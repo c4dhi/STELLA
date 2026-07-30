@@ -1,11 +1,87 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
+# Dependabot configuration.
+#
+# Security updates (driven by the alerts on the default branch) work without
+# this file. Version updates do NOT — they only run for the ecosystems and
+# directories declared here. The previous version of this file was the
+# unmodified GitHub starter template with `package-ecosystem: ""`, which
+# matches nothing, so scheduled version updates never ran for any manifest.
+#
+# Everything below is grouped so a quiet week produces a handful of PRs rather
+# than one per package. Majors stay ungrouped and arrive as individual PRs,
+# since those need a human to look at them.
+#
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # ---------------------------------------------------------------- npm ----
+  - package-ecosystem: "npm"
+    directories:
+      - "/" # NestJS backend
+      - "/frontend-ui" # React SPA
+      - "/docs-site" # Docusaurus site
     schedule:
       interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # ---------------------------------------------------------------- pip ----
+  - package-ecosystem: "pip"
+    directories:
+      - "/message-recorder-python"
+      - "/stt-service"
+      - "/tts-service"
+      - "/agents/stella-v2-agent"
+      - "/agents/stella-ai-agent-sdk"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      pip-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+      pip-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # ---------------------------------------------------- github-actions ----
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # ------------------------------------------------------------- docker ----
+  # Base-image updates for the services we build and ship.
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/frontend-ui"
+      - "/message-recorder-python"
+      - "/stt-service"
+      - "/tts-service"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
