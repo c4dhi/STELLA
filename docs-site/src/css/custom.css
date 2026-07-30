@@ -425,6 +425,28 @@ body.landing-page .navbar__inner,
   padding: 0 2rem;
 }
 
+/* Mobile: pin the STELLA brand to the left and push the nav links (and GitHub)
+   to the right, instead of letting them sit together. Also match the navbar
+   inset to the hero content (1rem instead of 2rem) so the brand lines up with
+   the hero text on the left and the buttons line up with it on the right. */
+@media (max-width: 768px) {
+  body.landing-page .navbar__inner,
+  :has(.landing-page-content) .navbar__inner {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  body.landing-page .navbar__items:not(.navbar__items--right),
+  :has(.landing-page-content) .navbar__items:not(.navbar__items--right) {
+    flex: 1 1 auto;
+  }
+
+  body.landing-page .navbar__brand,
+  :has(.landing-page-content) .navbar__brand {
+    margin-right: auto;
+  }
+}
+
 /* Landing page navbar: always dark background with white text */
 /* Override for both light and dark modes */
 body.landing-page .navbar,
@@ -4412,6 +4434,19 @@ tr:nth-child(even) td {
   .hero-statusbar-meta .hide-sm {
     display: none;
   }
+
+  /* Center the terminal status bar on phones and keep it on a single line
+     (path + meta together) rather than splitting into two rows. */
+  .hero-statusbar-inner {
+    justify-content: center;
+    gap: 0.6rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .hero-statusbar-meta {
+    margin-left: 0;
+  }
 }
 
 /* Background with gradient glows and dot pattern */
@@ -4496,10 +4531,10 @@ tr:nth-child(even) td {
   align-items: center;
   gap: 0.6rem;
   font-family: var(--ifm-font-family-monospace);
-  font-size: 0.74rem;
+  font-size: 0.62rem;
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.1em;
   color: var(--accent-bright);
   margin: 0 0 1.5rem 0;
 }
@@ -4949,13 +4984,14 @@ tr:nth-child(even) td {
   }
 
   .hero-browser {
-    width: 90vw;
+    width: 78vw;
+    max-width: 300px;
     margin-top: 2rem;
   }
 
   .hero-browser-content {
-    aspect-ratio: 4 / 5;
-    padding: 1.5rem;
+    aspect-ratio: 1 / 1;
+    padding: 1.25rem;
   }
 
   .hero-sphere-container {

@@ -15,14 +15,12 @@ const Hero = () => {
         <div className="hero-statusbar-inner">
           <div className="hero-statusbar-path">
             <span className="tilde">~</span>
-            <span>stella</span>
             <span className="sep">/</span>
             <span>voice-research</span>
           </div>
           <div className="hero-statusbar-meta">
             <span>license: <span className="val">MIT</span></span>
             <span className="hide-sm">deploy: <span className="val">self-hosted</span></span>
-            <span>wcag: <span className="ok">AA ✓</span></span>
             <span className="live"><span className="live-dot" />online</span>
           </div>
         </div>
@@ -33,7 +31,7 @@ const Hero = () => {
           {/* Text column */}
           <div className="hero-col-text">
             <AnimatedSection animation="fade-up">
-              <p className="hero-tagline">Open Source Voice AI for Research</p>
+              <p className="hero-tagline">Open Source Infrastructure for Research</p>
             </AnimatedSection>
 
             <AnimatedSection animation="fade-up" delay={100}>
