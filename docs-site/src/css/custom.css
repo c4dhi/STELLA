@@ -252,6 +252,14 @@ body:has(.landing-page-content) {
   --ifm-navbar-background-color: #08090a;
 }
 
+/* Contain the scroll-in entrance animations. The fade-left/fade-right resting
+   states translate full-width blocks ±40px, which pushes the page sideways on
+   narrow screens (horizontal scroll + a blank strip beside the dark sections).
+   Clip horizontal overflow at the landing root; vertical scroll is unaffected. */
+.landing-page-content {
+  overflow-x: clip;
+}
+
 html[data-theme='light'] body.landing-page,
 html[data-theme='light'] body:has(.landing-page-wrapper),
 html[data-theme='light'] body:has(.landing-page-content) {
