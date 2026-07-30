@@ -1,5 +1,5 @@
 # LiveKit SDK for real-time communication
-livekit==0.17.2
+livekit==1.1.13
 livekit-api==1.0.6
 
 # HTTP client for API communication
