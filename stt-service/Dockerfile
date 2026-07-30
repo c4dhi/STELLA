@@ -12,7 +12,7 @@ ARG ENABLE_GPU=false
 # ============================================================================
 # CPU-only base image
 # ============================================================================
-FROM python:3.11-slim AS base-cpu
+FROM python:3.14-slim AS base-cpu
 
 WORKDIR /app
 
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ============================================================================
 # GPU base image (NVIDIA CUDA 12.6 - compatible with driver 13.0+)
 # ============================================================================
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 AS base-gpu
+FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu22.04 AS base-gpu
 
 WORKDIR /app
 
