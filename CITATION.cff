@@ -1,0 +1,74 @@
+cff-version: 1.2.0
+message: >-
+  If you use STELLA in your research, please cite the CUI '26 paper below
+  (preferred-citation). To cite this specific software version, use the
+  software metadata.
+title: "STELLA — System for Testing and Engineering LLM-based Conversational Agents"
+abstract: >-
+  An open-source platform for running voice conversations with research
+  participants — qualitative interviews, digital interventions, and guided
+  dialogues — designed without code and run on your own hardware.
+type: software
+license: MIT
+repository-code: "https://github.com/c4dhi/STELLA"
+url: "https://c4dhi.github.io/STELLA/"
+version: "1.0.0-prolific"
+date-released: "2026-07-30"
+authors:
+  - given-names: Felix
+    family-names: Moser
+    orcid: "https://orcid.org/0009-0008-3562-520X"
+    affiliation: >-
+      School of Medicine, University of St. Gallen, Switzerland; Institute for
+      Implementation Science in Health Care, University of Zurich, Switzerland
+  - given-names: Rasita
+    family-names: Vinay
+    orcid: "https://orcid.org/0000-0002-0490-5697"
+    affiliation: >-
+      Institute of Biomedical Ethics and History of Medicine, University of
+      Zurich, Switzerland; Department of Management, Technology, and Economics,
+      ETH Zurich, Switzerland
+  - given-names: Tobias
+    family-names: Kowatsch
+    orcid: "https://orcid.org/0000-0001-5939-4145"
+    affiliation: >-
+      Institute for Implementation Science in Health Care, University of Zurich,
+      Switzerland; School of Medicine, University of St. Gallen, Switzerland
+preferred-citation:
+  type: conference-paper
+  title: >-
+    STELLA: An Open-Source Platform for Auditable Voice-First Conversational
+    Health Coaching Agents
+  authors:
+    - given-names: Felix
+      family-names: Moser
+      orcid: "https://orcid.org/0009-0008-3562-520X"
+    - given-names: Rasita
+      family-names: Vinay
+      orcid: "https://orcid.org/0000-0002-0490-5697"
+    - given-names: Tobias
+      family-names: Kowatsch
+      orcid: "https://orcid.org/0000-0001-5939-4145"
+  collection-title: >-
+    Proceedings of the 8th ACM Conference on Conversational User Interfaces
+    (CUI '26)
+  conference:
+    name: "CUI '26: ACM Conversational User Interfaces 2026"
+    city: Bremen
+    country: DE
+  publisher:
+    name: "Association for Computing Machinery"
+  year: 2026
+  month: 7
+  start: 1
+  end: 7
+  doi: "10.1145/3816046.3816293"
+  url: "https://doi.org/10.1145/3816046.3816293"
+# Maintained by the Center for Digital Health Interventions (C4DHI),
+# https://www.c4dhi.org/
+#
+# This is the study cut used for the CUI '26 paper — see RELEASING.md.
+#
+# TODO once the release is published: add the Zenodo DOI minted by the GitHub
+# release as a top-level `doi:` (e.g. doi: "10.5281/zenodo.XXXXXXX") so the
+# software version itself is permanently citeable.
