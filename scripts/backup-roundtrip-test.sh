@@ -45,7 +45,13 @@ table_hash() {
 
 compare_all() { # <srcDb> <otherDb>
   local tables mism=0
-  tables=$(psql_db "$1" "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename <> '_prisma_migrations' ORDER BY tablename;")
+  # AuditEvent is excluded on purpose: it is in NEVER_RESTORE_MODELS
+  # (manifest.ts), so an import never overwrites the target's copy. src and dst
+  # SHOULD differ there — the target keeps its own history plus the record of
+  # this import. Its behaviour is asserted separately below, not by this oracle.
+  tables=$(psql_db "$1" "SELECT tablename FROM pg_tables WHERE schemaname='public'
+                         AND tablename NOT IN ('_prisma_migrations','AuditEvent')
+                         ORDER BY tablename;")
   while IFS= read -r t; do
     [[ -z "$t" ]] && continue
     if [[ "$(table_hash "$1" "$t")" != "$(table_hash "$2" "$t")" ]]; then
@@ -85,12 +91,36 @@ mkdir -p "$WORK/pkgsrc/sub" "$WORK/pkgdst" "$WORK/pkgdst2"
 printf 'agent-one\x00\x01\x02' > "$WORK/pkgsrc/agent1.zip"
 echo "nested" > "$WORK/pkgsrc/sub/agent2.txt"
 
+# Pre-existing audit history on the TARGET. An import truncates every other
+# table; this row proves the audit log is spared, so an import cannot erase the
+# record of prior privileged operations (or of itself). (#380)
+psql_db dst "INSERT INTO \"AuditEvent\"(id,action,outcome,\"actorType\",\"actorLabel\")
+             VALUES ('pre-existing','backup.import','success','cli','earlier-operator');" >/dev/null
+
 echo "==> [1] Export src -> import dst (plain)"
 DATABASE_URL="$(url src)" AGENT_STORAGE_PATH="$WORK/pkgsrc" node "$CLI" export --out "$WORK/b.zip" --include-metrics >/dev/null 2>&1
 cp "$WORK/b.zip" "$WORK/b-keep.zip" # import deletes its input (credential), keep a copy for step 2
-DATABASE_URL="$(url dst)" AGENT_STORAGE_PATH="$WORK/pkgdst" node "$CLI" import --in "$WORK/b.zip" --confirm >/dev/null 2>&1
+DATABASE_URL="$(url dst)" AGENT_STORAGE_PATH="$WORK/pkgdst" \
+  STELLA_AUDIT_ACTOR="roundtrip-operator" \
+  node "$CLI" import --in "$WORK/b.zip" --confirm >/dev/null 2>&1
 m1=$(compare_all src dst)
 diff -r "$WORK/pkgsrc" "$WORK/pkgdst" >/dev/null && p1=IDENTICAL || p1=DIFF
+
+# --- Audit trail (#380) ---------------------------------------------------
+# The pre-existing row must survive the truncate, and the import must have
+# recorded itself. Both read from dst AFTER the restore committed.
+survived=$(psql_db dst "SELECT count(*) FROM \"AuditEvent\" WHERE id='pre-existing';")
+recorded=$(psql_db dst "SELECT count(*) FROM \"AuditEvent\"
+                        WHERE action='backup.import' AND outcome='success' AND id<>'pre-existing';")
+actor=$(psql_db dst "SELECT coalesce(\"actorLabel\",'') FROM \"AuditEvent\"
+                     WHERE id<>'pre-existing' ORDER BY \"occurredAt\" DESC LIMIT 1;")
+[[ "$survived" == 1 ]] && audit_survived=OK || audit_survived="LOST"
+[[ "$recorded" -ge 1 ]] && audit_recorded=OK || audit_recorded="MISSING"
+[[ "$actor" == "roundtrip-operator" ]] && audit_actor=OK || audit_actor="BAD($actor)"
+# The audit log must never be restored FROM the bundle either — src has no rows,
+# so a restored table would have wiped dst's history to zero.
+total=$(psql_db dst "SELECT count(*) FROM \"AuditEvent\";")
+[[ "$total" -ge 2 ]] && audit_total=OK || audit_total="BAD($total)"
 
 echo "==> [2] Host encrypt -> decrypt -> import dst2"
 printf 'ENV_VAR_ENCRYPTION_KEY=deadbeef\nJWT_SECRET=s3cr3t\n' > "$WORK/deploy.env"
@@ -140,11 +170,13 @@ echo "  [encrypted] table mismatches: $m2   packages: $p2"
 echo "  encryption marker: $enc   config round-trip: $cfg   wrong passphrase: $wrongpw"
 echo "  plaintext guard: $guard   wrote file on refusal: $guard_file   override: $guard_override"
 echo "  staged file modes: $modes"
+echo "  audit: survived import: $audit_survived   recorded: $audit_recorded   actor: $audit_actor   not-restored: $audit_total"
 echo "========================================="
 if [[ "$m1" == 0 && "$m2" == 0 && "$p1" == IDENTICAL && "$p2" == IDENTICAL \
       && "$enc" == OK && "$cfg" == IDENTICAL && "$wrongpw" == REJECTED \
       && "$guard" == REFUSED && "$guard_file" == NO_FILE && "$guard_override" == OK \
-      && "$modes" == OK ]]; then
+      && "$modes" == OK && "$audit_survived" == OK && "$audit_recorded" == OK \
+      && "$audit_actor" == OK && "$audit_total" == OK ]]; then
   echo "PASS — all information transferred exactly, and the secret guards hold."
 else
   echo "FAIL — see mismatches above."; exit 1

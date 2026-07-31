@@ -136,6 +136,47 @@ It is also the only workable place for it — the deployment `.env` lives on the
 deploy host, outside the pod, so an API-driven export could not produce a
 secret-carrying bundle at all.
 
+**Import is different**, and is audited for exactly that reason — see below.
+
+## Audit trail
+
+Every **import** is recorded in the `AuditEvent` table: who ran it, when, the
+outcome (`success`, `rejected`, or `failed`), and safe context — bundle
+filename, table and package counts, migration head, and the encryption-key
+*fingerprint*. Never a secret value.
+
+Import is audited and export is not, because the two are not comparable:
+
+|  | Export | Import |
+|---|---|---|
+| Requires | cluster access (`kubectl`) | a SystemAdmin token only |
+| Effect | copies data out | **truncates and replaces the whole deployment** |
+| Alternative route | `kubectl get secret` gets the same secrets, unrecorded | none — this is the only path |
+
+Auditing export would record only the polite route to secrets that cluster
+access already exposes more directly. Import has no such shortcut: it is
+reachable over HTTP by any system administrator, it is destructive, and until
+this was added it left no record of who ran it.
+
+**An import cannot erase the audit log.** `AuditEvent` is in the never-restore
+set, so while an import truncates and replaces every other table, this one is
+left alone and the target keeps its own history. The success record is written
+*after* the restore transaction commits, so it survives both the truncate and
+any rollback. A rejected or failed import is recorded too — an attempt that was
+blocked is worth finding in the log afterwards.
+
+Query it directly:
+
+```sql
+SELECT "occurredAt", outcome, "actorLabel", detail
+FROM "AuditEvent"
+WHERE action = 'backup.import'
+ORDER BY "occurredAt" DESC;
+```
+
+For the script path the actor is the operator's `user@host`; for the dashboard
+path it is the signed-in administrator's email.
+
 ## Prerequisites
 
 The export/restore scripts run on the **deploy host** (the machine you run

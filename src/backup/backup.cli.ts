@@ -97,6 +97,9 @@ async function main(): Promise<void> {
         bundlePath: args.in,
         confirmOverwrite: args.confirm,
         allowKeyMismatch: args.allowKeyMismatch,
+        // No authenticated user in a pod; the wrapper script passes the operator
+        // identity so the audit trail (#380) is not just "cli".
+        actor: { type: 'cli', label: process.env.STELLA_AUDIT_ACTOR || null },
       })
       process.stdout.write(JSON.stringify({ ok: true, report }) + '\n')
     } else {

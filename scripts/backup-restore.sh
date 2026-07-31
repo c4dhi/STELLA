@@ -207,9 +207,13 @@ POD_IN="/tmp/stella-restore-$(date +%s).zip"
 kubectl cp "$DATA_BUNDLE" "$KUBERNETES_NAMESPACE/$POD:$POD_IN"
 
 info "Importing data (overwriting) in pod $POD ..."
+# Identify the operator for the audit trail (#380) — the pod has no
+# authenticated user of its own. Best-effort: never block a restore on this.
+AUDIT_ACTOR="$(whoami 2>/dev/null || echo unknown)@$(hostname -s 2>/dev/null || echo unknown)"
 # Render the CLI's JSON report as a readable table (formatter runs host-side, so
 # it works with any pod image). pipefail preserves the import's exit code.
 kubectl exec -n "$KUBERNETES_NAMESPACE" "$POD" -- \
+    env STELLA_AUDIT_ACTOR="$AUDIT_ACTOR" \
     node dist/src/backup/backup.cli.js import --in "$POD_IN" --confirm $ALLOW_KEY_MISMATCH \
     | node "$LIB_DIR/backup_report.js"
 kubectl exec -n "$KUBERNETES_NAMESPACE" "$POD" -- rm -f "$POD_IN" 2>/dev/null || true

@@ -616,3 +616,37 @@ model AgentConfiguration {
   @@index([userId, agentTypeId])
   @@index([agentTypeId, compatibility])
 }
+
+// Audit trail for privileged, destructive operations (#380).
+//
+// Scope is deliberately narrow: backup IMPORT, which wipes and replaces the
+// entire deployment. That endpoint is reachable over HTTP by any SystemAdmin
+// (backup.controller.ts) with no cluster access, and until now left no record of
+// who ran it. Export is NOT audited here — it requires cluster access, and
+// anyone holding that can already read the secrets directly via
+// `kubectl get secret`, so a logbook of the polite route buys nothing.
+//
+// This table is excluded from backup restore (NEVER_RESTORE_MODELS in
+// manifest.ts): an import truncates every other table, so restoring this one
+// would let an import erase the evidence of itself.
+//
+// It records WHO and WHAT, never a secret VALUE.
+model AuditEvent {
+  id         String   @id @default(uuid())
+  action     String // e.g. 'backup.import'
+  outcome    String // 'success' | 'rejected' | 'failed'
+  occurredAt DateTime @default(now())
+
+  // Who acted. actorId/actorLabel are null for the in-pod CLI path, which has no
+  // authenticated user — actorType distinguishes the two.
+  actorType  String // 'system-admin' | 'cli'
+  actorId    String?
+  actorLabel String? // email for a user; "user@host" for the CLI
+
+  // Non-sensitive context: bundle filename/size, key FINGERPRINT (never the
+  // key), migration head, row/package counts, guard blockers.
+  detail Json?
+
+  @@index([occurredAt])
+  @@index([action])
+}
