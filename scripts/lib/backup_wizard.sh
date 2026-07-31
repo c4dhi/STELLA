@@ -41,7 +41,7 @@ run_backup_wizard() {
             local enc
             enc="$(wizard_boolean_input \
                 "Encrypt the bundle with a passphrase?" \
-                "Recommended — the bundle contains all secrets. You'll be prompted for the passphrase." \
+                "Say yes. The bundle holds every secret — unencrypted it is a plaintext credential for the whole system. You'll be prompted for the passphrase." \
                 "true")"
 
             _backup_wizard_header
@@ -53,7 +53,9 @@ run_backup_wizard() {
 
             local args=()
             [[ -n "$env_arg" ]] && args+=("$env_arg")
-            [[ "$enc" == "true" ]] && args+=("--encrypt")
+            # Encryption is the export script's default. Declining it here is the
+            # deliberate opt-in the script demands, so pass both flags.
+            [[ "$enc" != "true" ]] && args+=("--no-encrypt" "--allow-plaintext-config")
             [[ "$met" == "true" ]] && args+=("--include-metrics")
 
             _backup_wizard_header

@@ -8,8 +8,10 @@
  * so all config/secret handling lives in the wizard layer, not the backend.
  *
  *   finalize  <dataBundle> <envFile> <out>
- *       Embed the deployment .env into the bundle, then (if BACKUP_PASSPHRASE is
- *       set) encrypt the whole thing → <out>.
+ *       Embed the deployment .env into the bundle and encrypt the whole thing
+ *       under BACKUP_PASSPHRASE → <out>. Without a passphrase this REFUSES to
+ *       run (the embedded config is a plaintext credential), unless
+ *       STELLA_ALLOW_PLAINTEXT_CONFIG=1 explicitly overrides it.
  *
  *   prepare-restore <bundle> <outDataBundle> <outEnvFile>
  *       Decrypt if needed (BACKUP_PASSPHRASE), extract the embedded .env →
@@ -32,6 +34,13 @@ import { ZipReader, copyZipAdding } from '../src/backup/bundle-zip'
 // Where the deployment .env is parked inside the bundle.
 const CONFIG_ENTRY = 'config/deployment.env'
 
+/**
+ * Escape hatch for writing a bundle whose embedded config is NOT encrypted.
+ * Set to '1' by backup-export.sh only when the operator passed BOTH
+ * --no-encrypt and --allow-plaintext-config.
+ */
+const ALLOW_PLAINTEXT_ENV = 'STELLA_ALLOW_PLAINTEXT_CONFIG'
+
 function tmp(prefix: string): string {
   return path.join(os.tmpdir(), `${prefix}-${crypto.randomBytes(6).toString('hex')}.zip`)
 }
@@ -41,8 +50,24 @@ async function finalize(
   envFile: string,
   out: string,
 ): Promise<void> {
-  const config = await fs.readFile(envFile)
   const passphrase = process.env.BACKUP_PASSPHRASE
+
+  // Embedding the deployment .env puts EVERY secret — ENV_VAR_ENCRYPTION_KEY,
+  // JWT_SECRET, the database password, every API key — into this file. Without a
+  // passphrase that file is a plaintext credential sitting on disk. Refuse by
+  // default, and enforce it HERE rather than only in the calling script: this is
+  // the function that actually writes the bytes, so the guarantee cannot be lost
+  // to a shell-layer mistake. The check happens before the .env is even read.
+  if (!passphrase && process.env[ALLOW_PLAINTEXT_ENV] !== '1') {
+    throw new Error(
+      'refusing to write an unencrypted bundle: it would contain the deployment ' +
+        'config (ENV_VAR_ENCRYPTION_KEY, JWT_SECRET, database password, API keys) ' +
+        'in plaintext. Set BACKUP_PASSPHRASE, or re-run the export with both ' +
+        '--no-encrypt and --allow-plaintext-config if that is genuinely intended.',
+    )
+  }
+
+  const config = await fs.readFile(envFile)
 
   if (passphrase) {
     // Stream-copy the data bundle + config into a plain temp zip, then
