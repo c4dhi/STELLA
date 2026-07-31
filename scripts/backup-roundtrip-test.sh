@@ -103,15 +103,49 @@ DATABASE_URL="$(url dst2)" AGENT_STORAGE_PATH="$WORK/pkgdst2" node "$CLI" import
 m2=$(compare_all src dst2)
 diff -r "$WORK/pkgsrc" "$WORK/pkgdst2" >/dev/null && p2=IDENTICAL || p2=DIFF
 
+echo "==> [3] Plaintext-config guard (#380)"
+# The guard that makes encryption the default lives in finalize(). Steps 1-2
+# always supply a passphrase, so without these three checks the refusal could be
+# inverted and nothing would fail.
+if BACKUP_PASSPHRASE='' npx ts-node scripts/backup-bundle.ts finalize \
+      "$WORK/b-keep.zip" "$WORK/deploy.env" "$WORK/refused.zip" >/dev/null 2>&1; then
+  guard=ACCEPTED           # refusal did not fire — the control is broken
+else
+  guard=REFUSED
+fi
+# A refusal must also leave nothing behind: a partially-written bundle would
+# still be a plaintext credential on disk.
+[[ -e "$WORK/refused.zip" ]] && guard_file=WROTE_FILE || guard_file=NO_FILE
+# The documented escape hatch must still work, or operators will reach for
+# something worse.
+if BACKUP_PASSPHRASE='' STELLA_ALLOW_PLAINTEXT_CONFIG=1 npx ts-node scripts/backup-bundle.ts finalize \
+      "$WORK/b-keep.zip" "$WORK/deploy.env" "$WORK/override.zip" >/dev/null 2>&1 \
+      && [[ -s "$WORK/override.zip" ]]; then
+  guard_override=OK
+else
+  guard_override=BROKEN
+fi
+
+echo "==> [4] Staged plaintext is not world-readable (#380)"
+# The encrypted bundle and the recovered .env both hold secrets; on a shared
+# host, mode 0644 exposes them to every local user for the export window.
+perms_enc="$(stat -f '%Lp' "$WORK/final.enc" 2>/dev/null || stat -c '%a' "$WORK/final.enc" 2>/dev/null)"
+perms_env="$(stat -f '%Lp' "$WORK/rec.env" 2>/dev/null || stat -c '%a' "$WORK/rec.env" 2>/dev/null)"
+[[ "$perms_enc" == "600" && "$perms_env" == "600" ]] && modes=OK || modes="BAD(enc=$perms_enc env=$perms_env)"
+
 echo
 echo "================ RESULTS ================"
 echo "  [plain]     table mismatches: $m1   packages: $p1"
 echo "  [encrypted] table mismatches: $m2   packages: $p2"
 echo "  encryption marker: $enc   config round-trip: $cfg   wrong passphrase: $wrongpw"
+echo "  plaintext guard: $guard   wrote file on refusal: $guard_file   override: $guard_override"
+echo "  staged file modes: $modes"
 echo "========================================="
 if [[ "$m1" == 0 && "$m2" == 0 && "$p1" == IDENTICAL && "$p2" == IDENTICAL \
-      && "$enc" == OK && "$cfg" == IDENTICAL && "$wrongpw" == REJECTED ]]; then
-  echo "PASS — all information transferred exactly (plain + encrypted)."
+      && "$enc" == OK && "$cfg" == IDENTICAL && "$wrongpw" == REJECTED \
+      && "$guard" == REFUSED && "$guard_file" == NO_FILE && "$guard_override" == OK \
+      && "$modes" == OK ]]; then
+  echo "PASS — all information transferred exactly, and the secret guards hold."
 else
   echo "FAIL — see mismatches above."; exit 1
 fi

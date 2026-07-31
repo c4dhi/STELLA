@@ -31,7 +31,10 @@ export class ZipWriter {
   private readonly done: Promise<void>
 
   constructor(outPath: string) {
-    const out = fs.createWriteStream(outPath)
+    // A bundle carries password hashes and (once the deploy layer folds in the
+    // .env) every deployment secret. Create it owner-only rather than inheriting
+    // the process umask, which on a typical host yields a world-readable 0644.
+    const out = fs.createWriteStream(outPath, { mode: 0o600 })
     this.done = new Promise<void>((resolve, reject) => {
       out.on('close', resolve)
       out.on('error', reject)

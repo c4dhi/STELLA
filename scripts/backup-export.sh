@@ -197,18 +197,40 @@ fi
 STAMP="$(date +%Y%m%d-%H%M%S)"
 [[ -z "$OUT" ]] && OUT="$PROJECT_DIR/stella-backup-${STAMP}.zip"
 
+# The passphrase is the bundle's entire key strength: scrypt slows a guess down,
+# but a short passphrase is still brute-forceable offline by anyone holding the
+# file. Enforced on export only — restoring an older bundle must never be blocked
+# by a rule introduced after it was written.
+MIN_PASSPHRASE_LEN=12
+
 PASSPHRASE=""
 if [[ "$ENCRYPT" == "true" ]]; then
     if [[ -n "${BACKUP_PASSPHRASE:-}" ]]; then
         # Unattended path (CI/automation): take the passphrase from the
         # environment rather than blocking on a prompt nobody is there to answer.
         PASSPHRASE="$BACKUP_PASSPHRASE"
+    elif [[ ! -t 0 ]]; then
+        # No terminal to prompt on. Without this, `read` hits EOF and set -e
+        # aborts the script with no explanation at all.
+        error "No terminal available to prompt for a passphrase."
+        echo
+        echo -e "  This looks like a non-interactive run (CI, cron, a pipe)."
+        echo -e "  → Set ${BOLD:-}BACKUP_PASSPHRASE${NC:-} in the environment and re-run."
+        exit 1
     else
         read -r -s -p "Encryption passphrase: " PASSPHRASE; echo
         read -r -s -p "Confirm passphrase: " PASSPHRASE2; echo
         [[ "$PASSPHRASE" != "$PASSPHRASE2" ]] && { error "Passphrases do not match"; exit 1; }
     fi
     [[ -z "$PASSPHRASE" ]] && { error "Empty passphrase"; exit 1; }
+    if [[ "${#PASSPHRASE}" -lt "$MIN_PASSPHRASE_LEN" ]]; then
+        error "Passphrase too short (${#PASSPHRASE} characters, minimum $MIN_PASSPHRASE_LEN)."
+        echo
+        echo -e "  The passphrase is the only thing protecting a file that contains every"
+        echo -e "  secret in the deployment. A short one is cracked offline in minutes."
+        echo -e "  → Use a long passphrase — several random words beats a short complex string."
+        exit 1
+    fi
     [[ "$OUT" != *.enc ]] && OUT="${OUT}.enc"
 fi
 

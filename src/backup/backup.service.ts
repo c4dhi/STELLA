@@ -200,6 +200,7 @@ export class BackupService {
     }
 
     let decryptedPath: string | null = null
+    let decryptedDir: string | null = null
     let reader: ZipReader | null = null
     try {
       // Decrypt first if the bundle was exported with a passphrase.
@@ -210,9 +211,13 @@ export class BackupService {
             'This backup is encrypted. Provide the passphrase to import it.',
           )
         }
+        // Decrypting materializes the bundle in the clear. Stage it in an
+        // owner-only (0700) directory rather than a bare tmpdir path, so it is
+        // not readable by other local users for the duration of the import.
+        decryptedDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stella-dec-'))
         decryptedPath = path.join(
-          os.tmpdir(),
-          `stella-dec-${crypto.randomBytes(8).toString('hex')}.zip`,
+          decryptedDir,
+          `${crypto.randomBytes(8).toString('hex')}.zip`,
         )
         try {
           await decryptBundle(options.bundlePath, decryptedPath, options.passphrase)
@@ -294,8 +299,11 @@ export class BackupService {
       reader?.close()
       // The uploaded bundle (and any decrypted copy) is a credential — delete.
       await fs.rm(options.bundlePath, { force: true }).catch(() => undefined)
-      if (decryptedPath) {
-        await fs.rm(decryptedPath, { force: true }).catch(() => undefined)
+      if (decryptedDir) {
+        // Removes the staging directory and the decrypted bundle inside it.
+        await fs
+          .rm(decryptedDir, { recursive: true, force: true })
+          .catch(() => undefined)
       }
     }
   }

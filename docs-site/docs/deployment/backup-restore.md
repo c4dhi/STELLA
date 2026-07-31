@@ -77,7 +77,9 @@ the only thing standing between a stolen file and full compromise.
 - **Send it over a different channel than the bundle.** If the bundle goes by
   file transfer, send the passphrase by a separate medium.
 - **Make it long.** It is the entire key strength; a short passphrase is
-  brute-forceable offline once someone holds the file.
+  brute-forceable offline once someone holds the file. Export enforces a
+  **12-character minimum** and will refuse anything shorter. (Restore has no such
+  rule, so bundles made before it existed stay restorable.)
 - **There is no recovery.** Lose the passphrase and the backup is permanently
   unreadable — by design. Confirm you can decrypt a bundle *before* you rely on
   it for disaster recovery.
@@ -98,9 +100,23 @@ the only thing standing between a stolen file and full compromise.
 ### Unattended use
 
 Set `BACKUP_PASSPHRASE` in the environment and both export and restore skip the
-interactive prompt. Prefer a secret store or a shell that does not record history
-— an exported passphrase can otherwise end up in shell history or process
-listings.
+interactive prompt. Without it, a non-interactive run (CI, cron, a pipe) stops
+with an explicit message rather than failing silently on an unanswerable prompt.
+Prefer a secret store or a shell that does not record history — an exported
+passphrase can otherwise end up in shell history or process listings.
+
+### Files on disk
+
+Every file the backup path writes — bundles, the decrypted staging copy, the
+extracted `.env` — is created **mode 0600**, and plaintext intermediates are
+staged in owner-only (0700) temporary directories rather than a shared `/tmp`.
+On a multi-user deploy host this is what stops another local account reading the
+whole credential during the export or restore window.
+
+Restore also snapshots the config it is about to replace, as
+`.env.<env>.pre-restore.<timestamp>` in the project directory. **That file is a
+complete plaintext credential.** It is created 0600 and is gitignored, but it
+persists until you remove it — see the runbook's cleanup step.
 
 ## Who can do this
 
@@ -150,6 +166,10 @@ encryption, metrics, and the bundle to restore — run:
 It prompts for the high-level choices and then runs the same export/restore
 scripts below (which still handle passphrase entry and confirmations). The
 direct script invocations remain available for automation/CI.
+
+The wizard **always encrypts** — it deliberately does not offer an unencrypted
+option, since a single keystroke should not be able to produce a plaintext
+credential. If you genuinely need one, call `backup-export.sh` with both flags.
 
 ## Export
 
@@ -242,7 +262,13 @@ not surfaced in the dashboard.
 4. **Verify**: login works, projects/sessions/messages are present, agent
    packages resolve, and env-var-template secrets decrypt.
 5. **Clean up**: delete the bundle from the target and from any machine it
-   passed through, and rotate the passphrase before the next export.
+   passed through, remove the `.env.*.pre-restore.*` snapshot the restore left in
+   the project directory (a full plaintext credential), and rotate the passphrase
+   before the next export.
+
+   ```bash
+   rm -f .env.*.pre-restore.*        # once you have confirmed the restore worked
+   ```
 
 :::warning The encryption key must travel with the data
 `ENV_VAR_ENCRYPTION_KEY` is deployment config, not database content. Every

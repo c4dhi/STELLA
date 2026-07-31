@@ -41,8 +41,25 @@ const CONFIG_ENTRY = 'config/deployment.env'
  */
 const ALLOW_PLAINTEXT_ENV = 'STELLA_ALLOW_PLAINTEXT_CONFIG'
 
-function tmp(prefix: string): string {
-  return path.join(os.tmpdir(), `${prefix}-${crypto.randomBytes(6).toString('hex')}.zip`)
+/**
+ * A scratch path for a PLAINTEXT bundle, inside a private (0700) directory.
+ *
+ * These intermediates hold the deployment config in the clear for the duration
+ * of an export/restore. A bare os.tmpdir() path leaves them readable by every
+ * local user on a shared /tmp — so the containing directory is owner-only, and
+ * the files themselves are written 0600 (see bundle-zip / bundle-crypto).
+ *
+ * Returns both the file path and its directory, so callers can remove the whole
+ * directory rather than just unlinking the file.
+ */
+async function privateTmp(
+  prefix: string,
+): Promise<{ file: string; dir: string }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`))
+  return {
+    dir,
+    file: path.join(dir, `${crypto.randomBytes(6).toString('hex')}.zip`),
+  }
 }
 
 async function finalize(
@@ -72,12 +89,16 @@ async function finalize(
   if (passphrase) {
     // Stream-copy the data bundle + config into a plain temp zip, then
     // stream-encrypt it to the output — neither archive is held in memory.
-    const plain = tmp('stella-fin')
+    // The intermediate is a plaintext credential, so it lives in an owner-only
+    // directory and the whole directory is removed afterwards.
+    const plain = await privateTmp('stella-fin')
     try {
-      await copyZipAdding(dataBundle, plain, [{ name: CONFIG_ENTRY, data: config }])
-      await encryptBundle(plain, out, passphrase)
+      await copyZipAdding(dataBundle, plain.file, [
+        { name: CONFIG_ENTRY, data: config },
+      ])
+      await encryptBundle(plain.file, out, passphrase)
     } finally {
-      await fs.rm(plain, { force: true })
+      await fs.rm(plain.dir, { recursive: true, force: true })
     }
   } else {
     await copyZipAdding(dataBundle, out, [{ name: CONFIG_ENTRY, data: config }])
@@ -90,7 +111,7 @@ async function prepareRestore(
   outEnvFile: string,
 ): Promise<void> {
   let zipPath = bundle
-  let decrypted: string | null = null
+  let decrypted: { file: string; dir: string } | null = null
 
   try {
     if (await isEncryptedBundle(bundle)) {
@@ -98,9 +119,11 @@ async function prepareRestore(
       if (!passphrase) {
         throw new Error('bundle is encrypted; set BACKUP_PASSPHRASE to decrypt it')
       }
-      decrypted = tmp('stella-dec')
-      await decryptBundle(bundle, decrypted, passphrase)
-      zipPath = decrypted
+      // Decrypting materializes the full plaintext bundle — same exposure as the
+      // export side, so the same owner-only staging applies.
+      decrypted = await privateTmp('stella-dec')
+      await decryptBundle(bundle, decrypted.file, passphrase)
+      zipPath = decrypted.file
     }
 
     // The decrypted/plain zip IS the data bundle the pod importer reads; the
@@ -115,13 +138,15 @@ async function prepareRestore(
           'bundle has no embedded deployment config (config/deployment.env)',
         )
       }
-      await fs.writeFile(outEnvFile, cfg)
+      // The extracted .env is the deployment's secrets in the clear — owner-only.
+      await fs.writeFile(outEnvFile, cfg, { mode: 0o600 })
     } finally {
       reader.close()
     }
     await fs.copyFile(zipPath, outDataBundle)
+    await fs.chmod(outDataBundle, 0o600).catch(() => undefined)
   } finally {
-    if (decrypted) await fs.rm(decrypted, { force: true })
+    if (decrypted) await fs.rm(decrypted.dir, { recursive: true, force: true })
   }
 }
 

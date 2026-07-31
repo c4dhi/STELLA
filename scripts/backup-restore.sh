@@ -141,9 +141,15 @@ PASSPHRASE=""
 if [[ "$(head -c 9 "$BUNDLE" 2>/dev/null)" == "STELLABK2" ]]; then
     if [[ -n "${BACKUP_PASSPHRASE:-}" ]]; then
         PASSPHRASE="$BACKUP_PASSPHRASE"   # unattended path, mirrors backup-export.sh
+    elif [[ ! -t 0 ]]; then
+        error "No terminal available to prompt for the decryption passphrase."
+        echo -e "  → Set ${BOLD:-}BACKUP_PASSPHRASE${NC:-} in the environment and re-run."
+        exit 1
     else
         read -r -s -p "Decryption passphrase: " PASSPHRASE; echo
     fi
+    # No minimum length here: a bundle encrypted before that rule existed must
+    # still be restorable.
     [[ -z "$PASSPHRASE" ]] && { error "Bundle is encrypted; passphrase required"; exit 1; }
 fi
 
@@ -158,9 +164,15 @@ BACKUP_PASSPHRASE="$PASSPHRASE" \
 # 1. Restore config: back up the current env file, install the restored one,
 #    reload it, and recreate the secret with the restored values.
 if [[ -f "$ENV_FILE" ]]; then
-    cp "$ENV_FILE" "${ENV_FILE}.pre-restore.$(date +%s)"
+    # This snapshot is a full plaintext credential. Create it owner-only BEFORE
+    # copying anything into it, so the secrets are never briefly world-readable.
+    PRE_RESTORE="${ENV_FILE}.pre-restore.$(date +%s)"
+    ( umask 077 && cp "$ENV_FILE" "$PRE_RESTORE" )
+    chmod 600 "$PRE_RESTORE" 2>/dev/null || true
+    info "Previous config saved to $(basename "$PRE_RESTORE") — delete it once the restore is verified."
 fi
-cp "$RESTORED_ENV" "$ENV_FILE"
+( umask 077 && cp "$RESTORED_ENV" "$ENV_FILE" )
+chmod 600 "$ENV_FILE" 2>/dev/null || true
 load_env_file "$ENV_FILE" "$NODE_ENV"
 
 info "Recreating stella-ai-secrets from restored config ..."
