@@ -5,7 +5,7 @@ title: "🚀 Quick Start"
 
 # 🚀 Quick Start
 
-Get the entire STELLA system running in 3 commands.
+Get the entire STELLA system running in 2 commands.
 
 ## Prerequisites
 
@@ -21,15 +21,23 @@ Before starting, ensure you have:
 git clone https://github.com/c4dhi/STELLA.git
 cd STELLA
 
-# 2. Create .env file with your credentials
-cp .env.example .env
-nano .env  # Set OPENAI_API_KEY, LIVEKIT_* credentials, and database settings
-
-# 3. Deploy everything
+# 2. Deploy — the setup wizard runs automatically on first launch
 ./scripts/start-k8s.sh
+```
 
-# OR: Run in background (survives SSH logout)
-./scripts/start-k8s.sh --daemon
+On a fresh clone the script detects that setup is incomplete and offers the
+guided wizard. Press **Enter** to accept it. The wizard asks for your
+`OPENAI_API_KEY`, auto-generates the database password, JWT secret and
+encryption key, and can bootstrap an initial admin login. It writes
+`.env.local` (or `.env.production`) for you — there is no `.env` file to copy
+or edit by hand.
+
+Once the wizard finishes, it deploys the stack in the background automatically.
+
+```bash
+# Reconfigure anytime
+./scripts/start-k8s.sh --setup    # required variables
+./scripts/start-k8s.sh --config   # every variable
 ```
 
 **Done!** System is now running at:
