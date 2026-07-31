@@ -10,4 +10,4 @@ torch>=2.13.0
 torchaudio>=2.0.0
 
 # CTranslate2 - CUDA-optimized inference engine
-ctranslate2>=4.0.0
+ctranslate2>=4.8.1
