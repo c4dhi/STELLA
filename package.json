@@ -71,7 +71,7 @@
     "class-validator": "^0.14.2",
     "js-yaml": "^5.2.2",
     "livekit-server-sdk": "^2.14.0",
-    "openai": "^6.10.0",
+    "openai": "^7.0.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.16.3",
