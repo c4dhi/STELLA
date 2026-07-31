@@ -50,17 +50,73 @@ of leaving a half-wiped database.
 :::danger A bundle is a full credential
 Because the bundle embeds the deployment config, it contains **every secret** —
 password hashes, `ENV_VAR_ENCRYPTION_KEY`, API keys. A leaked bundle is a total
-compromise. **Encrypt it** (see below) and store/transfer it only over trusted
-channels.
+compromise: anyone who can read the file owns the deployment.
 :::
 
-## Optional encryption
+## Encryption
 
-Export can encrypt the whole bundle with a passphrase (AES-256-GCM, scrypt-derived
-key — pure Node, no external tools). An encrypted bundle is named `…​.zip.enc`.
-Restore detects encryption and asks for the passphrase. **Carry the passphrase
-separately from the bundle** — it is the one secret that is never written into the
-file.
+**Export encrypts by default** (AES-256-GCM with a scrypt-derived key — pure
+Node, no external tools). An encrypted bundle is named `….zip.enc`, and restore
+detects encryption and asks for the passphrase.
+
+Producing an unencrypted bundle takes **two** explicit flags —
+`--no-encrypt --allow-plaintext-config`. One flag alone is refused. This is
+deliberate: a single mistyped or copy-pasted flag should never be enough to write
+every secret to disk in the clear. The refusal is enforced both in the export
+script and in the helper that actually writes the file, so it cannot be lost to a
+scripting mistake.
+
+### Passphrase custody
+
+The passphrase is the one secret never written into the bundle, which makes it
+the only thing standing between a stolen file and full compromise.
+
+- **Store it somewhere other than the bundle** — a password manager, not the
+  same directory, drive, or email thread. A passphrase carried alongside the file
+  it protects provides no protection at all.
+- **Send it over a different channel than the bundle.** If the bundle goes by
+  file transfer, send the passphrase by a separate medium.
+- **Make it long.** It is the entire key strength; a short passphrase is
+  brute-forceable offline once someone holds the file. Export enforces a
+  **12-character minimum** and will refuse anything shorter. (Restore has no such
+  rule, so bundles made before it existed stay restorable.)
+- **There is no recovery.** Lose the passphrase and the backup is permanently
+  unreadable — by design. Confirm you can decrypt a bundle *before* you rely on
+  it for disaster recovery.
+- **Rotate after relocation.** Once a move is complete, treat the passphrase as
+  spent: delete the transferred bundle and use a fresh passphrase for the next
+  export.
+
+### Secure transport
+
+- Copy bundles over an authenticated, encrypted channel (`scp`/`rsync` over SSH).
+  Never email, chat, or upload one to shared storage — even encrypted, it invites
+  an offline attack on the passphrase.
+- Verify the file arrived intact before restoring (compare a `sha256sum` taken on
+  both ends).
+- Delete the bundle from every intermediate machine once the restore is verified.
+  Copies left on a laptop or jump host are the most common way one of these leaks.
+
+### Unattended use
+
+Set `BACKUP_PASSPHRASE` in the environment and both export and restore skip the
+interactive prompt. Without it, a non-interactive run (CI, cron, a pipe) stops
+with an explicit message rather than failing silently on an unanswerable prompt.
+Prefer a secret store or a shell that does not record history — an exported
+passphrase can otherwise end up in shell history or process listings.
+
+### Files on disk
+
+Every file the backup path writes — bundles, the decrypted staging copy, the
+extracted `.env` — is created **mode 0600**, and plaintext intermediates are
+staged in owner-only (0700) temporary directories rather than a shared `/tmp`.
+On a multi-user deploy host this is what stops another local account reading the
+whole credential during the export or restore window.
+
+Restore also snapshots the config it is about to replace, as
+`.env.<env>.pre-restore.<timestamp>` in the project directory. **That file is a
+complete plaintext credential.** It is created 0600 and is gitignored, but it
+persists until you remove it — see the runbook's cleanup step.
 
 ## Who can do this
 
@@ -71,6 +127,55 @@ file.
   full relocation (config + data), or a **data-only** import from the
   **Admin Dashboard** (`/settings/admin`, SystemAdmin only) when the deployment
   is already configured.
+
+Export is gated by **cluster access** (you need `kubectl` against the deployment)
+rather than by a SystemAdmin login. That is the tighter of the two: anyone with
+cluster access can already read `stella-ai-secrets` directly, so an admin-login
+export would add a way to download every credential without adding any control.
+It is also the only workable place for it — the deployment `.env` lives on the
+deploy host, outside the pod, so an API-driven export could not produce a
+secret-carrying bundle at all.
+
+**Import is different**, and is audited for exactly that reason — see below.
+
+## Audit trail
+
+Every **import** is recorded in the `AuditEvent` table: who ran it, when, the
+outcome (`success`, `rejected`, or `failed`), and safe context — bundle
+filename, table and package counts, migration head, and the encryption-key
+*fingerprint*. Never a secret value.
+
+Import is audited and export is not, because the two are not comparable:
+
+|  | Export | Import |
+|---|---|---|
+| Requires | cluster access (`kubectl`) | a SystemAdmin token only |
+| Effect | copies data out | **truncates and replaces the whole deployment** |
+| Alternative route | `kubectl get secret` gets the same secrets, unrecorded | none — this is the only path |
+
+Auditing export would record only the polite route to secrets that cluster
+access already exposes more directly. Import has no such shortcut: it is
+reachable over HTTP by any system administrator, it is destructive, and until
+this was added it left no record of who ran it.
+
+**An import cannot erase the audit log.** `AuditEvent` is in the never-restore
+set, so while an import truncates and replaces every other table, this one is
+left alone and the target keeps its own history. The success record is written
+*after* the restore transaction commits, so it survives both the truncate and
+any rollback. A rejected or failed import is recorded too — an attempt that was
+blocked is worth finding in the log afterwards.
+
+Query it directly:
+
+```sql
+SELECT "occurredAt", outcome, "actorLabel", detail
+FROM "AuditEvent"
+WHERE action = 'backup.import'
+ORDER BY "occurredAt" DESC;
+```
+
+For the script path the actor is the operator's `user@host`; for the dashboard
+path it is the signed-in administrator's email.
 
 ## Prerequisites
 
@@ -103,17 +208,25 @@ It prompts for the high-level choices and then runs the same export/restore
 scripts below (which still handle passphrase entry and confirmations). The
 direct script invocations remain available for automation/CI.
 
+The wizard **always encrypts** — it deliberately does not offer an unencrypted
+option, since a single keystroke should not be able to produce a plaintext
+credential. If you genuinely need one, call `backup-export.sh` with both flags.
+
 ## Export
 
 ```bash
-# Writes ./stella-backup-<timestamp>.zip
+# Prompts for a passphrase, writes ./stella-backup-<timestamp>.zip.enc
 ./scripts/backup-export.sh [--production|--local]
 
 # Include the high-volume metrics/observability tables (larger bundle)
 ./scripts/backup-export.sh --include-metrics
 
-# Encrypt the bundle at rest (prompts for a passphrase) → ….zip.enc
-./scripts/backup-export.sh --encrypt
+# Unattended (CI/automation) — no prompt
+BACKUP_PASSPHRASE='…' ./scripts/backup-export.sh
+
+# Unencrypted, secrets in the clear — both flags required, use only if you
+# understand that the result is a plaintext credential
+./scripts/backup-export.sh --no-encrypt --allow-plaintext-config
 ```
 
 Under the hood the script execs the in-pod backup CLI to produce the data bundle
@@ -179,8 +292,9 @@ not surfaced in the dashboard.
 
 ## Relocating to a new machine — runbook
 
-1. **On the source**, run `./scripts/backup-export.sh --encrypt` and copy the
-   `…​.zip.enc` to the target. Keep the passphrase separate.
+1. **On the source**, run `./scripts/backup-export.sh` (encrypted by default) and
+   copy the `….zip.enc` to the target over SSH. Carry the passphrase by a
+   separate channel — see [Passphrase custody](#passphrase-custody).
 2. **On the target**, bring up the stack with
    [`start-k8s.sh`](./kubernetes.md) and the **same app version** (so the
    migration head matches).
@@ -188,6 +302,28 @@ not surfaced in the dashboard.
    config, recreates secrets, restarts the backend, and imports the data.
 4. **Verify**: login works, projects/sessions/messages are present, agent
    packages resolve, and env-var-template secrets decrypt.
+5. **Clean up**: delete the bundle from the target and from any machine it
+   passed through, remove the `.env.*.pre-restore.*` snapshot the restore left in
+   the project directory (a full plaintext credential), and rotate the passphrase
+   before the next export.
+
+   ```bash
+   rm -f .env.*.pre-restore.*        # once you have confirmed the restore worked
+   ```
+
+:::warning The encryption key must travel with the data
+`ENV_VAR_ENCRYPTION_KEY` is deployment config, not database content. Every
+`EnvVarTemplate` secret and every `AgentInstance.manualEnvVarsEncrypted` value is
+AES-256-GCM ciphertext that **only that key** can open. Restore the data onto a
+machine with a different key and those secrets are permanently unreadable — the
+agents come up without their API keys.
+
+The script path handles this for you: the bundle carries the key inside the
+embedded config, and restore installs it *before* importing. The guard exists for
+the cases where it does not — the data-only UI import, or a hand-assembled
+restore. If you ever move the database by other means (`pg_dump`, a volume
+snapshot, a replica), you must carry `ENV_VAR_ENCRYPTION_KEY` across yourself.
+:::
 
 :::note
 This restores persistent data and config and keeps encrypted secrets usable. It

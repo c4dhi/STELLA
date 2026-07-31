@@ -91,6 +91,16 @@ prisma/seed.js
 # TypeScript incremental build cache
 *.tsbuildinfo
 
-# Backup bundles (#378) — contain the full deployment incl. all secrets; never commit
+# Backup bundles (#378) — contain the full deployment incl. all secrets; never commit.
+# The last two catch bundles written with a custom --out name, which would
+# otherwise fall outside the stella-backup-* pattern.
 stella-backup-*.zip
 stella-backup-*.zip.enc
+*.zip.enc
+*-backup-*.zip
+
+# Config snapshots taken by backup-restore.sh before it overwrites .env
+# (#380). These are full plaintext credentials. `.env.production` above is an
+# EXACT match, so it does not cover `.env.production.pre-restore.<epoch>`.
+.env.*.pre-restore.*
+*.pre-restore.*

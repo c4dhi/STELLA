@@ -48,7 +48,9 @@ export async function encryptBundle(
   const iv = crypto.randomBytes(IV_LEN)
   const cipher = crypto.createCipheriv('aes-256-gcm', deriveKey(passphrase, salt), iv)
 
-  const out = fs.createWriteStream(encPath)
+  // Owner-only: even the ciphertext is worth withholding, since it is offline
+  // brute-forceable by anyone who can read it.
+  const out = fs.createWriteStream(encPath, { mode: 0o600 })
   // Header goes out ahead of the ciphertext body.
   out.write(Buffer.concat([MAGIC, salt, iv]))
   await pipeline(fs.createReadStream(plainPath), cipher, out, { end: false })
@@ -113,7 +115,7 @@ export async function decryptBundle(
   const bodyLen = size - HEADER_LEN - TAG_LEN
   if (bodyLen === 0) {
     const out = Buffer.concat([decipher.update(Buffer.alloc(0)), decipher.final()])
-    await fsp.writeFile(plainPath, out)
+    await fsp.writeFile(plainPath, out, { mode: 0o600 })
     return
   }
 
@@ -121,5 +123,6 @@ export async function decryptBundle(
     start: HEADER_LEN,
     end: size - TAG_LEN - 1, // inclusive end offset
   })
-  await pipeline(body, decipher, fs.createWriteStream(plainPath))
+  // The decrypted output is the plaintext bundle — owner-only, same as export.
+  await pipeline(body, decipher, fs.createWriteStream(plainPath, { mode: 0o600 }))
 }

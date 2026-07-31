@@ -59,6 +59,19 @@ export const METRICS_MODELS = [
   'AgentBuildLog',
 ] as const
 
+/**
+ * Models that are EXPORTED (so a bundle carries the evidence) but never
+ * truncated or overwritten by an import.
+ *
+ * An import wipes every other table and replaces it with the bundle's contents.
+ * If the audit log were restored like normal data, importing a bundle would
+ * erase the target's record of every prior privileged operation — including the
+ * record of the import doing the erasing. An audit trail an attacker can clear
+ * by uploading a file is not an audit trail, so the target's own history always
+ * wins here.
+ */
+export const NEVER_RESTORE_MODELS = ['AuditEvent'] as const
+
 /** Postgres table name for a Prisma model (honours @@map). */
 function tableNameOf(model: { name: string; dbName?: string | null }): string {
   return model.dbName ?? model.name
@@ -81,6 +94,25 @@ export function metricsTableNames(): string[] {
 export function coreTableNames(): string[] {
   const metrics = new Set(metricsTableNames())
   return allTableNames().filter((t) => !metrics.has(t))
+}
+
+/** Table names for {@link NEVER_RESTORE_MODELS} that exist in the live schema. */
+export function neverRestoreTableNames(): string[] {
+  const never = new Set<string>(NEVER_RESTORE_MODELS)
+  return Prisma.dmmf.datamodel.models
+    .filter((m) => never.has(m.name))
+    .map(tableNameOf)
+}
+
+/**
+ * Narrow a bundle's tables to those an import may actually write. Applying this
+ * in ONE place means truncate, restore, and post-restore verification all agree
+ * — a table dropped here is never emptied, never re-inserted, and never
+ * reported as a count mismatch.
+ */
+export function tablesForImport(bundleTables: string[]): string[] {
+  const never = new Set(neverRestoreTableNames())
+  return bundleTables.filter((t) => !never.has(t))
 }
 
 /** Resolve the set of tables to count/restore for the chosen metrics policy. */

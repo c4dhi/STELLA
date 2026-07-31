@@ -37,13 +37,11 @@ run_backup_wizard() {
 
     case "$action" in
         Export)
-            _backup_wizard_header
-            local enc
-            enc="$(wizard_boolean_input \
-                "Encrypt the bundle with a passphrase?" \
-                "Recommended — the bundle contains all secrets. You'll be prompted for the passphrase." \
-                "true")"
-
+            # Encryption is NOT offered as a choice here. The bundle holds every
+            # secret, and a boolean prompt is a single arrow key — which would
+            # reduce the deliberate two-flag gate on the export script to one
+            # keystroke. An operator who genuinely needs a plaintext bundle can
+            # run backup-export.sh with --no-encrypt --allow-plaintext-config.
             _backup_wizard_header
             local met
             met="$(wizard_boolean_input \
@@ -53,11 +51,11 @@ run_backup_wizard() {
 
             local args=()
             [[ -n "$env_arg" ]] && args+=("$env_arg")
-            [[ "$enc" == "true" ]] && args+=("--encrypt")
             [[ "$met" == "true" ]] && args+=("--include-metrics")
 
             _backup_wizard_header
             info "Starting export — the system must be running."
+            info "The bundle will be encrypted; you'll be asked for a passphrase."
             echo
             "$scripts_dir/backup-export.sh" "${args[@]}"
             ;;

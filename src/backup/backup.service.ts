@@ -13,6 +13,7 @@ import {
   countTables,
   readMigrationHead,
   tablesForExport,
+  tablesForImport,
   validateForImport,
   allTableNames,
   metricsTableNames,
@@ -26,6 +27,7 @@ import {
   isEncryptedBundle,
 } from './bundle-crypto'
 import { ZipReader, ZipWriter } from './bundle-zip'
+import { AuditActor, AuditService } from './audit.service'
 
 /**
  * Every table name we will ever trust from an (untrusted) uploaded manifest.
@@ -69,6 +71,11 @@ export interface BackupImportOptions {
   passphrase?: string
   /** Proceed despite an encryption-key fingerprint mismatch. */
   allowKeyMismatch?: boolean
+  /**
+   * Who is running this import, for the audit trail (#380). Defaults to the CLI
+   * actor, since the in-pod command has no authenticated user.
+   */
+  actor?: AuditActor
 }
 
 export interface TableVerification {
@@ -119,6 +126,7 @@ export class BackupService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly encryption: EncryptionService,
+    private readonly audit: AuditService,
   ) {}
 
   async export(
@@ -192,6 +200,12 @@ export class BackupService {
   }
 
   async import(options: BackupImportOptions): Promise<BackupImportReport> {
+    // Audit context (#380). Import is the destructive half — it wipes and
+    // replaces the whole deployment, and over HTTP it needs only a SystemAdmin
+    // token, no cluster access. Every terminal path below records who did it.
+    const actor: AuditActor = options.actor ?? { type: 'cli' }
+    const bundleFilename = path.basename(options.bundlePath)
+
     if (!options.confirmOverwrite) {
       throw new BadRequestException(
         'Import not confirmed: this operation overwrites all existing data ' +
@@ -200,7 +214,11 @@ export class BackupService {
     }
 
     let decryptedPath: string | null = null
+    let decryptedDir: string | null = null
     let reader: ZipReader | null = null
+    // Guards against double-recording: the rejected path below already writes
+    // its own event, and would otherwise also be caught as a failure.
+    let audited = false
     try {
       // Decrypt first if the bundle was exported with a passphrase.
       let bundlePath = options.bundlePath
@@ -210,9 +228,13 @@ export class BackupService {
             'This backup is encrypted. Provide the passphrase to import it.',
           )
         }
+        // Decrypting materializes the bundle in the clear. Stage it in an
+        // owner-only (0700) directory rather than a bare tmpdir path, so it is
+        // not readable by other local users for the duration of the import.
+        decryptedDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stella-dec-'))
         decryptedPath = path.join(
-          os.tmpdir(),
-          `stella-dec-${crypto.randomBytes(8).toString('hex')}.zip`,
+          decryptedDir,
+          `${crypto.randomBytes(8).toString('hex')}.zip`,
         )
         try {
           await decryptBundle(options.bundlePath, decryptedPath, options.passphrase)
@@ -236,6 +258,15 @@ export class BackupService {
         allowKeyMismatch: options.allowKeyMismatch,
       })
       if (!guard.ok) {
+        // Record the attempt too, not just the successes — a rejected import is
+        // exactly the kind of thing you want to find in the log afterwards.
+        await this.audit.record('backup.import', 'rejected', actor, {
+          bundleFilename,
+          blockers: guard.blockers,
+          migrationHead: manifest.migrationHead,
+          encryptionKeyFingerprint: manifest.encryptionKeyFingerprint,
+        })
+        audited = true
         throw new BadRequestException({
           message: 'Backup import rejected before any changes were made.',
           blockers: guard.blockers,
@@ -244,9 +275,11 @@ export class BackupService {
 
       // Only tables that exist in the live schema are ever trusted from the
       // uploaded manifest (also the SQL-injection allowlist for table names).
+      // tablesForImport then drops the never-restore set (the audit log), so it
+      // is neither truncated, re-inserted, nor counted during verification.
       const known = knownTables()
-      const bundleTables = Object.keys(manifest.tables).filter((t) =>
-        known.has(t),
+      const bundleTables = tablesForImport(
+        Object.keys(manifest.tables).filter((t) => known.has(t)),
       )
       const order = this.insertionOrder().filter((t) =>
         bundleTables.includes(t),
@@ -289,13 +322,42 @@ export class BackupService {
           `${report.packages.restored}/${report.packages.expected} packages, ` +
           `key=${report.keyStatus}`,
       )
+
+      // Written AFTER the transaction commits. Inside it, the truncate would
+      // have to spare this table by accident of ordering; the never-restore set
+      // keeps it out of the wipe, and committing first keeps it out of a
+      // rollback that would erase the record of a restore that did happen.
+      await this.audit.record('backup.import', 'success', actor, {
+        bundleFilename,
+        includesMetrics: manifest.includesMetrics,
+        tableCount: report.tables.length,
+        packageCount: report.packages.restored,
+        migrationHead: manifest.migrationHead,
+        encryptionKeyFingerprint: manifest.encryptionKeyFingerprint,
+        keyStatus: report.keyStatus,
+      })
+      audited = true
       return report
+    } catch (err) {
+      // A failure part-way through is the state most worth having a record of:
+      // the deployment may have been left mid-restore. Record it, then rethrow
+      // untouched so the caller still sees the original error.
+      if (!audited) {
+        await this.audit.record('backup.import', 'failed', actor, {
+          bundleFilename,
+          reason: err instanceof Error ? err.message : String(err),
+        })
+      }
+      throw err
     } finally {
       reader?.close()
       // The uploaded bundle (and any decrypted copy) is a credential — delete.
       await fs.rm(options.bundlePath, { force: true }).catch(() => undefined)
-      if (decryptedPath) {
-        await fs.rm(decryptedPath, { force: true }).catch(() => undefined)
+      if (decryptedDir) {
+        // Removes the staging directory and the decrypted bundle inside it.
+        await fs
+          .rm(decryptedDir, { recursive: true, force: true })
+          .catch(() => undefined)
       }
     }
   }
