@@ -5,7 +5,7 @@
 
 # gRPC server
 grpcio>=1.83.0
-grpcio-tools>=1.60.0
+grpcio-tools>=1.83.0
 
 # Shared audio handling (numpy is also pulled in by every provider, pinned
 # here so the floor is consistent across single-provider builds).
