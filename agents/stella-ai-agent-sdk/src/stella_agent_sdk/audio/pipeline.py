@@ -100,6 +100,20 @@ _BYTES_PER_SAMPLE = 2  # 16-bit mono PCM
 _PLAYOUT_FRAME_SAMPLES = 480
 _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 
+# Jitter buffer held before the first frame of an utterance goes out.
+#
+# LiveKit's AudioSource.capture_frame self-paces at 1x real time, so once
+# playout starts the source drains steadily — but TTS does NOT arrive steadily.
+# The Qwen3 provider yields roughly 167ms lumps (QWEN3_CHUNK_SIZE=2 codec
+# frames) at an uneven rate. Starting playback on the very first frame leaves
+# zero cushion, so any lump arriving later than the audio already queued empties
+# the source: an underrun, heard as interference at the chunk boundaries.
+#
+# Buffered playback never hit this because the whole sentence was queued before
+# the first frame went out. Streaming playback has to buy the cushion back
+# explicitly — but at ~300ms rather than the 1040-4138ms a full sentence costs.
+_DEFAULT_TTS_PREROLL_MS = 300
+
 
 class _StreamingUtterance:
     """One sentence's PCM audio, appended to while synthesis streams it in.
@@ -273,6 +287,17 @@ class AudioPipeline:
         # service does not guard its own model, so concurrent synthesis garbles
         # audio; this keeps at most one stream in flight per pipeline.
         self._synthesis_lock: asyncio.Lock = asyncio.Lock()
+        # Jitter buffer before an utterance starts playing (see the constant).
+        # 0 disables it, which is only sane if the provider streams smoothly.
+        try:
+            _preroll_ms = int(
+                os.getenv("STELLA_TTS_PREROLL_MS", str(_DEFAULT_TTS_PREROLL_MS))
+            )
+        except ValueError:
+            _preroll_ms = _DEFAULT_TTS_PREROLL_MS
+        self._preroll_bytes = max(
+            0, int(_preroll_ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE
+        )
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -2236,6 +2261,9 @@ class AudioPipeline:
         self._cur_cursor = 0
         self._cur_meta = meta
         first = True
+        # Set when playback has caught up with synthesis, so the cushion is
+        # re-armed before resuming rather than trickling out frame by frame.
+        starved = False
         # True once the teleprompter's "speaking" envelope is still owed because
         # the buffer was incomplete when audio started.
         teleprompter_owed = False
@@ -2261,16 +2289,24 @@ class AudioPipeline:
                     self._emit_speech_progress("speaking", meta=meta)
 
                 available = len(self._cur_audio) - self._cur_cursor
-                if available <= 0 or (available < _PLAYOUT_FRAME_BYTES and not utt.complete):
-                    if utt.complete:
-                        break  # nothing left and nothing more coming
-                    # Starved: playback has caught up with synthesis.
+                # Hold a cushion so the paced LiveKit source never runs dry on a
+                # late TTS lump. Required before the FIRST frame, and re-armed
+                # after any starvation — a starvation means the source has
+                # already underrun, and resuming with no cushion just queues up
+                # the next click. Extra silence beats repeated interference.
+                need = _PLAYOUT_FRAME_BYTES if not first else 1
+                cushion = self._preroll_bytes if (first or starved) else 0
+                want = max(need, cushion)
+                if available < want and not utt.complete:
+                    starved = True
                     if not await utt.wait_for_data(
-                        self._cur_cursor + _PLAYOUT_FRAME_BYTES,
-                        self._stop_speaking_event,
+                        self._cur_cursor + want, self._stop_speaking_event
                     ):
                         break  # stopped while waiting
                     continue
+                if available <= 0:
+                    break  # nothing left and nothing more coming
+                starved = False
 
                 frame = bytes(
                     self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]

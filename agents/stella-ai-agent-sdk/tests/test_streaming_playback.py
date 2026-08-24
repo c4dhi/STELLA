@@ -51,11 +51,13 @@ class SlowTTS:
             raise
 
 
-def make_pipeline(tts, teleprompter=True, barge_in=True):
+def make_pipeline(tts, teleprompter=True, barge_in=True, preroll_frames=2):
     room = CapturingRoom()
     pipe = AudioPipeline(room, stt_client=None, tts_client=tts, session_id="s")
     pipe._teleprompter_enabled = teleprompter
     pipe._barge_in_enabled = barge_in
+    # Pin the jitter buffer so tests do not inherit the production default.
+    pipe._preroll_bytes = _PLAYOUT_FRAME_BYTES * preroll_frames
     pipe._is_speaking = True
     pipe._stop_speaking_event.clear()
     pipe._play_allowed.set()
@@ -96,8 +98,9 @@ async def test_turn_costs_first_chunk_not_whole_stream():
     ttfa_ms = (loop.time() - t0) * 1000
     await asyncio.wait_for(play, timeout=5)
 
-    # Buffered playback could not have produced audio before ~240ms.
-    assert ttfa_ms < 120, f"first audio took {ttfa_ms:.0f}ms — still buffering?"
+    # 8 frames x 30ms = ~240ms to synthesize the whole sentence. With a 2-frame
+    # cushion audio starts after ~60ms — the win is intact, it just is not zero.
+    assert ttfa_ms < 150, f"first audio took {ttfa_ms:.0f}ms — still buffering?"
 
 
 @pytest.mark.asyncio
@@ -190,11 +193,12 @@ class PacedRoom(CapturingRoom):
         self.published.extend(data)
 
 
-def make_paced_pipeline(tts, teleprompter=True):
+def make_paced_pipeline(tts, teleprompter=True, preroll_frames=2):
     room = PacedRoom()
     pipe = AudioPipeline(room, stt_client=None, tts_client=tts, session_id="s")
     pipe._teleprompter_enabled = teleprompter
     pipe._barge_in_enabled = True
+    pipe._preroll_bytes = _PLAYOUT_FRAME_BYTES * preroll_frames
     pipe._is_speaking = True
     pipe._stop_speaking_event.clear()
     pipe._play_allowed.set()
@@ -369,3 +373,53 @@ async def test_next_sentence_still_overlaps_the_current_playback():
     assert not play.done(), "test is not exercising mid-playback overlap"
 
     await asyncio.wait_for(play, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_preroll_cushion_is_held_before_the_first_frame():
+    """The second regression that shipped: interference between chunks.
+
+    LiveKit's AudioSource.capture_frame self-paces at 1x real time, so once
+    playout starts the source drains steadily — but TTS does not ARRIVE
+    steadily (the Qwen3 provider yields ~167ms lumps at an uneven rate).
+    Starting on the very first frame leaves zero cushion, so a late lump empties
+    the source: an underrun, heard as interference at the chunk boundaries.
+    """
+    tts = SlowTTS(frames=10, gap=0.02)
+    pipe, room = make_pipeline(tts, preroll_frames=4)
+
+    utt = pipe._begin_synthesis("a sentence")
+    play = asyncio.create_task(pipe._play_utterance(utt))
+
+    # One frame exists well before four do; nothing may go out yet.
+    await asyncio.sleep(0.035)
+    assert len(utt.data) >= _PLAYOUT_FRAME_BYTES, "test timing is off"
+    assert len(room.published) == 0, "played before the cushion was filled"
+
+    await asyncio.wait_for(play, timeout=5)
+    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 10
+
+
+@pytest.mark.asyncio
+async def test_short_utterance_does_not_wait_for_a_cushion_it_will_never_get():
+    """A sentence shorter than the cushion must still play, not deadlock."""
+    tts = SlowTTS(frames=2, gap=0.01)
+    pipe, room = make_pipeline(tts, preroll_frames=50)  # far more than exists
+
+    utt = pipe._begin_synthesis("hi")
+    await asyncio.wait_for(pipe._play_utterance(utt), timeout=2)
+
+    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 2
+
+
+@pytest.mark.asyncio
+async def test_cushion_is_rearmed_after_a_starvation():
+    """Resuming from an underrun with no cushion just queues the next click."""
+    tts = SlowTTS(frames=12, gap=0.02)
+    pipe, room = make_pipeline(tts, preroll_frames=3)
+
+    utt = pipe._begin_synthesis("a sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt), timeout=5)
+
+    # All audio still arrives, in order, exactly once.
+    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 12
