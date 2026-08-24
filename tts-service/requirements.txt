@@ -9,7 +9,15 @@ grpcio-tools>=1.60.0
 
 # Shared audio handling (numpy is also pulled in by every provider, pinned
 # here so the floor is consistent across single-provider builds).
-numpy>=2.5.1
+#
+# Do NOT raise this to >=2.5 without also moving the GPU base image forward:
+# numpy 2.5 requires Python >=3.12 and nvidia/cuda:*-ubuntu22.04 ships 3.11,
+# so a >=2.5.1 floor makes the GPU image UNBUILDABLE ("No matching
+# distribution found for numpy"). That is exactly what happened in 2a8f638,
+# and it went unnoticed for weeks because the image was not rebuilt in
+# between. The floor below still resolves to the newest numpy each
+# interpreter can actually take.
+numpy>=2.4.6
 soundfile>=0.12.0
 scipy>=1.11.0
 
