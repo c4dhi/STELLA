@@ -28,12 +28,51 @@ export type { AgentSpeechProgress }
 // rather than racing it. Empirical; ±150ms reads as in-sync.
 const TELEPROMPTER_CLIENT_LAG_MS = 150
 
-/** A spoken sentence scheduled on the wall clock (performance.now() ms). */
+// How far the chained schedule may run ahead of the SDK's own estimate of when
+// the playhead becomes audible before we stop chaining and rebase onto it.
+//
+// Segments are chained so they never overlap, which means a segment that ends
+// slightly late pushes every later one late too. Over a long reply — now made
+// of many short progress ticks rather than one segment per sentence — that
+// slop would accumulate and the highlight would drift permanently behind the
+// voice. The SDK's `delay_ms` is a fresh measurement of the output queue on
+// every tick, so a large disagreement means the chain has drifted, not that the
+// SDK has buffered ahead. Generous enough to leave genuine lookahead alone.
+const TELEPROMPTER_REBASE_TOLERANCE_MS = 600
+
+/** A span of speech scheduled on the wall clock (performance.now() ms). */
 interface Segment {
   charStart: number
   charEnd: number
   startAt: number
   endAt: number
+}
+
+/**
+ * Where a progress tick lands on the timeline.
+ *
+ * Pure so the arithmetic — the part that decides whether the highlight reads as
+ * in sync — is testable without a DOM or an animation frame.
+ *
+ * `rebase` means the chained schedule had drifted more than the tolerance ahead
+ * of the SDK's fresh `delay_ms`, so the caller must drop not-yet-started
+ * segments and restart from `startAt` instead of continuing the chain.
+ */
+export function planSegment(input: {
+  now: number
+  delayMs: number
+  durationMs: number
+  scheduledUntil: number
+}): { startAt: number; endAt: number; rebase: boolean } {
+  const { now, delayMs, durationMs, scheduledUntil } = input
+  // When this tick's audio becomes audible: now + the SDK's buffered lead + the
+  // client jitter-buffer lag.
+  const audibleAt = now + delayMs + TELEPROMPTER_CLIENT_LAG_MS
+  const rebase = scheduledUntil - audibleAt > TELEPROMPTER_REBASE_TOLERANCE_MS
+  // Normally chain onto the previous segment so segments never overlap; on
+  // drift, trust the fresh measurement instead.
+  const startAt = rebase ? audibleAt : Math.max(audibleAt, scheduledUntil)
+  return { startAt, endAt: startAt + Math.max(1, durationMs), rebase }
 }
 
 export interface Teleprompter {
@@ -179,6 +218,10 @@ export function useTeleprompter(): Teleprompter {
     (data: AgentSpeechProgress) => {
       const transcriptId = data.transcript_id || ''
       const charEnd = data.char_end ?? 0
+      // How far THIS segment runs. Mid-sentence ticks stop short of the
+      // sentence end because the rest is not synthesized yet; falling back to
+      // charEnd keeps older SDKs working (they only ever send whole sentences).
+      const target = data.target_char ?? charEnd
       const spoken = data.spoken_char ?? 0
       const state = data.state || 'speaking'
 
@@ -198,19 +241,18 @@ export function useTeleprompter(): Teleprompter {
         // remaining audio. Harmless for a fresh sentence (already unfrozen).
         frozenRef.current = false
         if (prefersReducedMotionRef.current) {
-          setSpokenChar(charEnd) // no animation — light the whole sentence at once
+          setSpokenChar(target) // no animation — step straight to this tick's target
           return
         }
         const now = performance.now()
-        // Start when this sentence becomes audible: now + the SDK's buffered
-        // lead + the client jitter-buffer lag, but never before the previously
-        // scheduled audio ends (chain segments so they never overlap).
-        const startAt = Math.max(
-          now + (data.delay_ms ?? 0) + TELEPROMPTER_CLIENT_LAG_MS,
-          scheduledUntilRef.current
-        )
-        const endAt = startAt + Math.max(1, data.duration_ms ?? 0)
-        segmentsRef.current.push({ charStart: spoken, charEnd, startAt, endAt })
+        const { startAt, endAt, rebase } = planSegment({
+          now,
+          delayMs: data.delay_ms ?? 0,
+          durationMs: data.duration_ms ?? 0,
+          scheduledUntil: scheduledUntilRef.current,
+        })
+        if (rebase) segmentsRef.current = segmentsRef.current.filter(s => s.startAt <= now)
+        segmentsRef.current.push({ charStart: spoken, charEnd: target, startAt, endAt })
         scheduledUntilRef.current = endAt
         ensureLoop()
       } else if (state === 'spoken') {

@@ -9,7 +9,9 @@ provider could already deliver.
 `_play_utterance` now consumes a buffer that synthesis appends to while it
 plays. These tests pin the overlap and the three things it must not break:
 whole-frame publishing, barge-in responsiveness while starved, and the
-teleprompter's duration accounting.
+teleprompter staying in step with the voice at ANY real-time factor — the last
+of which streaming playback did break, by tying progress to a "synthesis
+finished" event that at RTF ~1 only arrives once the sentence is over.
 """
 
 import asyncio
@@ -231,65 +233,144 @@ def make_paced_pipeline(tts, teleprompter=True, preroll_frames=2):
     return pipe, room
 
 
-@pytest.mark.asyncio
-async def test_teleprompter_duration_uses_the_true_total():
-    """The regression this design has to avoid.
+def animated_fraction(room, span_ms: float) -> float:
+    """Share of a sentence the teleprompter is actually told to animate over."""
+    events = [e["data"] for e in progress_events(room)]
+    speaking = [e for e in events if e["state"] == "speaking"]
+    return sum(e["duration_ms"] for e in speaking) / span_ms
 
-    ``duration_ms`` is derived from ``len(_cur_audio)``. Emitting ``speaking``
-    on the first frame while the buffer is still filling would tell the frontend
-    to race a word cursor to the end of a sentence that is still growing. So the
-    envelope is held until the buffer completes, then carries the true remaining
-    duration — the same shape used when resuming after a barge-in suspend.
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rtf", [0.3, 0.6, 1.0, 1.3])
+async def test_highlight_animates_the_whole_sentence_at_every_rtf(rtf):
+    """The regression this design exists to prevent.
+
+    Progress used to be ONE envelope per sentence, held until synthesis
+    completed so it could carry the true byte length. That silently assumed
+    synthesis finishes well before playback (RTF ~0.3). At the deployed model's
+    RTF 0.92-1.33 "complete" arrives at the END of the sentence, so the envelope
+    described 4-8% of it and the highlight jumped straight to the end — which is
+    what "the teleprompter jumps ahead / never shows" actually was.
+
+    Streaming ticks are RTF-independent: however slow synthesis is, the ticks
+    together still cover the sentence.
     """
-    # Synthesis finishes long before playback does, as in production.
-    tts = SlowTTS(frames=20, gap=0.0)
+    PacedRoom.frame_delay = 0.012  # 20ms of audio per 12ms of wall clock
+    tts = SlowTTS(frames=25, gap=0.012 * rtf)
     pipe, room = make_paced_pipeline(tts, teleprompter=True)
 
     utt = pipe._begin_synthesis("a sentence")
-    await asyncio.wait_for(pipe._play_utterance(utt, meta=META), timeout=5)
+    await asyncio.wait_for(pipe._play_utterance(utt, meta=META), timeout=15)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    covered = animated_fraction(room, 25 * 20)
+    assert covered >= 0.8, (
+        f"RTF {rtf}: ticks only animate {covered:.0%} of the sentence — "
+        "the highlight will jump the rest"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ticks_never_promise_past_the_end_of_the_sentence():
+    """A highlight that runs AHEAD of the voice is the unreadable failure.
+
+    Mid-sentence targets are estimated, so they must be clamped: no tick may
+    light a character the sentence has not reached, and none may walk backwards
+    when the estimate is later replaced by the true total.
+    """
+    tts = SlowTTS(frames=20, gap=0.01)
+    pipe, room = make_paced_pipeline(tts, teleprompter=True)
+
+    utt = pipe._begin_synthesis("a sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, meta=META), timeout=10)
     for _ in range(5):
         await asyncio.sleep(0)
 
     events = [e["data"] for e in progress_events(room)]
     speaking = [e for e in events if e["state"] == "speaking"]
-    assert speaking, "no speaking envelope emitted"
-
-    # 20 frames x 20ms = 400ms of audio. Emitted off a partial buffer this would
-    # have been a small fraction; emitted off the true total it is most of it.
-    assert speaking[0]["duration_ms"] >= 300, (
-        f"duration_ms={speaking[0]['duration_ms']} — emitted off a partial buffer"
-    )
-    assert [e["state"] for e in events][-1] == "spoken"
+    assert len(speaking) > 1, "expected a stream of ticks, not one envelope"
+    for e in speaking:
+        assert META["char_start"] <= e["spoken_char"] <= e["target_char"] <= META["char_end"]
+    # Monotonic: the highlight never retreats mid-sentence.
+    assert [e["spoken_char"] for e in speaking] == sorted(e["spoken_char"] for e in speaking)
+    assert events[-1]["state"] == "spoken"
     assert events[-1]["spoken_char"] == META["char_end"]
 
 
 @pytest.mark.asyncio
-async def test_teleprompter_still_settles_when_synthesis_is_slower_than_playback():
-    """Documented degradation, pinned so it stays a known quantity.
+async def test_first_tick_is_emitted_without_waiting_for_synthesis():
+    """The first tick must go out on the first frame.
 
-    If synthesis is slower than real-time playback the buffer only completes near
-    the end of the utterance, so the held ``speaking`` envelope reports little
-    remaining time and the highlight barely animates. Audio is choppy in that
-    regime regardless — the point here is that the highlight still SETTLES
-    correctly rather than being dropped or left mid-sentence.
+    Holding it until the buffer completed is what coupled the teleprompter to
+    RTF. A tick only ever describes audio already in hand, so there is nothing
+    to wait for.
     """
-    tts = SlowTTS(frames=6, gap=0.05)  # far slower than playback
-    pipe, room = make_paced_pipeline(tts, teleprompter=True)
+    tts = SlowTTS(frames=30, gap=0.03)  # never completes during the window
+    pipe, room = make_pipeline(tts, teleprompter=True)
 
     utt = pipe._begin_synthesis("a sentence")
-    await asyncio.wait_for(pipe._play_utterance(utt, meta=META), timeout=5)
+    play = asyncio.create_task(pipe._play_utterance(utt, meta=META))
+    await asyncio.sleep(0.15)
     for _ in range(5):
         await asyncio.sleep(0)
 
-    events = [e["data"] for e in progress_events(room)]
-    assert [e["state"] for e in events][-1] == "spoken"
-    assert events[-1]["spoken_char"] == META["char_end"]
+    assert not utt.complete, "test needs synthesis still running"
+    speaking = [e["data"] for e in progress_events(room) if e["data"]["state"] == "speaking"]
+    assert speaking, "no progress emitted while the sentence was still synthesizing"
+    assert speaking[0]["duration_ms"] > 0
+
+    pipe._stop_speaking_event.set()
+    await asyncio.wait_for(play, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_playback_state_does_not_tick_with_the_teleprompter():
+    """agent_playback drives the barge-in mute — it is a transition signal.
+
+    Progress now fires several times a second; re-announcing "speaking" on every
+    tick would spam the mute channel. One per sentence, as before.
+    """
+    tts = SlowTTS(frames=25, gap=0.005)
+    pipe, room = make_paced_pipeline(tts, teleprompter=True)
+
+    utt = pipe._begin_synthesis("a sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, meta=META), timeout=10)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    playback = [d for d in room.data if d.get("type") == "agent_playback"]
+    ticks = [d for d in progress_events(room) if d["data"]["state"] == "speaking"]
+    assert len(ticks) > 1
+    assert len(playback) == 1, f"{len(playback)} agent_playback envelopes for one sentence"
+
+
+@pytest.mark.asyncio
+async def test_pace_is_calibrated_from_completed_sentences():
+    """The mid-sentence estimate is only as good as the pace behind it.
+
+    Seeding a constant would misplace the highlight for any voice or language
+    that does not happen to match it, so the pace is re-measured from every
+    sentence that finishes.
+    """
+    tts = SlowTTS(frames=25, gap=0.0)
+    pipe, room = make_paced_pipeline(tts, teleprompter=True)
+    seeded = pipe._ms_per_char
+
+    # 25 frames x 20ms = 500ms of audio over META's 10-char span => 50ms/char,
+    # well away from the 70ms/char seed.
+    utt = pipe._begin_synthesis("a sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, meta=META), timeout=10)
+
+    assert pipe._ms_per_char != seeded, "pace never re-measured"
+    assert 50 <= pipe._ms_per_char < seeded, f"pace moved the wrong way: {pipe._ms_per_char}"
 
 
 @pytest.mark.asyncio
 async def test_client_unsilencing_is_not_deferred_with_the_teleprompter():
     """agent_playback gates barge-in muting — it must fire on the first frame,
-    not wait for the buffer to complete like the teleprompter envelope does."""
+    while the sentence is still synthesizing. Nothing on this channel may wait
+    for the buffer to complete: the client stays muted until it arrives."""
     tts = SlowTTS(frames=12, gap=0.03)
     pipe, room = make_pipeline(tts, teleprompter=True)
 
