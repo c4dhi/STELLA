@@ -293,3 +293,79 @@ async def test_empty_utterance_emits_no_progress():
 
     assert len(room.published) == 0
     assert progress_events(room) == []
+
+
+class ConcurrencyTrackingTTS:
+    """Records the maximum number of overlapping synthesize_stream calls."""
+
+    def __init__(self, frames=4, gap=0.01):
+        self.frames = frames
+        self.gap = gap
+        self.live = 0
+        self.max_live = 0
+
+    async def synthesize_stream(self, **kwargs):
+        self.live += 1
+        self.max_live = max(self.max_live, self.live)
+        try:
+            for _ in range(self.frames):
+                await asyncio.sleep(self.gap)
+                yield Chunk(bytes(_PLAYOUT_FRAME_BYTES))
+        finally:
+            self.live -= 1
+
+
+@pytest.mark.asyncio
+async def test_only_one_synthesis_runs_at_a_time():
+    """The regression that shipped and had to be rolled back.
+
+    The TTS service shares one model across a 10-thread gRPC pool with no lock,
+    so two overlapping generations contend on the same weights and CUDA graphs.
+    On prod that showed up as two streams starting in the same millisecond,
+    finishing in lockstep, TTFA doubling 235ms -> 495ms, and audibly garbled
+    speech.
+
+    Buffered playback used to serialize this by accident: sentence N was fully
+    synthesized before it began playing, so only N+1 was ever in flight.
+    Streaming playback removes that accident, so the lock has to hold the line.
+    """
+    tts = ConcurrencyTrackingTTS(frames=6, gap=0.01)
+    pipe, _room = make_pipeline(tts)
+
+    # Arm several sentences at once — exactly what the speech worker does when
+    # the response LLM has run ahead of playback.
+    utts = [pipe._begin_synthesis(f"sentence {i}") for i in range(4)]
+    await asyncio.gather(*(u.task for u in utts))
+
+    assert tts.max_live == 1, (
+        f"{tts.max_live} concurrent synthesis calls — the service cannot take that"
+    )
+    assert all(u.complete for u in utts)
+
+
+@pytest.mark.asyncio
+async def test_next_sentence_still_overlaps_the_current_playback():
+    """Serializing must not cost us the prefetch overlap.
+
+    The provider runs well faster than real time, so the current sentence's
+    synthesis finishes early in its own playback and the next one acquires the
+    lock while that playback is still going. If this ever regresses to
+    "synthesize N+1 only after N finished playing", the gap between sentences
+    comes straight back.
+    """
+    tts = ConcurrencyTrackingTTS(frames=4, gap=0.001)
+    pipe, _room = make_paced_pipeline(tts)
+
+    current = pipe._begin_synthesis("first")
+    nxt = pipe._begin_synthesis("second")
+
+    play = asyncio.create_task(pipe._play_utterance(current, source="response"))
+    # Long enough for the first synthesis to finish and the second to get the
+    # lock, but well short of the first sentence's playback ending.
+    await asyncio.sleep(0.05)
+    assert nxt.complete or len(nxt.data) > 0, (
+        "next sentence had not started synthesizing during current playback"
+    )
+    assert not play.done(), "test is not exercising mid-playback overlap"
+
+    await asyncio.wait_for(play, timeout=5)

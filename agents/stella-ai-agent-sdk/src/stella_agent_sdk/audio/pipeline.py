@@ -269,6 +269,10 @@ class AudioPipeline:
 
         # Sentence-level streaming TTS queue (tuple of sentence text + source label)
         self._speech_queue: asyncio.Queue = asyncio.Queue()
+        # Serializes TTS generation — see the note in _begin_synthesis. The
+        # service does not guard its own model, so concurrent synthesis garbles
+        # audio; this keeps at most one stream in flight per pipeline.
+        self._synthesis_lock: asyncio.Lock = asyncio.Lock()
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -2091,14 +2095,30 @@ class AudioPipeline:
 
         async def _pump() -> None:
             try:
-                async for chunk in self._tts.synthesize_stream(
-                    text=sentence,
-                    session_id=self._session_id,
-                    voice=voice if voice is not None else self._tts_voice,
-                    speed=speed,
-                    language=language if language is not None else self._tts_language,
-                ):
-                    utt.append(chunk.audio_data)
+                # ONE generation at a time. The TTS service shares a single model
+                # instance across a 10-thread gRPC pool with no lock of its own,
+                # so two overlapping synthesize_stream calls contend on the same
+                # weights and CUDA graphs. Observed on prod: two streams starting
+                # in the same millisecond, finishing in lockstep, and
+                # time-to-first-audio doubling from ~235ms to ~495ms — with
+                # audibly garbled output.
+                #
+                # Before playback streamed, this could not happen: sentence N was
+                # fully synthesized before it began playing, so only N+1 was ever
+                # in flight. Streaming playback removed that ACCIDENTAL
+                # serialization, so make it explicit. The next sentence is still
+                # armed early and simply waits here; the provider runs well
+                # faster than real time, so it acquires the lock early in the
+                # current sentence's playback and the prefetch overlap survives.
+                async with self._synthesis_lock:
+                    async for chunk in self._tts.synthesize_stream(
+                        text=sentence,
+                        session_id=self._session_id,
+                        voice=voice if voice is not None else self._tts_voice,
+                        speed=speed,
+                        language=language if language is not None else self._tts_language,
+                    ):
+                        utt.append(chunk.audio_data)
             except asyncio.CancelledError:
                 utt.finish()
                 raise
@@ -2246,7 +2266,7 @@ class AudioPipeline:
                         break  # nothing left and nothing more coming
                     # Starved: playback has caught up with synthesis.
                     if not await utt.wait_for_data(
-                        self._cur_cursor + min(available + 1, _PLAYOUT_FRAME_BYTES),
+                        self._cur_cursor + _PLAYOUT_FRAME_BYTES,
                         self._stop_speaking_event,
                     ):
                         break  # stopped while waiting
