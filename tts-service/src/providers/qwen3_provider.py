@@ -113,6 +113,23 @@ class Qwen3Provider(TTSProvider):
       voices is just "drop two files on the PVC, no env edits". Set this
       env var only if you can't write to the same directory as the audio.
     - ``QWEN3_CHUNK_SIZE``: codec frames per streamed yield. Default 2.
+    - ``QWEN3_XVEC_ONLY``: condition on the reference clip's speaker embedding
+      ALONE instead of in-context reference codes. Default false.
+
+      Why it exists: in the default ICL mode the reference clip's codec frames
+      AND its transcript are prepended to every request's prompt and prefilled
+      through the talker on each call — the extracted prompt is cached, but the
+      forward pass over it is not. At 12Hz a 20s clip is ~240 frames against
+      ~10-20 tokens of actual sentence, so the reference dominates prefill
+      completely. That is why measured time-to-first-audio is ~241ms and
+      CONSTANT regardless of sentence length, and why it lands as an audible
+      break between sentences (each sentence is its own request).
+
+      With this on, the model gets ``ref_code=None`` and ``ref_ids=None`` — one
+      cached speaker embedding and nothing else — so the prefix disappears.
+      Timbre is preserved (that is what the x-vector carries); in-context
+      prosodic style transfer is not. Keep the clip trimmed to 5-10s either
+      way: it still sets the x-vector, and it is what ICL mode prefills.
     - ``QWEN3_SAMPLE_RATE``: output sample rate (Hz). Default 24000.
     - ``QWEN3_VOICES_MANIFEST``: optional path to a ``voices.json`` registry
       mapping named voices to per-language reference clips (see
@@ -134,6 +151,12 @@ class Qwen3Provider(TTSProvider):
         self._ref_audio = os.getenv("QWEN3_REF_AUDIO", "/models/qwen3/ref_audio.mp3")
         self._ref_text = os.getenv("QWEN3_REF_TEXT", "")
         self._chunk_size = int(os.getenv("QWEN3_CHUNK_SIZE", str(DEFAULT_CHUNK_SIZE)))
+        # x-vector-only conditioning. See the class docstring: this drops the
+        # reference clip out of the PREFILL, which is what time-to-first-audio
+        # is actually made of on this deployment.
+        self._xvec_only = os.getenv("QWEN3_XVEC_ONLY", "false").strip().lower() in (
+            "1", "true", "yes", "on"
+        )
         self._sample_rate = int(os.getenv("QWEN3_SAMPLE_RATE", str(DEFAULT_SAMPLE_RATE)))
         self._voices_manifest = os.getenv("QWEN3_VOICES_MANIFEST", "/models/qwen3/voices.json")
 
@@ -585,6 +608,7 @@ class Qwen3Provider(TTSProvider):
                 language=lang,
                 ref_audio=ref_audio,
                 ref_text=ref_text,
+                xvec_only=self._xvec_only,
             )
             return audio_list, sr
 
@@ -654,7 +678,7 @@ class Qwen3Provider(TTSProvider):
             stop_event = threading.Event()
 
             def _producer(attempt_lang=attempt_lang, queue=queue, stop_event=stop_event,
-                          ref_audio=ref_audio, ref_text=ref_text):
+                          ref_audio=ref_audio, ref_text=ref_text, xvec_only=self._xvec_only):
                 try:
                     for audio_chunk, _sr, _timing in self._model.generate_voice_clone_streaming(
                         text=text,
@@ -662,6 +686,7 @@ class Qwen3Provider(TTSProvider):
                         ref_audio=ref_audio,
                         ref_text=ref_text,
                         chunk_size=codec_chunk,
+                        xvec_only=xvec_only,
                     ):
                         if stop_event.is_set():
                             break
@@ -704,7 +729,11 @@ class Qwen3Provider(TTSProvider):
                         int16 = np.concatenate([leftover, int16])
 
                     if not first_yielded:
-                        print(f"[Qwen3] First audio in {(time.time() - t0) * 1000:.0f}ms (stream)")
+                        mode = "xvec" if self._xvec_only else "icl"
+                        print(
+                            f"[Qwen3] First audio in {(time.time() - t0) * 1000:.0f}ms "
+                            f"(stream, {mode})"
+                        )
 
                     total = len(int16)
                     full = total - (total % chunk_size)
