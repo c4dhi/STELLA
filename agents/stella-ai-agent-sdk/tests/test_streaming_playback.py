@@ -18,7 +18,12 @@ import pytest
 
 from stella_agent_sdk.audio.pipeline import (
     AudioPipeline,
+    _BYTES_PER_SAMPLE,
+    _DECLICK_SAMPLES,
     _PLAYOUT_FRAME_BYTES,
+    _PLAYOUT_FRAME_SAMPLES,
+    _fade_in,
+    _silence_frame,
     _StreamingUtterance,
 )
 
@@ -45,10 +50,31 @@ class SlowTTS:
                 await asyncio.sleep(self.gap)
                 if self.fail_after is not None and i >= self.fail_after:
                     raise RuntimeError("tts exploded")
-                yield Chunk(bytes(_PLAYOUT_FRAME_BYTES))
+                # Non-zero, so real audio is distinguishable from the silence
+                # the underrun guard bridges with (see real_audio()).
+                yield Chunk(bytes([(i % 250) + 1]) * _PLAYOUT_FRAME_BYTES)
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+
+
+def real_frame_ids(room) -> list:
+    """Markers of the SPEECH frames published, in order.
+
+    SlowTTS fills chunk i with the constant byte i+1, so a frame's last byte
+    identifies which chunk it came from — and the last byte survives the
+    de-click fade-in, which only touches the head of a frame. A frame bridged
+    in by the underrun guard is silence past its ramp, so its tail is zero and
+    it is skipped. This makes "every chunk, once, in order" directly assertable
+    without the guard's silence confusing the count.
+    """
+    buf = bytes(room.published)
+    ids = []
+    for i in range(0, len(buf), _PLAYOUT_FRAME_BYTES):
+        frame = buf[i:i + _PLAYOUT_FRAME_BYTES]
+        if any(frame[_DECLICK_SAMPLES * _BYTES_PER_SAMPLE:]):
+            ids.append(frame[-1])
+    return ids
 
 
 def make_pipeline(tts, teleprompter=True, barge_in=True, preroll_frames=2):
@@ -80,7 +106,7 @@ async def test_audio_is_published_before_synthesis_finishes():
     assert not utt.complete, "test is not exercising the streaming case"
 
     await asyncio.wait_for(play, timeout=5)
-    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 6
+    assert real_frame_ids(room) == list(range(1, 7))
 
 
 @pytest.mark.asyncio
@@ -397,7 +423,7 @@ async def test_preroll_cushion_is_held_before_the_first_frame():
     assert len(room.published) == 0, "played before the cushion was filled"
 
     await asyncio.wait_for(play, timeout=5)
-    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 10
+    assert real_frame_ids(room) == list(range(1, 11))
 
 
 @pytest.mark.asyncio
@@ -409,17 +435,147 @@ async def test_short_utterance_does_not_wait_for_a_cushion_it_will_never_get():
     utt = pipe._begin_synthesis("hi")
     await asyncio.wait_for(pipe._play_utterance(utt), timeout=2)
 
-    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 2
+    assert real_frame_ids(room) == [1, 2]
 
 
 @pytest.mark.asyncio
-async def test_cushion_is_rearmed_after_a_starvation():
-    """Resuming from an underrun with no cushion just queues the next click."""
+async def test_starvation_delivers_every_sample_in_order():
+    """A starved player must still deliver the whole utterance, once, in order.
+
+    This used to assert the cushion was RE-ARMED after a starve. That was the
+    bug: at RTF ~1 re-arming stops the pushes for a whole pre-roll while the
+    output source drains the same amount, so the source hits empty on every
+    cycle. What actually matters is the invariant below — no sample dropped,
+    duplicated, or reordered, however often synthesis falls behind.
+    """
     tts = SlowTTS(frames=12, gap=0.02)
     pipe, room = make_pipeline(tts, preroll_frames=3)
 
     utt = pipe._begin_synthesis("a sentence")
     await asyncio.wait_for(pipe._play_utterance(utt), timeout=5)
 
-    # All audio still arrives, in order, exactly once.
-    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 12
+    assert real_frame_ids(room) == list(range(1, 13))
+
+
+# ---------------------------------------------------------------------------
+# Jitter-buffer sawtooth (the "interference between chunks" report)
+# ---------------------------------------------------------------------------
+
+
+def _spy_on_waits(monkeypatch, pipe, room):
+    """Record (want - cursor, already_playing) for every wait_for_data call."""
+    from stella_agent_sdk.audio import pipeline as P
+
+    orig = P._StreamingUtterance.wait_for_data
+    seen = []
+
+    async def spy(self, want, stop_event, *a, **k):
+        seen.append((want - pipe._cur_cursor, len(room.published) > 0))
+        return await orig(self, want, stop_event, *a, **k)
+
+    monkeypatch.setattr(P._StreamingUtterance, "wait_for_data", spy)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_cushion_is_not_rearmed_mid_sentence(monkeypatch):
+    """Once playing, a starved player must wait for ONE frame — not a new cushion.
+
+    Re-arming the whole pre-roll mid-sentence is what makes the LiveKit source
+    sawtooth: the player dumps its buffer into the source, immediately runs dry,
+    then stops pushing for a full pre-roll while the source drains that same
+    amount. The source grazes empty on every cycle, and an empty source is what
+    makes the client's Opus PLC invent audio — the warble people hear.
+
+    The initial pre-roll (before the first frame) is deliberate and stays.
+    """
+    # Synthesis well slower than playout (PacedRoom spends 12ms/frame)
+    # reproduces prod, where measured RTF is 0.92-1.33. The margin is wide on
+    # purpose: a ratio near 1.0 makes whether the player starves at all depend
+    # on machine load, which is not what this test is about.
+    tts = SlowTTS(frames=8, gap=0.04)
+    pipe, room = make_paced_pipeline(tts, preroll_frames=4)
+    seen = _spy_on_waits(monkeypatch, pipe, room)
+
+    utt = pipe._begin_synthesis("a sentence that streams in over time")
+    await pipe._play_utterance(utt, source="response", meta=META)
+
+    mid = [want for want, playing in seen if playing]
+    assert mid, "test did not exercise a mid-sentence starve"
+    assert max(mid) <= _PLAYOUT_FRAME_BYTES, (
+        f"player re-armed a {max(mid)}-byte cushion mid-sentence "
+        f"(one frame is {_PLAYOUT_FRAME_BYTES}); this drains the LiveKit source "
+        f"to empty on every cycle. waits={mid}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Underrun guard + de-click
+# ---------------------------------------------------------------------------
+
+
+def _samples(frame: bytes) -> list:
+    return [
+        int.from_bytes(frame[i * 2:i * 2 + 2], "little", signed=True)
+        for i in range(len(frame) // 2)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_underrun_is_bridged_with_silence():
+    """A source about to run dry gets real silence, not the client's guesswork.
+
+    An empty AudioSource sends no packets, so Opus concealment extrapolates the
+    last frame — the warble. Bridging keeps the stream continuous.
+    """
+    tts = SlowTTS(frames=8, gap=0.05)  # far slower than playout: certain to starve
+    pipe, room = make_paced_pipeline(tts, preroll_frames=2)
+
+    utt = pipe._begin_synthesis("a slowly arriving sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=15)
+
+    assert real_frame_ids(room) == list(range(1, 9)), "speech was lost or reordered"
+    total_frames = len(room.published) // _PLAYOUT_FRAME_BYTES
+    assert total_frames > 8, "source ran dry but no silence was bridged"
+
+
+@pytest.mark.asyncio
+async def test_healthy_stream_is_never_spliced_with_silence():
+    """The guard must not fire on a stream that is keeping up."""
+    tts = SlowTTS(frames=10, gap=0.001)  # synthesis far ahead of playout
+    pipe, room = make_paced_pipeline(tts, preroll_frames=2)
+
+    utt = pipe._begin_synthesis("a comfortable sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=10)
+
+    assert len(room.published) == _PLAYOUT_FRAME_BYTES * 10, (
+        "silence was spliced into a stream that never starved"
+    )
+
+
+def test_silence_frame_ramps_down_instead_of_cutting():
+    """Cutting a waveform to zero is a step, and a step is an audible click."""
+    frame = _silence_frame(fade_from=10000)
+    samples = _samples(frame)
+
+    assert samples[0] != 0, "silence cut straight to zero — that clicks"
+    assert abs(samples[0]) < 10000, "ramp must start below the source sample"
+    assert all(s == 0 for s in samples[_DECLICK_SAMPLES:]), "ramp overran"
+    head = [abs(s) for s in samples[:_DECLICK_SAMPLES]]
+    assert head == sorted(head, reverse=True), "ramp is not monotonically decaying"
+
+
+def test_silence_frame_with_no_predecessor_is_pure_silence():
+    assert _silence_frame() == bytes(_PLAYOUT_FRAME_BYTES)
+
+
+def test_fade_in_ramps_up_and_leaves_the_tail_alone():
+    """Resuming from silence must fade in; the rest of the frame is untouched."""
+    loud = b"\x40\x1f" * _PLAYOUT_FRAME_SAMPLES  # constant 7999
+    faded = _samples(_fade_in(loud))
+    original = _samples(loud)
+
+    assert faded[0] < original[0], "first sample was not attenuated"
+    head = faded[:_DECLICK_SAMPLES]
+    assert head == sorted(head), "fade-in is not monotonically rising"
+    assert faded[_DECLICK_SAMPLES:] == original[_DECLICK_SAMPLES:], "tail was altered"

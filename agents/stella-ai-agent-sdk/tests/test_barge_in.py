@@ -38,6 +38,11 @@ class FakeRoom:
         self.captured.append(data)
         await asyncio.sleep(0)
 
+    def publish_data_ordered(self, data, *a, **k):
+        # Stand-in for RoomManager's FIFO publisher. Recording synchronously
+        # preserves call order, which is the property it guarantees.
+        self.captured.append(data)
+
     def flush_audio_queue(self):
         pass
 

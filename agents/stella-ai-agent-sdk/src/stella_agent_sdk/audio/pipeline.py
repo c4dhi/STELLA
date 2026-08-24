@@ -130,6 +130,66 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 # On this hardware there is no headroom to stream into.
 _DEFAULT_TTS_PREROLL_MS = 800
 
+# Wall-clock covered by one playout frame.
+_PLAYOUT_FRAME_MS = _PLAYOUT_FRAME_SAMPLES * 1000 // _TTS_SAMPLE_RATE
+
+# Underrun guard.
+#
+# A LiveKit AudioSource that runs dry does NOT emit silence. The client simply
+# stops receiving packets, and Opus packet-loss concealment fills the hole by
+# extrapolating the last frame it had — a synthetic, warbling continuation of
+# whatever phoneme was in flight. That artifact is the "interference between
+# chunks" people report; it is the client inventing audio, not TTS producing it.
+#
+# So when synthesis falls behind far enough that the source is about to empty,
+# push real silence instead. A synthesis stall then sounds like a short pause,
+# which is honest, rather than a warble, which is not.
+_UNDERRUN_FLOOR_MS = 120.0    # top the source up once it drops below this
+_UNDERRUN_POLL_MS = 10.0      # how often to re-check while starved
+
+# De-click ramp applied on either side of inserted silence. Cutting a speech
+# waveform to zero — or resuming it from zero — is a step discontinuity, and a
+# step is audible as a click. A few ms of linear ramp removes it.
+_DECLICK_MS = 5
+_DECLICK_SAMPLES = _DECLICK_MS * _TTS_SAMPLE_RATE // 1000
+
+
+def _tail_sample(frame: bytes) -> int:
+    """Last 16-bit sample of a frame (0 when there is not one)."""
+    if len(frame) < _BYTES_PER_SAMPLE:
+        return 0
+    return int.from_bytes(frame[-_BYTES_PER_SAMPLE:], "little", signed=True)
+
+
+def _fade_in(frame: bytes) -> bytes:
+    """Ramp the first _DECLICK_MS of ``frame`` up from zero."""
+    n = min(len(frame) // _BYTES_PER_SAMPLE, _DECLICK_SAMPLES)
+    if n <= 0:
+        return frame
+    out = bytearray(frame)
+    for i in range(n):
+        off = i * _BYTES_PER_SAMPLE
+        sample = int.from_bytes(out[off:off + _BYTES_PER_SAMPLE], "little", signed=True)
+        scaled = int(sample * (i + 1) / n)
+        out[off:off + _BYTES_PER_SAMPLE] = scaled.to_bytes(
+            _BYTES_PER_SAMPLE, "little", signed=True
+        )
+    return bytes(out)
+
+
+def _silence_frame(fade_from: int = 0) -> bytes:
+    """A frame of silence, ramping down from ``fade_from`` so it does not click."""
+    out = bytearray(_PLAYOUT_FRAME_BYTES)
+    if fade_from:
+        n = min(_DECLICK_SAMPLES, _PLAYOUT_FRAME_SAMPLES)
+        for i in range(n):
+            off = i * _BYTES_PER_SAMPLE
+            scaled = int(fade_from * (1.0 - (i + 1) / n))
+            out[off:off + _BYTES_PER_SAMPLE] = scaled.to_bytes(
+                _BYTES_PER_SAMPLE, "little", signed=True
+            )
+    return bytes(out)
+
 
 class _StreamingUtterance:
     """One sentence's PCM audio, appended to while synthesis streams it in.
@@ -158,13 +218,23 @@ class _StreamingUtterance:
         self.complete = True
         self._new.set()
 
-    async def wait_for_data(self, want: int, stop_event: asyncio.Event) -> bool:
+    async def wait_for_data(
+        self,
+        want: int,
+        stop_event: asyncio.Event,
+        timeout: Optional[float] = None,
+    ) -> bool:
         """Block until the buffer holds ``want`` bytes, synthesis ends, or stop.
 
         Returns False only when ``stop_event`` fired — the caller must abandon
         playback. Racing the stop event here is what keeps barge-in responsive
         while the player is starved: without it a slow synthesis would pin the
         speech worker with the transcript gate closed and drop user speech.
+
+        With ``timeout`` set the wait also gives up when it expires and returns
+        True WITHOUT the data having arrived, so the caller can top the output
+        source up with silence and come back. Callers must therefore re-check
+        the buffer rather than assume ``want`` bytes are present.
         """
         while len(self.data) < want and not self.complete:
             self._new.clear()
@@ -176,12 +246,20 @@ class _StreamingUtterance:
             waiter = asyncio.ensure_future(self._new.wait())
             stopper = asyncio.ensure_future(stop_event.wait())
             try:
-                await asyncio.wait({waiter, stopper}, return_when=asyncio.FIRST_COMPLETED)
+                await asyncio.wait(
+                    {waiter, stopper},
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=timeout,
+                )
             finally:
                 waiter.cancel()
                 stopper.cancel()
             if stop_event.is_set():
                 return False
+            if timeout is not None:
+                # One bounded pass only — hand control back so the caller can
+                # decide whether the output source needs bridging.
+                return True
         return True
 
     def cancel(self) -> None:
@@ -1715,7 +1793,10 @@ class AudioPipeline:
             "data": {"state": state, "agent_id": self._agent_id},
         }
         try:
-            asyncio.create_task(self._room.publish_data(payload))
+            # Ordered, not create_task: this envelope and the speech-progress
+            # one are emitted back to back, and two independent tasks would let
+            # them reach the wire in scheduler order rather than call order.
+            self._room.publish_data_ordered(payload)
         except RuntimeError:
             # No running loop (e.g. sync test context) — skip.
             pass
@@ -1844,7 +1925,11 @@ class AudioPipeline:
             },
         }
         try:
-            asyncio.create_task(self._room.publish_data(payload))
+            # Ordered, not create_task — see _emit_playback_state. Consecutive
+            # sentences emit spoken(N) then speaking(N+1) microseconds apart
+            # under streaming playback; reordering those makes the teleprompter
+            # jump backwards.
+            self._room.publish_data_ordered(payload)
         except RuntimeError:
             # No running loop (e.g. called from sync test context) — skip.
             pass
@@ -2277,9 +2362,14 @@ class AudioPipeline:
         self._cur_cursor = 0
         self._cur_meta = meta
         first = True
-        # Set when playback has caught up with synthesis, so the cushion is
-        # re-armed before resuming rather than trickling out frame by frame.
+        # True while playback has caught up with synthesis and is waiting.
         starved = False
+        # True when the last thing pushed was bridging silence, so the next
+        # real frame gets a fade-in.
+        bridged = False
+        last_sample = 0
+        starve_count = 0
+        bridged_ms = 0.0
         # True once the teleprompter's "speaking" envelope is still owed because
         # the buffer was incomplete when audio started.
         teleprompter_owed = False
@@ -2305,20 +2395,44 @@ class AudioPipeline:
                     self._emit_speech_progress("speaking", meta=meta)
 
                 available = len(self._cur_audio) - self._cur_cursor
-                # Hold a cushion so the paced LiveKit source never runs dry on a
-                # late TTS lump. Required before the FIRST frame, and re-armed
-                # after any starvation — a starvation means the source has
-                # already underrun, and resuming with no cushion just queues up
-                # the next click. Extra silence beats repeated interference.
+                # The jitter buffer is armed ONCE, before the first frame.
+                # After that the LiveKit source IS the buffer: it holds
+                # everything already pushed and drains at 1x, so the player
+                # only ever needs the NEXT frame to keep it topped up.
+                #
+                # Re-arming the cushion mid-sentence (which this used to do on
+                # every starve) is actively harmful at RTF ~1: the player dumps
+                # its buffer into the source, immediately runs dry, then stops
+                # pushing for a whole pre-roll while the source drains that
+                # same amount. The source sawtooths down to empty on every
+                # cycle, and an empty source is exactly when the client starts
+                # concealing — see _bridge_underrun for what that sounds like.
                 need = _PLAYOUT_FRAME_BYTES if not first else 1
-                cushion = self._preroll_bytes if (first or starved) else 0
-                want = max(need, cushion)
+                want = max(need, self._preroll_bytes if first else 0)
                 if available < want and not utt.complete:
-                    starved = True
                     if not await utt.wait_for_data(
-                        self._cur_cursor + want, self._stop_speaking_event
+                        self._cur_cursor + want,
+                        self._stop_speaking_event,
+                        # Before the first frame there is nothing to protect, so
+                        # wait outright. Once playing, wake up often enough to
+                        # keep the source fed while synthesis catches up.
+                        timeout=None if first else _UNDERRUN_POLL_MS / 1000.0,
                     ):
                         break  # stopped while waiting
+                    if (
+                        not first
+                        and not utt.complete
+                        and len(self._cur_audio) - self._cur_cursor < want
+                    ):
+                        if not starved:
+                            starved = True
+                            starve_count += 1
+                        pushed = await self._bridge_underrun(
+                            fade_from=0 if bridged else last_sample
+                        )
+                        if pushed:
+                            bridged = True
+                            bridged_ms += pushed
                     continue
                 if available <= 0:
                     break  # nothing left and nothing more coming
@@ -2328,6 +2442,12 @@ class AudioPipeline:
                     self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]
                 )
                 self._cur_cursor += len(frame)
+                if bridged:
+                    # Coming back from inserted silence — ramp in so the
+                    # restart is a fade, not a step (a step is a click).
+                    frame = _fade_in(frame)
+                    bridged = False
+                last_sample = _tail_sample(frame)
 
                 if first:
                     first = False
@@ -2360,6 +2480,16 @@ class AudioPipeline:
                 # treat "spoken" only as "this sentence is done, settle it fully
                 # lit".
                 self._emit_speech_progress("spoken", meta=meta)
+
+            if starve_count:
+                # Without this the sawtooth is invisible: playback stalls do not
+                # surface anywhere else, so a session that sounds wrong leaves no
+                # trace to diagnose it from.
+                logger.info(
+                    f"[TTS] Playout starved {starve_count}x on a "
+                    f"{len(self._cur_audio)}B {source} utterance; bridged "
+                    f"{bridged_ms:.0f}ms of silence to keep the source fed"
+                )
         finally:
             # Never leave synthesis running for audio nobody will hear.
             utt.cancel()
@@ -2367,6 +2497,41 @@ class AudioPipeline:
             self._cur_audio = b""
             self._cur_cursor = 0
             self._cur_meta = None
+
+    async def _bridge_underrun(self, fade_from: int = 0) -> float:
+        """Push silence when the output source is about to run dry.
+
+        A LiveKit AudioSource that empties does not play silence — the client
+        stops receiving packets and Opus concealment extrapolates the last frame
+        it had, producing the warbling "interference between chunks" that a
+        synthesis stall is heard as. Pushing real silence keeps the stream
+        continuous, so the same stall reads as a short pause instead.
+
+        Only fires once the source has actually drained below the floor, so a
+        healthy stream never has silence spliced into it. ``fade_from`` ramps the
+        silence down from the last real sample rather than cutting to zero.
+
+        Note the inserted silence deliberately does NOT advance ``_cur_cursor``:
+        the teleprompter playhead tracks synthesized audio, not wall clock, so a
+        bridged sentence highlights slightly ahead of the sound for the duration
+        of the stall. That is the lesser evil — the alternative is a highlight
+        that stops dead.
+
+        Returns the milliseconds pushed (0 when the source still has depth).
+        """
+        # Cap the floor at half the jitter buffer. A floor larger than the
+        # cushion itself would fire the moment playback starts and splice
+        # silence into a perfectly healthy stream.
+        cushion_ms = self._preroll_bytes / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+        floor_ms = min(_UNDERRUN_FLOOR_MS, cushion_ms / 2)
+        try:
+            queued = float(self._room.queued_playout_ms)
+        except Exception:
+            return 0.0
+        if queued > floor_ms:
+            return 0.0
+        await self._room.publish_audio(_silence_frame(fade_from))
+        return float(_PLAYOUT_FRAME_MS)
 
     async def _speech_worker(self) -> None:
         """Background worker that speaks queued sentences with prefetch.
