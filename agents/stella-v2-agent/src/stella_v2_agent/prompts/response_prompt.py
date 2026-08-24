@@ -74,7 +74,9 @@ def build_response_system_prompt(
         "conversationHistory": format_history(conversation_history, history_limit),
         "stateContext": _state_machine_section(sm_context),
         "directive": directive.to_prompt_section() if directive else "",
-        "language": _language_directive(sm_context.get("language")) or "",
+        "language": _language_directive(
+            sm_context.get("language"), pinned=bool(sm_context.get("language_pinned"))
+        ) or "",
         "bridge": bridge or "",
         # Runtime flags so the editable guidelines own the "just collected /
         # phase completing / just transitioned" behavioral prose via {{#if ...}}.
@@ -85,17 +87,40 @@ def build_response_system_prompt(
     return "\n\n".join(s for s in sections if s)
 
 
-def _language_directive(language: Optional[str]) -> Optional[str]:
+def _language_directive(language: Optional[str], pinned: bool = False) -> Optional[str]:
     """Build a deterministic 'respond in <language>' instruction.
 
     Returns None for unknown/auto so the existing heuristic language rules stand.
+
+    The FIRST words matter most: the persona and guidelines carry a standing
+    "respond in the same language the user speaks" rule, and on an opening turn
+    — where the user has said nothing yet, or only something short and garbled —
+    that rule has no answer, so the model reaches for an English greeting and
+    only switches afterwards ("Hey there! Ich bin ..."). Both variants below
+    therefore name the greeting explicitly rather than trusting "every word" to
+    cover it.
+
+    ``pinned`` marks a deployment fixed to one language (STELLA_LANGUAGE): there
+    is nothing to detect and nothing to match, so the wording must not invite the
+    model to infer a language from the user at all.
     """
     if not language or language == "auto":
         return None
     name = LANGUAGE_NAMES.get(language, language)
-    return (
-        f"LANGUAGE (highest priority — overrides everything above):\n"
+    head = (
+        f"LANGUAGE (highest priority — overrides every other instruction, "
+        f"including any rule about matching the user's language):\n"
         f"- Respond ENTIRELY in {name}. Every single word, including any examples, must be in {name}.\n"
+        f"- This includes your GREETING and the very first sentence of your reply. "
+        f"Never open in another language and switch afterwards.\n"
+    )
+    if pinned:
+        return head + (
+            f"- This deployment is FIXED to {name}. It is not a guess and not a detection: "
+            f"speak {name} even when the user's input is empty, unclear, garbled, or in "
+            f"another language. Do not switch languages under any circumstance."
+        )
+    return head + (
         f"- This is the language detected for this conversation; do not switch languages on your own."
     )
 

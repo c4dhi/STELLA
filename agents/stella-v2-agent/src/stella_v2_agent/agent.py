@@ -230,6 +230,10 @@ class StellaV2Agent(BaseAgent):
             resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
             self._session_language = resolved_language
             sm_context["language"] = resolved_language
+            # Tell the response prompt whether this is a fixed-language deployment
+            # or a per-turn detection — the two need different wording to stop the
+            # model opening in English on an ambiguous first turn.
+            sm_context["language_pinned"] = bool(self.language_resolver.forced)
             logger.info(f"Resolved language for turn: {resolved_language}")
 
             # Resolve the per-stream TTS voice. Unlike language there is no
@@ -374,7 +378,7 @@ class StellaV2Agent(BaseAgent):
             deterministic_response = (
                 directive.resolved_response
                 or directive.redirect_message
-                or self.arbitration.gate_failure_message
+                or self.arbitration.gate_failure_message_for(resolved_language)
             )
             if directive.action == "short_circuit":
                 # Replace the response AND skip downstream processing entirely
