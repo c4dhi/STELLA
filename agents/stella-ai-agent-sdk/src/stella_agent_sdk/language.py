@@ -21,11 +21,39 @@ detector is a focused, dependency-free en/de classifier that returns a usable
 confidence. Swapping in a broader detector only changes ``detect_language``.
 """
 
+import logging
+import os
 import re
 from typing import Optional, Tuple
 
+logger = logging.getLogger(__name__)
+
 # Human-readable names for prompt injection.
 LANGUAGE_NAMES = {"en": "English", "de": "German"}
+
+# Deployment-level language PIN, chosen by the operator in the deploy UI.
+# When set to a supported ISO 639-1 code the conversation language is FORCED to
+# it for the whole deployment: detection is ignored, the lock never switches,
+# and STT transcription is pinned to the same language (``audio/pipeline.py``).
+# This is the deliberate opposite of the default auto-detect — it exists because
+# auto-detect needs a long enough utterance to be confident, so a short first
+# turn would otherwise fall back to the generic default (RFC §5 / §10 "force").
+# Empty or ``auto`` = auto-detect, the default.
+FORCE_LANGUAGE_ENV = "STELLA_LANGUAGE"
+
+
+def forced_language() -> Optional[str]:
+    """The deployment-pinned conversation language, or ``None`` for auto-detect.
+
+    Read from the ``STELLA_LANGUAGE`` env var so every consumer (resolver, STT
+    pin, TTS seed) derives the pin from one place rather than each holding its
+    own copy.
+    """
+    value = (os.getenv(FORCE_LANGUAGE_ENV) or "").strip().lower()
+    if not value or value == "auto":
+        return None
+    return value
+
 
 # German function words / strong indicators.
 _GERMAN_WORDS = {
@@ -111,6 +139,7 @@ class LanguageResolver:
         detect_threshold: float = 0.4,
         switch_threshold: float = 0.6,
         debounce: int = 1,
+        forced: Optional[str] = None,
     ) -> None:
         self.supported = set(supported)
         self.default = default if default in self.supported else next(iter(self.supported))
@@ -119,13 +148,33 @@ class LanguageResolver:
         self.debounce = max(1, debounce)
 
         self.seed = seed if seed in self.supported else None
-        self.locked: Optional[str] = None
+        # Deployment pin. ``_forced_request`` keeps the raw operator choice so a
+        # later ``apply_config`` that widens ``supported`` can honor a pin the
+        # default set had rejected. Falls back to the env var so both agents get
+        # the pin from the shared SDK with no per-agent wiring.
+        self._forced_request = (forced if forced is not None else forced_language())
+        self.forced = self._validate_forced()
+        self.locked: Optional[str] = self.forced
         # True once the lock came from a real detection (not the default/seed).
         # A provisional lock yields to the first genuine detection at
         # detect_threshold; a confirmed lock only changes via switch_threshold.
-        self._confirmed = False
+        # A pin counts as confirmed: it is a decision, not a placeholder.
+        self._confirmed = bool(self.forced)
         self._pending: Optional[str] = None
         self._pending_count = 0
+
+    def _validate_forced(self) -> Optional[str]:
+        """Clamp the requested pin to the supported set (unsupported → no pin)."""
+        want = self._forced_request
+        if not want:
+            return None
+        if want not in self.supported:
+            logger.warning(
+                f"[Language] Ignoring pin '{want}': not in supported set "
+                f"{sorted(self.supported)}. Falling back to auto-detect."
+            )
+            return None
+        return want
 
     def reset(self) -> None:
         """Clear per-session state (lock, confirmation, pending switch).
@@ -134,8 +183,8 @@ class LanguageResolver:
         conversations. Configuration (supported set, default, thresholds, seed)
         is preserved.
         """
-        self.locked = None
-        self._confirmed = False
+        self.locked = self.forced
+        self._confirmed = bool(self.forced)
         self._reset_pending()
 
     def apply_config(self, config: dict) -> None:
@@ -157,11 +206,21 @@ class LanguageResolver:
             self.switch_threshold = float(config["switch_threshold"])
         if "debounce" in config:
             self.debounce = max(1, int(config["debounce"]))
-        # Re-validate any seed against the (possibly new) supported set.
+        if "force" in config:
+            want = (str(config["force"] or "")).strip().lower()
+            self._forced_request = want if want and want != "auto" else None
+        # Re-validate seed and pin against the (possibly new) supported set.
         self.seed = self.seed if self.seed in self.supported else None
+        self.forced = self._validate_forced()
+        if self.forced:
+            self.locked, self._confirmed = self.forced, True
 
     def set_seed(self, seed: Optional[str]) -> None:
-        """Set the plan-declared language seed (``auto``/unsupported → no seed)."""
+        """Set the plan-declared language seed (``auto``/unsupported → no seed).
+
+        No effect while a deployment pin is active — the pin outranks the plan
+        seed, which only ever biases an otherwise-undecided turn.
+        """
         self.seed = seed if seed in self.supported else None
 
     def _reset_pending(self) -> None:
@@ -185,9 +244,18 @@ class LanguageResolver:
                 signal, RFC §8.3). Both signal shapes flow through the same
                 gating below, so the source is interchangeable.
 
-        Fallback chain (RFC §8.3): confident supported signal → session lock →
-        plan seed → default.
+        Fallback chain (RFC §8.3): deployment pin → confident supported signal →
+        session lock → plan seed → default.
         """
+        # Deployment pin outranks everything: the operator asked for a
+        # fixed-language deployment, so detection is not consulted at all and no
+        # short/ambiguous turn can fall back to the default.
+        if self.forced:
+            self.locked = self.forced
+            self._confirmed = True
+            self._reset_pending()
+            return self.locked
+
         if signal is not None:
             lang, confidence = signal
         else:

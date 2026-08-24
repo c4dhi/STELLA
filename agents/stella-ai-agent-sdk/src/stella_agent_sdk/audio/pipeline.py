@@ -45,6 +45,7 @@ import uuid
 from typing import AsyncIterator, Awaitable, Callable, List, Optional
 
 from stella_agent_sdk.env import env_int as _env_int
+from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
 from stella_agent_sdk.services.tts_client import TTSClient
@@ -188,10 +189,18 @@ class AudioPipeline:
         # TTS enabled flag
         self._tts_enabled = os.getenv("TTS_ENABLED", "true").lower() != "false"
 
-        # TTS language. Seeded from the env var for backward compatibility, but
-        # the agent overrides it per turn via set_tts_language() so the voice
-        # follows the resolved conversation language (RFC §8/§9 #9).
-        self._tts_language = os.getenv("TTS_LANGUAGE", None) or None
+        # Deployment language PIN (STELLA_LANGUAGE). When set, this deployment
+        # is fixed to one language: STT transcription is pinned to it below
+        # instead of auto-detecting, and the resolver forces every turn to it.
+        # None = auto-detect (default).
+        self._language_pin = forced_language()
+
+        # TTS language. Seeded from the env var for backward compatibility, then
+        # from the deployment pin, so the first synthesis of a pinned deployment
+        # is already correct before any turn has been resolved. The agent
+        # overrides it per turn via set_tts_language() so the voice follows the
+        # resolved conversation language (RFC §8/§9 #9).
+        self._tts_language = os.getenv("TTS_LANGUAGE", None) or self._language_pin or None
 
         # TTS voice. Seeded from the env var; the agent can override it per
         # stream via set_tts_voice() so the spoken voice can change per turn.
@@ -673,8 +682,11 @@ class AudioPipeline:
             sample_rate=sample_rate,
             # No language hint by default: STT auto-detects, which yields the
             # per-utterance detection signal for free (RFC §6). Pinning is an
-            # opt-in (env WHISPER_LANGUAGE or a language_provider) and trades
-            # that free detection away, so we leave it off here.
+            # opt-in that trades that free detection away — which is exactly what
+            # a pinned deployment wants: a short or garbled first utterance is
+            # transcribed AS the pinned language instead of being auto-detected
+            # (unreliably) and falling back to the default.
+            language_provider=(lambda: self._language_pin) if self._language_pin else None,
         ):
             logger.debug(f"STT event: text='{event.text[:50] if event.text else ''}...', is_final={event.is_final}, speech_started={event.speech_started}")
 

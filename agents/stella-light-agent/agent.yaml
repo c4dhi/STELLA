@@ -59,6 +59,8 @@ configSchema:
     - name: TTS_ENABLED
       description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
       default: "true"
+    - name: STELLA_LANGUAGE
+      description: "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT transcribes as it, the resolver forces every turn to it, and the reply is written in it — so a short or garbled first utterance still gets answered in that language. Empty or 'auto' = detect per turn and fall back to the default language."
     - name: TRANSCRIPT_DEBOUNCE_MS
       description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
       default: "300"

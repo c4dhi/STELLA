@@ -130,7 +130,7 @@ These settings only apply when `STT_PROVIDER=whisper`:
 | `WHISPER_DEVICE` | No | `cpu` | Compute device: `cpu` or `cuda` |
 | `WHISPER_COMPUTE_TYPE` | No | `int8` | Quantization type: `float16`, `int8`, `int8_float16` |
 | `WHISPER_BEAM_SIZE` | No | `5` | Beam search width. Higher = more accurate but slower |
-| `WHISPER_LANGUAGE` | No | (auto-detect) | Force specific language code (e.g., `en`, `de`, `fr`). Empty for auto-detection |
+| `WHISPER_LANGUAGE` | No | (auto-detect) | Force specific language code (e.g., `en`, `de`, `fr`) for the whole STT service. Empty for auto-detection. To fix a *single* agent's language, set `STELLA_LANGUAGE` on that agent instead — it pins transcription per session without affecting other agents |
 
 </details>
 

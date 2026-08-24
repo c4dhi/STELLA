@@ -63,9 +63,9 @@ export default function DeployAgentModal({
   // Agent configuration state (pipeline configurator)
   const [selectedConfiguration, setSelectedConfiguration] = useState<AgentConfiguration | null>(null)
 
-  // TTS voice/language selection. '' = provider default voice / Auto language.
+  // Voice/language selection. '' = provider default voice / Auto language.
   // Surfaced from the active provider's capabilities; persisted as the
-  // TTS_VOICE / TTS_LANGUAGE env vars the agent SDK already reads.
+  // TTS_VOICE / TTS_LANGUAGE / STELLA_LANGUAGE env vars the agent SDK reads.
   const [ttsCapabilities, setTtsCapabilities] = useState<TtsCapabilities | null>(null)
   const [isLoadingTtsCaps, setIsLoadingTtsCaps] = useState(false)
   const [ttsVoice, setTtsVoice] = useState('')
@@ -338,6 +338,13 @@ export default function DeployAgentModal({
         filteredEnvVars['TTS_VOICE'] = ttsVoice
       }
       if (ttsLanguage) {
+        // STELLA_LANGUAGE pins the *conversation*: STT transcribes as this
+        // language, the resolver forces every turn to it, and the reply is
+        // written in it — so a short or garbled first utterance still answers
+        // in the chosen language instead of falling back to the default.
+        // TTS_LANGUAGE goes along so the very first synthesis, which happens
+        // before any turn is resolved, already uses the right reference clip.
+        filteredEnvVars['STELLA_LANGUAGE'] = ttsLanguage
         filteredEnvVars['TTS_LANGUAGE'] = ttsLanguage
       }
 
