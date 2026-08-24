@@ -103,16 +103,32 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 # Jitter buffer held before the first frame of an utterance goes out.
 #
 # LiveKit's AudioSource.capture_frame self-paces at 1x real time, so once
-# playout starts the source drains steadily — but TTS does NOT arrive steadily.
-# The Qwen3 provider yields roughly 167ms lumps (QWEN3_CHUNK_SIZE=2 codec
-# frames) at an uneven rate. Starting playback on the very first frame leaves
-# zero cushion, so any lump arriving later than the audio already queued empties
-# the source: an underrun, heard as interference at the chunk boundaries.
+# playout starts the source drains steadily. TTS does NOT arrive steadily, and
+# on the current deployment it barely arrives fast enough at all.
 #
-# Buffered playback never hit this because the whole sentence was queued before
-# the first frame went out. Streaming playback has to buy the cushion back
-# explicitly — but at ~300ms rather than the 1040-4138ms a full sentence costs.
-_DEFAULT_TTS_PREROLL_MS = 300
+# Measured against the prod TTS service (Qwen3-TTS-12Hz-1.7B on an L4), three
+# German sentences of 1.7-4.2s of audio:
+#
+#   real-time factor          0.92 - 1.33   (synthesis is ~as slow as playback,
+#                                             and for short text SLOWER)
+#   first chunk               ~235ms
+#   whole sentence            2235 - 3907ms  <- what buffered playback waited for
+#   max playout deficit       614 - 756ms    <- how far playout falls behind
+#                                              arrival when started with no cushion
+#
+# The deficit is the number that sets this constant: playout must start late
+# enough that it never catches up with synthesis. 300ms was NOT enough (starts
+# at ~434ms, under the 756ms deficit) and still underran mid-sentence. 700-800ms
+# clears it with margin, and lands in the same arriving lump, so 800ms costs
+# nothing over 700ms.
+#
+# At 800ms the first frame goes out ~1037ms in, against 2235-3907ms before —
+# and it is now CONSTANT rather than scaling with sentence length.
+#
+# The real fix is a faster provider: at the RTF ~0.3 the Qwen3 docs quote (4090,
+# 0.6B) a 300ms cushion would be ample and first audio would land near 350ms.
+# On this hardware there is no headroom to stream into.
+_DEFAULT_TTS_PREROLL_MS = 800
 
 
 class _StreamingUtterance:
