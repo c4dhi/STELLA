@@ -101,6 +101,65 @@ _PLAYOUT_FRAME_SAMPLES = 480
 _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 
 
+class _StreamingUtterance:
+    """One sentence's PCM audio, appended to while synthesis streams it in.
+
+    Lets playback start on the first chunk instead of the last. ``data`` is a
+    bytearray the player binds to directly (``self._cur_audio``), so appends are
+    visible to the playhead without copying; ``complete`` says whether more is
+    coming; ``wait_for_data`` parks the player when it catches up with synthesis.
+    """
+
+    __slots__ = ("data", "complete", "error", "task", "_new")
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+        self.complete = False
+        self.error: Optional[Exception] = None
+        self.task: Optional[asyncio.Task] = None
+        self._new = asyncio.Event()
+
+    def append(self, audio: bytes) -> None:
+        self.data += audio
+        self._new.set()
+
+    def finish(self, error: Optional[Exception] = None) -> None:
+        self.error = error
+        self.complete = True
+        self._new.set()
+
+    async def wait_for_data(self, want: int, stop_event: asyncio.Event) -> bool:
+        """Block until the buffer holds ``want`` bytes, synthesis ends, or stop.
+
+        Returns False only when ``stop_event`` fired — the caller must abandon
+        playback. Racing the stop event here is what keeps barge-in responsive
+        while the player is starved: without it a slow synthesis would pin the
+        speech worker with the transcript gate closed and drop user speech.
+        """
+        while len(self.data) < want and not self.complete:
+            self._new.clear()
+            # Re-check after clear(): the producer may have appended (and set the
+            # event) between the length check and the clear, which would
+            # otherwise park us on an event nobody will set again.
+            if len(self.data) >= want or self.complete:
+                break
+            waiter = asyncio.ensure_future(self._new.wait())
+            stopper = asyncio.ensure_future(stop_event.wait())
+            try:
+                await asyncio.wait({waiter, stopper}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                waiter.cancel()
+                stopper.cancel()
+            if stop_event.is_set():
+                return False
+        return True
+
+    def cancel(self) -> None:
+        """Stop synthesising — the audio is no longer wanted."""
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+
+
 class AudioPipeline:
     """
     Orchestrates complete audio flow between LiveKit, STT, TTS, and agent.
@@ -2012,25 +2071,48 @@ class AudioPipeline:
         self._turn_response_tts_first_byte_emitted = False
         self._last_response_tts_done_elapsed = 0
 
-    async def _prefetch_sentence(self, sentence: str, voice=None, speed=1.0, language=None):
-        """Pre-synthesize a sentence and return all audio chunks as a list.
+    def _begin_synthesis(
+        self, sentence: str, voice=None, speed: float = 1.0, language=None
+    ) -> "_StreamingUtterance":
+        """Start synthesising a sentence and return its buffer IMMEDIATELY.
 
-        This runs the full gRPC synthesize_stream call and collects all chunks
-        so they can be played back immediately without waiting for synthesis.
+        The returned ``_StreamingUtterance`` fills in the background as chunks
+        arrive from the TTS service, so playback can begin on the first chunk
+        instead of the last. Nothing here awaits synthesis.
+
+        This replaces the old ``_prefetch_sentence``, which collected every
+        chunk into a list before returning — meaning the first audible sample of
+        a sentence waited for the WHOLE sentence to synthesize. Measured against
+        the Qwen3 provider that is time-to-first-audio ~235ms versus a full
+        stream of 1040-4138ms per sentence, i.e. we were paying 4-17x the
+        latency the provider was already capable of delivering.
         """
-        chunks = []
-        try:
-            async for chunk in self._tts.synthesize_stream(
-                text=sentence,
-                session_id=self._session_id,
-                voice=voice,
-                speed=speed,
-                language=language,
-            ):
-                chunks.append(chunk)
-        except Exception as e:
-            logger.error(f"[TTS] Prefetch failed: {e}")
-        return chunks
+        utt = _StreamingUtterance()
+
+        async def _pump() -> None:
+            try:
+                async for chunk in self._tts.synthesize_stream(
+                    text=sentence,
+                    session_id=self._session_id,
+                    voice=voice if voice is not None else self._tts_voice,
+                    speed=speed,
+                    language=language if language is not None else self._tts_language,
+                ):
+                    utt.append(chunk.audio_data)
+            except asyncio.CancelledError:
+                utt.finish()
+                raise
+            except Exception as e:
+                # Same contract as the old _prefetch_sentence: never raise into
+                # the speech worker. A failed synthesis yields whatever audio
+                # arrived (usually none) and the worker moves on.
+                logger.error(f"[TTS] Synthesis failed: {e}")
+                utt.finish(error=e)
+            else:
+                utt.finish()
+
+        utt.task = asyncio.create_task(_pump())
+        return utt
 
     def _emit_first_byte(self, source: str) -> None:
         """Emit the TTS first-byte analytics event once per source per turn.
@@ -2082,68 +2164,137 @@ class AudioPipeline:
     async def _play_prefetched(
         self, chunks, source: str = "response", meta: Optional[dict] = None
     ) -> None:
-        """Play a pre-fetched utterance to LiveKit, in fixed frames from a
+        """Play an ALREADY-COMPLETE list of TTS chunks.
+
+        A thin adapter over ``_play_utterance`` for callers that hold the whole
+        utterance up front — synthesis that finished before playback began, and
+        the barge-in / teleprompter tests, which drive the playhead with
+        synthetic audio and must keep exercising the real playback loop.
+        """
+        utt = _StreamingUtterance()
+        for c in chunks:
+            utt.append(c.audio_data)
+        utt.finish()
+        await self._play_utterance(utt, source=source, meta=meta)
+
+    async def _play_utterance(
+        self, utt: "_StreamingUtterance", source: str = "response", meta: Optional[dict] = None
+    ) -> None:
+        """Play an utterance to LiveKit AS IT SYNTHESIZES, in fixed frames from a
         sample-accurate playhead so playback can be suspended and resumed.
 
-        The utterance's chunks are concatenated into one PCM buffer held in
-        memory; ``self._cur_cursor`` tracks the next byte to push. When barge-in
+        ``self._cur_audio`` is the utterance's buffer — the SAME object the
+        synthesis task appends to, so it grows underneath this loop — and
+        ``self._cur_cursor`` tracks the next byte to push. When the cursor
+        catches up with synthesis we wait for more audio (racing the stop event,
+        so barge-in stays responsive) rather than returning. When barge-in
         suspends playback the loop pauses here (without returning) until resumed
         or aborted, so the speech worker does not advance to the next sentence.
 
+        Only WHOLE frames are published while synthesis is still running; a
+        short final frame is allowed once the buffer is complete. Publishing a
+        partial frame early would glitch the output.
+
         ``meta`` carries the sentence's character span in the published
         agent_text; with it (and the teleprompter enabled) this emits a
-        ``speaking`` progress envelope on the first frame and ``spoken`` once the
-        whole utterance has played. Interruption envelopes come from
-        suspend_speech()/stop_speaking()/commit_interrupt(), which read the
-        live playhead.
+        ``speaking`` progress envelope and ``spoken`` once the whole utterance
+        has played. Interruption envelopes come from suspend_speech()/
+        stop_speaking()/commit_interrupt(), which read the live playhead.
+
+        TELEPROMPTER TIMING: the ``speaking`` envelope carries ``duration_ms``,
+        derived from ``len(self._cur_audio)``. While synthesis is in flight that
+        length is a PARTIAL total, so the envelope would tell the frontend to
+        race a word cursor to the end of a sentence that is still growing. So
+        the teleprompter envelope is held until the buffer completes and then
+        emitted with the true remaining duration — the same "advance from the
+        playhead" shape already used when resuming after a barge-in suspend.
+        The client-silencing channel (_emit_playback_state) is NOT held: that
+        gates barge-in muting and must fire on the first frame.
         """
-        # Concatenate this utterance into one position-addressable buffer.
-        self._cur_audio = b"".join(c.audio_data for c in chunks)
+        # Bind the growing buffer directly — no copy, so appends are visible here.
+        self._cur_audio = utt.data
         self._cur_cursor = 0
         self._cur_meta = meta
         first = True
+        # True once the teleprompter's "speaking" envelope is still owed because
+        # the buffer was incomplete when audio started.
+        teleprompter_owed = False
 
-        while self._cur_cursor < len(self._cur_audio):
-            # Reversible suspend (barge-in): pause until resumed or aborted.
-            if not self._play_allowed.is_set():
-                resumed = await self._await_resume_or_stop()
-                if not resumed:
-                    break  # committed / hard-stopped while suspended
+        try:
+            while True:
+                # Reversible suspend (barge-in): pause until resumed or aborted.
+                if not self._play_allowed.is_set():
+                    resumed = await self._await_resume_or_stop()
+                    if not resumed:
+                        break  # committed / hard-stopped while suspended
 
-            if self._stop_speaking_event.is_set():
-                logger.info("TTS interrupted mid-sentence")
-                break
+                if self._stop_speaking_event.is_set():
+                    logger.info("TTS interrupted mid-sentence")
+                    break
 
-            frame = self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]
-            self._cur_cursor += len(frame)
+                # Synthesis may have finished at any point — including while we
+                # were publishing frames, which is the common case (the provider
+                # runs well faster than real time). Settle the deferred
+                # teleprompter envelope as soon as the true total is known.
+                if utt.complete and teleprompter_owed:
+                    teleprompter_owed = False
+                    self._emit_speech_progress("speaking", meta=meta)
 
-            if first:
-                first = False
-                self._emit_first_byte(source)
-                # Teleprompter: this sentence's audio has started. Tell the
-                # frontend its span and audible duration so it can advance a
-                # word cursor across it in time with the audio.
-                self._emit_speech_progress("speaking", meta=meta)
+                available = len(self._cur_audio) - self._cur_cursor
+                if available <= 0 or (available < _PLAYOUT_FRAME_BYTES and not utt.complete):
+                    if utt.complete:
+                        break  # nothing left and nothing more coming
+                    # Starved: playback has caught up with synthesis.
+                    if not await utt.wait_for_data(
+                        self._cur_cursor + min(available + 1, _PLAYOUT_FRAME_BYTES),
+                        self._stop_speaking_event,
+                    ):
+                        break  # stopped while waiting
+                    continue
 
-            # The agent is now audibly talking — a barge-in may start.
-            self._audio_active = True
-            await self._room.publish_audio(frame)
+                frame = bytes(
+                    self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]
+                )
+                self._cur_cursor += len(frame)
 
-        # Did the utterance play to the end (vs. abort via break)?
-        completed = self._cur_cursor >= len(self._cur_audio)
-        if completed:
-            # CONTRACT: "spoken" fires when the last frame is *pushed* to the
-            # room, not when the user *hears* the end — up to queued_playout_ms
-            # of this audio is still draining the output + client buffers. The
-            # frontend must therefore drive end-of-highlight timing from the
-            # "speaking" envelope's schedule (delay_ms + duration_ms), and treat
-            # "spoken" only as "this sentence is done, settle it fully lit".
-            self._emit_speech_progress("spoken", meta=meta)
+                if first:
+                    first = False
+                    self._emit_first_byte(source)
+                    if utt.complete:
+                        # Total already known — emit the full envelope now.
+                        self._emit_speech_progress("speaking", meta=meta)
+                    else:
+                        # Un-silence the client immediately; hold the
+                        # teleprompter envelope for the real duration.
+                        self._emit_playback_state("speaking")
+                        teleprompter_owed = True
 
-        # Utterance finished (or aborted) — clear held audio.
-        self._cur_audio = b""
-        self._cur_cursor = 0
-        self._cur_meta = None
+                # The agent is now audibly talking — a barge-in may start.
+                self._audio_active = True
+                await self._room.publish_audio(frame)
+
+            # Did the utterance play to the end (vs. abort via break)?
+            completed = (
+                not first  # something was actually spoken
+                and utt.complete
+                and self._cur_cursor >= len(self._cur_audio)
+            )
+            if completed:
+                # CONTRACT: "spoken" fires when the last frame is *pushed*, not
+                # when the user *hears* the end — up to queued_playout_ms of this
+                # audio is still draining the output + client buffers. The
+                # frontend must therefore drive end-of-highlight timing from the
+                # "speaking" envelope's schedule (delay_ms + duration_ms), and
+                # treat "spoken" only as "this sentence is done, settle it fully
+                # lit".
+                self._emit_speech_progress("spoken", meta=meta)
+        finally:
+            # Never leave synthesis running for audio nobody will hear.
+            utt.cancel()
+            # Utterance finished (or aborted) — release held audio.
+            self._cur_audio = b""
+            self._cur_cursor = 0
+            self._cur_meta = None
 
     async def _speech_worker(self) -> None:
         """Background worker that speaks queued sentences with prefetch.
@@ -2158,36 +2309,23 @@ class AudioPipeline:
         self.close_transcript_gate()
 
         try:
-            prefetch_task = None
-            prefetch_source = None
-            prefetch_meta = None
+            pending = None
+            pending_source = None
+            pending_meta = None
 
             while True:
-                # If we have a prefetched result, use it; otherwise wait for queue
-                if prefetch_task is not None:
-                    # Race the prefetch await against the stop signal. Otherwise an
-                    # in-flight synthesis blocks the worker while the transcript gate
-                    # stays closed, dropping user speech during barge-in.
-                    stop_waiter = asyncio.create_task(self._stop_speaking_event.wait())
-                    try:
-                        await asyncio.wait(
-                            {prefetch_task, stop_waiter},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                    finally:
-                        stop_waiter.cancel()
-                    if self._stop_speaking_event.is_set():
-                        prefetch_task.cancel()
-                        prefetch_task = None
-                        prefetch_source = None
-                        prefetch_meta = None
-                        break
-                    chunks = await prefetch_task
-                    source = prefetch_source
-                    meta = prefetch_meta
-                    prefetch_task = None
-                    prefetch_source = None
-                    prefetch_meta = None
+                # If the previous iteration armed the next sentence, take it —
+                # its synthesis has been running during the last playback. No
+                # await here any more: an utterance is usable the moment it
+                # exists, so the worker never blocks on synthesis and the old
+                # "race the prefetch against the stop signal" dance is gone.
+                if pending is not None:
+                    utt = pending
+                    source = pending_source
+                    meta = pending_meta
+                    pending = None
+                    pending_source = None
+                    pending_meta = None
                 else:
                     # Race the queue against the stop signal. A commit/stop
                     # drains the queue (including the flush sentinel), so a bare
@@ -2211,37 +2349,32 @@ class AudioPipeline:
                     if item is None:
                         break
                     sentence, source, meta = item
-                    # No prefetch available — synthesize synchronously for this first sentence
-                    chunks = await self._prefetch_sentence(
-                        sentence, voice=self._tts_voice, language=self._tts_language
-                    )
+                    # Nothing armed (first sentence of a turn, or the peek below
+                    # lost the race). Start synthesis now — this returns at once
+                    # and playback begins on the first chunk, so the cost of
+                    # arriving here is time-to-first-audio, not a whole sentence.
+                    utt = self._begin_synthesis(sentence)
 
                 if self._stop_speaking_event.is_set():
+                    utt.cancel()
                     break
 
-                if not chunks:
-                    continue
-
-                # Before playing, peek at the next sentence and start prefetching it
+                # Before playing, peek at the next sentence and arm its synthesis
                 try:
                     next_item = self._speech_queue.get_nowait()
                     if next_item is not None:
                         next_sentence, next_source, next_meta = next_item
-                        prefetch_task = asyncio.create_task(
-                            self._prefetch_sentence(
-                                next_sentence, voice=self._tts_voice, language=self._tts_language
-                            )
-                        )
-                        prefetch_source = next_source
-                        prefetch_meta = next_meta
+                        pending = self._begin_synthesis(next_sentence)
+                        pending_source = next_source
+                        pending_meta = next_meta
                     else:
                         # Sentinel — put it back so the main loop sees it
                         self._speech_queue.put_nowait(None)
                 except asyncio.QueueEmpty:
-                    pass  # No next sentence yet — that's fine
+                    pass  # Not enqueued yet — see #460; costs TTFA, not a stream
 
-                # Play the current sentence's audio
-                await self._play_prefetched(chunks, source=source, meta=meta)
+                # Play the current sentence as it synthesizes
+                await self._play_utterance(utt, source=source, meta=meta)
 
                 # Emit tts_done events after each sentence completes
                 if self.turn_anchor_ts > 0:
@@ -2253,12 +2386,12 @@ class AudioPipeline:
 
         except asyncio.CancelledError:
             logger.info("[TTS] Speech worker cancelled")
-            if prefetch_task:
-                prefetch_task.cancel()
+            if pending:
+                pending.cancel()
         except Exception as e:
             logger.error(f"[TTS] Speech worker error: {e}")
-            if prefetch_task:
-                prefetch_task.cancel()
+            if pending:
+                pending.cancel()
         finally:
             # Emit response_tts_done with the last response sentence's completion time
             if hasattr(self, '_last_response_tts_done_elapsed') and self._last_response_tts_done_elapsed > 0:
