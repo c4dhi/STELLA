@@ -22,7 +22,10 @@ from stella_agent_sdk.audio.pipeline import (
     _StreamingUtterance,
 )
 
-from test_teleprompter import CapturingRoom, Chunk, progress_events, META
+# tests/ is a package (__init__.py), so import the shared harness relatively —
+# a bare `from test_teleprompter import ...` only resolves when the tests
+# directory happens to be on sys.path.
+from .test_teleprompter import CapturingRoom, Chunk, progress_events, META
 
 
 class SlowTTS:
