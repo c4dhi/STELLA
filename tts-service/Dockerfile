@@ -36,9 +36,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# GPU base image (NVIDIA CUDA 12.4 — compatible with torch 2.5.1+cu124)
+# GPU base image
 # ============================================================================
-FROM nvidia/cuda:13.3.1-cudnn-runtime-ubuntu22.04 AS base-gpu
+#
+# PINNED, AND NOT SAFELY BUMPABLE. The CUDA version here must be supported by
+# the GPU node's *driver* and must match the torch wheel installed below
+# (torch 2.5.1+cu124). Dependabot bumped this to 13.3.1 on 2026-07-30; nobody
+# rebuilt the image until 2026-08-25, and every pod then failed in the NVIDIA
+# prestart hook before the container process even started:
+#
+#   nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.3
+#
+# The production node runs driver 565.57.01, which tops out at CUDA 12.x. The
+# failure is invisible until someone rebuilds, so it took the service down
+# weeks after the change that caused it. Bump this only together with the node
+# driver and the torch wheel, and only after actually starting the image on a
+# GPU host. See .github/dependabot.yml, which now ignores this dependency.
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base-gpu
 
 WORKDIR /app
 

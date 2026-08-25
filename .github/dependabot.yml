@@ -81,6 +81,21 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 5
+    ignore:
+      # nvidia/cuda is pinned to what the GPU node's DRIVER supports, not to
+      # whatever is newest. A bump to 13.3.1 (2026-07-30) was merged unnoticed
+      # and only detonated on the next rebuild, weeks later, taking tts-service
+      # down: every pod died in the NVIDIA prestart hook with
+      # "unsatisfied condition: cuda>=13.3" against driver 565.57.01.
+      #
+      # There is no build-time signal for this — the image builds fine and
+      # fails at container start — so it cannot be caught by CI that only
+      # builds. Upgrade deliberately, alongside the node driver and the torch
+      # wheel, and verify by starting the image on a GPU host.
+      - dependency-name: "nvidia/cuda"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
     groups:
       docker-base-images:
         patterns:
