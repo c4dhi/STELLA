@@ -46,8 +46,8 @@ class FakeClient:
             "new_state_id": "state-y",
         }
 
-    async def set_deliverable(self, key, value, reasoning=""):
-        self.calls.append(("set_deliverable", key, value, reasoning))
+    async def set_deliverable(self, key, value, reasoning="", unconfirmed=False):
+        self.calls.append(("set_deliverable", key, value, reasoning, unconfirmed))
         return {"success": True, "transitioned": False, "task_completed": None}
 
 
@@ -115,3 +115,39 @@ async def test_batch_update_completes_and_skips_explicitly():
     # Verify the tool drove explicit complete + skip via the client.
     assert ("complete_task", "task-1", "done") in client.calls
     assert ("skip_task", "task-2", "skip") in client.calls
+
+
+# ---------------------------------------------------------------------------
+# `unconfirmed` reaches the wire (mentioned-but-not-confirmed deliverables).
+# ---------------------------------------------------------------------------
+
+def test_set_deliverable_request_carries_unconfirmed():
+    from stella_agent_sdk._grpc import state_machine_pb2 as pb
+    req = pb.SetDeliverableRequest(
+        session_id="s", key="walks", value='"most days"',
+        reasoning="mentioned in passing", unconfirmed=True,
+    )
+    assert req.unconfirmed is True
+
+
+def test_unconfirmed_defaults_to_false_on_the_wire():
+    # Existing callers, and every deliverable recorded before this existed,
+    # must keep meaning "settled".
+    from stella_agent_sdk._grpc import state_machine_pb2 as pb
+    assert pb.SetDeliverableRequest(session_id="s", key="k", value="1").unconfirmed is False
+
+
+def test_batch_update_schema_exposes_unconfirmed():
+    # batch_update is the tool the extraction expert actually calls, so the flag
+    # is inert unless it is offered here.
+    from stella_agent_sdk.tools.state_machine.batch_update import BatchUpdateTool
+    schema = BatchUpdateTool(client=None).parameters_schema
+    props = schema["properties"]["deliverables"]["items"]["properties"]
+    assert "unconfirmed" in props
+    assert props["unconfirmed"]["type"] == "boolean"
+
+
+def test_set_deliverable_schema_exposes_unconfirmed():
+    from stella_agent_sdk.tools.state_machine.set_deliverable import SetDeliverableTool
+    props = SetDeliverableTool(client=None).parameters_schema["properties"]
+    assert "unconfirmed" in props

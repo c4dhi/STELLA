@@ -267,6 +267,12 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
         d for d in deliverables
         if d.get("status") == "pending" and d["key"] not in collected_keys
     ]
+    # Mentioned in passing, not yet confirmed. There used to be no such state —
+    # a deliverable was either unknown or settled — so something the user
+    # volunteered came back later as a cold question ("do you go for walks?"
+    # after they had already said they walk most days). These are things to
+    # check, not things to ask.
+    unconfirmed = [d for d in deliverables if d.get("status") == "partial"]
 
     if pending:
         # The current task's own items are what the conversation is actually on;
@@ -291,6 +297,18 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
                 f"  (plus {hidden} more you'll get to later — not this turn)"
             )
 
+    if unconfirmed:
+        parts.append(
+            "They MENTIONED these but have not confirmed them. Do not ask as if "
+            "you never heard it — bring back what they said and check it, the way "
+            "an interviewer would ('you said you usually walk — is that still "
+            "happening in this heat?'). One at most per turn, and only when it "
+            "fits what you are already talking about:"
+        )
+        for d in unconfirmed:
+            label = d.get("description") or d["key"]
+            parts.append(f"  - {label}: they said {d.get('value', '?')}")
+
     # What they already said, so it is never asked twice. Just-collected keys are
     # shown here too: they are not in the pending list any more, and the agent
     # must know they landed. Described in words rather than by key, since the key
@@ -300,6 +318,8 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
         label = d.get("description") or d["key"]
         if d.get("status") == "completed":
             known.append(f"  - {label}: {d.get('value', '?')}")
+        elif d.get("status") == "partial":
+            continue  # listed above as unconfirmed — not settled yet
         elif d["key"] in collected_keys:
             known.append(f"  - {label}: (they just told you this)")
     if known:

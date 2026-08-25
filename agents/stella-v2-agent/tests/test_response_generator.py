@@ -429,3 +429,67 @@ def test_task_instruction_survives():
 
 def test_empty_context_renders_nothing():
     assert _state_machine_section({}) == ""
+
+
+# ---------------------------------------------------------------------------
+# Mentioned-but-unconfirmed deliverables (status 'partial').
+#
+# There used to be only two states — unknown or settled — so something the user
+# volunteered came back later as a cold question ("do you go for walks?" after
+# they had already said they walk most days). A real interviewer brings it back
+# and checks instead.
+# ---------------------------------------------------------------------------
+
+def _sm_with_unconfirmed():
+    return {
+        "state": {"title": "Alltag"},
+        "current_task": {"description": "Bewegung", "deliverable_keys": ["movement"]},
+        "deliverables": [
+            {"key": "movement", "status": "pending",
+             "description": "how they move day to day"},
+            {"key": "walks", "status": "partial",
+             "description": "whether they walk regularly",
+             "value": "walks most days, not in this heat"},
+            {"key": "water", "status": "completed",
+             "description": "hydration", "value": "tries to drink enough"},
+        ],
+    }
+
+
+def test_unconfirmed_is_surfaced_as_something_to_check():
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    assert "MENTIONED these but have not confirmed" in result
+    assert "walks most days, not in this heat" in result
+
+
+def test_unconfirmed_is_not_listed_as_unknown():
+    # Asking cold is the bug being fixed — it must not appear as a gap.
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    start = result.index("still don't know")
+    end = result.index("They MENTIONED", start)
+    assert "walk" not in result[start:end]
+
+
+def test_unconfirmed_is_not_treated_as_settled():
+    # Nor may it be filed under "never ask this again" — that is the other
+    # failure: asserting something the user never actually agreed to.
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    # Slice on the section HEADER — the bare phrase "already told you" also
+    # occurs in the conversation guidelines further up.
+    settled = result[result.index("They have already told you (never ask"):]
+    assert "walk" not in settled
+    assert "hydration" in settled
+
+
+def test_confirmed_and_unconfirmed_coexist():
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    assert "how they move day to day" in result   # still unknown
+    assert "whether they walk regularly" in result  # to be checked
+    assert "tries to drink enough" in result        # settled
+
+
+def test_no_unconfirmed_block_when_there_are_none():
+    sm = {"state": {"title": "X"},
+          "deliverables": [{"key": "a", "status": "completed",
+                            "description": "a thing", "value": "v"}]}
+    assert "MENTIONED" not in build_response_system_prompt(sm, ResponseDirective())
