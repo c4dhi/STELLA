@@ -81,7 +81,7 @@ configSchema:
     - name: TTS_VOICE
       description: "Seed TTS voice, overridable per stream. Honored by voice-selecting providers (e.g. Kokoro), ignored by others. Empty = provider default."
     - name: STELLA_TTS_PREROLL_MS
-      description: "Jitter buffer (ms) held before an utterance starts playing. Default 800, sized from the measured playout deficit on the deployed provider — lowering it without faster inference brings back mid-sentence dropouts. 0 disables it. Leave unset to use the default."
+      description: "Jitter buffer (ms) of audio buffered before an utterance starts playing. Default 800, calibrated for a provider running at roughly real time. On faster hardware lower it (150-300ms when synthesis outruns playback) to cut time-to-first-sound; if you hear warbling or see 'Playout starved' in the agent log, raise it. 0 also disables the underrun guard. Leave unset to use the default."
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
 
