@@ -86,8 +86,6 @@ configSchema:
       description: "Vary the speaking rate slightly by turn character (a heavier turn is taken a little slower, an opening beat a little brisker). ON BY DEFAULT — set 'false' to synthesize every utterance at exactly one rate. Only providers that implement rate honor it (Qwen3 does, by resampling)."
     - name: TTS_SPEED
       description: "Baseline speaking rate (0.5-2.0, default 1.0). The agent overrides this per turn when STELLA_TTS_RATE_VARIATION is on. Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker."
-    - name: BRIDGE_ALLOW_SILENCE
-      description: "Deploy-time default for the bridge_generator 'Allow Silent Turns' slot. When 'true', a second bare turn in a row gets no spoken bridge at all. Off by default — it trades latency for naturalness."
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
 
@@ -258,42 +256,36 @@ pipelineSchema:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "System prompt for bridge phrase generation"
+          description: "System prompt for the bridge. Supports {{conversationHistory}}, {{isBargeIn}}, {{allowAppraisal}}, {{userInput}} and {{bridgeMode}} — the per-turn instruction saying whether this turn wants a bare beat, a full reception, or a visible pause. If your prompt omits {{bridgeMode}} it is appended automatically, so the per-turn behaviour still applies."
           default: |
-            You are the real-time speech reflex for a professional Voice AI interviewer. Right after the user stops speaking, you say the natural opening beat of your reply — what a real person says first, before getting to their actual point. It is spoken aloud immediately while the full reply is still being prepared, so the more (genuinely) you can say here, the smoother the conversation feels.
-
-            Your job is to carry the ENTIRE reaction — receive what they said, reflect it back, and (when it's personal) sit with it for a beat — so the reply that follows only has to move things forward. Lean LONG, not short: the more genuine reaction you give here, the more present you sound AND the more time the full reply has to land. A bare "Okay, I follow." wastes that — when they've given you something real, take it in out loud across a sentence or two.
+            You just heard the user and you're about to answer. First you say the opening beat of your reply the way a real person would — spoken aloud on its own, while the rest of the answer is still being prepared.
             {{#if conversationHistory}}
 
             Recent context:
             {{conversationHistory}}
             {{/if}}
 
-            Core directives:
-            - End with . or ! — NEVER a question mark. The bridge never asks anything; the question belongs to the reply that follows.
-            - Never answer, advise, give facts, or move to the next topic — that's the reply's job. You only react to what they just said.
-            - Length scales to what they gave you — and lean toward the longer end; a fuller bridge sounds more present and buys the reply time:
-              - One word / a greeting -> 1-2 words ("Hey." / "Okay.").
-              - An ordinary factual answer -> acknowledge and mirror their specifics in a short sentence ("Right — twice a week, mostly bodyweight stuff.").
-              - A fuller, personal, or vulnerable turn -> receive it fully: mirror it back AND name what you're hearing — the feeling, the effort — across two or three short sentences, up to ~35 words, in their own words ("Okay, I hear you. Having to force yourself through every workout — that's draining, and it's honest of you to admit it.").
-            - Mirror the SPECIFIC thing they said (their words, their numbers), never a generic "okay". Naming the feeling or effort you hear ("that sounds draining") is reflection and welcome; giving advice, facts, or the next question is NOT — that's the reply's job.
-
+            Always:
+            - End with . or ! — never ask a question. The question belongs to the reply that follows.
+            - Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
+            - Mirror the SPECIFIC thing they said, their words and their numbers, never a generic "okay".
+            - Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
+            - Do not reuse an opener you have already used in this conversation. Check the recent context above and say something different.
+            - No "hmm", "uh" or "erm" — they render badly in our synth.
+            {{#if isBargeIn}}
+            - The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead."). Do not continue your previous point.
+            {{/if}}
             {{#unless allowAppraisal}}
-            - Do NOT evaluate what they said — no "That's interesting", "That's a good point", "That's great". Just receive it and reflect it back plainly.
+            - Do NOT evaluate what they said — no "that's interesting", "good point", "that's great". Receive it and reflect it back plainly.
             {{/unless}}
             {{#if allowAppraisal}}
-            - You MAY add a brief, understated appraisal of the user's OWN situation or goal ("that's a solid base to build on", "makes sense that it all ties together") — low-key, never gushing, only about what they've actually told you, never about an answer or topic you haven't reached yet.
+            - You MAY add a brief, understated appraisal of their own situation or goal ("that's a solid base to build on") — low-key, never gushing, and only about what they have actually told you.
             {{/if}}
+            {{#if bridgeMode}}
 
-            Language matching — CRITICAL:
-            - ALWAYS respond in the SAME LANGUAGE the user is speaking. Natural, idiomatic phrasing — never translate literally.
-
-            {{#if isBargeIn}}
-            Barge-in: The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead." / "Sorry, yes?"). Do not continue your previous point.
+            {{bridgeMode}}
             {{/if}}
-            Output ONLY the bridge. No quotes, no explanations.
-
-            Available variables: {{isBargeIn}} (yes/no — was this a user interruption), {{allowAppraisal}} (yes/no — may you lightly appraise this turn; set by a safety screen), {{userInput}}.
+            Output ONLY the bridge. No quotes, no labels.
         - id: model
           label: "Model"
           type: select
@@ -313,17 +305,6 @@ pipelineSchema:
           max: 120
           step: 5
           default: 90
-        - id: fast_path
-          label: "Fast Bridge (skip LLM)"
-          type: select
-          options: ["off", "on"]
-          default: "off"
-          description: >
-            When "on", the bridge is an INSTANT templated acknowledgement
-            (greeting / acknowledgement / "let me think") with no LLM call, so it
-            always lands inside the natural turn-taking gap. When "off" (default),
-            the LLM generates a contextual bridge from the prompt above — richer,
-            but it can take up to the timeout below to return.
         - id: timeout_ms
           label: "LLM Bridge Timeout (ms)"
           type: number
@@ -335,25 +316,13 @@ pipelineSchema:
             How long to wait for the LLM bridge before falling back to an instant
             templated one. The bridge only buys ~1s while the main pipeline runs,
             so a slow LLM must never stall the turn. Ignored when Fast Bridge is on.
-        - id: allow_silence
-          label: "Allow Silent Turns"
-          type: select
-          options: ["off", "on"]
-          default: "off"
-          description: >
-            When "on", a second bare turn in a row (after a receipt token like
-            "Mm.") gets NO bridge at all — the reply opens cold instead of
-            ticking "Mm." "Right." "Okay." down the conversation. Off by default
-            because this trades latency for naturalness: with no bridge the user
-            hears the expert pool's latency as silence rather than as speech.
-
         - id: appraisal
           label: "Bridge Appraisal"
           type: select
           options: ["off", "on"]
           default: "on"
           description: >
-            When "off" (default), the bridge is strictly reflective — it mirrors
+            When "off", the bridge is strictly reflective — it mirrors
             back what the user said but never evaluates it. When "on", the LLM
             bridge MAY add a brief, understated appraisal of the user's situation
             ("that's a good amount to work with") — but only when a cheap safety

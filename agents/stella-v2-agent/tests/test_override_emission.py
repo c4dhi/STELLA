@@ -36,7 +36,16 @@ def _build_agent(monkeypatch, *, action: str) -> StellaV2Agent:
     agent.sm_client = None  # no state machine -> Stage 5 no-ops, collected-keys skipped
 
     # Stage 1: a non-empty acknowledgment bridge (no Input Gate anymore — #363).
-    agent.bridge_generator.generate = AsyncMock(return_value=BRIDGE_TEXT)
+    #
+    # process() consumes generate_STREAM, not generate — mocking the latter left
+    # the real streaming call in place, which reached a live LLM, failed on the
+    # test API key, and was rescued by the canned-inventory fallback. These
+    # tests were green for the wrong reason. The inventories are gone and a
+    # failed bridge is now silent, so mock what the agent actually calls.
+    async def _bridge_stream(*_a, **_kw):
+        yield BRIDGE_TEXT
+
+    agent.bridge_generator.generate_stream = _bridge_stream
 
     # Stage 2: the medical expert returns a CRITICAL verdict.
     agent.expert_pool.run = AsyncMock(

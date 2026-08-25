@@ -1,4 +1,10 @@
-"""Tests for typed bridge selection and the fast-path (#304 A2/A3)."""
+"""Tests for bridge mode selection and the single LLM bridge path.
+
+The hand-written phrase inventories are gone — they could only cover the two
+languages someone had written lists for, repeated inside a session, and never
+referred to anything the user had said. There is one LLM bridge now, and the
+mode tells it what this turn needs.
+"""
 
 import os
 
@@ -7,22 +13,12 @@ import yaml
 
 from stella_v2_agent.pipeline.bridge_generator import (
     BridgeGenerator,
-    select_bridge_type,
-    pick_bridge_from_inventory,
-    BRIDGE_TYPE_GREETING,
-    BRIDGE_TYPE_ACKNOWLEDGEMENT,
-    BRIDGE_TYPE_PENSIVE,
-    BRIDGE_TYPE_MINIMAL,
-    BRIDGE_TYPE_NONE,
-    GREETING_BRIDGES_EN,
-    GREETING_BRIDGES_DE,
-    PENSIVE_BRIDGES_EN,
-    PENSIVE_BRIDGES_DE,
-    ACKNOWLEDGEMENT_BRIDGES_EN,
-    ACKNOWLEDGEMENT_BRIDGES_DE,
-    MINIMAL_BRIDGES_EN,
-    MINIMAL_BRIDGES_DE,
-    _BRIDGE_INVENTORY,
+    select_bridge_mode,
+    BRIDGE_MODE_BRIEF,
+    BRIDGE_MODE_FULL,
+    BRIDGE_MODE_THINKING,
+    _MODE_DIRECTIVES,
+    _MODE_MAX_TOKENS,
     _screen_risk,
     _gate_stream,
 )
@@ -30,8 +26,8 @@ from stella_agent_sdk.llm import LLMResponse
 from stella_v2_agent.prompts.template import render_prompt
 
 
-# An ordinary turn: long enough not to be a receipt token, short enough not to
-# be "substantial". Selects a full-reaction type, i.e. the LLM bridge path.
+# An ordinary turn: long enough not to be a bare beat, short enough not to be
+# "substantial" — i.e. it selects BRIDGE_MODE_FULL on a fresh turn.
 _ORDINARY_TURN = "I run three times a week"
 
 
@@ -83,193 +79,172 @@ def _slot_default(node_id: str, slot_id: str) -> str:
     raise AssertionError(f"{node_id}.{slot_id} not found in agent.yaml")
 
 
-class TestSelectBridgeType:
-    def test_greeting_picks_greeting(self):
-        assert select_bridge_type("hi") == BRIDGE_TYPE_GREETING
-        assert select_bridge_type("Hello!") == BRIDGE_TYPE_GREETING
-        assert select_bridge_type("hallo") == BRIDGE_TYPE_GREETING
-
-    def test_question_picks_pensive(self):
-        assert select_bridge_type("What should I eat to lose weight?") == BRIDGE_TYPE_PENSIVE
-
-    def test_long_input_picks_pensive(self):
-        long_input = " ".join(["word"] * 30)
-        assert select_bridge_type(long_input) == BRIDGE_TYPE_PENSIVE
-
-    def test_ordinary_short_answer_picks_acknowledgement(self):
-        assert select_bridge_type("I run three times a week") == BRIDGE_TYPE_ACKNOWLEDGEMENT
-
-    def test_very_short_turn_picks_minimal(self):
+class TestSelectBridgeMode:
+    def test_a_bare_turn_gets_a_beat(self):
         # There is nothing in "yeah" worth receiving in full — mirroring it back
         # is the empty acknowledgement the guidelines forbid.
-        assert select_bridge_type("yeah") == BRIDGE_TYPE_MINIMAL
-        assert select_bridge_type("twice a week") == BRIDGE_TYPE_MINIMAL
+        assert select_bridge_mode("yeah") == BRIDGE_MODE_BRIEF
+        assert select_bridge_mode("twice a week") == BRIDGE_MODE_BRIEF
 
-    def test_greeting_beats_everything(self):
-        assert select_bridge_type("hi", previous_type=BRIDGE_TYPE_PENSIVE) == BRIDGE_TYPE_GREETING
+    def test_a_greeting_gets_a_beat(self):
+        # No greeting-detection word list any more: a greeting is simply a very
+        # short turn, and the LLM greets back in whatever language they used.
+        assert select_bridge_mode("hi") == BRIDGE_MODE_BRIEF
+        assert select_bridge_mode("hallo") == BRIDGE_MODE_BRIEF
+        assert select_bridge_mode("bonjour") == BRIDGE_MODE_BRIEF
+
+    def test_a_question_takes_a_visible_moment(self):
+        assert select_bridge_mode("What should I eat to lose weight?") == BRIDGE_MODE_THINKING
+
+    def test_a_long_turn_takes_a_visible_moment(self):
+        assert select_bridge_mode(" ".join(["word"] * 30)) == BRIDGE_MODE_THINKING
+
+    def test_an_ordinary_answer_is_received_in_full(self):
+        assert select_bridge_mode(_ORDINARY_TURN) == BRIDGE_MODE_FULL
 
 
 class TestAntiLockstep:
-    """The bridge must not perform a full reaction on every consecutive turn —
+    """The bridge must not perform a full reception on every consecutive turn —
     that lockstep is what the conversation guidelines call a questionnaire."""
 
-    def test_full_reaction_is_not_repeated_back_to_back(self):
-        first = select_bridge_type("I run three times a week")
-        assert first == BRIDGE_TYPE_ACKNOWLEDGEMENT
-        assert select_bridge_type(
-            "mostly in the evenings after work", previous_type=first
-        ) == BRIDGE_TYPE_MINIMAL
+    def test_full_reception_is_not_repeated_back_to_back(self):
+        first = select_bridge_mode(_ORDINARY_TURN)
+        assert first == BRIDGE_MODE_FULL
+        assert select_bridge_mode(
+            "mostly in the evenings after work", previous_mode=first
+        ) == BRIDGE_MODE_BRIEF
 
-    def test_substantial_turn_is_exempt_from_the_anti_lockstep_rule(self):
-        # When someone actually opens up, receiving it properly beats varying
-        # the shape — a long turn still gets a full reaction.
-        long_turn = " ".join(["word"] * 30)
-        assert select_bridge_type(
-            long_turn, previous_type=BRIDGE_TYPE_ACKNOWLEDGEMENT
-        ) == BRIDGE_TYPE_PENSIVE
+    def test_substantial_turn_is_exempt(self):
+        assert select_bridge_mode(
+            " ".join(["word"] * 30), previous_mode=BRIDGE_MODE_FULL
+        ) == BRIDGE_MODE_THINKING
 
-    def test_a_personal_disclosure_is_never_demoted_to_a_receipt_token(self):
+    def test_a_question_is_exempt_too(self):
+        assert select_bridge_mode(
+            "so what should I do?", previous_mode=BRIDGE_MODE_THINKING
+        ) == BRIDGE_MODE_THINKING
+
+    def test_a_personal_disclosure_is_never_demoted_to_a_beat(self):
         """The worst failure this selector could have.
 
         A disclosure is emotionally substantial long before it is long enough to
         look computationally heavy, so the anti-lockstep exemption uses its own
-        (much lower) threshold. Answering someone opening up with "Mm." because
-        the previous turn happened to get a full reaction would be far worse
-        than the lockstep the rule exists to prevent.
+        (much lower) threshold. Answering someone opening up with a two-word
+        beat, because the previous turn happened to get a full reception, would
+        be far worse than the lockstep the rule exists to prevent.
         """
         disclosure = (
             "Honestly I've been forcing myself through every single workout "
             "lately and it just feels like a chore I can't get out of"
         )
-        assert len(disclosure.split()) < 25  # under the pensive threshold
-        assert select_bridge_type(
-            disclosure, previous_type=BRIDGE_TYPE_ACKNOWLEDGEMENT
-        ) == BRIDGE_TYPE_ACKNOWLEDGEMENT
-
-    def test_a_question_is_exempt_too(self):
-        assert select_bridge_type(
-            "so what should I do?", previous_type=BRIDGE_TYPE_PENSIVE
-        ) == BRIDGE_TYPE_PENSIVE
+        assert len(disclosure.split()) < 25  # under the thinking threshold
+        assert select_bridge_mode(
+            disclosure, previous_mode=BRIDGE_MODE_FULL
+        ) == BRIDGE_MODE_FULL
 
     def test_alternates_rather_than_ticking(self):
-        # An ordinary back-and-forth alternates full / minimal instead of
-        # emitting a full reaction every single turn.
         seen, prev = [], None
         for _ in range(4):
-            prev = select_bridge_type("I run three times a week", previous_type=prev)
+            prev = select_bridge_mode(_ORDINARY_TURN, previous_mode=prev)
             seen.append(prev)
         assert seen == [
-            BRIDGE_TYPE_ACKNOWLEDGEMENT,
-            BRIDGE_TYPE_MINIMAL,
-            BRIDGE_TYPE_ACKNOWLEDGEMENT,
-            BRIDGE_TYPE_MINIMAL,
+            BRIDGE_MODE_FULL, BRIDGE_MODE_BRIEF,
+            BRIDGE_MODE_FULL, BRIDGE_MODE_BRIEF,
         ]
 
-    def test_silence_is_off_by_default(self):
-        # Two bare turns running still speak, because a silent bridge trades
-        # latency for naturalness and must be opted into.
-        assert select_bridge_type("yeah", previous_type=BRIDGE_TYPE_MINIMAL) == BRIDGE_TYPE_MINIMAL
+    def test_first_turn_of_a_session_is_never_demoted(self):
+        assert select_bridge_mode(_ORDINARY_TURN, previous_mode=None) == BRIDGE_MODE_FULL
 
-    def test_silence_opt_in_stops_the_tick(self):
-        assert select_bridge_type(
-            "yeah", previous_type=BRIDGE_TYPE_MINIMAL, allow_silence=True
-        ) == BRIDGE_TYPE_NONE
+
+class TestModeDirectives:
+    def test_every_mode_has_a_directive(self):
+        for mode in (BRIDGE_MODE_BRIEF, BRIDGE_MODE_FULL, BRIDGE_MODE_THINKING):
+            assert _MODE_DIRECTIVES[mode].strip()
+
+    def test_a_beat_is_capped_hard(self):
+        # With no instant template left, the token cap is what keeps a bare beat
+        # inside the turn-taking gap.
+        assert _MODE_MAX_TOKENS[BRIDGE_MODE_BRIEF] <= 16
+
+    def test_a_full_reception_is_not_capped(self):
+        # Its whole job is to be substantial, so it uses the configured budget.
+        assert BRIDGE_MODE_FULL not in _MODE_MAX_TOKENS
+
+    def test_directives_never_invite_a_question(self):
+        for mode, text in _MODE_DIRECTIVES.items():
+            assert "?" not in text, mode
 
 
 class TestNoAssessmentBeforeDispreferred:
-    """A2 acceptance: no evaluative/assessment token can ever be chosen.
+    """A2 acceptance: the bridge can never open with an evaluative token.
 
-    The structural guarantee is that no assessment sub-type or inventory exists,
-    and the selectable inventories contain no evaluative openers.
+    This used to be guaranteed structurally, by there being no "assessment"
+    phrase inventory. The inventories are gone, so the guarantee now rests
+    entirely on _gate_stream rejecting evaluative openers and on no mode
+    directive ever asking for one — which is what these pin.
     """
 
     _ASSESSMENT_OPENERS = (
-        "that's", "thats", "what a", "wow", "oh wow", "amazing", "great",
-        "wonderful", "fantastic", "perfect", "interesting", "toll", "super",
-        "wunderbar", "fantastisch", "das ist",
+        "That's great.", "That's a good question.", "What a good point.",
+        "Wow, amazing.", "Perfect, thanks.", "Good point.", "Well done.",
+        "Toll, super.", "Interessant.", "Sehr gut.",
     )
 
-    def test_select_never_returns_assessment(self):
-        # Whatever the input, the type is one of the four declared, never an
-        # assessment (there is no assessment type at all).
+    # Naming the feeling or effort heard is reflection, which the bridge is
+    # explicitly meant to do. Widening the opener list must not swallow these.
+    _REFLECTIONS = (
+        "That's draining, honestly.", "Okay, I hear you.",
+        "Right, twice a week.", "Das klingt anstrengend.", "Ja, verstehe.",
+    )
+
+    def test_gate_rejects_every_assessment_opener(self):
+        for opener in self._ASSESSMENT_OPENERS:
+            accepted, stop = _gate_stream(opener, False, final=True)
+            assert accepted == "", opener
+            assert stop is True, opener
+
+    def test_reflection_is_not_mistaken_for_assessment(self):
+        for text in self._REFLECTIONS:
+            accepted, stop = _gate_stream(text, False, final=True)
+            assert accepted == text, text
+            assert stop is False, text
+
+    def test_selection_never_returns_an_assessment_mode(self):
+        # Whatever the input, the mode is one of the three declared. There is no
+        # assessment mode to select at all.
         for inp in ["hi", "I feel terrible", "no", "What now?", "x " * 40]:
-            assert select_bridge_type(inp) in {
-                BRIDGE_TYPE_GREETING,
-                BRIDGE_TYPE_MINIMAL,
-                BRIDGE_TYPE_ACKNOWLEDGEMENT,
-                BRIDGE_TYPE_PENSIVE,
-                BRIDGE_TYPE_NONE,
+            assert select_bridge_mode(inp) in {
+                BRIDGE_MODE_BRIEF, BRIDGE_MODE_FULL, BRIDGE_MODE_THINKING,
             }
 
-    def test_inventories_contain_no_assessment_openers(self):
-        every_phrase = (
-            ACKNOWLEDGEMENT_BRIDGES_EN + ACKNOWLEDGEMENT_BRIDGES_DE
-            + PENSIVE_BRIDGES_EN + PENSIVE_BRIDGES_DE
-            + GREETING_BRIDGES_EN + GREETING_BRIDGES_DE
-            + MINIMAL_BRIDGES_EN + MINIMAL_BRIDGES_DE
-        )
-        for phrase in every_phrase:
-            low = phrase.lower()
-            for opener in self._ASSESSMENT_OPENERS:
-                assert not low.startswith(opener), f"{phrase!r} is an assessment"
-
-    def test_no_assessment_inventory_registered(self):
-        types = {t for (t, _lang) in _BRIDGE_INVENTORY}
-        assert "assessment" not in types
-
-
-class TestPickFromInventory:
-    def test_greeting_language(self):
-        assert pick_bridge_from_inventory(BRIDGE_TYPE_GREETING, is_german=True) in GREETING_BRIDGES_DE
-        assert pick_bridge_from_inventory(BRIDGE_TYPE_GREETING, is_german=False) in GREETING_BRIDGES_EN
-
-    def test_pensive_language(self):
-        assert pick_bridge_from_inventory(BRIDGE_TYPE_PENSIVE, is_german=True) in PENSIVE_BRIDGES_DE
-        assert pick_bridge_from_inventory(BRIDGE_TYPE_PENSIVE, is_german=False) in PENSIVE_BRIDGES_EN
-
-    def test_minimal_language(self):
-        assert pick_bridge_from_inventory(BRIDGE_TYPE_MINIMAL, is_german=True) in MINIMAL_BRIDGES_DE
-        assert pick_bridge_from_inventory(BRIDGE_TYPE_MINIMAL, is_german=False) in MINIMAL_BRIDGES_EN
-
-    def test_unknown_type_falls_back_to_acknowledgement(self):
-        # An unregistered type must not raise — it falls back to ack.
-        assert pick_bridge_from_inventory("no-such-type", is_german=False) in ACKNOWLEDGEMENT_BRIDGES_EN
-
-
-class TestFastBridge:
-    def test_fast_bridge_greeting_de(self):
-        gen = BridgeGenerator(llm_service=None)
-        assert gen.fast_bridge("hallo", language="de") in GREETING_BRIDGES_DE
-
-    def test_fast_bridge_question_en_is_pensive(self):
-        gen = BridgeGenerator(llm_service=None)
-        assert gen.fast_bridge("What do you think I should do?", language="en") in PENSIVE_BRIDGES_EN
-
-    @pytest.mark.asyncio
-    async def test_generate_uses_fast_path_without_llm(self):
-        # With the fast-path on, generate() must not touch the LLM service.
-        gen = BridgeGenerator(llm_service=None)
-        gen.fast_path_enabled = True
-        bridge = await gen.generate("I run three times a week", [], language="en")
-        assert bridge in ACKNOWLEDGEMENT_BRIDGES_EN
+    def test_no_directive_asks_the_bridge_to_evaluate(self):
+        banned = ("evaluate", "praise", "compliment", "assess")
+        for mode, text in _MODE_DIRECTIVES.items():
+            low = text.lower()
+            for word in banned:
+                # "do not evaluate" is fine; asking for evaluation is not.
+                if word in low:
+                    assert "do not" in low or "don't" in low or "never" in low, (mode, word)
 
 
 class TestApplyConfig:
     """Bridge knobs are controlled via the Agent Configurator (apply_config)."""
 
-    def test_fast_path_from_select_string(self):
+    def test_appraisal_from_select_string(self):
         gen = BridgeGenerator(llm_service=None)
         # The configurator select sends "on"/"off" strings — bool("off") is True,
         # so this must be parsed, not cast.
-        gen.apply_config({"fast_path": "on"})
-        assert gen.fast_path_enabled is True
-        gen.apply_config({"fast_path": "off"})
-        assert gen.fast_path_enabled is False
+        gen.apply_config({"appraisal": "on"})
+        assert gen.appraisal_enabled is True
+        gen.apply_config({"appraisal": "off"})
+        assert gen.appraisal_enabled is False
 
-    def test_fast_path_from_bool(self):
+    def test_unknown_knobs_are_ignored(self):
+        # fast_path / allow_silence were removed; a stored config that still
+        # carries them must not blow up an agent on startup.
         gen = BridgeGenerator(llm_service=None)
-        gen.apply_config({"fast_path": True})
-        assert gen.fast_path_enabled is True
+        gen.apply_config({"fast_path": "on", "allow_silence": "on"})
+        assert gen.bridge_model  # still constructed and usable
 
     def test_timeout_ms_overrides_env_default(self):
         gen = BridgeGenerator(llm_service=None)
@@ -409,13 +384,24 @@ class TestConfigCarriesTheImprovements:
         guidelines = _slot_default("response_generator", "conversation_guidelines")
         assert "NEVER praise a mundane answer" in guidelines
 
-    def test_yaml_bridge_carries_full_reflection(self):
+    def test_yaml_bridge_carries_the_standing_rules(self):
         prompt = _slot_default("bridge_generator", "system_prompt")
-        # The bridge owns the ENTIRE reaction and is told to lean long (a fuller
-        # reflective bridge sounds present and buys the reply time), not just emit
-        # a bare acknowledgment.
-        assert "carry the ENTIRE reaction" in prompt
-        assert "Lean LONG" in prompt
+        assert "never ask a question" in prompt
+        assert "Mirror the SPECIFIC thing they said" in prompt
+        # The repetition guard that replaced inventory randomisation: the LLM can
+        # see what it already said, which a fixed phrase pool never could.
+        assert "Do not reuse an opener you have already used" in prompt
+
+    def test_yaml_bridge_exposes_the_per_turn_mode(self):
+        # How long/full this turn's beat should be is per-turn, not baked into
+        # the prompt — the mode directive carries it.
+        assert "{{bridgeMode}}" in _slot_default("bridge_generator", "system_prompt")
+
+    def test_yaml_bridge_prompt_matches_the_code_default(self):
+        # agent.yaml is what actually runs; the code constant is the fallback.
+        # They drifted before, so pin them together.
+        from stella_v2_agent.pipeline.bridge_generator import BRIDGE_SYSTEM_PROMPT
+        assert _slot_default("bridge_generator", "system_prompt").strip() == BRIDGE_SYSTEM_PROMPT.strip()
 
     def test_appraisal_default_on_in_config(self):
         assert _slot_default("bridge_generator", "appraisal") == "on"
@@ -477,22 +463,26 @@ class TestGenerateStream:
         assert all(out[-1].startswith(chunk) for chunk in out)
 
     @pytest.mark.asyncio
-    async def test_question_only_falls_back_to_canned_bridge(self):
+    async def test_a_question_only_bridge_is_silent_not_canned(self):
+        """A bridge must never ask a question, and there is no longer a canned
+        phrase to fall back on — so the turn simply says nothing and the reply
+        carries the reaction instead. Better a missing opener than a stock one
+        that would fit any answer."""
         gen = BridgeGenerator(llm_service=_FakeStreamingLLM("What do you enjoy doing?"))
         gen.bridge_timeout_s = 5.0
         out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
-        assert out, "must always yield at least a fallback"
-        assert "?" not in out[-1]
-        assert out[-1] in ACKNOWLEDGEMENT_BRIDGES_EN + PENSIVE_BRIDGES_EN
+        assert out == []
 
     @pytest.mark.asyncio
-    async def test_fast_path_yields_single_canned_chunk_without_llm(self):
-        fake = _FakeStreamingLLM("should not be used")
-        gen = BridgeGenerator(llm_service=fake)
-        gen.fast_path_enabled = True
-        out = await _drain(gen.generate_stream("I run three times a week", [], language="en"))
-        assert len(out) == 1 and out[0] in ACKNOWLEDGEMENT_BRIDGES_EN
-        assert fake.called is False
+    async def test_llm_failure_is_silent_not_canned(self):
+        class _Boom:
+            async def generate(self, *a, **kw):
+                raise RuntimeError("provider down")
+
+        gen = BridgeGenerator(llm_service=_Boom())
+        gen.bridge_timeout_s = 5.0
+        out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
+        assert out == []
 
     @pytest.mark.asyncio
     async def test_generate_delegates_and_returns_final_accumulated(self):
