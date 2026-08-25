@@ -536,11 +536,20 @@ class AudioPipeline:
         # Highest char offset already published for the held sentence, so a
         # re-estimate can never walk the highlight backwards.
         self._cur_last_char: int = 0
+        # Bytes of the held sentence already covered by an emitted segment.
+        # Segments must TILE the sentence: the frontend chains them end to end
+        # on the wall clock, so a segment measured from the live playhead rather
+        # than from here would re-describe audio an earlier segment already
+        # covered, and the schedule would outrun the sound.
+        self._cur_promised: int = 0
         # Session-calibrated speaking pace, used to estimate where inside a
         # sentence the playhead is while the sentence is still synthesizing.
         # Re-measured from every sentence that completes, so it tracks the
         # voice, the language and the model actually in use.
         self._ms_per_char: float = _DEFAULT_MS_PER_CHAR
+        # False until a real sentence has been measured, so the seed above is
+        # replaced rather than averaged with the first measurement.
+        self._pace_measured: bool = False
         # Last agent_playback state actually put on the wire. Progress is now
         # emitted on a tick, and the mute channel must not tick with it.
         self._last_playback_state: Optional[str] = None
@@ -1937,7 +1946,17 @@ class AudioPipeline:
         if span < 8 or total <= 0:
             return  # too short to measure anything trustworthy
         ms = total / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
-        self._ms_per_char = 0.7 * self._ms_per_char + 0.3 * (ms / span)
+        measured = ms / span
+        if not self._pace_measured:
+            # First real sentence of the session: the seed was only ever a
+            # placeholder, so adopt the measurement outright. Averaging it in
+            # would drag a badly-seeded estimate out over several sentences, and
+            # a wrong estimate is what makes the highlight lag then jump when
+            # the true length lands.
+            self._ms_per_char = measured
+            self._pace_measured = True
+        else:
+            self._ms_per_char = 0.7 * self._ms_per_char + 0.3 * measured
 
     def _emit_speech_progress(self, state: str, meta: Optional[dict] = None) -> None:
         """Publish an ``agent_speech_progress`` envelope for the teleprompter.
@@ -1982,40 +2001,64 @@ class AudioPipeline:
             frac = min(1.0, max(0.0, byte_offset / total))
             return char_start + round(frac * span)
 
+        lead_ms = 0.0
         if state == "spoken":
             spoken_char = target_char = char_end
             duration_ms = 0
         elif state == "interrupted":
             # Freeze at what was actually heard. Deliberately NOT clamped
-            # monotonically: a barge-in rewinds the playhead on purpose.
+            # monotonically: a barge-in rewinds the playhead on purpose, and
+            # anything already promised past it was never heard.
             spoken_char = target_char = char_at(self._cur_cursor)
             duration_ms = 0
-        else:  # "speaking" — a progress tick over the audio in hand
-            # How far this tick promises to carry the highlight. Normally that
-            # is all the audio synthesized so far. But at RTF ~1 the player
-            # consumes frames as fast as they arrive, so `known` sits barely
-            # ahead of the playhead and a tick would promise ~20ms of movement
-            # followed by a wait — a visibly stepping highlight. So promise at
-            # least one tick's worth, extrapolated at the measured pace and
-            # capped at the sentence's estimated end. The next tick corrects,
-            # so the error can never exceed one tick.
+            self._cur_promised = self._cur_cursor
+            self._cur_last_char = spoken_char
+        else:  # "speaking" — the next CONTIGUOUS stretch of this sentence
+            # How far the highlight may be carried: all the audio synthesized so
+            # far, but at least one tick's worth. The floor matters at RTF ~1,
+            # where the player consumes frames as fast as they arrive so `known`
+            # sits barely ahead of the playhead; without it a tick would promise
+            # ~20ms of movement followed by a wait — a visibly stepping cursor.
+            # Extrapolation is capped at the sentence's estimated end and
+            # corrected by the next tick, so the error stays under one tick.
             horizon = self._cur_cursor + int(
                 _PROGRESS_TICK_MS * _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE / 1000
             )
             promise = min(max(known, horizon), total) if total > 0 else known
-            spoken_char = max(char_at(self._cur_cursor), self._cur_last_char)
+            # Start where the LAST segment ended, not at the live playhead. The
+            # frontend lays segments end to end on the wall clock, so measuring
+            # from the playhead would re-describe audio an earlier segment
+            # already covered: with a deep jitter buffer every tick re-promised
+            # the whole buffer and the schedule ran 2.3-3.3x longer than the
+            # sound, which reads as the highlight stalling mid-message.
+            start = max(self._cur_promised, self._cur_cursor)
+            if promise <= start:
+                return  # nothing new to schedule yet
+            # _cur_last_char holds the PREVIOUS segment's target, so segments
+            # butt exactly. Without this the re-estimated mapping could place
+            # this segment's start a character or two before the last one's end
+            # and the highlight would flick backwards at every tick boundary.
+            spoken_char = max(char_at(start), self._cur_last_char)
             target_char = max(char_at(promise), spoken_char)
             duration_ms = int(
-                max(0, promise - self._cur_cursor)
-                / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+                (promise - start) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
             )
-            self._cur_last_char = spoken_char
+            # This segment starts where the previous one ended, which is `start`
+            # bytes into the stream — already-queued audio must drain first, and
+            # so must anything between the playhead and `start`.
+            lead_ms = max(0, start - self._cur_cursor) / (
+                _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE
+            ) * 1000
+            self._cur_promised = promise
+            self._cur_last_char = target_char
 
         # How long until this sentence is actually audible: audio already queued
         # in the output buffer must drain first. Lets the frontend start the word
         # cursor in time with playout rather than with this (earlier) publish.
         try:
-            delay_ms = int(self._room.queued_playout_ms) if state == "speaking" else 0
+            delay_ms = (
+                int(self._room.queued_playout_ms + lead_ms) if state == "speaking" else 0
+            )
         except Exception:
             delay_ms = 0
 
@@ -2494,6 +2537,7 @@ class AudioPipeline:
         bridged_ms = 0.0
         self._cur_complete = utt.complete
         self._cur_last_char = 0
+        self._cur_promised = 0
         # Re-announce playback state for every sentence (the dedupe in
         # _emit_playback_state only suppresses the ticks WITHIN a sentence), so
         # a client that missed the first envelope is not left muted.
@@ -2522,6 +2566,15 @@ class AudioPipeline:
                     if not first:
                         self._emit_speech_progress("speaking", meta=meta)
                         next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
+
+                # Tick HERE, not in the frame-push path below: at RTF ~1 the
+                # loop spends most of its time waiting for synthesis, and a tick
+                # that only fired alongside a pushed frame stopped firing
+                # exactly when playback was starved — the schedule then covered
+                # a third of the sentence and the highlight fell behind.
+                if not first and _now() >= next_tick_at:
+                    self._emit_speech_progress("speaking", meta=meta)
+                    next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
 
                 available = len(self._cur_audio) - self._cur_cursor
                 # The jitter buffer is armed ONCE, before the first frame.
@@ -2587,9 +2640,6 @@ class AudioPipeline:
                     # RTF ~1 (see _PROGRESS_TICK_MS).
                     self._emit_speech_progress("speaking", meta=meta)
                     next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
-                elif _now() >= next_tick_at:
-                    self._emit_speech_progress("speaking", meta=meta)
-                    next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
 
                 # The agent is now audibly talking — a barge-in may start.
                 self._audio_active = True
@@ -2633,6 +2683,7 @@ class AudioPipeline:
             self._cur_meta = None
             self._cur_complete = False
             self._cur_last_char = 0
+            self._cur_promised = 0
 
     async def _bridge_underrun(self, fade_from: int = 0) -> float:
         """Push silence when the output source is about to run dry.

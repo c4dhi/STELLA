@@ -23,6 +23,7 @@ from stella_agent_sdk.audio.pipeline import (
     _BYTES_PER_SAMPLE,
     _DECLICK_SAMPLES,
     _PLAYOUT_FRAME_BYTES,
+    _PLAYOUT_FRAME_MS,
     _PLAYOUT_FRAME_SAMPLES,
     _fade_in,
     _silence_frame,
@@ -233,41 +234,131 @@ def make_paced_pipeline(tts, teleprompter=True, preroll_frames=2):
     return pipe, room
 
 
-def animated_fraction(room, span_ms: float) -> float:
-    """Share of a sentence the teleprompter is actually told to animate over."""
-    events = [e["data"] for e in progress_events(room)]
-    speaking = [e for e in events if e["state"] == "speaking"]
-    return sum(e["duration_ms"] for e in speaking) / span_ms
+class RealtimeRoom(PacedRoom):
+    """PacedRoom clocked so 20ms of audio costs 20ms of wall time.
+
+    PacedRoom's default runs the clock fast, which flatters anything measured
+    per wall-clock tick. Progress ticks ARE emitted per wall-clock, so schedule
+    coverage has to be measured against a source draining at true 1x.
+    """
+
+    frame_delay = _PLAYOUT_FRAME_MS / 1000.0
+
+
+def make_realtime_pipeline(tts, preroll_frames=40):
+    """A pipeline with the PRODUCTION jitter buffer (800ms), not a token one.
+
+    Pre-roll depth is not incidental to the teleprompter: it sets how far
+    synthesis runs ahead of the playhead, which is exactly what a progress tick
+    has to describe. A 2-frame cushion hides scheduling bugs that an 800ms one
+    exposes, so these tests use the real thing.
+    """
+    room = RealtimeRoom()
+    pipe = AudioPipeline(room, stt_client=None, tts_client=tts, session_id="s")
+    pipe._teleprompter_enabled = True
+    pipe._barge_in_enabled = True
+    pipe._preroll_bytes = _PLAYOUT_FRAME_BYTES * preroll_frames
+    pipe._is_speaking = True
+    pipe._stop_speaking_event.clear()
+    pipe._play_allowed.set()
+    return pipe, room
+
+
+# 2000ms of speech over 28 characters — about 70ms/char, ordinary speaking pace.
+LONG_META = {"transcript_id": "t1", "char_start": 100, "char_end": 128}
+
+
+async def play_one(tts, meta=LONG_META, preroll_frames=40):
+    pipe, room = make_realtime_pipeline(tts, preroll_frames=preroll_frames)
+    utt = pipe._begin_synthesis("a sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, meta=meta), timeout=30)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    return pipe, [e["data"] for e in progress_events(room)]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rtf", [0.3, 0.6, 1.0, 1.3])
-async def test_highlight_animates_the_whole_sentence_at_every_rtf(rtf):
-    """The regression this design exists to prevent.
+async def test_segments_tile_the_sentence_at_every_rtf(rtf):
+    """The invariant the whole design rests on.
 
-    Progress used to be ONE envelope per sentence, held until synthesis
-    completed so it could carry the true byte length. That silently assumed
-    synthesis finishes well before playback (RTF ~0.3). At the deployed model's
-    RTF 0.92-1.33 "complete" arrives at the END of the sentence, so the envelope
-    described 4-8% of it and the highlight jumped straight to the end — which is
-    what "the teleprompter jumps ahead / never shows" actually was.
+    The frontend lays each segment end to end on the wall clock, so the
+    segments must TILE the sentence: together exactly as much time as there is
+    audio, no more and no less.
 
-    Streaming ticks are RTF-independent: however slow synthesis is, the ticks
-    together still cover the sentence.
+    Both directions were live bugs. Measuring a segment from the live playhead
+    instead of from the previous segment's end re-described audio already
+    covered, and with the production 800ms buffer the schedule ran 2.3-3.3x
+    longer than the sound — the highlight fell steadily behind until it looked
+    frozen, then snapped to fully-read at the end. Emitting ticks only
+    alongside a pushed frame stopped them firing whenever playback was starved,
+    which at RTF ~1 is most of the time, and covered a third of the sentence.
     """
-    PacedRoom.frame_delay = 0.012  # 20ms of audio per 12ms of wall clock
-    tts = SlowTTS(frames=25, gap=0.012 * rtf)
-    pipe, room = make_paced_pipeline(tts, teleprompter=True)
+    tts = SlowTTS(frames=100, gap=_PLAYOUT_FRAME_MS / 1000.0 * rtf)  # 2000ms
+    _, events = await play_one(tts)
+    speaking = [e for e in events if e["state"] == "speaking"]
+    assert len(speaking) > 1, "expected a stream of ticks"
 
-    utt = pipe._begin_synthesis("a sentence")
-    await asyncio.wait_for(pipe._play_utterance(utt, meta=META), timeout=15)
-    for _ in range(5):
-        await asyncio.sleep(0)
+    scheduled = sum(e["duration_ms"] for e in speaking)
+    ratio = scheduled / 2000
+    assert 0.9 <= ratio <= 1.1, (
+        f"RTF {rtf}: scheduled {scheduled}ms for 2000ms of audio ({ratio:.2f}x) "
+        "— the highlight will drift out of step with the voice"
+    )
 
-    covered = animated_fraction(room, 25 * 20)
-    assert covered >= 0.8, (
-        f"RTF {rtf}: ticks only animate {covered:.0%} of the sentence — "
-        "the highlight will jump the rest"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rtf", [0.6, 1.0, 1.3])
+async def test_segments_join_without_gap_or_rewind(rtf):
+    """Each segment must start exactly where the previous one ended.
+
+    The byte->char mapping is re-estimated on every tick while a sentence is
+    still synthesizing, so without an explicit clamp a shifted estimate places
+    the next segment a character or two behind the last one's end — and the
+    highlight flicks backwards at every tick boundary.
+    """
+    tts = SlowTTS(frames=100, gap=_PLAYOUT_FRAME_MS / 1000.0 * rtf)
+    _, events = await play_one(tts)
+    speaking = [e for e in events if e["state"] == "speaking"]
+
+    for prev, cur in zip(speaking, speaking[1:]):
+        assert cur["spoken_char"] == prev["target_char"], (
+            f"RTF {rtf}: segment starts at {cur['spoken_char']} but the previous "
+            f"one ended at {prev['target_char']} — visible jump"
+        )
+    assert events[-1]["state"] == "spoken"
+    assert events[-1]["spoken_char"] == LONG_META["char_end"]
+
+
+@pytest.mark.asyncio
+async def test_ticks_keep_firing_while_playback_is_starved():
+    """At RTF ~1 the loop spends most of its time waiting for synthesis.
+
+    A tick emitted only alongside a pushed frame goes quiet exactly when the
+    player is starved, which is when the highlight most needs updating.
+    """
+    # Slower than real time, so the player is starved for most of the sentence.
+    tts = SlowTTS(frames=60, gap=_PLAYOUT_FRAME_MS / 1000.0 * 1.4)
+    _, events = await play_one(tts, preroll_frames=2)
+    speaking = [e for e in events if e["state"] == "speaking"]
+    # 60 frames x 20ms = 1200ms of audio; at a 200ms cadence that is ~6 ticks.
+    assert len(speaking) >= 4, f"only {len(speaking)} ticks while starved"
+
+
+@pytest.mark.asyncio
+async def test_pace_seed_is_replaced_by_the_first_measurement():
+    """The seeded 70ms/char is a placeholder, not a prior.
+
+    Averaging the first real measurement into it drags a badly-seeded estimate
+    out over several sentences, and a wrong estimate is what makes the highlight
+    lag and then jump when the true sentence length lands.
+    """
+    tts = SlowTTS(frames=100, gap=0.0)
+    # 2000ms over 60 chars = 33ms/char, far from the 70ms/char seed.
+    fast = {"transcript_id": "t1", "char_start": 0, "char_end": 60}
+    pipe, _ = await play_one(tts, meta=fast)
+    assert abs(pipe._ms_per_char - 33.3) < 2, (
+        f"pace is {pipe._ms_per_char:.0f}ms/char — seed was averaged in, not replaced"
     )
 
 
