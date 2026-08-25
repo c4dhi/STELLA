@@ -59,10 +59,16 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
+# The deadsnakes PPA is fetched with retries: add-apt-repository resolves the
+# signing key through Launchpad's API, which intermittently answers
+# GPGKeyTemporarilyNotFoundError and would otherwise fail the whole build
+# ~20 minutes in (seen 2026-08-25). It still fails loudly after five attempts —
+# that matters, because without the PPA python3.11 resolves to jammy's own
+# 3.11.0~rc1, a release candidate we must never ship.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     tzdata \
-    && add-apt-repository ppa:deadsnakes/ppa \
+    && (for i in 1 2 3 4 5; do add-apt-repository -y ppa:deadsnakes/ppa && exit 0; sleep 10; done; exit 1) \
     && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
