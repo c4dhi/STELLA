@@ -359,7 +359,10 @@ class TestConfigCarriesTheImprovements:
         assert "in YOUR words, not theirs" in prompt
         # The repetition guard that replaced inventory randomisation: the LLM can
         # see what it already said, which a fixed phrase pool never could.
-        assert "Do not reuse an opener you have already used" in prompt
+        # Strengthened after six consecutive bridges opened "Das klingt nach..."
+        # — each fine alone, together a template.
+        assert "VARY HOW YOU OPEN" in prompt
+        assert "different construction" in prompt
 
     def test_yaml_bridge_exposes_the_per_turn_mode(self):
         # How long/full this turn's beat should be is per-turn, not baked into

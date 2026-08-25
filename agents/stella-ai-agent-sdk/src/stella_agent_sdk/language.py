@@ -122,6 +122,31 @@ def detect_language(text: str) -> Tuple[Optional[str], float]:
     return lang, confidence
 
 
+# Below this many word-equivalents a turn carries too little signal to move a
+# confirmed language lock. Structural rather than a word list: it measures how
+# much was said, so it holds in any language. Scripts without spaces are counted
+# by character, since whitespace splitting returns ~1 for a whole sentence.
+_MIN_SWITCH_WORDS = 4
+_DENSE_SCRIPT_RANGES = (
+    (0x3040, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF), (0x0E00, 0x0E7F),
+)
+
+
+def _too_short_to_switch(text: Optional[str]) -> bool:
+    """True when this turn is too slight to be evidence of a language change."""
+    if not text:
+        return True
+    words = len(text.split())
+    dense = sum(
+        1 for ch in text
+        if any(lo <= ord(ch) <= hi for lo, hi in _DENSE_SCRIPT_RANGES)
+    )
+    if dense:
+        words = max(words, round(dense / 1.5))
+    return words < _MIN_SWITCH_WORDS
+
+
 class LanguageResolver:
     """Holds the resolved session language and applies confidence-gated switching.
 
@@ -138,13 +163,19 @@ class LanguageResolver:
         seed: Optional[str] = None,
         detect_threshold: float = 0.4,
         switch_threshold: float = 0.6,
-        debounce: int = 1,
+        debounce: int = 3,
         forced: Optional[str] = None,
     ) -> None:
         self.supported = set(supported)
         self.default = default if default in self.supported else next(iter(self.supported))
         self.detect_threshold = detect_threshold
         self.switch_threshold = switch_threshold
+        # Consecutive confident detections required to move a CONFIRMED lock.
+        # Was 1, i.e. a single turn flipped the conversation's language
+        # mid-sentence. STT is least reliable on exactly the turns that carry
+        # the least language signal — short acknowledgements — so one vote was
+        # far too cheap. Observed in production: German sessions where "Nicht
+        # so." and "Y'all." came back from Whisper as English.
         self.debounce = max(1, debounce)
 
         self.seed = seed if seed in self.supported else None
@@ -277,7 +308,14 @@ class LanguageResolver:
             return self.locked
 
         # Confirmed lock: hold it (the last detected language) unless a
-        # sustained, high-confidence change is seen.
+        # sustained, high-confidence change is seen — and only from turns long
+        # enough to actually carry the evidence. A one- or two-word
+        # acknowledgement is where STT guesses, so it must not get a vote; it
+        # neither advances a pending switch nor cancels one, it is simply not
+        # evidence either way.
+        if _too_short_to_switch(text):
+            return self.locked
+
         if lang and lang != self.locked and confidence >= self.switch_threshold:
             if self._pending == lang:
                 self._pending_count += 1

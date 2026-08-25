@@ -56,7 +56,7 @@ Always:
 - NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
 - React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction ("Fair enough.", "Ah, okay.") beats an echo every time.
 - Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
-- Do not reuse an opener you have already used in this conversation. Check the recent context above and say something different.
+- VARY HOW YOU OPEN. Check what you already said in the recent context above and start this one differently — different words AND a different construction. Opening several turns in a row with the same frame ("That sounds like...", "Das klingt nach...") is the single most robotic thing you can do, even when each sentence is individually fine.
 - No "hmm", "uh" or "erm" — they render badly in our synth.
 {{#if isBargeIn}}
 - The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead."). Do not continue your previous point.
@@ -115,12 +115,17 @@ _MODE_DIRECTIVES = {
         "above all do not hand their own words back to them."
     ),
     BRIDGE_MODE_FULL: (
-        "THIS TURN — they gave you something real, so react to it properly rather "
-        "than just noting it. Say what it tells you, or what you hear behind it — "
-        "the effort, the difficulty, the trade-off — in YOUR words. Do not restate "
-        "what they said; they already know what they said, and hearing it read back "
-        "is what makes this sound like a machine. One or two short sentences, "
-        "around 15-25 words. Stop once you have actually reacted."
+        "THIS TURN — they gave you something real. React the way a person would: "
+        "agree, recognise it, say what it makes you think, follow their point. In "
+        "YOUR words — do not restate theirs; they know what they said, and hearing "
+        "it read back is what makes this sound like a machine.\n"
+        "Do NOT assume there is a hardship in it. Most turns are ordinary, and "
+        "some are good news. Manufacturing a struggle ('that sounds demanding', "
+        "'that must be exhausting') for a turn that contained none is worse than "
+        "saying something small and true. Only name a difficulty if they actually "
+        "described one.\n"
+        "One or two short sentences, around 15-25 words. Stop once you have "
+        "actually reacted."
     ),
     BRIDGE_MODE_THINKING: (
         "THIS TURN — they asked you something, or gave you a lot at once. Take the "
@@ -411,7 +416,12 @@ class BridgeGenerator:
         self.bridge_max_tokens = 80
         self.bridge_temperature = 0.7
         self.custom_system_prompt: Optional[str] = None
-        self.history_limit: int = 0  # 0 = default (2)
+        # 0 = default (6). Was 2, which is one prior assistant turn — far too
+        # little for the "vary how you open" rule to work with. Production
+        # showed six consecutive bridges opening "Das klingt nach einer...",
+        # each individually fine and collectively a template, because the model
+        # could not see its own pattern.
+        self.history_limit: int = 0
         # The bridge only buys ~1s while the main pipeline runs; it must never
         # stall the turn. If the LLM is slow (API latency spike), fall back to a
         # canned bridge instead of hanging. Tunable via BRIDGE_TIMEOUT_MS.
@@ -466,7 +476,7 @@ class BridgeGenerator:
         ctx = {
             **(variables or {}),
             "userInput": user_input,
-            "conversationHistory": format_history(conversation_history, self.history_limit or 2),
+            "conversationHistory": format_history(conversation_history, self.history_limit or 6),
             "bridgeMode": directive,
         }
         system_prompt = render_prompt(raw_prompt, ctx)

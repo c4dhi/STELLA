@@ -128,9 +128,14 @@ def test_acoustic_signal_is_used_over_text():
 
 def test_acoustic_signal_drives_switch():
     r = LanguageResolver()
-    r.resolve("hi there", signal=("en", 0.96))      # lock en (acoustic)
-    # sustained, confident German acoustic detection switches
-    assert r.resolve("weiter auf deutsch", signal=("de", 0.95)) == "de"
+    r.resolve("hi there and welcome along", signal=("en", 0.96))   # lock en (acoustic)
+    # Sustained, confident German acoustic detection switches. One turn no
+    # longer suffices (debounce is 3): STT guesses hardest on the shortest
+    # turns, so a single vote was too cheap.
+    de_turn = "wir sprechen jetzt bitte weiter auf deutsch"
+    for _ in range(3):
+        got = r.resolve(de_turn, signal=("de", 0.95))
+    assert got == "de"
 
 
 def test_acoustic_unsupported_language_holds_lock():
@@ -178,7 +183,10 @@ def test_reset_preserves_config():
 def test_switches_on_sustained_confident_change():
     r = LanguageResolver()
     r.resolve("Ich habe heute echt keine Motivation")  # lock de
-    assert r.resolve("Actually I would prefer to continue in English now") == "en"
+    en_turn = "Actually I would prefer to continue in English now"
+    for _ in range(3):
+        got = r.resolve(en_turn)
+    assert got == "en"
 
 
 def test_switch_requires_high_confidence():
@@ -202,10 +210,13 @@ def test_debounce_resets_on_weak_opposite_signal():
     # confident turns must not accumulate across the gap (finding #3).
     r = LanguageResolver(debounce=2)
     r.resolve("I have been running a lot this week")  # lock en
-    assert r.resolve("", signal=("de", 0.95)) == "en"  # pending de = 1
-    assert r.resolve("", signal=("de", 0.50)) == "en"  # weak de < switch → reset
-    assert r.resolve("", signal=("de", 0.95)) == "en"  # pending de = 1 again, no flip
-    assert r.resolve("", signal=("de", 0.95)) == "de"  # now 2 consecutive → switch
+    # NOTE: the interleaved turn must now be long enough to count as evidence
+    # at all. Turns below the length gate are neutral — they neither advance a
+    # pending switch nor reset one (see test_short_turns_do_not_cancel...).
+    assert r.resolve("also ich laufe ziemlich viel", signal=("de", 0.95)) == "en"  # pending de = 1
+    assert r.resolve("also ich laufe ziemlich viel", signal=("de", 0.50)) == "en"  # weak de < switch → reset
+    assert r.resolve("also ich laufe ziemlich viel", signal=("de", 0.95)) == "en"  # pending de = 1 again, no flip
+    assert r.resolve("also ich laufe ziemlich viel", signal=("de", 0.95)) == "de"  # now 2 consecutive → switch
 
 
 # ─────────────────────── clamp to supported set ───────────────────────
@@ -317,7 +328,12 @@ def test_pin_survives_session_reset():
 def test_unsupported_pin_falls_back_to_autodetect():
     r = LanguageResolver(forced="fr")
     assert r.forced is None
-    assert r.resolve("I have been running three times a week") == "en"
+    # Clearing the pin leaves the previously-pinned language as a confirmed
+    # lock, so switching away from it now needs sustained evidence like any
+    # other change.
+    for _ in range(3):
+        got = r.resolve("I have been running three times a week")
+    assert got == "en"
 
 
 def test_pin_honored_after_config_widens_supported_set():
@@ -353,4 +369,73 @@ def test_apply_config_force_auto_clears_pin():
     r = LanguageResolver(forced="de")
     r.apply_config({"force": "auto"})
     assert r.forced is None
-    assert r.resolve("I have been running three times a week") == "en"
+    # Clearing the pin leaves the previously-pinned language as a confirmed
+    # lock, so switching away from it now needs sustained evidence like any
+    # other change.
+    for _ in range(3):
+        got = r.resolve("I have been running three times a week")
+    assert got == "en"
+
+
+# ---------------------------------------------------------------------------
+# Lock the language in, then hold it (production 2026-08-25).
+#
+# debounce was 1, so a single confident detection flipped the conversation
+# mid-stream. STT is least reliable on exactly the turns carrying the least
+# language signal — short acknowledgements — so one vote was far too cheap:
+# a German session had "Nicht so." and "Y'all." come back from Whisper as
+# English.
+# ---------------------------------------------------------------------------
+
+def _resolver(**kw):
+    from stella_agent_sdk.language import LanguageResolver
+    kw.setdefault("supported", ["en", "de"])
+    kw.setdefault("default", "en")
+    return LanguageResolver(**kw)
+
+
+def test_first_confident_detection_locks_in():
+    r = _resolver()
+    assert r.resolve("Hallo, wie geht es dir heute so?", signal=("de", 0.95)) == "de"
+
+
+def test_one_confident_turn_no_longer_flips_the_lock():
+    r = _resolver()
+    r.resolve("Hallo, ich heisse Felix und komme aus Zuerich", signal=("de", 0.95))
+    got = r.resolve("I think that is quite interesting actually", signal=("en", 0.95))
+    assert got == "de", "a single turn must not switch a confirmed lock"
+
+
+def test_a_sustained_switch_is_still_honoured():
+    r = _resolver()
+    r.resolve("Hallo, ich heisse Felix und komme aus Zuerich", signal=("de", 0.95))
+    for _ in range(3):
+        got = r.resolve("I would much rather keep talking in English now",
+                        signal=("en", 0.95))
+    assert got == "en", "sustained, substantial evidence must still switch"
+
+
+def test_short_acknowledgements_cannot_vote():
+    # The actual production failure: brief turns mis-transcribed by STT.
+    r = _resolver()
+    r.resolve("Hallo, ich heisse Felix und komme aus Zuerich", signal=("de", 0.95))
+    for text in ("Y'all.", "Okay.", "Yeah.", "Nicht so.", "Sure."):
+        assert r.resolve(text, signal=("en", 0.99)) == "de", text
+
+
+def test_short_turns_do_not_cancel_a_real_switch_either():
+    # They are not evidence in either direction, so an interleaved "okay"
+    # must not reset a genuine, sustained switch back to zero.
+    r = _resolver()
+    r.resolve("Hallo, ich heisse Felix und komme aus Zuerich", signal=("de", 0.95))
+    long_en = "I would honestly prefer to continue this conversation in English"
+    r.resolve(long_en, signal=("en", 0.95))
+    r.resolve("Okay.", signal=("en", 0.99))
+    r.resolve(long_en, signal=("en", 0.95))
+    assert r.resolve(long_en, signal=("en", 0.95)) == "en"
+
+
+def test_a_pinned_deployment_never_switches():
+    r = _resolver(forced="de")
+    assert r.resolve("I would much rather speak English from now on please",
+                     signal=("en", 0.99)) == "de"
