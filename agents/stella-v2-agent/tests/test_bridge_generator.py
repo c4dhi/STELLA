@@ -14,12 +14,12 @@ import yaml
 from stella_v2_agent.pipeline.bridge_generator import (
     BridgeGenerator,
     select_bridge_mode,
+    _turn_length,
     BRIDGE_MODE_BRIEF,
     BRIDGE_MODE_FULL,
     BRIDGE_MODE_THINKING,
     _MODE_DIRECTIVES,
     _MODE_MAX_TOKENS,
-    _screen_risk,
     _gate_stream,
 )
 from stella_agent_sdk.llm import LLMResponse
@@ -103,6 +103,53 @@ class TestSelectBridgeMode:
         assert select_bridge_mode(_ORDINARY_TURN) == BRIDGE_MODE_FULL
 
 
+class TestTurnLengthAcrossScripts:
+    """Mode selection is driven by how much the user said, so the length measure
+    has to work in every language the agent can speak — not just the ones that
+    put spaces between words.
+
+    Whitespace splitting returns 1 for an entire Chinese or Japanese sentence.
+    That made every CJK turn look bare, so every CJK turn got a two-word beat
+    and a personal disclosure was brushed off with one — the exact failure the
+    substantial threshold exists to prevent, total for those languages.
+    """
+
+    _DISCLOSURES = {
+        "en": "Honestly I have been forcing myself through every single workout lately and it feels like a chore",
+        "de": "Ehrlich gesagt quäle ich mich in letzter Zeit durch jedes Training und es fühlt sich an wie eine Pflicht",
+        "fr": "Honnêtement je me force à faire chaque séance en ce moment et ça ressemble à une corvée pénible",
+        "es": "La verdad es que últimamente me obligo a hacer cada entrenamiento y se siente como una tarea pesada",
+        "zh": "老实说我最近每次锻炼都是强迫自己完成的感觉就像一件苦差事我不想再继续下去了",
+        "ja": "正直なところ最近はどのトレーニングも自分を無理やり奮い立たせてやっていて雑用のように感じています",
+        "th": "จริงๆแล้วช่วงนี้ผมต้องฝืนใจตัวเองทุกครั้งที่ออกกำลังกายมันรู้สึกเหมือนเป็นภาระ",
+    }
+
+    @pytest.mark.parametrize("lang", sorted(_DISCLOSURES))
+    def test_a_disclosure_is_substantial_in_every_script(self, lang):
+        text = self._DISCLOSURES[lang]
+        assert _turn_length(text) >= 12, lang
+        # Never a bare beat, and never demoted even after a full reception.
+        assert select_bridge_mode(text) != BRIDGE_MODE_BRIEF, lang
+        assert select_bridge_mode(text, previous_mode=BRIDGE_MODE_FULL) != BRIDGE_MODE_BRIEF, lang
+
+    @pytest.mark.parametrize("text", ["是的", "うん", "ครับ", "yeah", "ja"])
+    def test_a_bare_turn_is_still_bare_in_every_script(self, text):
+        assert select_bridge_mode(text) == BRIDGE_MODE_BRIEF
+
+    def test_korean_is_treated_as_space_delimited(self):
+        # Hangul IS written with spaces, so whitespace splitting already works
+        # and must not be double-counted as a dense script.
+        assert _turn_length("네 맞아요") == 2
+
+    def test_mixed_script_is_not_undercounted(self):
+        # Code-switching is common in speech; take the larger of the two measures.
+        assert _turn_length("老实说我really不想再继续下去了") > 2
+
+    def test_empty_input_is_zero(self):
+        assert _turn_length("") == 0
+        assert _turn_length("   ") == 0
+
+
 class TestAntiLockstep:
     """The bridge must not perform a full reception on every consecutive turn —
     that lockstep is what the conversation guidelines call a questionnaire."""
@@ -176,42 +223,16 @@ class TestModeDirectives:
 
 
 class TestNoAssessmentBeforeDispreferred:
-    """A2 acceptance: the bridge can never open with an evaluative token.
+    """A2 acceptance: the bridge can never appraise ahead of a dispreferred answer.
 
-    This used to be guaranteed structurally, by there being no "assessment"
-    phrase inventory. The inventories are gone, so the guarantee now rests
-    entirely on _gate_stream rejecting evaluative openers and on no mode
-    directive ever asking for one — which is what these pin.
+    The guarantee has moved twice. It was structural (no "assessment" phrase
+    inventory existed), then briefly a hardcoded English/German opener list, and
+    is now where it belongs: the bridge is UNCONDITIONALLY told never to
+    evaluate, and the only stage permitted to appraise is the one that runs
+    after the experts and is handed the tone.
     """
 
-    _ASSESSMENT_OPENERS = (
-        "That's great.", "That's a good question.", "What a good point.",
-        "Wow, amazing.", "Perfect, thanks.", "Good point.", "Well done.",
-        "Toll, super.", "Interessant.", "Sehr gut.",
-    )
-
-    # Naming the feeling or effort heard is reflection, which the bridge is
-    # explicitly meant to do. Widening the opener list must not swallow these.
-    _REFLECTIONS = (
-        "That's draining, honestly.", "Okay, I hear you.",
-        "Right, twice a week.", "Das klingt anstrengend.", "Ja, verstehe.",
-    )
-
-    def test_gate_rejects_every_assessment_opener(self):
-        for opener in self._ASSESSMENT_OPENERS:
-            accepted, stop = _gate_stream(opener, False, final=True)
-            assert accepted == "", opener
-            assert stop is True, opener
-
-    def test_reflection_is_not_mistaken_for_assessment(self):
-        for text in self._REFLECTIONS:
-            accepted, stop = _gate_stream(text, False, final=True)
-            assert accepted == text, text
-            assert stop is False, text
-
     def test_selection_never_returns_an_assessment_mode(self):
-        # Whatever the input, the mode is one of the three declared. There is no
-        # assessment mode to select at all.
         for inp in ["hi", "I feel terrible", "no", "What now?", "x " * 40]:
             assert select_bridge_mode(inp) in {
                 BRIDGE_MODE_BRIEF, BRIDGE_MODE_FULL, BRIDGE_MODE_THINKING,
@@ -222,28 +243,25 @@ class TestNoAssessmentBeforeDispreferred:
         for mode, text in _MODE_DIRECTIVES.items():
             low = text.lower()
             for word in banned:
-                # "do not evaluate" is fine; asking for evaluation is not.
                 if word in low:
                     assert "do not" in low or "don't" in low or "never" in low, (mode, word)
+
+    def test_the_bridge_has_no_appraisal_switch_left(self):
+        # Nothing a stored config or env var can set turns evaluation back on.
+        gen = BridgeGenerator(llm_service=None)
+        assert not hasattr(gen, "appraisal_enabled")
+        gen.apply_config({"appraisal": "on"})
+        assert not hasattr(gen, "appraisal_enabled")
 
 
 class TestApplyConfig:
     """Bridge knobs are controlled via the Agent Configurator (apply_config)."""
 
-    def test_appraisal_from_select_string(self):
-        gen = BridgeGenerator(llm_service=None)
-        # The configurator select sends "on"/"off" strings — bool("off") is True,
-        # so this must be parsed, not cast.
-        gen.apply_config({"appraisal": "on"})
-        assert gen.appraisal_enabled is True
-        gen.apply_config({"appraisal": "off"})
-        assert gen.appraisal_enabled is False
-
     def test_unknown_knobs_are_ignored(self):
-        # fast_path / allow_silence were removed; a stored config that still
-        # carries them must not blow up an agent on startup.
+        # fast_path / allow_silence / appraisal were all removed; a stored config
+        # that still carries them must not blow up an agent on startup.
         gen = BridgeGenerator(llm_service=None)
-        gen.apply_config({"fast_path": "on", "allow_silence": "on"})
+        gen.apply_config({"fast_path": "on", "allow_silence": "on", "appraisal": "on"})
         assert gen.bridge_model  # still constructed and usable
 
     def test_timeout_ms_overrides_env_default(self):
@@ -265,58 +283,9 @@ class TestApplyConfig:
         assert gen.bridge_max_tokens == 40
 
 
-class TestAppraisalRiskScreen:
-    """The cheap, deterministic screen that gates the appraisal tier (#343)."""
-
-    @pytest.mark.parametrize("text", [
-        "I hurt my knee last month",
-        "I've been really depressed lately",
-        "No, not really, I've been pretty lazy",
-        "Ich hab mir das Knie verletzt",
-        "Ich war ziemlich faul",
-        "I haven't been doing much",
-        "my dad died last week",
-        "I might need a lawyer for this",
-    ])
-    def test_sensitive_or_dispreferred_trips_screen(self, text):
-        assert _screen_risk(text) is True
-
-    @pytest.mark.parametrize("text", [
-        "I've been running three times a week",
-        "I usually work out in the mornings",
-        "Ich laufe dreimal die Woche",
-        "I want to get stronger and feel better",
-    ])
-    def test_benign_clears_screen(self, text):
-        assert _screen_risk(text) is False
-
-
-def _validate_whole(raw, allow_appraisal=False):
-    """Whole-string validation via the gate that actually runs in production.
-
-    These invariants used to be asserted against BridgeGenerator._validate_bridge,
-    a second validator kept for a non-streaming path that no longer existed. It
-    has been removed, so they are asserted against _gate_stream(final=True) —
-    the code the streaming bridge really passes through.
-    """
-    return _gate_stream(raw, allow_appraisal, final=True)[0]
-
-
-class TestValidateBridgeAppraisalGate:
-    """Evaluative openers are rejected by default, allowed only under the gate."""
-
-    def test_evaluative_opener_rejected_by_default(self):
-        assert _validate_whole("That's a good amount to work with.") == ""
-
-    def test_evaluative_opener_allowed_when_appraisal(self):
-        out = _validate_whole(
-            "That's a good amount to work with.", allow_appraisal=True
-        )
-        assert out == "That's a good amount to work with."
-
-    def test_question_still_rejected_even_with_appraisal(self):
-        # The appraisal gate must NOT relax the no-questions rule.
-        assert _validate_whole("That's good, right?", allow_appraisal=True) == ""
+def _validate_whole(raw):
+    """Whole-string validation via the gate that actually runs in production."""
+    return _gate_stream(raw, final=True)[0]
 
 
 class TestValidateBridgeLength:
@@ -343,37 +312,32 @@ class TestValidateBridgeLength:
         assert _validate_whole(bridge) == ""
 
 
-class TestAppraisalConfig:
-    def test_appraisal_defaults_off(self):
-        gen = BridgeGenerator(llm_service=None)
-        assert gen.appraisal_enabled is False
+class TestBridgeNeverAppraises:
+    """The bridge runs BEFORE the experts, so it cannot know whether the user
+    just disclosed something difficult. It is therefore never permitted to
+    evaluate — unconditionally, with no tier to switch on.
 
-    def test_appraisal_toggle_from_select_string(self):
-        gen = BridgeGenerator(llm_service=None)
-        gen.apply_config({"appraisal": "on"})
-        assert gen.appraisal_enabled is True
-        gen.apply_config({"appraisal": "off"})
-        assert gen.appraisal_enabled is False
+    This used to be an opt-in tier guarded by a word-list risk screen. The screen
+    was guessing at information that arrives ~200ms later in the same turn, and
+    could only guess in English and German.
+    """
 
-
-class TestBridgePromptRendering:
-    """The appraisal permission/ban is wired through the PRODUCTION (agent.yaml)
-    bridge prompt via the template conditionals — not the code fallback."""
-
-    _BAN = "Do NOT evaluate what they said"
-    _PERMISSION = "You MAY add a brief, understated appraisal"
-
-    def test_ban_present_when_appraisal_off(self):
+    def test_the_ban_is_unconditional(self):
         prompt = _slot_default("bridge_generator", "system_prompt")
-        rendered = render_prompt(prompt, {"allowAppraisal": False})
-        assert self._BAN in rendered
-        assert self._PERMISSION not in rendered
+        assert "Do NOT evaluate or praise what they said" in prompt
+        # No conditional at all — nothing can turn the ban off.
+        assert "allowAppraisal" not in prompt
+        assert render_prompt(prompt, {}) == render_prompt(prompt, {"allowAppraisal": True})
 
-    def test_ban_dropped_and_permission_added_when_appraisal_on(self):
+    def test_reflection_is_still_explicitly_allowed(self):
+        # Naming the feeling heard is the bridge's job; only judging is banned.
         prompt = _slot_default("bridge_generator", "system_prompt")
-        rendered = render_prompt(prompt, {"allowAppraisal": True})
-        assert self._BAN not in rendered
-        assert self._PERMISSION in rendered
+        assert "reflection, not evaluation" in prompt
+
+    def test_appraisal_moved_to_the_stage_that_knows_the_tone(self):
+        guidelines = _slot_default("response_generator", "conversation_guidelines")
+        assert "Appraising their SITUATION" in guidelines
+        assert "cautious tone, do not appraise" in guidelines
 
 
 class TestConfigCarriesTheImprovements:
@@ -403,8 +367,6 @@ class TestConfigCarriesTheImprovements:
         from stella_v2_agent.pipeline.bridge_generator import BRIDGE_SYSTEM_PROMPT
         assert _slot_default("bridge_generator", "system_prompt").strip() == BRIDGE_SYSTEM_PROMPT.strip()
 
-    def test_appraisal_default_on_in_config(self):
-        assert _slot_default("bridge_generator", "appraisal") == "on"
 
 
 class TestGateStream:
@@ -413,36 +375,31 @@ class TestGateStream:
 
     def test_releases_only_complete_sentences(self):
         # Trailing incomplete text is held back (never speak half a sentence).
-        out, stop = _gate_stream("Okay, I hear you. That sounds", allow_appraisal=False, final=False)
+        out, stop = _gate_stream("Okay, I hear you. That sounds", final=False)
         assert out == "Okay, I hear you."
         assert stop is False
 
     def test_final_flushes_remainder_with_terminal_punctuation(self):
-        out, stop = _gate_stream("Okay, I hear you. That sounds draining", allow_appraisal=False, final=True)
+        out, stop = _gate_stream("Okay, I hear you. That sounds draining", final=True)
         assert out == "Okay, I hear you. That sounds draining."
 
     def test_question_sentence_is_dropped_and_stops(self):
-        out, stop = _gate_stream("Okay, got it. So what do you enjoy?", allow_appraisal=False, final=True)
+        out, stop = _gate_stream("Okay, got it. So what do you enjoy?", final=True)
         assert out == "Okay, got it."
         assert stop is True
 
     def test_question_only_yields_nothing(self):
-        out, stop = _gate_stream("What do you enjoy?", allow_appraisal=False, final=True)
+        out, stop = _gate_stream("What do you enjoy?", final=True)
         assert out == ""
         assert stop is True
 
     def test_word_cap_stops_before_overrun(self):
-        out, stop = _gate_stream(" ".join(["word"] * 40) + ".", allow_appraisal=False, final=True)
-        assert out == ""
-        assert stop is True
-
-    def test_evaluative_opener_blocked_by_default(self):
-        out, stop = _gate_stream("That's a great routine.", allow_appraisal=False, final=True)
+        out, stop = _gate_stream(" ".join(["word"] * 40) + ".", final=True)
         assert out == ""
         assert stop is True
 
     def test_evaluative_opener_allowed_under_appraisal(self):
-        out, stop = _gate_stream("That's a great routine.", allow_appraisal=True, final=True)
+        out, stop = _gate_stream("That's a great routine.", final=True)
         assert out == "That's a great routine."
         assert stop is False
 

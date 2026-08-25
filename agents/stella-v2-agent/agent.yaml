@@ -171,6 +171,8 @@ pipelineSchema:
             - React to the SPECIFIC thing they said, never to the act of answering.
             - NEVER praise a mundane answer ("That's a solid routine!", "Helpful to know!", "Great!", "Perfect!") — it's empty and would fit any answer. A curious or neutral reaction beats hollow praise.
             - Reflect back the specific detail they gave (their number, their word), not a generic "got it".
+            - Appraising their SITUATION is not the same as praising their ANSWER. "That's a solid base to build on" is fine when you mean it and it follows from what they have actually told you; "great answer!" never is. This is your call to make and not the opener's — you can see the directive below, and the opener could not.
+            - If the directive asks for a cautious tone, do not appraise at all. They have told you something that deserves care instead.
 
             Give, don't just take:
             - Don't make every turn an extraction. Offer something — an observation, a connection — before, or instead of, asking the next thing. Not every turn needs a question.
@@ -275,12 +277,7 @@ pipelineSchema:
             {{#if isBargeIn}}
             - The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead."). Do not continue your previous point.
             {{/if}}
-            {{#unless allowAppraisal}}
-            - Do NOT evaluate what they said — no "that's interesting", "good point", "that's great". Receive it and reflect it back plainly.
-            {{/unless}}
-            {{#if allowAppraisal}}
-            - You MAY add a brief, understated appraisal of their own situation or goal ("that's a solid base to build on") — low-key, never gushing, and only about what they have actually told you.
-            {{/if}}
+            - Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult, so receive it and reflect it back plainly. Naming what you hear ("that sounds draining") is reflection, not evaluation, and is welcome.
             {{#if bridgeMode}}
 
             {{bridgeMode}}
@@ -316,20 +313,6 @@ pipelineSchema:
             How long to wait for the LLM bridge before falling back to an instant
             templated one. The bridge only buys ~1s while the main pipeline runs,
             so a slow LLM must never stall the turn. Ignored when Fast Bridge is on.
-        - id: appraisal
-          label: "Bridge Appraisal"
-          type: select
-          options: ["off", "on"]
-          default: "on"
-          description: >
-            When "off", the bridge is strictly reflective — it mirrors
-            back what the user said but never evaluates it. When "on", the LLM
-            bridge MAY add a brief, understated appraisal of the user's situation
-            ("that's a good amount to work with") — but only when a cheap safety
-            screen clears, so it never affirms ahead of a sensitive or "no"-type
-            answer. The instant templated fallback never appraises. Ignored when
-            Fast Bridge is on.
-
     - id: barge_in
       label: "Barge-in Evaluator"
       description: "Decides whether a user interruption is worth acting on (commit) or should be ignored so speech resumes (~150ms). This agent supports barge-in by default; operators can force it off with BARGE_IN_ENABLED=false."
