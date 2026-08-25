@@ -690,6 +690,43 @@ class AudioPipeline:
         """Timestamp (perf_counter) of the turn's ground zero (stt_end), for analytics."""
         return self._turn_stt_end_ts
 
+    def _begin_turn_analytics(self, turn_id: Optional[str]) -> None:
+        """Establish analytics ground zero for a turn.
+
+        Every stage event is reported as ``elapsed_ms`` relative to this
+        timestamp, and every TTS timing event is gated on it being set, so a
+        turn without an anchor records a full set of zeros rather than nothing
+        — which reads on the dashboard as "the pipeline took 0ms", not as
+        "unmeasured".
+
+        Called from two places, deliberately:
+
+        * the STT final branch, where ground zero is stt_end (the transcript is
+          locked in and the pipeline starts working) — earlier and more
+          accurate than the moment the agent dequeues it; and
+        * ``audio_in()``, the single turn boundary, for any turn that reaches
+          the agent WITHOUT having passed through that branch. Typed turns and
+          committed barge-ins (voice and text alike) both do: the barge-in path
+          ``continue``s before the anchor is set, and the user_text path never
+          touches the STT stream at all.
+        """
+        self._turn_stt_end_ts = time.perf_counter()
+        self._turn_id = turn_id
+        self._turn_bridge_tts_first_byte_emitted = False
+        self._turn_response_tts_first_byte_emitted = False
+
+    def _anchor_turn_if_unanchored(self, event: "TranscriptEvent") -> None:
+        """Anchor a turn that reached the agent without passing the STT branch.
+
+        Only fires when no anchor is standing, so a spoken turn keeps stt_end as
+        its ground zero rather than being re-anchored to the later moment the
+        agent dequeued it. ``_reset_turn_analytics()`` clears the anchor at the
+        end of every turn, so "no anchor standing" reliably means "this turn
+        never got one".
+        """
+        if self._turn_stt_end_ts == 0:
+            self._begin_turn_analytics(getattr(event, "transcript_id", None))
+
     async def _emit_analytics_event(self, stage: str, elapsed_ms: float, **kwargs) -> None:
         """Emit a raw timestamped analytics event relative to stt_end."""
         turn_id = self._turn_id or ""
@@ -991,10 +1028,7 @@ class AudioPipeline:
                 logger.info(f"Final transcript: '{event.text}'")
 
                 # Capture stt_end and reset per-turn state
-                self._turn_stt_end_ts = time.perf_counter()
-                self._turn_id = getattr(event, 'transcript_id', None)
-                self._turn_bridge_tts_first_byte_emitted = False
-                self._turn_response_tts_first_byte_emitted = False
+                self._begin_turn_analytics(getattr(event, 'transcript_id', None))
 
                 # Ground zero = stt_end (transcript locked in, pipeline processing starts)
                 # vad_trigger is emitted as a negative value showing how long the user spoke
@@ -1328,6 +1362,7 @@ class AudioPipeline:
             if self._pending_barge_in is not None:
                 event = self._pending_barge_in
                 self._pending_barge_in = None
+                self._anchor_turn_if_unanchored(event)
                 yield event
                 continue
             try:
@@ -1338,6 +1373,7 @@ class AudioPipeline:
                 )
 
                 # [GATE DISABLED] AEC handles echo cancellation at audio level
+                self._anchor_turn_if_unanchored(event)
                 yield event
 
             except asyncio.TimeoutError:
