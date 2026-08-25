@@ -53,14 +53,16 @@ Recent context:
 Always:
 - End with . or ! — never ask a question. The question belongs to the reply that follows.
 - Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
-- Mirror the SPECIFIC thing they said, their words and their numbers, never a generic "okay".
+- NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
+- React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction ("Fair enough.", "Ah, okay.") beats an echo every time.
 - Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
 - Do not reuse an opener you have already used in this conversation. Check the recent context above and say something different.
 - No "hmm", "uh" or "erm" — they render badly in our synth.
 {{#if isBargeIn}}
 - The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead."). Do not continue your previous point.
 {{/if}}
-- Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult, so receive it and reflect it back plainly. Naming what you hear ("that sounds draining") is reflection, not evaluation, and is welcome.
+- Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult. Naming what you hear in it ("that sounds draining") is welcome; judging it is not.
+- Say only what follows from what they actually told you. Do not invent a mood, a motive or a situation they have not mentioned.
 {{#if bridgeMode}}
 
 {{bridgeMode}}
@@ -107,15 +109,18 @@ _MODE_DIRECTIVES = {
         "THIS TURN — keep it to a beat. One or two words, then stop. Either they "
         "gave you very little, or you already received them in full a moment ago; "
         "either way a fuller reception here would sound like a routine rather than "
-        "a person. Do not mirror, do not name a feeling, and do not add warmth you "
-        "have not been given a reason for."
+        "a person. Just show you heard them and hand the floor back: \"Okay.\", "
+        "\"Right.\", \"Fair enough.\", \"Got it.\" — in their language. Do not name "
+        "a feeling, do not add warmth you have not been given a reason for, and "
+        "above all do not hand their own words back to them."
     ),
     BRIDGE_MODE_FULL: (
-        "THIS TURN — receive it properly. They gave you something real, so take it "
-        "in out loud: mirror the specific thing they said in their own words, and "
-        "name what you actually hear in it — the effort, the feeling, the trade-off. "
-        "Two or three short sentences, up to about 35 words. Lean long rather than "
-        "short; this is the beat that earns the reply the time it needs."
+        "THIS TURN — they gave you something real, so react to it properly rather "
+        "than just noting it. Say what it tells you, or what you hear behind it — "
+        "the effort, the difficulty, the trade-off — in YOUR words. Do not restate "
+        "what they said; they already know what they said, and hearing it read back "
+        "is what makes this sound like a machine. One or two short sentences, "
+        "around 15-25 words. Stop once you have actually reacted."
     ),
     BRIDGE_MODE_THINKING: (
         "THIS TURN — they asked you something, or gave you a lot at once. Take the "
@@ -252,6 +257,63 @@ _BRIDGE_MAX_WORDS = 35
 _BRIDGE_SENTENCE_END = re.compile(r"[.!?]+(?=\s|$)")
 
 
+# An echo — the user's own words handed straight back — is the single worst
+# thing the bridge can produce. "I don't know." answered with "I don't know."
+# reads as mockery; "not really" answered with "not really" reads as a machine
+# with nothing of its own. Both were observed in production on 2026-08-25.
+#
+# The prompt is the real fix (it no longer asks for a "mirror"); this is the
+# backstop for when the model does it anyway. It is structural rather than a
+# word list — it compares the two strings' own tokens, so it works in any
+# language.
+#
+# Only SHORT bridges are checked. A longer reception legitimately reuses some of
+# the user's words while adding something of its own, and its overlap ratio is
+# naturally well below the threshold.
+_ECHO_MAX_WORDS = 6
+_ECHO_OVERLAP_RATIO = 0.8
+# Below this length a shared prefix collides too easily to mean anything.
+_STEM_MIN_LEN = 4
+
+
+def _is_echo(bridge: str, user_input: str) -> bool:
+    """True when a short bridge says almost nothing the user did not just say."""
+    if not bridge or not user_input:
+        return False
+    b_words = re.findall(r"\w+", bridge.lower(), flags=re.UNICODE)
+    if not b_words or len(b_words) > _ECHO_MAX_WORDS:
+        return False
+    u_words = set(re.findall(r"\w+", user_input.lower(), flags=re.UNICODE))
+    if not u_words:
+        return False
+    shared = sum(1 for w in b_words if _same_word(w, u_words))
+    return shared / len(b_words) >= _ECHO_OVERLAP_RATIO
+
+
+def _same_word(word: str, others: set) -> bool:
+    """Does ``word`` appear in ``others``, allowing for endings?
+
+    Exact match alone is too brittle here: the user's turn arrives from STT, so
+    it carries transcription noise and inflection the bridge will not reproduce.
+    The real failure "not really." against "no, not reallyy" slipped through an
+    exact check on one duplicated letter.
+
+    Words of _STEM_MIN_LEN or more match on a shared prefix, which covers both
+    that and ordinary inflection ("laufe"/"laufen") without needing to know any
+    language's morphology. Shorter words must match exactly, since a 2-3 letter
+    prefix collides far too easily.
+    """
+    if word in others:
+        return True
+    if len(word) < _STEM_MIN_LEN:
+        return False
+    return any(
+        o.startswith(word) or word.startswith(o)
+        for o in others
+        if len(o) >= _STEM_MIN_LEN
+    )
+
+
 def _split_complete_sentences(text: str) -> tuple:
     """Split ``text`` into (complete_sentences, trailing_remainder).
 
@@ -279,7 +341,7 @@ def _clean_stream_text(raw: str) -> str:
     return t
 
 
-def _gate_stream(raw: str, final: bool) -> tuple:
+def _gate_stream(raw: str, final: bool, user_input: str = "") -> tuple:
     """Decide how much of the streamed bridge is safe to release to TTS yet.
 
     The whole-string validator can't run mid-stream (TTS speaks sentence 1 before
@@ -314,6 +376,9 @@ def _gate_stream(raw: str, final: bool) -> tuple:
     words = 0
     for idx, s in enumerate(candidates):
         if "?" in s:  # a bridge never asks — drop this sentence and stop
+            return " ".join(accepted), True
+        if idx == 0 and _is_echo(s, user_input):
+            # Better to say nothing than to read their own words back at them.
             return " ".join(accepted), True
         n = len(s.split())
         if words + n > _BRIDGE_MAX_WORDS:  # would overrun the cap — stop before it
@@ -514,7 +579,7 @@ class BridgeGenerator:
                 async for raw, final in stream_completion(
                     self._llm_service, messages, config, component_name="bridge_generator",
                 ):
-                    candidate, stop = _gate_stream(raw, final=final)
+                    candidate, stop = _gate_stream(raw, final=final, user_input=user_input)
                     if candidate and candidate != released and candidate.startswith(released):
                         released = candidate
                         yield released

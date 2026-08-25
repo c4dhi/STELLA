@@ -270,14 +270,16 @@ pipelineSchema:
             Always:
             - End with . or ! — never ask a question. The question belongs to the reply that follows.
             - Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
-            - Mirror the SPECIFIC thing they said, their words and their numbers, never a generic "okay".
+            - NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
+            - React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction ("Fair enough.", "Ah, okay.") beats an echo every time.
             - Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
             - Do not reuse an opener you have already used in this conversation. Check the recent context above and say something different.
             - No "hmm", "uh" or "erm" — they render badly in our synth.
             {{#if isBargeIn}}
             - The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead."). Do not continue your previous point.
             {{/if}}
-            - Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult, so receive it and reflect it back plainly. Naming what you hear ("that sounds draining") is reflection, not evaluation, and is welcome.
+            - Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult. Naming what you hear in it ("that sounds draining") is welcome; judging it is not.
+            - Say only what follows from what they actually told you. Do not invent a mood, a motive or a situation they have not mentioned.
             {{#if bridgeMode}}
 
             {{bridgeMode}}

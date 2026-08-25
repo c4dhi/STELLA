@@ -21,6 +21,7 @@ from stella_v2_agent.pipeline.bridge_generator import (
     _MODE_DIRECTIVES,
     _MODE_MAX_TOKENS,
     _gate_stream,
+    _is_echo,
 )
 from stella_agent_sdk.llm import LLMResponse
 from stella_v2_agent.prompts.template import render_prompt
@@ -330,9 +331,10 @@ class TestBridgeNeverAppraises:
         assert render_prompt(prompt, {}) == render_prompt(prompt, {"allowAppraisal": True})
 
     def test_reflection_is_still_explicitly_allowed(self):
-        # Naming the feeling heard is the bridge's job; only judging is banned.
+        # Naming what you hear is the bridge's job; only judging is banned.
         prompt = _slot_default("bridge_generator", "system_prompt")
-        assert "reflection, not evaluation" in prompt
+        assert "Naming what you hear in it" in prompt
+        assert "judging it is not" in prompt
 
     def test_appraisal_moved_to_the_stage_that_knows_the_tone(self):
         guidelines = _slot_default("response_generator", "conversation_guidelines")
@@ -351,7 +353,10 @@ class TestConfigCarriesTheImprovements:
     def test_yaml_bridge_carries_the_standing_rules(self):
         prompt = _slot_default("bridge_generator", "system_prompt")
         assert "never ask a question" in prompt
-        assert "Mirror the SPECIFIC thing they said" in prompt
+        # React in your own words — the "mirror their words" rule that produced
+        # verbatim echoes in production is gone and must stay gone.
+        assert "React to the specific thing they said" in prompt
+        assert "in YOUR words, not theirs" in prompt
         # The repetition guard that replaced inventory randomisation: the LLM can
         # see what it already said, which a fixed phrase pool never could.
         assert "Do not reuse an opener you have already used" in prompt
@@ -367,6 +372,91 @@ class TestConfigCarriesTheImprovements:
         from stella_v2_agent.pipeline.bridge_generator import BRIDGE_SYSTEM_PROMPT
         assert _slot_default("bridge_generator", "system_prompt").strip() == BRIDGE_SYSTEM_PROMPT.strip()
 
+
+
+class TestNoEcho:
+    """The bridge must never hand the user their own words back.
+
+    Observed in production 2026-08-25, from a prompt that said "Mirror the
+    SPECIFIC thing they said, their words and their numbers":
+
+        user: "I don't know"     bridge: "I don't know."
+        user: "no, not reallyy"  bridge: "not really."
+
+    An echo is not acknowledgement. On a negative it reads as mockery, and
+    everywhere else as a machine with nothing of its own to add. The prompt no
+    longer asks for a mirror; this is the structural backstop, and it compares
+    the two strings' own tokens so it holds in any language.
+    """
+
+    ECHOES = [
+        ("no, not reallyy", "not really."),            # the real failure
+        ("I don't know", "I don't know."),             # the other real failure
+        ("my name is Felix", "Felix."),
+        ("Ich laufe dreimal die Woche", "Dreimal die Woche."),
+        ("是的", "是的。"),
+    ]
+
+    REACTIONS = [
+        ("no, not reallyy", "Fair enough."),
+        ("I don't know", "Okay, no worries."),
+        ("my name is Felix", "Felix, good to meet you."),
+        ("I run three times a week", "Three times a week is a real habit."),
+        ("Ich laufe dreimal die Woche", "Alles klar, verstehe."),
+        ("twice a week", "Twice a week, got it."),
+        ("I hurt my knee", "Ah, that's rough."),
+        ("nothing much", "Okay."),
+    ]
+
+    @pytest.mark.parametrize("user,bridge", ECHOES)
+    def test_echo_is_detected(self, user, bridge):
+        assert _is_echo(bridge, user) is True
+
+    @pytest.mark.parametrize("user,bridge", REACTIONS)
+    def test_real_reaction_is_not_an_echo(self, user, bridge):
+        assert _is_echo(bridge, user) is False
+
+    def test_stt_noise_does_not_defeat_it(self):
+        # The user's turn comes from STT, so it carries transcription noise the
+        # bridge will not reproduce. An exact-token check missed the real case
+        # on a single duplicated letter.
+        assert _is_echo("not really.", "no, not reallyy") is True
+
+    def test_a_long_reception_may_reuse_their_words(self):
+        # Only short bridges are checked; a real reaction that quotes a detail
+        # while adding something of its own must pass.
+        assert _is_echo("Three times a week, that's a real habit forming.",
+                        "I run three times a week") is False
+
+    def test_the_gate_drops_an_echo_entirely(self):
+        accepted, stop = _gate_stream("I don't know.", final=True, user_input="I don't know")
+        assert accepted == ""
+        assert stop is True
+
+    def test_the_gate_keeps_a_real_reaction(self):
+        accepted, _ = _gate_stream("Fair enough.", final=True, user_input="no, not really")
+        assert accepted == "Fair enough."
+
+    def test_no_user_input_means_no_echo_check(self):
+        # Barge-in and other paths may not supply it; must not crash or over-block.
+        assert _gate_stream("Okay.", final=True)[0] == "Okay."
+
+
+class TestPromptNoLongerAsksForAMirror:
+    def test_standing_rules_forbid_repeating_the_user(self):
+        prompt = _slot_default("bridge_generator", "system_prompt")
+        assert "NEVER say the user's own words back to them" in prompt
+        # The instruction that caused it must be gone.
+        assert "Mirror the SPECIFIC thing they said" not in prompt
+
+    def test_no_mode_asks_for_a_mirror(self):
+        for mode, text in _MODE_DIRECTIVES.items():
+            assert "mirror the specific" not in text.lower(), mode
+
+    def test_full_mode_no_longer_asks_for_length(self):
+        # "Lean long rather than short" pushed it toward padding, and padding is
+        # what restating the user's turn is.
+        assert "lean long" not in _MODE_DIRECTIVES[BRIDGE_MODE_FULL].lower()
 
 
 class TestGateStream:
