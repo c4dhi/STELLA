@@ -74,8 +74,12 @@ export default function MessageBubble({
   const shouldShowDeliveryStatus = isUser && isFinal && effectiveDeliveryStatus
 
   return (
+    // `w-fit` is load-bearing: without it this block-level wrapper resolves to
+    // `width: auto`, so every bubble renders at exactly max-w and a one-word
+    // reply is as wide as a paragraph. Sizing to content is also what makes the
+    // auto margin able to push user bubbles to the right.
     <motion.div
-      className={`max-w-[75%] relative group ${isUser ? 'ml-auto' : 'mr-auto'}`}
+      className={`w-fit max-w-[75%] relative group ${isUser ? 'ml-auto' : 'mr-auto'}`}
     >
       {/* Message Bubble */}
       <div
