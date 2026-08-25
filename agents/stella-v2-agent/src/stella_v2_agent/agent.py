@@ -40,7 +40,14 @@ from stella_agent_sdk.tools.state_machine import create_state_machine_tools
 
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
-from stella_v2_agent.pipeline.bridge_generator import BridgeGenerator
+from stella_agent_sdk.env import env_bool
+from stella_v2_agent.pipeline.bridge_generator import (
+    BridgeGenerator,
+    BRIDGE_TYPE_GREETING,
+    BRIDGE_TYPE_MINIMAL,
+    BRIDGE_TYPE_ACKNOWLEDGEMENT,
+    BRIDGE_TYPE_PENSIVE,
+)
 from stella_v2_agent.pipeline.expert_pool import ExpertPool
 from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
@@ -49,6 +56,36 @@ from stella_agent_sdk.agent import BargeInEvaluator
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
 from stella_v2_agent.utils import normalize_transition_priority
 import logging
+
+
+# ── Per-turn speaking rate (#3 prosody) ──────────────────────────────────────
+# The TTS provider synthesises at one fixed rate with one fixed affect, so
+# without this every utterance in a conversation is acoustically identical —
+# sympathy and enthusiasm come out the same. That is a large part of why a
+# well-worded reply can still sound scripted, and it is invisible in a
+# transcript.
+#
+# The turn's bridge type is already a classifier for the turn's character, so it
+# picks the rate for the WHOLE turn (bridge and reply alike) — a rate change
+# inside one utterance would read as a glitch rather than as expression.
+#
+# Deliberately within a few percent: the Qwen3 provider implements rate by
+# resampling, which shifts pitch along with it. A few percent reads as natural
+# variation; a large factor reads as a different speaker.
+_TURN_SPEED_BY_BRIDGE_TYPE = {
+    BRIDGE_TYPE_GREETING: 1.03,        # an opening beat, brisk
+    BRIDGE_TYPE_MINIMAL: 1.02,         # a quick receipt, then straight on
+    BRIDGE_TYPE_ACKNOWLEDGEMENT: 1.00, # ordinary conversational rate
+    BRIDGE_TYPE_PENSIVE: 0.97,         # a heavier turn, taken slower
+}
+
+
+def _turn_speed(bridge_type) -> float:
+    """Speaking rate for this turn, or 1.0 when variation is off/unknown."""
+    if not env_bool("STELLA_TTS_RATE_VARIATION", True):
+        return 1.0
+    return _TURN_SPEED_BY_BRIDGE_TYPE.get(bridge_type, 1.0)
+
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +339,11 @@ class StellaV2Agent(BaseAgent):
             # stays False: the response continues this same transcript.
             bridge = ""
             bridge_ready_emitted = False
+            # Set once the generator has classified the turn (it does so before
+            # yielding anything, and still does it on a silent turn that yields
+            # nothing at all), then reused for the reply so bridge and reply are
+            # spoken at ONE rate — a rate change mid-utterance reads as a glitch.
+            turn_speed = 1.0
             async for bridge_accum in self.bridge_generator.generate_stream(
                 input.text, history, language=resolved_language, variables=prompt_variables
             ):
@@ -328,10 +370,18 @@ class StellaV2Agent(BaseAgent):
                 bridge_output.metadata["language"] = resolved_language
                 if resolved_voice:
                     bridge_output.metadata["voice"] = resolved_voice
+                turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_type", None))
+                bridge_output.metadata["speed"] = turn_speed
                 yield bridge_output
 
+            # Covers the silent turn too, where the loop above never ran.
+            turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_type", None))
+
             if bridge:
-                logger.info(f"Bridge: '{bridge}'")
+                logger.info(
+                    f"Bridge ({getattr(self.bridge_generator, 'last_bridge_type', None)}, "
+                    f"rate {turn_speed:.2f}): '{bridge}'"
+                )
 
             # ── Stage 2: Expert Pool — join the run started above ──
             # All enabled experts ran in parallel and self-gated; task_extraction
@@ -504,6 +554,8 @@ class StellaV2Agent(BaseAgent):
                         output.metadata["language"] = resolved_language
                         if resolved_voice:
                             output.metadata["voice"] = resolved_voice
+                        # Same rate as the bridge — one turn, one voice setting.
+                        output.metadata["speed"] = turn_speed
                         # Keep the latest accumulated reply so a barge-in mid-stream
                         # can evaluate against the half-committed message.
                         if output.content:

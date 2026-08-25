@@ -189,11 +189,43 @@ Conversation so far:
 {{/if}}"""
 
 
+# How many not-yet-known items to name explicitly. Naming the entire backlog
+# every turn is what makes this section read as a form; naming what is live and
+# counting the rest keeps the agent oriented without handing it a checklist.
+_MAX_VISIBLE_PENDING = 3
+
+
 def _state_machine_section(sm_context: Dict[str, Any]) -> str:
+    """Render the turn's state-machine context as orientation, not as a form.
+
+    This section is the single largest structural pull toward sounding scripted.
+    It used to emit a labelled checklist on EVERY turn — each pending deliverable
+    by snake_case key with its acceptance criteria, the full collected list, and
+    an "Overall progress: 40%" line. Models follow structure over instruction, so
+    handing a checklist to a model whose persona says "you are not a form"
+    reliably produced form-like turns: the structure won.
+
+    What survives is only what changes what the agent SAYS next:
+      * the phase, its goal, and the current task instruction — what to do now;
+      * what is still unknown, in prose, capped at ``_MAX_VISIBLE_PENDING`` and
+        ordered so the current task's items come first;
+      * what the user already told you, so it is never asked twice.
+
+    Deliberately dropped:
+      * the progress percentage — it has no bearing on what to say next, and a
+        running completion meter is the most form-like thing in the window;
+      * the snake_case keys — this stage only writes prose. Key names are the
+        extraction expert's business and it builds its own context, so exposing
+        them here just invited field-shaped turns;
+      * acceptance criteria for items not currently in play.
+    """
     if not sm_context:
         return ""
 
-    parts: List[str] = ["CURRENT CONVERSATION CONTEXT (internal — never mention these labels to the user):"]
+    parts: List[str] = [
+        "WHERE YOU ARE (internal orientation — never say any of this aloud, "
+        "and never use these words):"
+    ]
 
     state = sm_context.get("state", {})
     if state:
@@ -213,7 +245,8 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
 
     # Always show the current task instruction — the agent may need to perform
     # an action (e.g. "introduce yourself") even if deliverables were collected.
-    current_task = sm_context.get("current_task")
+    current_task = sm_context.get("current_task") or {}
+    task_del_keys = set(current_task.get("deliverable_keys", []))
     if current_task:
         parts.append(f"Current task: {current_task.get('description', '')}")
         instruction = current_task.get("instruction", "")
@@ -225,38 +258,52 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
         # longer hardcoded here — it lives in the editable conversation
         # guidelines, gated on the {{taskJustCollected}} / {{stateCompleting}} /
         # {{stateJustChanged}} runtime flags (see _state_conditions).
-        task_del_keys = set(current_task.get("deliverable_keys", []))
-        task_keys_just_collected = task_del_keys & collected_keys
-
-        if not task_keys_just_collected and instruction:
+        if not (task_del_keys & collected_keys) and instruction:
             parts.append(f"Instruction: {instruction}")
 
-    # Filter out just-collected deliverables from the pending list.
     deliverables = sm_context.get("deliverables", [])
-    pending = [d for d in deliverables if d.get("status") == "pending" and d["key"] not in collected_keys]
-    completed = [d for d in deliverables if d.get("status") == "completed"]
-    # Show just-collected keys as completed so the LLM knows they were provided
-    for d in deliverables:
-        if d.get("status") == "pending" and d["key"] in collected_keys:
-            completed.append({"key": d["key"], "value": "(just provided)"})
+    pending = [
+        d for d in deliverables
+        if d.get("status") == "pending" and d["key"] not in collected_keys
+    ]
 
     if pending:
-        parts.append("Still need to collect:")
-        for d in pending:
-            line = f"  - {d['key']}: {d['description']}"
-            if d.get("acceptance_criteria"):
-                line += f" (criteria: {d['acceptance_criteria']})"
+        # The current task's own items are what the conversation is actually on;
+        # anything else is backlog and is counted rather than listed.
+        live = [d for d in pending if d["key"] in task_del_keys]
+        rest = [d for d in pending if d["key"] not in task_del_keys]
+        visible = (live + rest)[:_MAX_VISIBLE_PENDING]
+
+        parts.append("What you still don't know about them:")
+        for d in visible:
+            line = f"  - {d.get('description') or d['key']}"
+            # Criteria only for what is in play — for backlog items they are
+            # noise now and read as a spec to satisfy rather than a thing to
+            # become curious about.
+            if d["key"] in task_del_keys and d.get("acceptance_criteria"):
+                line += f" (needs: {d['acceptance_criteria']})"
             parts.append(line)
 
-    if completed:
-        parts.append("Already collected:")
-        for d in completed:
-            parts.append(f"  - {d['key']}: {d.get('value', '?')}")
+        hidden = len(pending) - len(visible)
+        if hidden > 0:
+            parts.append(
+                f"  (plus {hidden} more you'll get to later — not this turn)"
+            )
 
-    progress = sm_context.get("progress", {})
-    pct = progress.get("percentage", 0)
-    if pct > 0:
-        parts.append(f"Overall progress: {pct:.0f}%")
+    # What they already said, so it is never asked twice. Just-collected keys are
+    # shown here too: they are not in the pending list any more, and the agent
+    # must know they landed. Described in words rather than by key, since the key
+    # alone ("workout_freq: 2-3") is the form shape we are removing.
+    known: List[str] = []
+    for d in deliverables:
+        label = d.get("description") or d["key"]
+        if d.get("status") == "completed":
+            known.append(f"  - {label}: {d.get('value', '?')}")
+        elif d["key"] in collected_keys:
+            known.append(f"  - {label}: (they just told you this)")
+    if known:
+        parts.append("They have already told you (never ask any of this again):")
+        parts.extend(known)
 
     return "\n".join(parts)
 

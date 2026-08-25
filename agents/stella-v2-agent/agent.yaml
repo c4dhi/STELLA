@@ -82,6 +82,12 @@ configSchema:
       description: "Seed TTS voice, overridable per stream. Honored by voice-selecting providers (e.g. Kokoro), ignored by others. Empty = provider default."
     - name: STELLA_TTS_PREROLL_MS
       description: "Jitter buffer (ms) of audio buffered before an utterance starts playing. Default 800, calibrated for a provider running at roughly real time. On faster hardware lower it (150-300ms when synthesis outruns playback) to cut time-to-first-sound; if you hear warbling or see 'Playout starved' in the agent log, raise it. 0 also disables the underrun guard. Leave unset to use the default."
+    - name: STELLA_TTS_RATE_VARIATION
+      description: "Vary the speaking rate slightly by turn character (a heavier turn is taken a little slower, an opening beat a little brisker). ON BY DEFAULT — set 'false' to synthesize every utterance at exactly one rate. Only providers that implement rate honor it (Qwen3 does, by resampling)."
+    - name: TTS_SPEED
+      description: "Baseline speaking rate (0.5-2.0, default 1.0). The agent overrides this per turn when STELLA_TTS_RATE_VARIATION is on. Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker."
+    - name: BRIDGE_ALLOW_SILENCE
+      description: "Deploy-time default for the bridge_generator 'Allow Silent Turns' slot. When 'true', a second bare turn in a row gets no spoken bridge at all. Off by default — it trades latency for naturalness."
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
 
@@ -329,6 +335,18 @@ pipelineSchema:
             How long to wait for the LLM bridge before falling back to an instant
             templated one. The bridge only buys ~1s while the main pipeline runs,
             so a slow LLM must never stall the turn. Ignored when Fast Bridge is on.
+        - id: allow_silence
+          label: "Allow Silent Turns"
+          type: select
+          options: ["off", "on"]
+          default: "off"
+          description: >
+            When "on", a second bare turn in a row (after a receipt token like
+            "Mm.") gets NO bridge at all — the reply opens cold instead of
+            ticking "Mm." "Right." "Okay." down the conversation. Off by default
+            because this trades latency for naturalness: with no bridge the user
+            hears the expert pool's latency as silence rather than as speech.
+
         - id: appraisal
           label: "Bridge Appraisal"
           type: select

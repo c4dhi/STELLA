@@ -44,7 +44,7 @@ import time
 import uuid
 from typing import AsyncIterator, Awaitable, Callable, List, Optional
 
-from stella_agent_sdk.env import env_int as _env_int
+from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
 from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
@@ -405,6 +405,13 @@ class AudioPipeline:
         # Same contract as language — passed to the provider as a hint that
         # voice-selecting providers honor (e.g. Kokoro) and others disregard.
         self._tts_voice = os.getenv("TTS_VOICE", None) or None
+
+        # Speaking rate. Same contract as voice/language: an env seed the agent
+        # overrides per turn via set_tts_speed(). Providers that cannot change
+        # rate ignore it; the Qwen3 provider resamples its own PCM to honour it.
+        # This exists so a whole conversation is not synthesised at one fixed
+        # rate and one fixed affect, which is a large part of sounding scripted.
+        self._tts_speed: float = _env_float("TTS_SPEED", 1.0)
 
         # Sentence-level streaming TTS queue (tuple of sentence text + source label)
         self._speech_queue: asyncio.Queue = asyncio.Queue()
@@ -1460,7 +1467,7 @@ class AudioPipeline:
         self,
         text: str,
         voice: Optional[str] = None,
-        speed: float = 1.0,
+        speed: Optional[float] = None,
         language: Optional[str] = None,
     ) -> None:
         """
@@ -1511,6 +1518,9 @@ class AudioPipeline:
         # Resolve voice the same way (per-stream override > env seed > provider default)
         if voice is None:
             voice = self._tts_voice
+        # …and rate, so a direct speak() follows the turn's rate like the queue does.
+        if speed is None:
+            speed = self._tts_speed
 
         logger.info(f"[TTS] speak() called with text: {text[:50]}... lang={language}")
         self._is_speaking = True
@@ -1534,7 +1544,7 @@ class AudioPipeline:
         self,
         sentence: str,
         voice: Optional[str] = None,
-        speed: float = 1.0,
+        speed: Optional[float] = None,
         language: Optional[str] = None,
         source: str = "response",
     ) -> None:
@@ -1562,7 +1572,7 @@ class AudioPipeline:
                     text=sentence,
                     session_id=self._session_id,
                     voice=voice,
-                    speed=speed,
+                    speed=speed if speed is not None else self._tts_speed,
                     language=language,
                 ):
                     if self._stop_speaking_event.is_set():
@@ -2316,6 +2326,30 @@ class AudioPipeline:
             logger.info(f"[TTS] voice set to '{voice}' (was '{self._tts_voice}')")
             self._tts_voice = voice
 
+    def set_tts_speed(self, speed) -> None:
+        """Set the speaking rate for subsequent TTS synthesis (per-turn).
+
+        Called by the agent loop from ``metadata["speed"]``. Same contract as
+        voice and language: a hint the provider may honour (Qwen3 resamples its
+        own PCM) or ignore. Out-of-range and non-numeric values are ignored
+        rather than clamped here — the provider owns the valid range, and a
+        silently clamped value would hide a caller bug.
+
+        Kept deliberately small in practice: this shifts pitch along with rate,
+        so a few percent reads as natural variation while a large factor reads
+        as a different speaker.
+        """
+        try:
+            value = float(speed)
+        except (TypeError, ValueError):
+            return
+        if not 0.5 <= value <= 2.0:
+            logger.warning(f"[TTS] ignoring out-of-range speed {value}")
+            return
+        if abs(value - self._tts_speed) > 1e-6:
+            logger.info(f"[TTS] speed set to {value:.3f} (was {self._tts_speed:.3f})")
+            self._tts_speed = value
+
     def enqueue_sentence(
         self,
         sentence: str,
@@ -2401,7 +2435,7 @@ class AudioPipeline:
         self._last_response_tts_done_elapsed = 0
 
     def _begin_synthesis(
-        self, sentence: str, voice=None, speed: float = 1.0, language=None
+        self, sentence: str, voice=None, speed: Optional[float] = None, language=None
     ) -> "_StreamingUtterance":
         """Start synthesising a sentence and return its buffer IMMEDIATELY.
 
@@ -2440,7 +2474,7 @@ class AudioPipeline:
                         text=sentence,
                         session_id=self._session_id,
                         voice=voice if voice is not None else self._tts_voice,
-                        speed=speed,
+                        speed=speed if speed is not None else self._tts_speed,
                         language=language if language is not None else self._tts_language,
                     ):
                         utt.append(chunk.audio_data)

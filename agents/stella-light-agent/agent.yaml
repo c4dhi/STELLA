@@ -69,6 +69,8 @@ configSchema:
       default: "false"
     - name: STELLA_TTS_PREROLL_MS
       description: "Jitter buffer (ms) of audio buffered before an utterance starts playing. Default 800, calibrated for a provider running at roughly real time. On faster hardware lower it (150-300ms when synthesis outruns playback) to cut time-to-first-sound; if you hear warbling or see 'Playout starved' in the agent log, raise it. 0 also disables the underrun guard. Leave unset to use the default."
+    - name: TTS_SPEED
+      description: "Baseline speaking rate (0.5-2.0, default 1.0). Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker. This agent has no bridge stage, so it does not vary rate per turn."
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
 

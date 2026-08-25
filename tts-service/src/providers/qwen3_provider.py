@@ -29,6 +29,7 @@ LICENSE NOTES
 
 import asyncio
 import json
+import math
 import os
 import threading
 import time
@@ -85,6 +86,78 @@ DEFAULT_SAMPLE_RATE = 24000
 DEFAULT_CHUNK_SIZE = 2
 # Sentinel used in the async pump queue to signal end-of-stream.
 _QWEN3_STREAM_DONE = object()
+
+# Speech-rate bounds. tts.proto declares speed as 0.5-2.0; anything outside is
+# clamped rather than rejected so a bad caller degrades to odd-sounding audio
+# instead of no audio. Factors within _SPEED_EPSILON of 1.0 snap to exactly 1.0
+# so the resampler is bypassed entirely on the overwhelmingly common path.
+_MIN_SPEED = 0.5
+_MAX_SPEED = 2.0
+_SPEED_EPSILON = 0.005
+
+
+def _normalize_speed(speed) -> float:
+    """Clamp a requested speed into range, snapping near-1.0 to exactly 1.0."""
+    try:
+        value = float(speed)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(value) or abs(value - 1.0) < _SPEED_EPSILON:
+        return 1.0
+    return min(max(value, _MIN_SPEED), _MAX_SPEED)
+
+
+class _SpeedResampler:
+    """Streaming-safe playback-rate change for int16 PCM.
+
+    faster-qwen3-tts has no speed control of its own, so ``speed`` arrived from
+    the proto and was discarded — every utterance in a conversation came out at
+    exactly one rate and one affect. Resampling the PCM we already own gives the
+    channel back without provider support.
+
+    Playing back at ``speed`` means reading one output sample every ``speed``
+    input samples, interpolating between neighbours. Doing that per chunk
+    naively restarts the read phase at each chunk boundary, which drops or
+    repeats a fraction of a sample every time and clicks. This carries the
+    fractional phase AND the boundary sample across calls, so a chunked stream
+    resamples identically to the whole utterance processed at once.
+
+    Like tape speed this shifts pitch along with rate. That is what makes it
+    usable for the few-percent variation the agent applies and unusable for
+    large factors, which sound plainly pitch-shifted.
+    """
+
+    __slots__ = ("_speed", "_pos", "_tail")
+
+    def __init__(self, speed: float) -> None:
+        self._speed = float(speed)
+        # Read phase, in samples, into the buffer formed by _tail + next chunk.
+        self._pos = 0.0
+        # Final sample of the previous chunk, kept so interpolation can span the
+        # boundary instead of restarting inside the new chunk.
+        self._tail = np.empty(0, dtype=np.int16)
+
+    def process(self, chunk: np.ndarray) -> np.ndarray:
+        buf = np.concatenate([self._tail, chunk]) if self._tail.size else chunk
+        last = buf.size - 1
+
+        # Too little to interpolate across, or the phase has run past everything
+        # we hold: carry it all forward and emit nothing this round.
+        if last < 1 or self._pos > last:
+            if buf.size:
+                self._pos = max(0.0, self._pos - last)
+                self._tail = buf[-1:]
+            return np.empty(0, dtype=np.int16)
+
+        n_out = int((last - self._pos) // self._speed) + 1
+        idx = self._pos + np.arange(n_out) * self._speed
+        out = np.interp(idx, np.arange(buf.size), buf.astype(np.float32))
+
+        # Re-express the next read position relative to the sample carried over,
+        # which becomes index 0 of the next call's buffer.
+        self._pos = self._pos + n_out * self._speed - last
+        self._tail = buf[-1:]
+        return np.clip(np.rint(out), -32768, 32767).astype(np.int16)
 
 
 class Qwen3Provider(TTSProvider):
@@ -590,7 +663,7 @@ class Qwen3Provider(TTSProvider):
         self,
         text: str,
         voice: Optional[str] = None,
-        speed: float = 1.0,  # not exposed by faster-qwen3-tts; accepted for parity
+        speed: float = 1.0,
         language: Optional[str] = None,
     ) -> Optional[Tuple[np.ndarray, int]]:
         if not self._initialized or self._model is None:
@@ -624,6 +697,10 @@ class Qwen3Provider(TTSProvider):
                 int16 = np.concatenate(int16_parts)
             else:
                 int16 = self._to_int16_numpy(audio_list)
+            # The model has no rate control, so apply it to the PCM it produced.
+            rate = _normalize_speed(speed)
+            if rate != 1.0:
+                int16 = _SpeedResampler(rate).process(int16)
             audio = (int16.astype(np.float32) / 32767.0)
             print(f"[Qwen3] Synthesized {len(audio)} samples in {(time.time() - t0) * 1000:.0f}ms")
             return audio, int(sr or self._sample_rate)
@@ -657,6 +734,9 @@ class Qwen3Provider(TTSProvider):
 
         codec_chunk = self._chunk_size
         loop = asyncio.get_event_loop()
+        # Resolved once per call; a fresh resampler is built per attempt below so
+        # a language retry restarts with a clean read phase.
+        rate = _normalize_speed(speed)
 
         # Try the resolved language first. If synthesis fails *before* emitting
         # any audio (e.g. a label the model can't handle slips past
@@ -709,6 +789,7 @@ class Qwen3Provider(TTSProvider):
             first_yielded = False
             errored = False
             leftover = np.empty(0, dtype=np.int16)
+            resampler = _SpeedResampler(rate) if rate != 1.0 else None
 
             try:
                 while True:
@@ -725,6 +806,12 @@ class Qwen3Provider(TTSProvider):
                         break
 
                     int16 = self._to_int16_numpy(item)
+                    # Rate-shift before re-slicing, so emitted frames keep the
+                    # exact chunk_size the gRPC consumer expects.
+                    if resampler is not None:
+                        int16 = resampler.process(int16)
+                        if not int16.size:
+                            continue
                     if len(leftover):
                         int16 = np.concatenate([leftover, int16])
 
