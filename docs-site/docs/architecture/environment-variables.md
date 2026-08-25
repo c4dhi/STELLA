@@ -285,7 +285,7 @@ STELLA_AI_TEMP_DIR=/mnt/stella-ai-temp
 
 ## Agent SDK (Pod-Level)
 
-These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. Agents declare them in their `agent.yaml` manifest under `x-stella-optional-env-vars` so the frontend deploy modal can expose them.
+These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. For how the audio pipeline actually works and why the timing constants are what they are, see [TTS & Audio Pipeline](./tts-pipeline.md). Agents declare them in their `agent.yaml` manifest under `x-stella-optional-env-vars` so the frontend deploy modal can expose them.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -294,6 +294,11 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `TRANSCRIPT_DEBOUNCE_MS` | No | `300` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Set to `0` to disable debouncing |
 | `DISABLE_AEC` | No | `false` | Disable Acoustic Echo Cancellation (AEC) for debugging audio feedback issues |
 | `STT_WARMUP_ENABLED` | No | `true` | Warm up the STT model on agent start and when participants join. Set to `false` to skip warmup |
+| `STELLA_TTS_PREROLL_MS` | No | `800` | Jitter buffer (ms) held before the first frame of an utterance plays. Sized from the measured playout deficit — see [TTS & Audio Pipeline](./tts-pipeline.md#why-the-pre-roll-exists) before lowering it |
+| `TTS_PROGRESS_TICK_MS` | No | `200` | How often a teleprompter progress envelope is emitted during playback |
+| `TTS_VOICE` | No | provider default | Seed TTS voice, overridable per stream. Honored by voice-selecting providers, ignored by others |
+| `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
+| `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
 
 ### Turn Management
 
