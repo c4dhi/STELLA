@@ -23,10 +23,21 @@ import type { AgentSpeechProgress } from '../lib/types'
 export type { AgentSpeechProgress }
 
 // The speech-progress data event reaches the client ahead of the audio it
-// describes (the audio waits in the client jitter buffer before it is heard).
-// Delay the word cursor by this much so the highlight lands with the sound
-// rather than racing it. Empirical; ±150ms reads as in-sync.
-const TELEPROMPTER_CLIENT_LAG_MS = 150
+// describes (the audio waits in the browser's jitter buffer before it is
+// heard). Delay the word cursor by this much so the highlight lands with the
+// sound rather than racing it.
+//
+// This constant IS the highlight's trail: simulating this scheduler against
+// real SDK envelopes, the median lag behind the voice tracks it almost exactly
+// (150 -> 150ms, 60 -> 64ms, 0 -> 7ms), because everything else — segment
+// tiling and the SDK's own delay_ms — is already calibrated. It was 150ms,
+// which read as visibly trailing.
+//
+// It cannot go to zero: the simulation models the server-side output source
+// draining, but not the browser's own jitter buffer, so 0 would let the
+// highlight lead the voice — and reading words before they are spoken is far
+// worse than reading them slightly late. 60ms keeps a margin.
+const TELEPROMPTER_CLIENT_LAG_MS = 60
 
 // How far the chained schedule may run ahead of the SDK's own estimate of when
 // the playhead becomes audible before we stop chaining and rebase onto it.
@@ -256,9 +267,20 @@ export function useTeleprompter(): Teleprompter {
         scheduledUntilRef.current = endAt
         ensureLoop()
       } else if (state === 'spoken') {
-        // The schedule carries the cursor to the end; just drop any freeze so a
-        // normally-completed message renders fully lit.
+        // The schedule normally carries the cursor to the end on its own.
         clearFrozen(transcriptId)
+        // Safety net. A sentence the SDK reports as fully spoken must end fully
+        // lit — if the schedule falls even slightly short, the bubble sits
+        // permanently half-highlighted, which is how a scheduling bug shows up
+        // to a reader. Extending the last segment's target costs nothing when
+        // the schedule was already correct (it is a no-op) and converts any
+        // future arithmetic error into slight timing imprecision instead of a
+        // stuck highlight.
+        const last = segmentsRef.current[segmentsRef.current.length - 1]
+        if (last && last.charEnd < charEnd) {
+          last.charEnd = charEnd
+          ensureLoop()
+        }
       } else if (state === 'interrupted') {
         // Freeze exactly where the audio stopped, drop pending segments, and
         // remember the point so the bubble keeps its partial highlight.

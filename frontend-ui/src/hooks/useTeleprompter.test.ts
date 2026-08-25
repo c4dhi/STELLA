@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest'
 import { planSegment } from './useTeleprompter'
 
 // Mirrors the constants in the hook.
-const LAG = 150
+const LAG = 60
 const TOLERANCE = 600
 
 describe('planSegment', () => {

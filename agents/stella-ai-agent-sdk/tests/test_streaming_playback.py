@@ -15,6 +15,7 @@ finished" event that at RTF ~1 only arrives once the sentence is over.
 """
 
 import asyncio
+import time
 
 import pytest
 
@@ -219,6 +220,13 @@ class PacedRoom(CapturingRoom):
 
     async def publish_audio(self, data: bytes):
         await asyncio.sleep(self.frame_delay)
+        # Stamp the first push like CapturingRoom does. Without this
+        # queued_playout_ms answers 0 forever, so every paced test ran with a
+        # permanently-empty output source: the underrun guard looked constantly
+        # triggered and delay_ms — the teleprompter's whole notion of "when will
+        # this be audible" — was never exercised at all.
+        if self._first_push is None:
+            self._first_push = time.perf_counter()
         self.published.extend(data)
 
 
