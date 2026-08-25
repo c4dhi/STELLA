@@ -7,6 +7,10 @@ asyncio.gather(), and returns structured ExpertVerdict objects.
 All experts (including task_extraction) run as foreground — their results
 are needed before response generation to ensure accurate state context.
 
+The caller starts this pool as a task alongside bridge generation and joins it
+before arbitration (#455), so most of this latency is spent while the user is
+already hearing the bridge.
+
 Target latency: ~300-500ms wall-clock (parallelized).
 
 Timeout per expert: configurable via EXPERT_TIMEOUT_MS env var (default: 15000ms).

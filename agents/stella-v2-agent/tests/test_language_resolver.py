@@ -10,7 +10,9 @@ import pytest
 
 from stella_agent_sdk.language import (
     detect_language,
+    forced_language,
     language_name,
+    FORCE_LANGUAGE_ENV,
     LanguageResolver,
 )
 
@@ -263,3 +265,92 @@ def test_apply_config_ignores_unknown_and_empty():
 ])
 def test_language_name(code, expected):
     assert language_name(code) == expected
+
+
+# ─────────────────── deployment language pin (STELLA_LANGUAGE) ───────────────────
+# The operator picks a language at deploy time; that deployment must then answer
+# in it even when the first utterance is short or garbled — the case auto-detect
+# cannot serve, because it needs a long enough utterance to be confident.
+
+def test_forced_language_reads_env(monkeypatch):
+    monkeypatch.setenv(FORCE_LANGUAGE_ENV, "de")
+    assert forced_language() == "de"
+
+
+@pytest.mark.parametrize("value", ["", "   ", "auto", "AUTO"])
+def test_forced_language_absent_or_auto_means_autodetect(monkeypatch, value):
+    monkeypatch.setenv(FORCE_LANGUAGE_ENV, value)
+    assert forced_language() is None
+
+
+def test_pin_wins_on_garbled_first_turn():
+    """The endgoal: a short/garbled first message still answers in the pin."""
+    r = LanguageResolver(forced="de")
+    assert r.resolve("42 ok") == "de"   # no signal at all
+    assert r.resolve("") == "de"
+    # ...and a sub-2s utterance arriving with no acoustic signal (RFC §4 floor).
+    assert r.resolve("mm", signal=None) == "de"
+
+
+def test_pin_ignores_confident_opposite_detection():
+    r = LanguageResolver(forced="de")
+    assert r.resolve("I have been running three times a week") == "de"
+    # Even a sustained, maximally confident English signal cannot flip a pin.
+    for _ in range(5):
+        assert r.resolve("This is clearly English", signal=("en", 1.0)) == "de"
+
+
+def test_pin_outranks_plan_seed():
+    r = LanguageResolver(forced="de")
+    r.set_seed("en")
+    assert r.resolve("hello there") == "de"
+
+
+def test_pin_survives_session_reset():
+    r = LanguageResolver(forced="de")
+    r.resolve("hallo")
+    r.reset()
+    assert r.locked == "de"
+    assert r.resolve("äh") == "de"
+
+
+def test_unsupported_pin_falls_back_to_autodetect():
+    r = LanguageResolver(forced="fr")
+    assert r.forced is None
+    assert r.resolve("I have been running three times a week") == "en"
+
+
+def test_pin_honored_after_config_widens_supported_set():
+    r = LanguageResolver(forced="fr")
+    assert r.forced is None  # rejected against the default en/de set
+    r.apply_config({"supported": ["en", "de", "fr"]})
+    assert r.forced == "fr"
+    assert r.resolve("whatever") == "fr"
+
+
+def test_pin_from_env_needs_no_wiring(monkeypatch):
+    """Both agents construct LanguageResolver() bare — the env must reach it."""
+    monkeypatch.setenv(FORCE_LANGUAGE_ENV, "de")
+    r = LanguageResolver()
+    assert r.resolve("42 ok") == "de"
+
+
+def test_auto_still_falls_back_to_english(monkeypatch):
+    """Unpinned + undetectable is the ONLY case that falls back to the default."""
+    monkeypatch.delenv(FORCE_LANGUAGE_ENV, raising=False)
+    r = LanguageResolver()
+    assert detect_language("42 ok") == (None, 0.0)  # genuinely no signal
+    assert r.resolve("42 ok") == "en"
+
+
+def test_apply_config_force_key_pins():
+    r = LanguageResolver()
+    r.apply_config({"force": "de"})
+    assert r.resolve("hello there") == "de"
+
+
+def test_apply_config_force_auto_clears_pin():
+    r = LanguageResolver(forced="de")
+    r.apply_config({"force": "auto"})
+    assert r.forced is None
+    assert r.resolve("I have been running three times a week") == "en"

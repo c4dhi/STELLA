@@ -14,8 +14,10 @@ import type {
   ProjectWithCounts,
   Project,
   AgentConfiguration,
+  TtsCapabilities,
 } from '../../lib/api-types'
 import { parseAgentRequirements } from '../../lib/api-types'
+import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import {
   AgentGalleryStep,
   ConfigurationSelectionStep,
@@ -35,7 +37,7 @@ interface ProjectModalProps {
   onProjectUpdated?: (project: Project) => void
 }
 
-type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'plan' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
+type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'voice' | 'plan' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
 type ProjectType = 'private' | 'public'
 type EnvVarsView = 'select' | 'edit'
 
@@ -53,11 +55,12 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'agent', number: 1, label: 'Select Agent' },
   { id: 'configure', number: 2, label: 'Configure' },
   { id: 'configuration', number: 3, label: 'Configuration' },
-  { id: 'plan', number: 4, label: 'Plan' },
-  { id: 'envvars', number: 5, label: 'Env Vars' },
-  { id: 'visualizer', number: 6, label: 'Visualizer' },
-  { id: 'duration', number: 7, label: 'Session Duration' },
-  { id: 'expiration', number: 8, label: 'Expiration' },
+  { id: 'voice', number: 4, label: 'Voice & Language' },
+  { id: 'plan', number: 5, label: 'Plan' },
+  { id: 'envvars', number: 6, label: 'Env Vars' },
+  { id: 'visualizer', number: 7, label: 'Visualizer' },
+  { id: 'duration', number: 8, label: 'Session Duration' },
+  { id: 'expiration', number: 9, label: 'Expiration' },
 ]
 
 export default function ProjectModal({
@@ -103,6 +106,14 @@ export default function ProjectModal({
   const [envVars, setEnvVars] = useState<Record<string, string>>({})
   const [envVarsView, setEnvVarsView] = useState<EnvVarsView>('select')
 
+  // Voice/language for the agent every participant gets. '' = provider default
+  // voice / Auto language. Persisted into publicAgentConfig.envVars, the same
+  // keys a normal deployment writes, so the spawn path needs no special case.
+  const [ttsCapabilities, setTtsCapabilities] = useState<TtsCapabilities | null>(null)
+  const [isLoadingTtsCaps, setIsLoadingTtsCaps] = useState(false)
+  const [ttsVoice, setTtsVoice] = useState('')
+  const [ttsLanguage, setTtsLanguage] = useState('')
+
   // Visualizer
   const [visualizerType, setVisualizerType] = useState<VisualizerType | undefined>(undefined)
   const [visualizerLocked, setVisualizerLocked] = useState(false)
@@ -127,27 +138,38 @@ export default function ProjectModal({
     return parseAgentRequirements(selectedAgentType.configSchema)
   }, [selectedAgentType])
 
+  // Show the voice step only when the active TTS provider actually exposes
+  // something to choose — a selectable voice or at least a language.
+  const supportsVoiceSelection = useMemo(() => {
+    if (!ttsCapabilities || ttsCapabilities.voices.length === 0) return false
+    return ttsCapabilities.supportsVoiceSelection || ttsCapabilities.languages.length > 0
+  }, [ttsCapabilities])
+
   // Dynamic steps for public project (excluding basic)
   const publicSteps = useMemo((): Step[] => {
     const s: Step[] = ['agent', 'configure']
     if (agentRequirements.supportsConfigurator && selectedAgentType?.pipelineSchema) {
       s.push('configuration')
     }
+    if (supportsVoiceSelection) {
+      s.push('voice')
+    }
     if (agentRequirements.requiresPlan) {
       s.push('plan')
     }
     s.push('envvars', 'visualizer', 'duration', 'expiration')
     return s
-  }, [agentRequirements.requiresPlan, agentRequirements.supportsConfigurator, selectedAgentType?.pipelineSchema])
+  }, [agentRequirements.requiresPlan, agentRequirements.supportsConfigurator, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
 
   // Get visible step configs (filtered based on requirements)
   const visibleStepConfigs = useMemo(() => {
     return STEPS_CONFIG.filter(s => {
       if (s.id === 'plan') return agentRequirements.requiresPlan
       if (s.id === 'configuration') return agentRequirements.supportsConfigurator && !!selectedAgentType?.pipelineSchema
+      if (s.id === 'voice') return supportsVoiceSelection
       return publicSteps.includes(s.id)
     }).map((s, idx) => ({ ...s, number: idx + 1 }))
-  }, [publicSteps, agentRequirements.requiresPlan, agentRequirements.supportsConfigurator, selectedAgentType?.pipelineSchema])
+  }, [publicSteps, agentRequirements.requiresPlan, agentRequirements.supportsConfigurator, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
 
   const getStepNumber = (s: Step): number => {
     const config = visibleStepConfigs.find(c => c.id === s)
@@ -165,6 +187,18 @@ export default function ProjectModal({
       setError(null)
       setPublicLink(null)
       setCopied(false)
+
+      // Fetch TTS capabilities so the voice step (and its place in the wizard)
+      // reflects what the active provider can actually produce. Failures are
+      // non-fatal: the step is simply omitted.
+      setIsLoadingTtsCaps(true)
+      apiClient.getTtsCapabilities()
+        .then(setTtsCapabilities)
+        .catch((err) => {
+          console.error('Failed to fetch TTS capabilities:', err)
+          setTtsCapabilities(null)
+        })
+        .finally(() => setIsLoadingTtsCaps(false))
 
       if (project) {
         // Edit mode - load project values
@@ -195,6 +229,8 @@ export default function ProjectModal({
         setSelectedEnvVarTemplate(null)
         setEnvVars({})
         setEnvVarsView('select')
+        setTtsVoice('')
+        setTtsLanguage('')
         setVisualizerType(undefined)
         setVisualizerLocked(false)
         setExpiresInHours(undefined)
@@ -292,6 +328,9 @@ export default function ProjectModal({
         }
         // No template and no required env vars - can proceed
         return true
+      case 'voice':
+        // Both choices are optional — Auto / provider default is a valid answer.
+        return true
       case 'visualizer':
         return true
       case 'duration':
@@ -367,6 +406,18 @@ export default function ProjectModal({
               filteredEnvVars[key] = value
             }
           }
+          // Voice/language ride in as the env vars the agent SDK already reads,
+          // exactly as DeployAgentModal writes them. STELLA_LANGUAGE pins the
+          // conversation (STT + reply + voice); TTS_LANGUAGE makes the first
+          // synthesis correct before any turn has resolved. Empty = Auto, so we
+          // omit rather than pinning a value.
+          if (ttsVoice) {
+            filteredEnvVars['TTS_VOICE'] = ttsVoice
+          }
+          if (ttsLanguage) {
+            filteredEnvVars['STELLA_LANGUAGE'] = ttsLanguage
+            filteredEnvVars['TTS_LANGUAGE'] = ttsLanguage
+          }
           if (Object.keys(filteredEnvVars).length > 0) {
             agentConfig.envVars = filteredEnvVars
           }
@@ -423,6 +474,7 @@ export default function ProjectModal({
       case 'agent': return 'Select Agent'
       case 'configure': return 'Configure Agent'
       case 'configuration': return 'Pipeline Configuration'
+      case 'voice': return 'Voice & Language'
       case 'plan': return 'Select Plan'
       case 'envvars': return 'Environment Variables'
       case 'visualizer': return 'Choose Visualizer'
@@ -439,6 +491,7 @@ export default function ProjectModal({
       case 'basic': return 'Start a new project to organize your sessions'
       case 'agent': return 'Choose the agent that will be deployed for each participant'
       case 'configure': return 'Customize the agent appearance and settings'
+      case 'voice': return 'Choose the voice and language every participant\'s agent uses'
       case 'plan': return 'Select a conversation plan for this agent'
       case 'envvars': return 'Configure API keys and secrets for this agent'
       case 'visualizer': return 'Set a default visualizer for participants'
@@ -932,6 +985,27 @@ export default function ProjectModal({
                     capabilities={selectedAgentType.capabilities}
                     selectedConfiguration={selectedConfiguration}
                     onSelectConfiguration={setSelectedConfiguration}
+                  />
+                </motion.div>
+              )}
+
+              {/* Voice & Language Step */}
+              {step === 'voice' && (
+                <motion.div
+                  key="voice"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <VoiceSelectionStep
+                    capabilities={ttsCapabilities}
+                    loading={isLoadingTtsCaps}
+                    voice={ttsVoice}
+                    language={ttsLanguage}
+                    onVoiceChange={setTtsVoice}
+                    onLanguageChange={setTtsLanguage}
                   />
                 </motion.div>
               )}

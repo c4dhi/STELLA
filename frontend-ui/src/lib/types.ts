@@ -140,6 +140,13 @@ export interface AgentSpeechProgress {
   char_start?: number
   char_end?: number
   spoken_char?: number
+  /**
+   * Char offset the highlight should reach by the end of this segment. While a
+   * sentence is still synthesizing it stops short of `char_end` — only the last
+   * tick of a sentence reaches it. Absent on older SDKs, where `char_end` is
+   * the only target available.
+   */
+  target_char?: number
   duration_ms?: number
   delay_ms?: number
   /** 'speaking' | 'spoken' | 'interrupted' */

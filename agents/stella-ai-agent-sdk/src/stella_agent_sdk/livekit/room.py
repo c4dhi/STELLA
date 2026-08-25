@@ -1,6 +1,7 @@
 """LiveKit Room Manager for direct room connections."""
 
 import asyncio
+from collections import deque
 import json
 import logging
 import os
@@ -75,6 +76,10 @@ class RoomManager:
 
         self._room: Optional[rtc.Room] = None
         self._audio_source: Optional[rtc.AudioSource] = None
+        # FIFO for publish_data_ordered — see the note there on why ordering
+        # cannot be left to asyncio task scheduling.
+        self._outbound: deque = deque()
+        self._outbound_task: Optional[asyncio.Task] = None
         self._audio_track: Optional[rtc.LocalAudioTrack] = None
         self._connected = False
 
@@ -254,6 +259,13 @@ class RoomManager:
             return
 
         logger.info("Disconnecting from LiveKit room")
+
+        # Stop the ordered-publish drain and drop anything still queued —
+        # the room is going away, so those envelopes have nowhere to land.
+        if self._outbound_task is not None and not self._outbound_task.done():
+            self._outbound_task.cancel()
+        self._outbound_task = None
+        self._outbound.clear()
 
         # Cancel all stream reading tasks
         for task in self._stream_tasks.values():
@@ -718,6 +730,47 @@ class RoomManager:
 
         except Exception as e:
             logger.error(f"Error publishing data: {e}")
+
+    def publish_data_ordered(
+        self,
+        data: Dict[str, Any],
+        topic: str = "",
+        reliable: bool = True,
+    ) -> None:
+        """Queue a data message, preserving CALL order on the wire.
+
+        The obvious way to publish without blocking the caller is
+        ``asyncio.create_task(publish_data(...))``, but that hands ordering to
+        the scheduler: two envelopes emitted back to back become two
+        independent tasks, and whichever wins the race reaches the wire first.
+        Reliable delivery preserves the order of SENDS, not the order of calls,
+        so it cannot save this.
+
+        That is a real defect for anything stateful. Speech progress is the
+        clear case — ``spoken`` for one sentence overtaking ``speaking`` for the
+        next makes the teleprompter jump backwards, and the client's barge-in
+        silencing reads the same channel. It stayed hidden while sentences were
+        seconds apart and surfaced once streaming playback started emitting them
+        microseconds apart.
+
+        This keeps the non-blocking property (the caller still returns at once)
+        and adds the guarantee the caller actually assumed: FIFO.
+        """
+        self._outbound.append((data, topic, reliable))
+        if self._outbound_task is None or self._outbound_task.done():
+            self._outbound_task = asyncio.create_task(self._drain_outbound())
+
+    async def _drain_outbound(self) -> None:
+        """Publish queued data messages one at a time, in order."""
+        while self._outbound:
+            data, topic, reliable = self._outbound.popleft()
+            try:
+                await self.publish_data(data, topic=topic, reliable=reliable)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # One bad envelope must not strand the ones behind it.
+                logger.error(f"Error publishing queued data: {e}")
 
     def on_participant_joined(self, callback: Callable[[str], None]) -> None:
         """Register callback for participant join events."""

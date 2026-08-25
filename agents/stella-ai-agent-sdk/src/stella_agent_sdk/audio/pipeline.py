@@ -45,6 +45,7 @@ import uuid
 from typing import AsyncIterator, Awaitable, Callable, List, Optional
 
 from stella_agent_sdk.env import env_int as _env_int
+from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
 from stella_agent_sdk.services.tts_client import TTSClient
@@ -98,6 +99,204 @@ _BYTES_PER_SAMPLE = 2  # 16-bit mono PCM
 # in fixed frames lets us track a sample-accurate playhead for barge-in.
 _PLAYOUT_FRAME_SAMPLES = 480
 _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
+
+# Jitter buffer held before the first frame of an utterance goes out.
+#
+# LiveKit's AudioSource.capture_frame self-paces at 1x real time, so once
+# playout starts the source drains steadily. TTS does NOT arrive steadily, and
+# on the current deployment it barely arrives fast enough at all.
+#
+# Measured against the prod TTS service (Qwen3-TTS-12Hz-1.7B on an L4), three
+# German sentences of 1.7-4.2s of audio:
+#
+#   real-time factor          0.92 - 1.33   (synthesis is ~as slow as playback,
+#                                             and for short text SLOWER)
+#   first chunk               ~235ms
+#   whole sentence            2235 - 3907ms  <- what buffered playback waited for
+#   max playout deficit       614 - 756ms    <- how far playout falls behind
+#                                              arrival when started with no cushion
+#
+# The deficit is the number that sets this constant: playout must start late
+# enough that it never catches up with synthesis. 300ms was NOT enough (starts
+# at ~434ms, under the 756ms deficit) and still underran mid-sentence. 700-800ms
+# clears it with margin, and lands in the same arriving lump, so 800ms costs
+# nothing over 700ms.
+#
+# At 800ms the first frame goes out ~1037ms in, against 2235-3907ms before —
+# and it is now CONSTANT rather than scaling with sentence length.
+#
+# The real fix is a faster provider: at the RTF ~0.3 the Qwen3 docs quote (4090,
+# 0.6B) a 300ms cushion would be ample and first audio would land near 350ms.
+# On this hardware there is no headroom to stream into.
+_DEFAULT_TTS_PREROLL_MS = 800
+
+# Wall-clock covered by one playout frame.
+_PLAYOUT_FRAME_MS = _PLAYOUT_FRAME_SAMPLES * 1000 // _TTS_SAMPLE_RATE
+
+# Underrun guard.
+#
+# A LiveKit AudioSource that runs dry does NOT emit silence. The client simply
+# stops receiving packets, and Opus packet-loss concealment fills the hole by
+# extrapolating the last frame it had — a synthetic, warbling continuation of
+# whatever phoneme was in flight. That artifact is the "interference between
+# chunks" people report; it is the client inventing audio, not TTS producing it.
+#
+# So when synthesis falls behind far enough that the source is about to empty,
+# push real silence instead. A synthesis stall then sounds like a short pause,
+# which is honest, rather than a warble, which is not.
+_UNDERRUN_FLOOR_MS = 120.0    # top the source up once it drops below this
+_UNDERRUN_POLL_MS = 10.0      # how often to re-check while starved
+
+# De-click ramp applied on either side of inserted silence. Cutting a speech
+# waveform to zero — or resuming it from zero — is a step discontinuity, and a
+# step is audible as a click. A few ms of linear ramp removes it.
+_DECLICK_MS = 5
+_DECLICK_SAMPLES = _DECLICK_MS * _TTS_SAMPLE_RATE // 1000
+
+# Teleprompter progress cadence (#241).
+#
+# The highlight used to be driven by ONE envelope per sentence, held until
+# synthesis completed so it could carry the sentence's true byte length. That
+# assumed synthesis finishes well before playback does (RTF ~0.3). It does not:
+# the deployed model runs at RTF 0.92-1.33, so "synthesis complete" lands at the
+# END of the sentence and the envelope describes almost nothing left to animate.
+# Measured against the paced harness at a constant 500ms sentence:
+#
+#   RTF 0.3 -> 300ms still to animate (60% of the sentence)
+#   RTF 0.6 -> 160ms (32%)
+#   RTF 1.0 ->  40ms (8%)
+#   RTF 1.3 ->  20ms (4%)   <- the highlight simply appears, fully lit
+#
+# So progress is now STREAMED: a tick every _PROGRESS_TICK_MS describes only the
+# audio actually in hand, and the frontend chains those short segments. Each
+# tick's timing is anchored to bytes really pushed, so it cannot outrun the
+# audio no matter how slow synthesis is.
+_PROGRESS_TICK_MS = float(os.getenv("TTS_PROGRESS_TICK_MS", "200"))
+
+# Seed for the chars-per-millisecond estimate used to place the highlight inside
+# a sentence that is still synthesizing (see _estimated_total_bytes). ~70ms/char
+# is normal conversational TTS pace; it self-calibrates from the first completed sentence,
+# so this only has to be in the right neighbourhood for the very first one.
+_DEFAULT_MS_PER_CHAR = 70.0
+
+
+def _now() -> float:
+    """Monotonic seconds — never the wall clock, which can step."""
+    return time.monotonic()
+
+
+def _tail_sample(frame: bytes) -> int:
+    """Last 16-bit sample of a frame (0 when there is not one)."""
+    if len(frame) < _BYTES_PER_SAMPLE:
+        return 0
+    return int.from_bytes(frame[-_BYTES_PER_SAMPLE:], "little", signed=True)
+
+
+def _fade_in(frame: bytes) -> bytes:
+    """Ramp the first _DECLICK_MS of ``frame`` up from zero."""
+    n = min(len(frame) // _BYTES_PER_SAMPLE, _DECLICK_SAMPLES)
+    if n <= 0:
+        return frame
+    out = bytearray(frame)
+    for i in range(n):
+        off = i * _BYTES_PER_SAMPLE
+        sample = int.from_bytes(out[off:off + _BYTES_PER_SAMPLE], "little", signed=True)
+        scaled = int(sample * (i + 1) / n)
+        out[off:off + _BYTES_PER_SAMPLE] = scaled.to_bytes(
+            _BYTES_PER_SAMPLE, "little", signed=True
+        )
+    return bytes(out)
+
+
+def _silence_frame(fade_from: int = 0) -> bytes:
+    """A frame of silence, ramping down from ``fade_from`` so it does not click."""
+    out = bytearray(_PLAYOUT_FRAME_BYTES)
+    if fade_from:
+        n = min(_DECLICK_SAMPLES, _PLAYOUT_FRAME_SAMPLES)
+        for i in range(n):
+            off = i * _BYTES_PER_SAMPLE
+            scaled = int(fade_from * (1.0 - (i + 1) / n))
+            out[off:off + _BYTES_PER_SAMPLE] = scaled.to_bytes(
+                _BYTES_PER_SAMPLE, "little", signed=True
+            )
+    return bytes(out)
+
+
+class _StreamingUtterance:
+    """One sentence's PCM audio, appended to while synthesis streams it in.
+
+    Lets playback start on the first chunk instead of the last. ``data`` is a
+    bytearray the player binds to directly (``self._cur_audio``), so appends are
+    visible to the playhead without copying; ``complete`` says whether more is
+    coming; ``wait_for_data`` parks the player when it catches up with synthesis.
+    """
+
+    __slots__ = ("data", "complete", "error", "task", "_new")
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+        self.complete = False
+        self.error: Optional[Exception] = None
+        self.task: Optional[asyncio.Task] = None
+        self._new = asyncio.Event()
+
+    def append(self, audio: bytes) -> None:
+        self.data += audio
+        self._new.set()
+
+    def finish(self, error: Optional[Exception] = None) -> None:
+        self.error = error
+        self.complete = True
+        self._new.set()
+
+    async def wait_for_data(
+        self,
+        want: int,
+        stop_event: asyncio.Event,
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """Block until the buffer holds ``want`` bytes, synthesis ends, or stop.
+
+        Returns False only when ``stop_event`` fired — the caller must abandon
+        playback. Racing the stop event here is what keeps barge-in responsive
+        while the player is starved: without it a slow synthesis would pin the
+        speech worker with the transcript gate closed and drop user speech.
+
+        With ``timeout`` set the wait also gives up when it expires and returns
+        True WITHOUT the data having arrived, so the caller can top the output
+        source up with silence and come back. Callers must therefore re-check
+        the buffer rather than assume ``want`` bytes are present.
+        """
+        while len(self.data) < want and not self.complete:
+            self._new.clear()
+            # Re-check after clear(): the producer may have appended (and set the
+            # event) between the length check and the clear, which would
+            # otherwise park us on an event nobody will set again.
+            if len(self.data) >= want or self.complete:
+                break
+            waiter = asyncio.ensure_future(self._new.wait())
+            stopper = asyncio.ensure_future(stop_event.wait())
+            try:
+                await asyncio.wait(
+                    {waiter, stopper},
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=timeout,
+                )
+            finally:
+                waiter.cancel()
+                stopper.cancel()
+            if stop_event.is_set():
+                return False
+            if timeout is not None:
+                # One bounded pass only — hand control back so the caller can
+                # decide whether the output source needs bridging.
+                return True
+        return True
+
+    def cancel(self) -> None:
+        """Stop synthesising — the audio is no longer wanted."""
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
 
 
 class AudioPipeline:
@@ -188,10 +387,18 @@ class AudioPipeline:
         # TTS enabled flag
         self._tts_enabled = os.getenv("TTS_ENABLED", "true").lower() != "false"
 
-        # TTS language. Seeded from the env var for backward compatibility, but
-        # the agent overrides it per turn via set_tts_language() so the voice
-        # follows the resolved conversation language (RFC §8/§9 #9).
-        self._tts_language = os.getenv("TTS_LANGUAGE", None) or None
+        # Deployment language PIN (STELLA_LANGUAGE). When set, this deployment
+        # is fixed to one language: STT transcription is pinned to it below
+        # instead of auto-detecting, and the resolver forces every turn to it.
+        # None = auto-detect (default).
+        self._language_pin = forced_language()
+
+        # TTS language. Seeded from the env var for backward compatibility, then
+        # from the deployment pin, so the first synthesis of a pinned deployment
+        # is already correct before any turn has been resolved. The agent
+        # overrides it per turn via set_tts_language() so the voice follows the
+        # resolved conversation language (RFC §8/§9 #9).
+        self._tts_language = os.getenv("TTS_LANGUAGE", None) or self._language_pin or None
 
         # TTS voice. Seeded from the env var; the agent can override it per
         # stream via set_tts_voice() so the spoken voice can change per turn.
@@ -201,6 +408,21 @@ class AudioPipeline:
 
         # Sentence-level streaming TTS queue (tuple of sentence text + source label)
         self._speech_queue: asyncio.Queue = asyncio.Queue()
+        # Serializes TTS generation — see the note in _begin_synthesis. The
+        # service does not guard its own model, so concurrent synthesis garbles
+        # audio; this keeps at most one stream in flight per pipeline.
+        self._synthesis_lock: asyncio.Lock = asyncio.Lock()
+        # Jitter buffer before an utterance starts playing (see the constant).
+        # 0 disables it, which is only sane if the provider streams smoothly.
+        try:
+            _preroll_ms = int(
+                os.getenv("STELLA_TTS_PREROLL_MS", str(_DEFAULT_TTS_PREROLL_MS))
+            )
+        except ValueError:
+            _preroll_ms = _DEFAULT_TTS_PREROLL_MS
+        self._preroll_bytes = max(
+            0, int(_preroll_ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE
+        )
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -307,6 +529,30 @@ class AudioPipeline:
         # translate the byte-accurate playhead into a character offset in the
         # published agent_text. None when the held audio carries no offsets.
         self._cur_meta: Optional[dict] = None
+        # Whether synthesis of the held utterance has finished. Until it has,
+        # len(_cur_audio) is a PARTIAL total and the byte->char mapping has to
+        # be estimated rather than divided out (see _estimated_total_bytes).
+        self._cur_complete: bool = False
+        # Highest char offset already published for the held sentence, so a
+        # re-estimate can never walk the highlight backwards.
+        self._cur_last_char: int = 0
+        # Bytes of the held sentence already covered by an emitted segment.
+        # Segments must TILE the sentence: the frontend chains them end to end
+        # on the wall clock, so a segment measured from the live playhead rather
+        # than from here would re-describe audio an earlier segment already
+        # covered, and the schedule would outrun the sound.
+        self._cur_promised: int = 0
+        # Session-calibrated speaking pace, used to estimate where inside a
+        # sentence the playhead is while the sentence is still synthesizing.
+        # Re-measured from every sentence that completes, so it tracks the
+        # voice, the language and the model actually in use.
+        self._ms_per_char: float = _DEFAULT_MS_PER_CHAR
+        # False until a real sentence has been measured, so the seed above is
+        # replaced rather than averaged with the first measurement.
+        self._pace_measured: bool = False
+        # Last agent_playback state actually put on the wire. Progress is now
+        # emitted on a tick, and the mute channel must not tick with it.
+        self._last_playback_state: Optional[str] = None
 
         # Per-turn analytics state (raw event model)
         self._turn_stt_start_ts: float = 0
@@ -673,8 +919,11 @@ class AudioPipeline:
             sample_rate=sample_rate,
             # No language hint by default: STT auto-detects, which yields the
             # per-utterance detection signal for free (RFC §6). Pinning is an
-            # opt-in (env WHISPER_LANGUAGE or a language_provider) and trades
-            # that free detection away, so we leave it off here.
+            # opt-in that trades that free detection away — which is exactly what
+            # a pinned deployment wants: a short or garbled first utterance is
+            # transcribed AS the pinned language instead of being auto-detected
+            # (unreliably) and falling back to the default.
+            language_provider=(lambda: self._language_pin) if self._language_pin else None,
         ):
             logger.debug(f"STT event: text='{event.text[:50] if event.text else ''}...', is_final={event.is_final}, speech_started={event.speech_started}")
 
@@ -1594,12 +1843,20 @@ class AudioPipeline:
             return
         if state not in ("speaking", "interrupted"):
             return
+        # Progress ticks call through here several times a second; the client
+        # only cares about TRANSITIONS (mute / un-mute), so collapse repeats.
+        if state == self._last_playback_state:
+            return
+        self._last_playback_state = state
         payload = {
             "type": "agent_playback",
             "data": {"state": state, "agent_id": self._agent_id},
         }
         try:
-            asyncio.create_task(self._room.publish_data(payload))
+            # Ordered, not create_task: this envelope and the speech-progress
+            # one are emitted back to back, and two independent tasks would let
+            # them reach the wire in scheduler order rather than call order.
+            self._room.publish_data_ordered(payload)
         except RuntimeError:
             # No running loop (e.g. sync test context) — skip.
             pass
@@ -1653,6 +1910,54 @@ class AudioPipeline:
             decision="resume",
         )
 
+    def _estimated_total_bytes(self, span: int) -> int:
+        """Byte length to divide the playhead by when mapping bytes to chars.
+
+        Once synthesis is done this is simply what we hold. While it is still
+        running, ``len(_cur_audio)`` is a partial total — dividing by it would
+        put the playhead at ~100% of the sentence from the very first frame,
+        which is exactly the "highlight jumps to the end" bug. So estimate the
+        finished length from the sentence's character count at the session's
+        measured speaking pace.
+
+        Clamped to never fall BELOW the audio already in hand: underestimating
+        pushes the highlight past the end of the sentence, and a highlight that
+        runs ahead of the voice is far worse to read than one that trails.
+        """
+        known = len(self._cur_audio)
+        if self._cur_complete or span <= 0:
+            return known
+        est = int(
+            span * self._ms_per_char * _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE / 1000
+        )
+        return max(known, est)
+
+    def _calibrate_pace(self, meta: Optional[dict]) -> None:
+        """Re-measure ms-per-character from a sentence that just finished.
+
+        Exponential moving average so one odd sentence (a number, an acronym,
+        a long pause) cannot swing the estimate, but a genuine change of voice
+        or language converges within a few sentences.
+        """
+        if not meta:
+            return
+        span = max(0, meta["char_end"] - meta["char_start"])
+        total = len(self._cur_audio)
+        if span < 8 or total <= 0:
+            return  # too short to measure anything trustworthy
+        ms = total / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+        measured = ms / span
+        if not self._pace_measured:
+            # First real sentence of the session: the seed was only ever a
+            # placeholder, so adopt the measurement outright. Averaging it in
+            # would drag a badly-seeded estimate out over several sentences, and
+            # a wrong estimate is what makes the highlight lag then jump when
+            # the true length lands.
+            self._ms_per_char = measured
+            self._pace_measured = True
+        else:
+            self._ms_per_char = 0.7 * self._ms_per_char + 0.3 * measured
+
     def _emit_speech_progress(self, state: str, meta: Optional[dict] = None) -> None:
         """Publish an ``agent_speech_progress`` envelope for the teleprompter.
 
@@ -1687,30 +1992,73 @@ class AudioPipeline:
         char_start = meta["char_start"]
         char_end = meta["char_end"]
         span = max(0, char_end - char_start)
-        total = len(self._cur_audio)
-        if total > 0:
-            frac = min(1.0, max(0.0, self._cur_cursor / total))
-        else:
-            frac = 1.0 if state == "spoken" else 0.0
+        known = len(self._cur_audio)
+        total = self._estimated_total_bytes(span)
 
+        def char_at(byte_offset: int) -> int:
+            if total <= 0:
+                return char_end
+            frac = min(1.0, max(0.0, byte_offset / total))
+            return char_start + round(frac * span)
+
+        lead_ms = 0.0
         if state == "spoken":
-            spoken_char = char_end
+            spoken_char = target_char = char_end
             duration_ms = 0
         elif state == "interrupted":
-            spoken_char = char_start + round(frac * span)
+            # Freeze at what was actually heard. Deliberately NOT clamped
+            # monotonically: a barge-in rewinds the playhead on purpose, and
+            # anything already promised past it was never heard.
+            spoken_char = target_char = char_at(self._cur_cursor)
             duration_ms = 0
-        else:  # "speaking" (fresh or resumed) — advance from the playhead
-            spoken_char = char_start + round(frac * span)
-            remaining_bytes = max(0, total - self._cur_cursor)
-            duration_ms = int(
-                remaining_bytes / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+            self._cur_promised = self._cur_cursor
+            self._cur_last_char = spoken_char
+        else:  # "speaking" — the next CONTIGUOUS stretch of this sentence
+            # How far the highlight may be carried: all the audio synthesized so
+            # far, but at least one tick's worth. The floor matters at RTF ~1,
+            # where the player consumes frames as fast as they arrive so `known`
+            # sits barely ahead of the playhead; without it a tick would promise
+            # ~20ms of movement followed by a wait — a visibly stepping cursor.
+            # Extrapolation is capped at the sentence's estimated end and
+            # corrected by the next tick, so the error stays under one tick.
+            horizon = self._cur_cursor + int(
+                _PROGRESS_TICK_MS * _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE / 1000
             )
+            promise = min(max(known, horizon), total) if total > 0 else known
+            # Start where the LAST segment ended, not at the live playhead. The
+            # frontend lays segments end to end on the wall clock, so measuring
+            # from the playhead would re-describe audio an earlier segment
+            # already covered: with a deep jitter buffer every tick re-promised
+            # the whole buffer and the schedule ran 2.3-3.3x longer than the
+            # sound, which reads as the highlight stalling mid-message.
+            start = max(self._cur_promised, self._cur_cursor)
+            if promise <= start:
+                return  # nothing new to schedule yet
+            # _cur_last_char holds the PREVIOUS segment's target, so segments
+            # butt exactly. Without this the re-estimated mapping could place
+            # this segment's start a character or two before the last one's end
+            # and the highlight would flick backwards at every tick boundary.
+            spoken_char = max(char_at(start), self._cur_last_char)
+            target_char = max(char_at(promise), spoken_char)
+            duration_ms = int(
+                (promise - start) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+            )
+            # This segment starts where the previous one ended, which is `start`
+            # bytes into the stream — already-queued audio must drain first, and
+            # so must anything between the playhead and `start`.
+            lead_ms = max(0, start - self._cur_cursor) / (
+                _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE
+            ) * 1000
+            self._cur_promised = promise
+            self._cur_last_char = target_char
 
         # How long until this sentence is actually audible: audio already queued
         # in the output buffer must drain first. Lets the frontend start the word
         # cursor in time with playout rather than with this (earlier) publish.
         try:
-            delay_ms = int(self._room.queued_playout_ms) if state == "speaking" else 0
+            delay_ms = (
+                int(self._room.queued_playout_ms + lead_ms) if state == "speaking" else 0
+            )
         except Exception:
             delay_ms = 0
 
@@ -1721,6 +2069,18 @@ class AudioPipeline:
                 "char_start": char_start,
                 "char_end": char_end,
                 "spoken_char": int(spoken_char),
+                # Where the highlight should reach by the end of this segment.
+                # Equal to char_end only on the tick carrying a sentence's final
+                # audio; earlier ticks stop short, because the rest of the
+                # sentence is not synthesized yet.
+                #
+                # COUPLED DEPLOY: a client that ignores this field animates each
+                # tick to char_end instead, then starts the next tick further
+                # back — i.e. the highlight steps FORWARD then BACK once per
+                # tick. Ship the frontend with the agent image; a new frontend
+                # against an old agent is fine (no ticks, unchanged behaviour),
+                # the reverse is not.
+                "target_char": int(target_char),
                 "duration_ms": duration_ms,
                 "delay_ms": delay_ms,
                 "state": state,
@@ -1728,7 +2088,11 @@ class AudioPipeline:
             },
         }
         try:
-            asyncio.create_task(self._room.publish_data(payload))
+            # Ordered, not create_task — see _emit_playback_state. Consecutive
+            # sentences emit spoken(N) then speaking(N+1) microseconds apart
+            # under streaming playback; reordering those makes the teleprompter
+            # jump backwards.
+            self._room.publish_data_ordered(payload)
         except RuntimeError:
             # No running loop (e.g. called from sync test context) — skip.
             pass
@@ -2000,25 +2364,64 @@ class AudioPipeline:
         self._turn_response_tts_first_byte_emitted = False
         self._last_response_tts_done_elapsed = 0
 
-    async def _prefetch_sentence(self, sentence: str, voice=None, speed=1.0, language=None):
-        """Pre-synthesize a sentence and return all audio chunks as a list.
+    def _begin_synthesis(
+        self, sentence: str, voice=None, speed: float = 1.0, language=None
+    ) -> "_StreamingUtterance":
+        """Start synthesising a sentence and return its buffer IMMEDIATELY.
 
-        This runs the full gRPC synthesize_stream call and collects all chunks
-        so they can be played back immediately without waiting for synthesis.
+        The returned ``_StreamingUtterance`` fills in the background as chunks
+        arrive from the TTS service, so playback can begin on the first chunk
+        instead of the last. Nothing here awaits synthesis.
+
+        This replaces the old ``_prefetch_sentence``, which collected every
+        chunk into a list before returning — meaning the first audible sample of
+        a sentence waited for the WHOLE sentence to synthesize. Measured against
+        the Qwen3 provider that is time-to-first-audio ~235ms versus a full
+        stream of 1040-4138ms per sentence, i.e. we were paying 4-17x the
+        latency the provider was already capable of delivering.
         """
-        chunks = []
-        try:
-            async for chunk in self._tts.synthesize_stream(
-                text=sentence,
-                session_id=self._session_id,
-                voice=voice,
-                speed=speed,
-                language=language,
-            ):
-                chunks.append(chunk)
-        except Exception as e:
-            logger.error(f"[TTS] Prefetch failed: {e}")
-        return chunks
+        utt = _StreamingUtterance()
+
+        async def _pump() -> None:
+            try:
+                # ONE generation at a time. The TTS service shares a single model
+                # instance across a 10-thread gRPC pool with no lock of its own,
+                # so two overlapping synthesize_stream calls contend on the same
+                # weights and CUDA graphs. Observed on prod: two streams starting
+                # in the same millisecond, finishing in lockstep, and
+                # time-to-first-audio doubling from ~235ms to ~495ms — with
+                # audibly garbled output.
+                #
+                # Before playback streamed, this could not happen: sentence N was
+                # fully synthesized before it began playing, so only N+1 was ever
+                # in flight. Streaming playback removed that ACCIDENTAL
+                # serialization, so make it explicit. The next sentence is still
+                # armed early and simply waits here; the provider runs well
+                # faster than real time, so it acquires the lock early in the
+                # current sentence's playback and the prefetch overlap survives.
+                async with self._synthesis_lock:
+                    async for chunk in self._tts.synthesize_stream(
+                        text=sentence,
+                        session_id=self._session_id,
+                        voice=voice if voice is not None else self._tts_voice,
+                        speed=speed,
+                        language=language if language is not None else self._tts_language,
+                    ):
+                        utt.append(chunk.audio_data)
+            except asyncio.CancelledError:
+                utt.finish()
+                raise
+            except Exception as e:
+                # Same contract as the old _prefetch_sentence: never raise into
+                # the speech worker. A failed synthesis yields whatever audio
+                # arrived (usually none) and the worker moves on.
+                logger.error(f"[TTS] Synthesis failed: {e}")
+                utt.finish(error=e)
+            else:
+                utt.finish()
+
+        utt.task = asyncio.create_task(_pump())
+        return utt
 
     def _emit_first_byte(self, source: str) -> None:
         """Emit the TTS first-byte analytics event once per source per turn.
@@ -2070,68 +2473,252 @@ class AudioPipeline:
     async def _play_prefetched(
         self, chunks, source: str = "response", meta: Optional[dict] = None
     ) -> None:
-        """Play a pre-fetched utterance to LiveKit, in fixed frames from a
+        """Play an ALREADY-COMPLETE list of TTS chunks.
+
+        A thin adapter over ``_play_utterance`` for callers that hold the whole
+        utterance up front — synthesis that finished before playback began, and
+        the barge-in / teleprompter tests, which drive the playhead with
+        synthetic audio and must keep exercising the real playback loop.
+        """
+        utt = _StreamingUtterance()
+        for c in chunks:
+            utt.append(c.audio_data)
+        utt.finish()
+        await self._play_utterance(utt, source=source, meta=meta)
+
+    async def _play_utterance(
+        self, utt: "_StreamingUtterance", source: str = "response", meta: Optional[dict] = None
+    ) -> None:
+        """Play an utterance to LiveKit AS IT SYNTHESIZES, in fixed frames from a
         sample-accurate playhead so playback can be suspended and resumed.
 
-        The utterance's chunks are concatenated into one PCM buffer held in
-        memory; ``self._cur_cursor`` tracks the next byte to push. When barge-in
+        ``self._cur_audio`` is the utterance's buffer — the SAME object the
+        synthesis task appends to, so it grows underneath this loop — and
+        ``self._cur_cursor`` tracks the next byte to push. When the cursor
+        catches up with synthesis we wait for more audio (racing the stop event,
+        so barge-in stays responsive) rather than returning. When barge-in
         suspends playback the loop pauses here (without returning) until resumed
         or aborted, so the speech worker does not advance to the next sentence.
 
+        Only WHOLE frames are published while synthesis is still running; a
+        short final frame is allowed once the buffer is complete. Publishing a
+        partial frame early would glitch the output.
+
         ``meta`` carries the sentence's character span in the published
         agent_text; with it (and the teleprompter enabled) this emits a
-        ``speaking`` progress envelope on the first frame and ``spoken`` once the
-        whole utterance has played. Interruption envelopes come from
-        suspend_speech()/stop_speaking()/commit_interrupt(), which read the
-        live playhead.
+        ``speaking`` progress envelope and ``spoken`` once the whole utterance
+        has played. Interruption envelopes come from suspend_speech()/
+        stop_speaking()/commit_interrupt(), which read the live playhead.
+
+        TELEPROMPTER TIMING: progress is STREAMED as a tick every
+        ``_PROGRESS_TICK_MS``, starting on the first frame. Each tick describes
+        only audio already synthesized (plus at most one tick of extrapolation),
+        so it can never promise the frontend a sentence that is not there yet.
+
+        This deliberately replaces holding one envelope per sentence until
+        synthesis completed. That held envelope carried the true byte length,
+        but only arrived when the buffer did — and at the deployed RTF of ~1
+        that is the END of the sentence, so it described 4-8% of it and the
+        highlight jumped. Ticks decouple the highlight from synthesis speed
+        entirely; see ``_PROGRESS_TICK_MS`` for the measurements.
         """
-        # Concatenate this utterance into one position-addressable buffer.
-        self._cur_audio = b"".join(c.audio_data for c in chunks)
+        # Bind the growing buffer directly — no copy, so appends are visible here.
+        self._cur_audio = utt.data
         self._cur_cursor = 0
         self._cur_meta = meta
         first = True
+        # True while playback has caught up with synthesis and is waiting.
+        starved = False
+        # True when the last thing pushed was bridging silence, so the next
+        # real frame gets a fade-in.
+        bridged = False
+        last_sample = 0
+        starve_count = 0
+        bridged_ms = 0.0
+        self._cur_complete = utt.complete
+        self._cur_last_char = 0
+        self._cur_promised = 0
+        # Re-announce playback state for every sentence (the dedupe in
+        # _emit_playback_state only suppresses the ticks WITHIN a sentence), so
+        # a client that missed the first envelope is not left muted.
+        self._last_playback_state = None
+        # Monotonic deadline for the next teleprompter progress tick.
+        next_tick_at = 0.0
 
-        while self._cur_cursor < len(self._cur_audio):
-            # Reversible suspend (barge-in): pause until resumed or aborted.
-            if not self._play_allowed.is_set():
-                resumed = await self._await_resume_or_stop()
-                if not resumed:
-                    break  # committed / hard-stopped while suspended
+        try:
+            while True:
+                # Reversible suspend (barge-in): pause until resumed or aborted.
+                if not self._play_allowed.is_set():
+                    resumed = await self._await_resume_or_stop()
+                    if not resumed:
+                        break  # committed / hard-stopped while suspended
 
-            if self._stop_speaking_event.is_set():
-                logger.info("TTS interrupted mid-sentence")
-                break
+                if self._stop_speaking_event.is_set():
+                    logger.info("TTS interrupted mid-sentence")
+                    break
 
-            frame = self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]
-            self._cur_cursor += len(frame)
+                # Synthesis may finish at any point. The moment it does the
+                # byte->char mapping stops being an estimate and becomes exact,
+                # so spend a tick on it right away rather than waiting for the
+                # next deadline.
+                if utt.complete and not self._cur_complete:
+                    self._cur_complete = True
+                    if not first:
+                        self._emit_speech_progress("speaking", meta=meta)
+                        next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
 
-            if first:
-                first = False
-                self._emit_first_byte(source)
-                # Teleprompter: this sentence's audio has started. Tell the
-                # frontend its span and audible duration so it can advance a
-                # word cursor across it in time with the audio.
-                self._emit_speech_progress("speaking", meta=meta)
+                # Tick HERE, not in the frame-push path below: at RTF ~1 the
+                # loop spends most of its time waiting for synthesis, and a tick
+                # that only fired alongside a pushed frame stopped firing
+                # exactly when playback was starved — the schedule then covered
+                # a third of the sentence and the highlight fell behind.
+                if not first and _now() >= next_tick_at:
+                    self._emit_speech_progress("speaking", meta=meta)
+                    next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
 
-            # The agent is now audibly talking — a barge-in may start.
-            self._audio_active = True
-            await self._room.publish_audio(frame)
+                available = len(self._cur_audio) - self._cur_cursor
+                # The jitter buffer is armed ONCE, before the first frame.
+                # After that the LiveKit source IS the buffer: it holds
+                # everything already pushed and drains at 1x, so the player
+                # only ever needs the NEXT frame to keep it topped up.
+                #
+                # Re-arming the cushion mid-sentence (which this used to do on
+                # every starve) is actively harmful at RTF ~1: the player dumps
+                # its buffer into the source, immediately runs dry, then stops
+                # pushing for a whole pre-roll while the source drains that
+                # same amount. The source sawtooths down to empty on every
+                # cycle, and an empty source is exactly when the client starts
+                # concealing — see _bridge_underrun for what that sounds like.
+                need = _PLAYOUT_FRAME_BYTES if not first else 1
+                want = max(need, self._preroll_bytes if first else 0)
+                if available < want and not utt.complete:
+                    if not await utt.wait_for_data(
+                        self._cur_cursor + want,
+                        self._stop_speaking_event,
+                        # Before the first frame there is nothing to protect, so
+                        # wait outright. Once playing, wake up often enough to
+                        # keep the source fed while synthesis catches up.
+                        timeout=None if first else _UNDERRUN_POLL_MS / 1000.0,
+                    ):
+                        break  # stopped while waiting
+                    if (
+                        not first
+                        and not utt.complete
+                        and len(self._cur_audio) - self._cur_cursor < want
+                    ):
+                        if not starved:
+                            starved = True
+                            starve_count += 1
+                        pushed = await self._bridge_underrun(
+                            fade_from=0 if bridged else last_sample
+                        )
+                        if pushed:
+                            bridged = True
+                            bridged_ms += pushed
+                    continue
+                if available <= 0:
+                    break  # nothing left and nothing more coming
+                starved = False
 
-        # Did the utterance play to the end (vs. abort via break)?
-        completed = self._cur_cursor >= len(self._cur_audio)
-        if completed:
-            # CONTRACT: "spoken" fires when the last frame is *pushed* to the
-            # room, not when the user *hears* the end — up to queued_playout_ms
-            # of this audio is still draining the output + client buffers. The
-            # frontend must therefore drive end-of-highlight timing from the
-            # "speaking" envelope's schedule (delay_ms + duration_ms), and treat
-            # "spoken" only as "this sentence is done, settle it fully lit".
-            self._emit_speech_progress("spoken", meta=meta)
+                frame = bytes(
+                    self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]
+                )
+                self._cur_cursor += len(frame)
+                if bridged:
+                    # Coming back from inserted silence — ramp in so the
+                    # restart is a fade, not a step (a step is a click).
+                    frame = _fade_in(frame)
+                    bridged = False
+                last_sample = _tail_sample(frame)
 
-        # Utterance finished (or aborted) — clear held audio.
-        self._cur_audio = b""
-        self._cur_cursor = 0
-        self._cur_meta = None
+                if first:
+                    first = False
+                    self._emit_first_byte(source)
+                    # Emit immediately, complete or not. A tick only ever
+                    # describes audio already synthesized, so there is nothing
+                    # to wait for — and waiting is what broke the highlight at
+                    # RTF ~1 (see _PROGRESS_TICK_MS).
+                    self._emit_speech_progress("speaking", meta=meta)
+                    next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
+
+                # The agent is now audibly talking — a barge-in may start.
+                self._audio_active = True
+                await self._room.publish_audio(frame)
+
+            # Did the utterance play to the end (vs. abort via break)?
+            completed = (
+                not first  # something was actually spoken
+                and utt.complete
+                and self._cur_cursor >= len(self._cur_audio)
+            )
+            if completed:
+                # Learn this sentence's real pace before the buffer is released,
+                # so the NEXT sentence's mid-synthesis estimate is grounded in
+                # measurement rather than the seeded default.
+                self._calibrate_pace(meta)
+                # CONTRACT: "spoken" fires when the last frame is *pushed*, not
+                # when the user *hears* the end — up to queued_playout_ms of this
+                # audio is still draining the output + client buffers. The
+                # frontend must therefore drive end-of-highlight timing from the
+                # "speaking" envelope's schedule (delay_ms + duration_ms), and
+                # treat "spoken" only as "this sentence is done, settle it fully
+                # lit".
+                self._emit_speech_progress("spoken", meta=meta)
+
+            if starve_count:
+                # Without this the sawtooth is invisible: playback stalls do not
+                # surface anywhere else, so a session that sounds wrong leaves no
+                # trace to diagnose it from.
+                logger.info(
+                    f"[TTS] Playout starved {starve_count}x on a "
+                    f"{len(self._cur_audio)}B {source} utterance; bridged "
+                    f"{bridged_ms:.0f}ms of silence to keep the source fed"
+                )
+        finally:
+            # Never leave synthesis running for audio nobody will hear.
+            utt.cancel()
+            # Utterance finished (or aborted) — release held audio.
+            self._cur_audio = b""
+            self._cur_cursor = 0
+            self._cur_meta = None
+            self._cur_complete = False
+            self._cur_last_char = 0
+            self._cur_promised = 0
+
+    async def _bridge_underrun(self, fade_from: int = 0) -> float:
+        """Push silence when the output source is about to run dry.
+
+        A LiveKit AudioSource that empties does not play silence — the client
+        stops receiving packets and Opus concealment extrapolates the last frame
+        it had, producing the warbling "interference between chunks" that a
+        synthesis stall is heard as. Pushing real silence keeps the stream
+        continuous, so the same stall reads as a short pause instead.
+
+        Only fires once the source has actually drained below the floor, so a
+        healthy stream never has silence spliced into it. ``fade_from`` ramps the
+        silence down from the last real sample rather than cutting to zero.
+
+        Note the inserted silence deliberately does NOT advance ``_cur_cursor``:
+        the teleprompter playhead tracks synthesized audio, not wall clock, so a
+        bridged sentence highlights slightly ahead of the sound for the duration
+        of the stall. That is the lesser evil — the alternative is a highlight
+        that stops dead.
+
+        Returns the milliseconds pushed (0 when the source still has depth).
+        """
+        # Cap the floor at half the jitter buffer. A floor larger than the
+        # cushion itself would fire the moment playback starts and splice
+        # silence into a perfectly healthy stream.
+        cushion_ms = self._preroll_bytes / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+        floor_ms = min(_UNDERRUN_FLOOR_MS, cushion_ms / 2)
+        try:
+            queued = float(self._room.queued_playout_ms)
+        except Exception:
+            return 0.0
+        if queued > floor_ms:
+            return 0.0
+        await self._room.publish_audio(_silence_frame(fade_from))
+        return float(_PLAYOUT_FRAME_MS)
 
     async def _speech_worker(self) -> None:
         """Background worker that speaks queued sentences with prefetch.
@@ -2146,36 +2733,23 @@ class AudioPipeline:
         self.close_transcript_gate()
 
         try:
-            prefetch_task = None
-            prefetch_source = None
-            prefetch_meta = None
+            pending = None
+            pending_source = None
+            pending_meta = None
 
             while True:
-                # If we have a prefetched result, use it; otherwise wait for queue
-                if prefetch_task is not None:
-                    # Race the prefetch await against the stop signal. Otherwise an
-                    # in-flight synthesis blocks the worker while the transcript gate
-                    # stays closed, dropping user speech during barge-in.
-                    stop_waiter = asyncio.create_task(self._stop_speaking_event.wait())
-                    try:
-                        await asyncio.wait(
-                            {prefetch_task, stop_waiter},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                    finally:
-                        stop_waiter.cancel()
-                    if self._stop_speaking_event.is_set():
-                        prefetch_task.cancel()
-                        prefetch_task = None
-                        prefetch_source = None
-                        prefetch_meta = None
-                        break
-                    chunks = await prefetch_task
-                    source = prefetch_source
-                    meta = prefetch_meta
-                    prefetch_task = None
-                    prefetch_source = None
-                    prefetch_meta = None
+                # If the previous iteration armed the next sentence, take it —
+                # its synthesis has been running during the last playback. No
+                # await here any more: an utterance is usable the moment it
+                # exists, so the worker never blocks on synthesis and the old
+                # "race the prefetch against the stop signal" dance is gone.
+                if pending is not None:
+                    utt = pending
+                    source = pending_source
+                    meta = pending_meta
+                    pending = None
+                    pending_source = None
+                    pending_meta = None
                 else:
                     # Race the queue against the stop signal. A commit/stop
                     # drains the queue (including the flush sentinel), so a bare
@@ -2199,37 +2773,32 @@ class AudioPipeline:
                     if item is None:
                         break
                     sentence, source, meta = item
-                    # No prefetch available — synthesize synchronously for this first sentence
-                    chunks = await self._prefetch_sentence(
-                        sentence, voice=self._tts_voice, language=self._tts_language
-                    )
+                    # Nothing armed (first sentence of a turn, or the peek below
+                    # lost the race). Start synthesis now — this returns at once
+                    # and playback begins on the first chunk, so the cost of
+                    # arriving here is time-to-first-audio, not a whole sentence.
+                    utt = self._begin_synthesis(sentence)
 
                 if self._stop_speaking_event.is_set():
+                    utt.cancel()
                     break
 
-                if not chunks:
-                    continue
-
-                # Before playing, peek at the next sentence and start prefetching it
+                # Before playing, peek at the next sentence and arm its synthesis
                 try:
                     next_item = self._speech_queue.get_nowait()
                     if next_item is not None:
                         next_sentence, next_source, next_meta = next_item
-                        prefetch_task = asyncio.create_task(
-                            self._prefetch_sentence(
-                                next_sentence, voice=self._tts_voice, language=self._tts_language
-                            )
-                        )
-                        prefetch_source = next_source
-                        prefetch_meta = next_meta
+                        pending = self._begin_synthesis(next_sentence)
+                        pending_source = next_source
+                        pending_meta = next_meta
                     else:
                         # Sentinel — put it back so the main loop sees it
                         self._speech_queue.put_nowait(None)
                 except asyncio.QueueEmpty:
-                    pass  # No next sentence yet — that's fine
+                    pass  # Not enqueued yet — see #460; costs TTFA, not a stream
 
-                # Play the current sentence's audio
-                await self._play_prefetched(chunks, source=source, meta=meta)
+                # Play the current sentence as it synthesizes
+                await self._play_utterance(utt, source=source, meta=meta)
 
                 # Emit tts_done events after each sentence completes
                 if self.turn_anchor_ts > 0:
@@ -2241,12 +2810,12 @@ class AudioPipeline:
 
         except asyncio.CancelledError:
             logger.info("[TTS] Speech worker cancelled")
-            if prefetch_task:
-                prefetch_task.cancel()
+            if pending:
+                pending.cancel()
         except Exception as e:
             logger.error(f"[TTS] Speech worker error: {e}")
-            if prefetch_task:
-                prefetch_task.cancel()
+            if pending:
+                pending.cancel()
         finally:
             # Emit response_tts_done with the last response sentence's completion time
             if hasattr(self, '_last_response_tts_done_elapsed') and self._last_response_tts_done_elapsed > 0:

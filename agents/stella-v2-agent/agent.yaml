@@ -74,6 +74,8 @@ configSchema:
     - name: EXPERT_TIMEOUT_MS
       description: "Timeout per expert in milliseconds"
       default: "3000"
+    - name: STELLA_LANGUAGE
+      description: "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT transcribes as it, the resolver forces every turn to it, and the reply is written in it — so a short or garbled first utterance still gets answered in that language. Empty or 'auto' = detect per turn and fall back to the default language."
     - name: TTS_LANGUAGE
       description: "Seed language for TTS (ISO 639-1, e.g. 'de'). Empty = follow the per-turn detected language; the agent overrides this each turn."
     - name: TTS_VOICE

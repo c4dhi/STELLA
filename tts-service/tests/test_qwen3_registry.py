@@ -201,3 +201,61 @@ def _run_standalone():
 
 if __name__ == "__main__":
     sys.exit(_run_standalone())
+
+
+# ---------------------------------------------------------------------------
+# x-vector-only conditioning (QWEN3_XVEC_ONLY)
+# ---------------------------------------------------------------------------
+
+
+def test_xvec_only_defaults_off():
+    """ICL stays the default — it is the higher-fidelity mode."""
+    old = os.environ.pop("QWEN3_XVEC_ONLY", None)
+    try:
+        assert Qwen3Provider()._xvec_only is False
+    finally:
+        if old is not None:
+            os.environ["QWEN3_XVEC_ONLY"] = old
+
+
+def test_xvec_only_parses_truthy_spellings():
+    """Operators set this from a deploy UI / configmap, so be forgiving."""
+    for raw, expected in [
+        ("true", True), ("TRUE", True), ("  yes ", True), ("1", True), ("on", True),
+        ("false", False), ("0", False), ("", False), ("nonsense", False),
+    ]:
+        os.environ["QWEN3_XVEC_ONLY"] = raw
+        try:
+            assert Qwen3Provider()._xvec_only is expected, raw
+        finally:
+            os.environ.pop("QWEN3_XVEC_ONLY", None)
+
+
+def test_bundled_reference_clips_stay_within_the_recommended_length():
+    """The clips are prefilled on EVERY request in ICL mode, so length is latency.
+
+    They were 17-20s — 2-4x the 5-10s the provider documents — which is what
+    made time-to-first-audio ~241ms and constant regardless of sentence length.
+    That surfaced as an audible break between sentences, since each sentence is
+    its own request. Guard the regression: a future re-record must not quietly
+    reintroduce a 20s reference.
+    """
+    import wave  # noqa: F401  (kept: documents that these are audio assets)
+
+    assets = os.path.join(os.path.dirname(__file__), "..", "assets")
+    clips = [
+        os.path.join(assets, "ref_audio.mp3"),
+        os.path.join(assets, "voices", "stella_de.mp3"),
+        os.path.join(assets, "voices", "stella_en.mp3"),
+    ]
+    # ~77-80kbps mono MP3: 10s is well under 130KB. Size is a proxy for
+    # duration that needs no audio decoder in the test environment.
+    for path in clips:
+        if not os.path.isfile(path):
+            continue
+        size = os.path.getsize(path)
+        assert size < 130_000, (
+            f"{os.path.basename(path)} is {size}B — that is roughly "
+            f"{size / 9700:.0f}s at this bitrate, over the 5-10s the provider "
+            f"documents. Every ICL request prefills this clip."
+        )

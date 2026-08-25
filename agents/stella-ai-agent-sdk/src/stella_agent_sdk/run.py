@@ -511,8 +511,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
             if agent._last_progress_payload:
                 logger.info(f"[PARTICIPANT JOINED] {participant_identity} - re-sending progress state")
-                # Schedule the async publish_data call
-                asyncio.create_task(audio_pipeline._room.publish_data(agent._last_progress_payload))
+                # Queue it rather than create_task: ordered publishing keeps
+                # this behind anything already in flight instead of racing it.
+                audio_pipeline._room.publish_data_ordered(agent._last_progress_payload)
             else:
                 logger.warning(f"[PARTICIPANT JOINED] {participant_identity} - no progress payload to send!")
 
