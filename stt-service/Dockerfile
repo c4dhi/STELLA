@@ -116,14 +116,9 @@ RUN if [ "$ENABLE_GPU" = "true" ]; then \
     fi
 
 # ============================================================================
-# Proto compilation
+# Proto sources (compiled AFTER the app code is copied — see below)
 # ============================================================================
 COPY proto/ ./proto/
-RUN python -m grpc_tools.protoc \
-    -I./proto \
-    --python_out=. \
-    --grpc_python_out=. \
-    proto/stt.proto
 
 # ============================================================================
 # Model download scripts (models are downloaded at runtime via init container)
@@ -142,6 +137,32 @@ ENV SILERO_VAD_CACHE_DIR=/root/.cache/silero-vad
 # Application code
 # ============================================================================
 COPY src/ ./src/
+
+# ============================================================================
+# Proto compilation — INTO src/, and AFTER copying it
+# ============================================================================
+# Both parts of that matter.
+#
+# CMD runs `python src/stt_server.py`, which puts /app/src at the head of
+# sys.path — so `import stt_pb2` resolves to src/stt_pb2.py, never to /app.
+# This step used to emit into /app, where nothing could import it, while the
+# service quietly ran on the stubs committed under src/. Adding a proto field
+# then built and shipped an image that did not have it, and the mismatch only
+# showed up at runtime as:
+#
+#   ValueError: Protocol message TranscriptEvent has no "decode_diagnostics" field
+#
+# Generating into src/ after the COPY means the build output always wins over
+# whatever is committed, so the two cannot drift again. The committed stubs
+# stay in git for local runs and tests, which have no build step.
+RUN python -m grpc_tools.protoc \
+    -I./proto \
+    --python_out=./src \
+    --grpc_python_out=./src \
+    proto/stt.proto \
+ && python -c "import sys; sys.path.insert(0, './src'); import stt_pb2; \
+    assert hasattr(stt_pb2.TranscriptEvent(), 'decode_diagnostics'); \
+    print('[STT] proto stubs regenerated and importable')"
 
 # ============================================================================
 # Environment defaults
