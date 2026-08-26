@@ -92,6 +92,30 @@ def _latency_status(source: str, elapsed_ms: float) -> str:
     return "ok"
 
 
+# How much new speech must appear before a barge-in that was already dismissed
+# is reconsidered. Compared on normalized characters rather than words so it
+# behaves the same in scripts that do not delimit words with spaces.
+_BARGE_IN_REEVAL_GROWTH_CHARS = 4
+
+
+def _speech_grew(new_text: str, seen_text: str) -> bool:
+    """True when new_text carries materially more speech than seen_text.
+
+    Guards both re-evaluation and re-suspension: STT re-emits overlapping
+    partials constantly, and without this a dismissed backchannel would
+    re-trigger on its own echo and stutter the agent indefinitely.
+    """
+    if not new_text:
+        return False
+    if not seen_text:
+        return True
+    new_norm = " ".join(new_text.split())
+    seen_norm = " ".join(seen_text.split())
+    if new_norm == seen_norm:
+        return False
+    return len(new_norm) - len(seen_norm) >= _BARGE_IN_REEVAL_GROWTH_CHARS
+
+
 def _decode_diagnostic_fields(raw: str) -> dict:
     """Flatten the STT decode-diagnostics JSON into analytics event fields.
 
@@ -558,6 +582,43 @@ class AudioPipeline:
         self._barge_in_decider: Optional[
             Callable[[str], Awaitable["BargeInDecision"]]
         ] = None
+        # ── Speculative barge-in resolution ──
+        #
+        # The decision used to wait for a FINAL transcript, which cannot arrive
+        # until the user has stopped talking AND the endpointing windows have
+        # elapsed AND whisper has decoded — ~1.6s measured — and only THEN did
+        # the LLM classifier start. So an interruption cost the user roughly
+        # three seconds of dead air, most of it spent waiting to begin.
+        #
+        # Partials arrive every PARTIAL_INTERVAL_MS while the mic is hot, and
+        # "is this a real interruption or a backchannel" is usually answerable
+        # from the first few words. So we start classifying WHILE the user is
+        # still speaking:
+        #
+        #   RESUME → act on it immediately. Being wrong is cheap: the user
+        #            simply keeps talking and the next partial re-arms. This is
+        #            what stops "mhm" from halting the agent for two seconds.
+        #   COMMIT → keep the playback suspended and BANK the decision. The
+        #            final transcript is still what gets acted on (a partial is
+        #            an incomplete turn), but by the time it lands the
+        #            classification is already paid for.
+        #
+        # Set BARGE_IN_SPECULATIVE=0 to fall back to deciding only on the final.
+        self._barge_in_speculative = os.getenv(
+            "BARGE_IN_SPECULATIVE", "1"
+        ).lower() in ("1", "true", "yes", "on")
+        self._barge_in_speculative_task: Optional[asyncio.Task] = None
+        self._barge_in_speculative_text = ""
+        self._barge_in_speculative_decision: Optional["BargeInDecision"] = None
+        # What we already early-resumed on, so the same words cannot re-suspend
+        # the agent in a loop. Only genuinely NEW speech re-arms.
+        self._barge_in_resumed_text = ""
+        # Newest partial seen for the current interruption. Partials keep
+        # arriving while the classifier is thinking, and that newer speech is
+        # exactly what can turn a backchannel into a real interruption
+        # ("mhm" -> "mhm, aber warte..."), so it must not be dropped just
+        # because a request was in flight when it landed.
+        self._barge_in_latest_text = ""
         # Session-end wrap-up handler (issue #198): invoked when the backend signals
         # a graceful close over the data channel ({"type":"session_end"}).
         self._session_end_handler: Optional[
@@ -1073,6 +1134,11 @@ class AudioPipeline:
                     if event.is_final and text:
                         self._barge_in_resolving = True
                         asyncio.create_task(self._resolve_barge_in(text))
+                    elif text:
+                        # Classify while the user is still talking, so the final
+                        # does not have to wait for a classifier round trip.
+                        self._barge_in_latest_text = text
+                        self._maybe_speculate_barge_in(text)
                     continue
 
                 # No barge-in yet. Only START one if the agent is ACTUALLY
@@ -1083,10 +1149,19 @@ class AudioPipeline:
                     continue
                 if len(text) < self._barge_in_min_chars:
                     continue
+                # An utterance already dismissed as backchannel must not
+                # re-suspend on its own trailing partials — STT keeps re-emitting
+                # overlapping text, which would stutter the agent on a single
+                # "mhm". Only genuinely new speech re-arms.
+                if not _speech_grew(text, self._barge_in_resumed_text):
+                    self._barge_in_latest_text = text
+                    await self._publish_user_transcript(event)
+                    continue
                 logger.info(
                     f"[BARGE-IN] Interruption detected while talking ('{text[:40]}') — suspending"
                 )
                 self._barge_in_active = True
+                self._clear_barge_in_speculation()
                 self.suspend_speech()
                 await self._emit_barge_in_debug(
                     f"⏸️ Barge-in detected — paused, listening… (\"{text[:60]}\")",
@@ -1097,6 +1172,9 @@ class AudioPipeline:
                 if event.is_final and text:
                     self._barge_in_resolving = True
                     asyncio.create_task(self._resolve_barge_in(text))
+                else:
+                    self._barge_in_latest_text = text
+                    self._maybe_speculate_barge_in(text)
                 continue
 
             # 1. Publish ALL transcripts to LiveKit for frontend display.
@@ -1792,6 +1870,13 @@ class AudioPipeline:
         logger.info("[BARGE-IN] Resuming playback from playhead")
         self.close_transcript_gate()
         self._play_allowed.set()
+        # The agent is audibly talking again. suspend_speech() cleared this, and
+        # waiting for the playout loop to set it on the next frame leaves a
+        # window where a genuine interruption is ignored because a barge-in may
+        # only START while _audio_active is True — precisely the "mhm, aber
+        # warte..." case, where the real interruption arrives right behind a
+        # dismissed backchannel.
+        self._audio_active = True
         # Teleprompter: resume the word cursor from the frozen point over the
         # audio that's still left in this sentence.
         self._emit_speech_progress("speaking")
@@ -2039,6 +2124,8 @@ class AudioPipeline:
         self._barge_in_active = False
         self._barge_in_resolving = False
         self._pending_barge_in = None
+        self._barge_in_resumed_text = ""
+        self._clear_barge_in_speculation()
         self.resume_speech()
         await self._emit_barge_in_debug(
             "▶️ Barge-in never resolved (no final transcript) — auto-resumed",
@@ -2232,6 +2319,118 @@ class AudioPipeline:
             # No running loop (e.g. called from sync test context) — skip.
             pass
 
+    def _maybe_speculate_barge_in(self, text: str) -> None:
+        """Kick off (or refresh) a classification on a PARTIAL. Never blocks.
+
+        At most one call is in flight per utterance, and it is only refreshed
+        when the user has actually said more — otherwise overlapping partials
+        would fire a classifier request every few hundred milliseconds.
+        """
+        if not self._barge_in_speculative or self._barge_in_decider is None:
+            return
+        if self._barge_in_resolving or not self._barge_in_active:
+            return
+        # A banked COMMIT is terminal: more words will not turn a real
+        # interruption back into noise, and the final is what we act on anyway.
+        if self._barge_in_speculative_decision is not None:
+            return
+        task = self._barge_in_speculative_task
+        if task is not None and not task.done():
+            return
+        if not _speech_grew(text, self._barge_in_speculative_text):
+            return
+        self._barge_in_speculative_text = text
+        self._barge_in_speculative_task = asyncio.create_task(
+            self._speculate_barge_in(text)
+        )
+
+    async def _speculate_barge_in(self, text: str) -> None:
+        """Classify a partial mid-utterance; act at once only on RESUME.
+
+        Errors are swallowed deliberately: speculation is an optimisation, and
+        anything it fails to answer is still answered by the final-transcript
+        path exactly as before.
+        """
+        decider = self._barge_in_decider
+        if decider is None:
+            return
+        try:
+            decision = await decider(text)
+        except Exception as e:
+            logger.warning(f"[BARGE-IN] Speculative decision failed: {e} — deferring to final")
+            return
+
+        # The world may have moved while the classifier was thinking: the final
+        # may have landed and resolved this, or the barge-in may have been
+        # dismissed. Either way this verdict is stale.
+        if self._barge_in_resolving or not self._barge_in_active:
+            return
+        if text != self._barge_in_speculative_text:
+            return
+
+        if decision != BargeInDecision.RESUME:
+            # Bank it. _resolve_barge_in spends it the moment the final lands,
+            # so the classifier is no longer on the critical path.
+            self._barge_in_speculative_decision = decision
+            logger.info(f"[BARGE-IN] Speculative COMMIT banked for '{text[:40]}'")
+            return
+
+        logger.info(f"[BARGE-IN] Speculative RESUME — '{text[:40]}' is backchannel, resuming now")
+        self._barge_in_resumed_text = text
+        self._barge_in_active = False
+        self._barge_in_speculative_text = ""
+        self._barge_in_speculative_decision = None
+        self.resume_speech()
+        await self._emit_barge_in_debug(
+            f"🔁 Barge-in RESUME (early, mid-utterance) — resumed without waiting "
+            f"for the final. Heard: \"{text[:100]}\"",
+            decision="resume",
+            transcript=text,
+        )
+
+        # The user may have kept talking while the classifier was deciding. That
+        # newer speech has never been judged, and waiting for yet another
+        # partial to re-arm would give back the latency this exists to remove.
+        latest = self._barge_in_latest_text
+        # _is_speaking, not _audio_active: suspend_speech() clears _audio_active
+        # by design, and we have just resumed, so no frame has necessarily gone
+        # out yet. What matters is that there is still a held utterance to
+        # protect.
+        if self._is_speaking and _speech_grew(latest, self._barge_in_resumed_text):
+            logger.info(f"[BARGE-IN] Speech continued past the dismissal ('{latest[:40]}') — re-arming")
+            self._barge_in_active = True
+            self.suspend_speech()
+            self._maybe_speculate_barge_in(latest)
+
+    def _clear_barge_in_speculation(self) -> None:
+        """Drop speculation state at the end of an utterance."""
+        task = self._barge_in_speculative_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._barge_in_speculative_task = None
+        self._barge_in_speculative_text = ""
+        self._barge_in_speculative_decision = None
+        self._barge_in_latest_text = ""
+
+    async def _take_speculative_decision(self) -> Optional["BargeInDecision"]:
+        """Return a decision already computed for this utterance, if any.
+
+        If the classifier is still thinking, wait for it rather than starting a
+        second request — it has a head start of however long the user kept
+        talking, so waiting is strictly faster than asking again. Its own
+        wall-clock timeout bounds this.
+        """
+        if self._barge_in_speculative_decision is not None:
+            return self._barge_in_speculative_decision
+        task = self._barge_in_speculative_task
+        if task is None:
+            return None
+        try:
+            await task
+        except Exception:
+            return None
+        return self._barge_in_speculative_decision
+
     async def _resolve_barge_in(self, transcript: str) -> None:
         """Resolve a suspended barge-in given the user's transcript.
 
@@ -2245,8 +2444,17 @@ class AudioPipeline:
         """
         decider = self._barge_in_decider
         try:
+            # Spend the decision speculation already paid for, if there is one.
+            # This is the whole point of speculating: by now the classifier has
+            # usually finished, so the final transcript is acted on with no
+            # further round trip.
+            decision = await self._take_speculative_decision()
+            if decision is not None:
+                logger.info(f"[BARGE-IN] Using banked decision {decision.name} — no extra round trip")
             try:
-                if decider is not None:
+                if decision is not None:
+                    pass
+                elif decider is not None:
                     decision = await decider(transcript)
                 else:
                     decision = BargeInDecision.COMMIT
@@ -2277,6 +2485,8 @@ class AudioPipeline:
         finally:
             self._barge_in_active = False
             self._barge_in_resolving = False
+            self._barge_in_resumed_text = ""
+            self._clear_barge_in_speculation()
 
     async def _handle_text_barge_in(self, event: TranscriptEvent) -> None:
         """Resolve a typed message that arrived mid-turn (#278).
