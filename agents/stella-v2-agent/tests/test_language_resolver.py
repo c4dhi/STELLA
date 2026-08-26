@@ -439,3 +439,62 @@ def test_a_pinned_deployment_never_switches():
     r = _resolver(forced="de")
     assert r.resolve("I would much rather speak English from now on please",
                      signal=("en", 0.99)) == "de"
+
+
+# ──────────────── declared plan language (a pin, not a hint) ────────────────
+#
+# The production failure these pin down: a fully-German plan whose opening
+# utterance whisper detected as English at 0.69 confidence. detect_threshold is
+# 0.4, so one turn confirmed the lock, every later turn was decoded in English,
+# and a 0.5s "ja" came back as "down". A declared language removes the guess.
+
+
+def test_declared_language_wins_over_confident_detection():
+    """A seed yields to confident detection; a declaration does not. That is
+    the whole difference between the two, and the reason for the new method."""
+    r = LanguageResolver()
+    r.set_plan_language("de")
+    assert r.resolve("I want to discuss my weekly running plan") == "de"
+
+
+def test_declared_language_ignores_the_stt_signal_entirely():
+    """Even a unanimous, high-confidence acoustic detection cannot move it."""
+    r = LanguageResolver()
+    r.set_plan_language("de")
+    for _ in range(5):
+        assert r.resolve("Thank you.", signal=("en", 0.99)) == "de"
+
+
+def test_declared_language_is_reported_as_pinned():
+    """The response prompt words itself differently for a fixed-language
+    deployment, and reads this flag to know."""
+    r = LanguageResolver()
+    assert bool(r.forced) is False
+    r.set_plan_language("de")
+    assert r.forced == "de"
+
+
+def test_declaring_an_unsupported_language_still_pins_it():
+    """Declaring French must mean the conversation IS French — not that it
+    silently falls back to auto-detect because the default pair is de/en."""
+    r = LanguageResolver()
+    r.set_plan_language("fr")
+    assert r.forced == "fr"
+    assert r.resolve("I want to discuss my weekly running plan") == "fr"
+
+
+def test_no_declaration_leaves_detection_alone():
+    """Plans that declare nothing keep exactly the old behaviour."""
+    r = LanguageResolver()
+    r.set_plan_language(None)
+    r.set_plan_language("auto")
+    assert r.forced is None
+    assert r.resolve("I want to discuss my weekly running plan") == "en"
+
+
+def test_declaration_survives_a_session_reset():
+    """reset() clears the per-session lock but not the operator's decision."""
+    r = LanguageResolver()
+    r.set_plan_language("de")
+    r.reset()
+    assert r.resolve("I want to discuss my weekly running plan") == "de"

@@ -257,10 +257,16 @@ class StellaV2Agent(BaseAgent):
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
-            # stay coherent (RFC §8 single source of truth). The plan's declared
-            # language (if any) seeds resolution; confident detection overrides it.
+            # stay coherent (RFC §8 single source of truth).
+            # A plan that declares its language is PINNED to it: detection is
+            # off, and STT is told what to transcribe. Whisper auto-detects from
+            # a very short window and, guessing wrong, translates rather than
+            # mis-hears — which is how a fully-German plan ran its whole session
+            # in English. A declaration removes the guess entirely.
             plan_language = (self._plan_config or {}).get("language")
-            self.language_resolver.set_seed(plan_language)
+            self.language_resolver.set_plan_language(plan_language)
+            if self.has_audio:
+                self.audio.set_stt_language(self.language_resolver.forced)
             # Prefer STT's independent acoustic detection (voice); fall back to
             # the text classifier when absent (typed input / no signal, §8.3).
             meta = input.metadata or {}
@@ -800,6 +806,14 @@ class StellaV2Agent(BaseAgent):
 
         # Load plan and initialize gRPC state machine
         plan = self._load_plan_config(config)
+
+        # Declare the plan's language to STT BEFORE the first utterance. Doing it
+        # on the first turn is too late: the opening utterance is exactly the one
+        # that gets misdetected (it is short, and often starts with a name), and
+        # it is what confirms the lock for the rest of the session.
+        self.language_resolver.set_plan_language((plan or {}).get("language"))
+        if self.has_audio:
+            self.audio.set_stt_language(self.language_resolver.forced)
         if plan:
             self._plan_config = plan
 

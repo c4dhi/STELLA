@@ -282,6 +282,14 @@ class StellaLightAgent(BaseAgent):
         # Retain the raw plan so progress updates can expose per-state transitions.
         self._plan_config = plan_config
 
+        # Declare the plan's language to STT BEFORE the first utterance. Doing it
+        # on the first turn is too late: the opening utterance is exactly the one
+        # that gets misdetected (it is short, and often starts with a name), and
+        # it is what confirms the lock for the rest of the session.
+        self.language_resolver.set_plan_language((plan_config or {}).get("language"))
+        if self.has_audio:
+            self.audio.set_stt_language(self.language_resolver.forced)
+
         # Initialize tool-based state management (the only path).
         await self._init_tool_mode(session_id, plan_config)
 
@@ -550,11 +558,20 @@ class StellaLightAgent(BaseAgent):
             print(f"[StellaLightAgent] Using plan system prompt: {self._plan_system_prompt[:100]}...")
 
         # Resolve the conversation language for this turn (single source of truth,
-        # shared SDK logic — identical to stella-v2). The plan language seeds it;
-        # STT's acoustic detection (input metadata) overrides when confident, else
-        # the bundled text classifier reads input.text. Flows to {{language}} and
-        # to TTS via output metadata below.
-        self.language_resolver.set_seed((self._plan_config or {}).get("language"))
+        # shared SDK logic — identical to stella-v2). A declared plan language
+        # pins it; otherwise STT's acoustic detection (input metadata) decides
+        # when confident, else the bundled text classifier reads input.text.
+        # Flows to {{language}} and to TTS via output metadata below.
+        # A plan that declares its language is PINNED to it: detection is
+        # off, and STT is told what to transcribe. Whisper auto-detects from
+        # a very short window and, guessing wrong, translates rather than
+        # mis-hears — which is how a fully-German plan ran its whole session
+        # in English. A declaration removes the guess entirely.
+        self.language_resolver.set_plan_language(
+            (self._plan_config or {}).get("language")
+        )
+        if self.has_audio:
+            self.audio.set_stt_language(self.language_resolver.forced)
         meta = getattr(input, "metadata", None) or {}
         detected_language = meta.get("detected_language") or None
         language_signal = (

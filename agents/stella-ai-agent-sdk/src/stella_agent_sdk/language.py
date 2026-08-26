@@ -246,6 +246,41 @@ class LanguageResolver:
         if self.forced:
             self.locked, self._confirmed = self.forced, True
 
+    def set_plan_language(self, lang: Optional[str]) -> None:
+        """Declare the language this plan is written in — a PIN, not a hint.
+
+        A plan whose system prompt, task instructions and acceptance criteria
+        are all in German is not a conversation whose language needs guessing.
+        Declaring it turns detection off for the session: the STT service is
+        told what to transcribe, and every turn resolves to this language.
+
+        That matters far more than it sounds. Whisper auto-detects per
+        utterance from a very short window, and when it guesses wrong it does
+        not merely mis-hear — conditioned on the wrong language token it
+        TRANSLATES. Observed in production on a fully-German plan: the opening
+        "Hi Grace, kannst du mich hören" (2.6s, detected en at 0.69 confidence
+        because it starts with an English-sounding name) came back as "Hi
+        Grace, can you hear me?", and from there a 0.5s "ja" decoded as "down",
+        which the agent read as the user feeling low. The plan never recovered.
+
+        Nothing here is a heuristic: the operator said what language this is.
+
+        The declared language joins ``supported`` — declaring French means the
+        conversation is French, not that it silently falls back to auto-detect
+        because French was not in the default pair.
+
+        ``None`` or ``"auto"`` leaves detection exactly as it was.
+        """
+        want = (str(lang or "")).strip().lower()
+        if not want or want == "auto":
+            return
+        self.supported.add(want)
+        self._forced_request = want
+        self.forced = self._validate_forced()
+        if self.forced:
+            self.locked, self._confirmed = self.forced, True
+            self._reset_pending()
+
     def set_seed(self, seed: Optional[str]) -> None:
         """Set the plan-declared language seed (``auto``/unsupported → no seed).
 

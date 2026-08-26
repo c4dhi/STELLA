@@ -470,6 +470,11 @@ class AudioPipeline:
         # instead of auto-detecting, and the resolver forces every turn to it.
         # None = auto-detect (default).
         self._language_pin = forced_language()
+        # Language to transcribe in, when the conversation HAS a declared one
+        # (plan-level, via set_stt_language). Only ever set from a declaration,
+        # never from detection: pinning STT to a language we merely guessed
+        # would make a wrong guess permanent and self-confirming.
+        self._stt_language: Optional[str] = None
 
         # TTS language. Seeded from the env var for backward compatibility, then
         # from the deployment pin, so the first synthesis of a pinned deployment
@@ -556,9 +561,11 @@ class AudioPipeline:
         self._barge_in_decider: Optional[
             Callable[[str], Awaitable["BargeInDecision"]]
         ] = None
-        # Set when a voice barge-in has been committed and we are waiting for
-        # the utterance's final transcript to deliver as the interrupting turn.
-        self._barge_in_committed = False
+        # transcript_id of an utterance we have committed a voice barge-in for,
+        # while waiting for its final to deliver as the interrupting turn.
+        # Keyed on the id, not a bare flag, so the state cannot outlive its
+        # utterance — which is exactly how the previous design broke.
+        self._barge_in_committed_tid: Optional[str] = None
         # Session-end wrap-up handler (issue #198): invoked when the backend signals
         # a graceful close over the data channel ({"type":"session_end"}).
         self._session_end_handler: Optional[
@@ -1040,13 +1047,19 @@ class AudioPipeline:
             session_id=self._session_id,
             participant_id=self._participant_id,
             sample_rate=sample_rate,
-            # No language hint by default: STT auto-detects, which yields the
-            # per-utterance detection signal for free (RFC §6). Pinning is an
-            # opt-in that trades that free detection away — which is exactly what
-            # a pinned deployment wants: a short or garbled first utterance is
-            # transcribed AS the pinned language instead of being auto-detected
-            # (unreliably) and falling back to the default.
-            language_provider=(lambda: self._language_pin) if self._language_pin else None,
+            # Tell STT the language whenever the conversation has a declared
+            # one — the deployment pin, or the language the plan declares. This
+            # is the single biggest accuracy lever available on short
+            # utterances: auto-detect runs on a very short window, and a wrong
+            # guess does not just mis-hear, it translates.
+            #
+            # With nothing declared this stays None and STT auto-detects, which
+            # yields the per-utterance detection signal for free (RFC §6). What
+            # it deliberately does NOT do is feed a DETECTED language back:
+            # a pinned session reports that pin as its detection with
+            # confidence 1.0, so an early wrong guess would confirm itself
+            # forever. A declaration is a fact; a detection is not.
+            language_provider=self._resolve_stt_language,
         ):
             logger.debug(f"STT event: text='{event.text[:50] if event.text else ''}...', is_final={event.is_final}, speech_started={event.speech_started}")
 
@@ -1056,16 +1069,24 @@ class AudioPipeline:
             # worker does it on the way out), so by the time the final lands the
             # gate may be either side — and the turn must be delivered, and
             # flagged, either way.
-            if self._barge_in_committed and event.is_final:
-                self._barge_in_committed = False
-                await self._publish_user_transcript(event)
-                text = (event.text or "").strip()
-                if text:
-                    logger.info(f"[BARGE-IN] Delivering interrupting turn: '{text[:40]}'")
-                    self._deliver_barge_in_turn(text)
-                else:
-                    logger.info("[BARGE-IN] Interruption produced no transcript — nothing to deliver")
-                continue
+            if self._barge_in_committed_tid is not None:
+                if event.transcript_id != self._barge_in_committed_tid:
+                    # A different utterance started first, so the interrupted
+                    # one will never produce a final (STT dropped it or
+                    # reconnected). Let the state die with it rather than
+                    # re-labelling somebody else's turn as the interruption.
+                    logger.info("[BARGE-IN] Interrupted utterance ended without a final")
+                    self._barge_in_committed_tid = None
+                elif event.is_final:
+                    self._barge_in_committed_tid = None
+                    await self._publish_user_transcript(event)
+                    text = (event.text or "").strip()
+                    if text:
+                        logger.info(f"[BARGE-IN] Delivering interrupting turn: '{text[:40]}'")
+                        self._deliver_barge_in_turn(text)
+                    else:
+                        logger.info("[BARGE-IN] Interruption produced no transcript — nothing to deliver")
+                    continue
 
             # While the agent is speaking, the turn gate is closed.
             if self._transcript_gate_closed and self._tts_enabled:
@@ -1106,7 +1127,7 @@ class AudioPipeline:
                 # and "aha" are short everywhere, with no word list to maintain.
                 if event.speech_confirmed and self._audio_active:
                     logger.info("[BARGE-IN] Interruption confirmed by VAD — stopping")
-                    self._barge_in_committed = True
+                    self._barge_in_committed_tid = event.transcript_id
                     self.commit_interrupt()
                     await self._emit_barge_in_debug(
                         "✋ Barge-in — user is speaking, stopping and listening",
@@ -1201,9 +1222,10 @@ class AudioPipeline:
         self._current_utterance_speaker = self._room.current_audio_speaker
         logger.debug(f"Speech started detected - locked speaker: {self._current_utterance_speaker}")
 
-        # Barge-in detection happens in _run_stt_stream_inner (threshold-based
-        # on recognized speech), not here — speech_started alone is too noisy to
-        # trigger an interruption.
+        # Barge-in is NOT decided here. speech_started fires on the first VAD
+        # frame over threshold, which a cough or a door clears; the interruption
+        # signal is speech_confirmed (sustained voiced audio), handled in
+        # _run_stt_stream_inner.
 
         # No barge-in while agent is speaking (gate closed)
         if self._interrupt_mode == "none" and self._transcript_gate_closed:
@@ -2368,6 +2390,27 @@ class AudioPipeline:
     # ─────────────────────────────────────────────────────────────────────
     # Sentence-level streaming TTS
     # ─────────────────────────────────────────────────────────────────────
+
+    def _resolve_stt_language(self) -> Optional[str]:
+        """The language to transcribe in, or None to let STT auto-detect.
+
+        Read per utterance, so a plan language declared after the stream opened
+        still takes effect on the next one.
+        """
+        return self._language_pin or self._stt_language
+
+    def set_stt_language(self, language: Optional[str]) -> None:
+        """Pin STT transcription to a DECLARED conversation language.
+
+        Only ever called with a declaration (a plan's ``language``, a
+        deployment pin) — never with a detected language. See
+        ``_resolve_stt_language`` at the STT stream for why that distinction is
+        load-bearing. ``None``/``"auto"`` clears the pin back to auto-detect.
+        """
+        want = language if language and language != "auto" else None
+        if want != self._stt_language:
+            logger.info(f"[STT] language pinned to '{want}' (was '{self._stt_language}')")
+            self._stt_language = want
 
     def set_tts_language(self, language: Optional[str]) -> None:
         """Set the language used for subsequent TTS synthesis.

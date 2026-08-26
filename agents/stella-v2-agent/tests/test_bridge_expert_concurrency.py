@@ -79,7 +79,7 @@ def _make_agent(
         get_collected_deliverables=_async_return(dict(collected or {})),
     )
     agent.language_resolver = SimpleNamespace(
-        set_seed=lambda *_a, **_k: None,
+        set_plan_language=lambda *_a, **_k: None,
         resolve=lambda *_a, **_k: "en",
         forced=None,
     )

@@ -320,7 +320,7 @@ async def test_interruption_with_no_transcript_delivers_nothing():
     ])
     assert pipe._stop_speaking_event.is_set()
     assert pipe._pending_barge_in is None
-    assert pipe._barge_in_committed is False   # state cleared for the next one
+    assert pipe._barge_in_committed_tid is None   # state cleared for the next one
 
 
 @pytest.mark.asyncio

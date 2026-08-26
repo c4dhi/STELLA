@@ -471,6 +471,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
   const [name, setName] = useState(template?.name || '')
   const [description, setDescription] = useState(template?.description || '')
   const [systemPrompt, setSystemPrompt] = useState(template?.content.system_prompt || '')
+  const [planLanguage, setPlanLanguage] = useState(template?.content.language || '')
   const [sessionContext, setSessionContext] = useState<SessionContext>(template?.content.session_context || { fields: [] })
   const [agentSpawnMode, setAgentSpawnMode] = useState<AgentSpawnMode>(extractSpawnMode(template?.content.metadata))
   const [onParticipantJoin, setOnParticipantJoin] = useState(
@@ -606,6 +607,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
       },
     },
     ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
+    ...(planLanguage.trim() ? { language: planLanguage.trim().toLowerCase() } : {}),
   })
 
   const handleAddState = () => {
@@ -956,6 +958,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
         setSelectedStartNode(false)
         setInitialStateId(validation.resolvedInitialStateId)
         setSystemPrompt(content.system_prompt || '')
+        setPlanLanguage(content.language || '')
         setSessionContext(content.session_context || { fields: [] })
         setAgentSpawnMode(extractSpawnMode(importedMetadata))
         setOnParticipantJoin(extractParticipantEventConfig(
@@ -1391,6 +1394,39 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
                     : 'bg-white border-neutral-200 text-neutral-900 placeholder:text-neutral-400'
                 } focus:outline-none`}
               />
+
+              <label className={`block text-caption font-medium mt-4 mb-2 ${
+                isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'
+              }`}>
+                Language
+              </label>
+              <input
+                type="text"
+                list="plan-language-suggestions"
+                value={planLanguage}
+                onChange={(e) => { setPlanLanguage(e.target.value); markChanged() }}
+                placeholder="Auto-detect — or an ISO code, e.g. de"
+                className={`w-full px-3 py-2.5 rounded-lg text-[13px] border transition-colors ${
+                  isDark
+                    ? 'bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500'
+                    : 'bg-white border-neutral-200 text-neutral-900 placeholder:text-neutral-400'
+                } focus:outline-none`}
+              />
+              {/* Suggestions only — any ISO 639-1 code Whisper supports works,
+                  so this must not become a closed list that silently rejects
+                  the language someone actually needs. */}
+              <datalist id="plan-language-suggestions">
+                <option value="de">German</option>
+                <option value="en">English</option>
+                <option value="fr">French</option>
+                <option value="it">Italian</option>
+                <option value="es">Spanish</option>
+              </datalist>
+              <p className={`text-[11px] font-light mt-1.5 ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+                Set this whenever you know it. Left blank, the language is
+                detected per utterance from a very short window — and a wrong
+                guess makes Whisper translate rather than transcribe.
+              </p>
             </div>
 
             <div className="flex-1 overflow-y-auto overflow-x-hidden">

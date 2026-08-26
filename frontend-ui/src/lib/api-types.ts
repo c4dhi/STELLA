@@ -870,6 +870,17 @@ export interface PlanContent {
   // Initial prompt configuration
   system_prompt?: string           // Agent persona (snake_case for SDK consistency)
   session_context?: SessionContext
+  /**
+   * ISO 639-1 code the conversation is conducted in (e.g. "de"). Absent or
+   * "auto" = detect per utterance.
+   *
+   * This is a declaration, not a hint: it pins Whisper's transcription for the
+   * whole session. Worth setting whenever you know — auto-detect runs on a very
+   * short window and, guessing wrong, TRANSLATES rather than mis-hears. A German
+   * plan opening with "Hi Grace, kannst du mich hören" was transcribed as "Hi
+   * Grace, can you hear me?" and never recovered.
+   */
+  language?: string
 }
 
 export interface PlanTemplate {
