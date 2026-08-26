@@ -18,6 +18,7 @@ import type {
 } from '../../lib/api-types'
 import { parseAgentRequirements } from '../../lib/api-types'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
+import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import {
   AgentGalleryStep,
   ConfigurationSelectionStep,
@@ -55,8 +56,8 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'agent', number: 1, label: 'Select Agent' },
   { id: 'configure', number: 2, label: 'Configure' },
   { id: 'configuration', number: 3, label: 'Configuration' },
-  { id: 'voice', number: 4, label: 'Voice & Language' },
-  { id: 'plan', number: 5, label: 'Plan' },
+  { id: 'plan', number: 4, label: 'Plan' },
+  { id: 'voice', number: 5, label: 'Voice & Language' },
   { id: 'envvars', number: 6, label: 'Env Vars' },
   { id: 'visualizer', number: 7, label: 'Visualizer' },
   { id: 'duration', number: 8, label: 'Session Duration' },
@@ -138,12 +139,15 @@ export default function ProjectModal({
     return parseAgentRequirements(selectedAgentType.configSchema)
   }, [selectedAgentType])
 
-  // Show the voice step only when the active TTS provider actually exposes
-  // something to choose — a selectable voice or at least a language.
-  const supportsVoiceSelection = useMemo(() => {
-    if (!ttsCapabilities || ttsCapabilities.voices.length === 0) return false
-    return ttsCapabilities.supportsVoiceSelection || ttsCapabilities.languages.length > 0
-  }, [ttsCapabilities])
+  // The language the selected plan declares, if it declares one. A plan written
+  // in German is German wherever it is deployed, so it — not the operator —
+  // decides the session language, and the picker is skipped.
+  const planLanguage = planDeclaredLanguage(selectedPlan)
+
+  const supportsVoiceSelection = useMemo(
+    () => showsVoiceStep(ttsCapabilities, planLanguage),
+    [ttsCapabilities, planLanguage],
+  )
 
   // Dynamic steps for public project (excluding basic)
   const publicSteps = useMemo((): Step[] => {
@@ -151,11 +155,13 @@ export default function ProjectModal({
     if (agentRequirements.supportsConfigurator && selectedAgentType?.pipelineSchema) {
       s.push('configuration')
     }
-    if (supportsVoiceSelection) {
-      s.push('voice')
-    }
+    // Plan BEFORE voice: the plan may declare the language, and the voice step
+    // needs to know that to skip the picker.
     if (agentRequirements.requiresPlan) {
       s.push('plan')
+    }
+    if (supportsVoiceSelection) {
+      s.push('voice')
     }
     s.push('envvars', 'visualizer', 'duration', 'expiration')
     return s
@@ -414,10 +420,7 @@ export default function ProjectModal({
           if (ttsVoice) {
             filteredEnvVars['TTS_VOICE'] = ttsVoice
           }
-          if (ttsLanguage) {
-            filteredEnvVars['STELLA_LANGUAGE'] = ttsLanguage
-            filteredEnvVars['TTS_LANGUAGE'] = ttsLanguage
-          }
+          Object.assign(filteredEnvVars, languageEnvVars(ttsLanguage, planLanguage))
           if (Object.keys(filteredEnvVars).length > 0) {
             agentConfig.envVars = filteredEnvVars
           }
@@ -1004,6 +1007,7 @@ export default function ProjectModal({
                     loading={isLoadingTtsCaps}
                     voice={ttsVoice}
                     language={ttsLanguage}
+                    planLanguage={planLanguage}
                     onVoiceChange={setTtsVoice}
                     onLanguageChange={setTtsLanguage}
                   />

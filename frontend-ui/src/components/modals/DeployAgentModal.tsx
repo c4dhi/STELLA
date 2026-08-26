@@ -18,6 +18,7 @@ import type {
 import { parseAgentRequirements } from '../../lib/api-types'
 import ConfigurationSelectionStep from '../shared/ConfigurationSelectionStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
+import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import { useEnvVarListEditor } from '../shared/EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
 
@@ -89,21 +90,29 @@ export default function DeployAgentModal({
   // Show the voice step only when the active TTS provider actually exposes
   // something to choose — a selectable voice or at least a language. Providers
   // that report an empty catalog (no per-agent voice support) skip the step.
-  const supportsVoiceSelection = useMemo(() => {
-    if (!ttsCapabilities || ttsCapabilities.voices.length === 0) return false
-    return ttsCapabilities.supportsVoiceSelection || ttsCapabilities.languages.length > 0
-  }, [ttsCapabilities])
+  // The language the selected plan declares, if it declares one. A plan written
+  // in German is German wherever it is deployed, so it — not the operator —
+  // decides the session language, and the picker is skipped.
+  const planLanguage = planDeclaredLanguage(selectedPlan)
+
+  const supportsVoiceSelection = useMemo(
+    () => showsVoiceStep(ttsCapabilities, planLanguage),
+    [ttsCapabilities, planLanguage],
+  )
 
   const dynamicSteps = useMemo((): Step[] => {
     const steps: Step[] = ['gallery', 'configure']
     if (agentRequirements.supportsConfigurator && selectedType?.pipelineSchema) {
       steps.push('configuration')
     }
-    if (supportsVoiceSelection) {
-      steps.push('voice')
-    }
+    // Plan BEFORE voice: the plan may declare the language, and the voice step
+    // needs to know that to skip the picker. Choosing what the conversation is
+    // before how it sounds is also the more natural order.
     if (agentRequirements.requiresPlan) {
       steps.push('plan')
+    }
+    if (supportsVoiceSelection) {
+      steps.push('voice')
     }
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
@@ -337,16 +346,7 @@ export default function DeployAgentModal({
       if (ttsVoice) {
         filteredEnvVars['TTS_VOICE'] = ttsVoice
       }
-      if (ttsLanguage) {
-        // STELLA_LANGUAGE pins the *conversation*: STT transcribes as this
-        // language, the resolver forces every turn to it, and the reply is
-        // written in it — so a short or garbled first utterance still answers
-        // in the chosen language instead of falling back to the default.
-        // TTS_LANGUAGE goes along so the very first synthesis, which happens
-        // before any turn is resolved, already uses the right reference clip.
-        filteredEnvVars['STELLA_LANGUAGE'] = ttsLanguage
-        filteredEnvVars['TTS_LANGUAGE'] = ttsLanguage
-      }
+      Object.assign(filteredEnvVars, languageEnvVars(ttsLanguage, planLanguage))
 
       await onSubmit(
         name.trim(),
@@ -750,6 +750,7 @@ export default function DeployAgentModal({
                     loading={isLoadingTtsCaps}
                     voice={ttsVoice}
                     language={ttsLanguage}
+                    planLanguage={planLanguage}
                     onVoiceChange={setTtsVoice}
                     onLanguageChange={setTtsLanguage}
                   />

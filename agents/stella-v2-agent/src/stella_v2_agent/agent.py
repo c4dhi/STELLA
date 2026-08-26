@@ -814,6 +814,10 @@ class StellaV2Agent(BaseAgent):
         self.language_resolver.set_plan_language((plan or {}).get("language"))
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
+            # Seed TTS too. The opening greeting is synthesised before any turn
+            # resolves, so without this the agent's FIRST words come out in the
+            # provider default while everything after them follows the plan.
+            self.audio.set_tts_language(self.language_resolver.forced)
         if plan:
             self._plan_config = plan
 

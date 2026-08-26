@@ -289,6 +289,10 @@ class StellaLightAgent(BaseAgent):
         self.language_resolver.set_plan_language((plan_config or {}).get("language"))
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
+            # Seed TTS too. The opening greeting is synthesised before any turn
+            # resolves, so without this the agent's FIRST words come out in the
+            # provider default while everything after them follows the plan.
+            self.audio.set_tts_language(self.language_resolver.forced)
 
         # Initialize tool-based state management (the only path).
         await self._init_tool_mode(session_id, plan_config)

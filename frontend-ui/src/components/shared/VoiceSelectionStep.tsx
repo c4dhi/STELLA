@@ -29,6 +29,13 @@ interface VoiceSelectionStepProps {
   voice: string
   /** Pinned ISO conversation language. Empty string = Auto (detect per turn). */
   language: string
+  /**
+   * ISO code the SELECTED PLAN declares, if any. When present the plan is the
+   * session language and the picker is replaced by a read-only summary — there
+   * is nothing to decide, and offering a choice that the plan then overrides
+   * would just be a lie.
+   */
+  planLanguage?: string
   onVoiceChange: (voice: string) => void
   onLanguageChange: (language: string) => void
 }
@@ -45,12 +52,19 @@ interface VoiceSelectionStepProps {
  * transcription, the written reply, and the voice. That is the point of the
  * pin — auto-detect needs a long enough utterance to be confident, so a short
  * or garbled first turn would otherwise be answered in the default language.
+ *
+ * When the selected plan declares its own language, that IS the session
+ * language and the picker is replaced by a read-only summary. The plan is the
+ * better place for it: a plan written in German is German wherever it is
+ * deployed, so the operator should not have to restate it — or be able to
+ * contradict it — every time they deploy.
  */
 export default function VoiceSelectionStep({
   capabilities,
   loading,
   voice,
   language,
+  planLanguage,
   onVoiceChange,
   onLanguageChange,
 }: VoiceSelectionStepProps) {
@@ -110,7 +124,24 @@ export default function VoiceSelectionStep({
         </div>
       )}
 
-      {languages.length > 0 && (
+      {planLanguage ? (
+        <div>
+          <label className={labelClass}>Language</label>
+          <div
+            className={`w-full px-4 py-2.5 rounded-xl text-sm font-light border ${
+              isDark
+                ? 'bg-zinc-800/60 border-zinc-700 text-zinc-300'
+                : 'bg-neutral-50 border-neutral-200 text-neutral-700'
+            }`}
+          >
+            {languageLabel(planLanguage)} — set by the plan
+          </div>
+          <p className={hintClass}>
+            This plan is written in {languageLabel(planLanguage)}, so the whole session uses it:
+            transcription, replies, and voice. To change it, edit the plan's Language field.
+          </p>
+        </div>
+      ) : languages.length > 0 && (
         <div>
           <label className={labelClass}>Language</label>
           <select
