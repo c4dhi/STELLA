@@ -640,6 +640,30 @@ class WhisperSession(STTSession):
             print(f"[WhisperSession] Shadow submit error: {e}")
             self.pending_shadow_future = None
 
+    def _looks_hallucinated(self, metrics: dict) -> bool:
+        """True when a decode's own confidence signals say it was not speech.
+
+        Uses the thresholds already passed to whisper.transcribe() rather than
+        new magic numbers: no_speech_threshold (0.6) and log_prob_threshold
+        (-1.0) are the model's own conventions for "this segment is silence" and
+        "this decode is low confidence". They were being computed on every call
+        and discarded — only segment.text was ever read.
+
+        Both must fire. Either alone is noisy: quiet-but-real speech can score a
+        poor logprob, and a confident decode can sit above the no-speech
+        threshold. Requiring both keeps this from eating genuine short turns.
+        """
+        no_speech = metrics.get("no_speech_prob") or {}
+        logprob = metrics.get("avg_logprob") or {}
+        worst_no_speech = no_speech.get("worst")
+        worst_logprob = logprob.get("worst")
+        if worst_no_speech is None or worst_logprob is None:
+            return False
+        return (
+            worst_no_speech >= self.config.get("no_speech_threshold", 0.6)
+            and worst_logprob <= self.config.get("log_prob_threshold", -1.0)
+        )
+
     def _submit_async_partial(self) -> None:
         """Submit partial transcription to background thread (non-blocking)."""
         if len(self.speech_buffer) < self.min_speech_samples:
@@ -695,13 +719,32 @@ class WhisperSession(STTSession):
             # Don't cache language from partials - they're too short for reliable detection
             # Language will be cached from final transcription instead
 
-            # Process segments
+            # Process segments, keeping the confidence signals the model already
+            # computed instead of reading only .text.
+            segment_list = list(segments)
             transcribed_text = ""
-            for segment in segments:
+            for segment in segment_list:
                 transcribed_text += segment.text + " "
             transcribed_text = transcribed_text.strip()
+            _, metrics = _collect_segments(segment_list)
 
             transcription_time = (time.time() - start_time) * 1000
+
+            if transcribed_text and self._looks_hallucinated(metrics):
+                # Whisper invents filler over near-silence — "Thank you.", "You",
+                # "Y'all." — and a partial is the one place that costs real
+                # damage: a barge-in triggers on it, so the agent stops talking
+                # because the model imagined a word. Judged against whisper's OWN
+                # configured thresholds, not invented ones, and applied to
+                # partials only: dropping a partial loses nothing (another
+                # arrives, and the final is decoded separately), whereas dropping
+                # a final would lose the user's turn.
+                print(
+                    f"[WhisperSession] Partial suppressed as hallucination "
+                    f"({audio_duration_sec:.2f}s): '{transcribed_text[:40]}' "
+                    f"no_speech={metrics.get('no_speech_prob')} logprob={metrics.get('avg_logprob')}"
+                )
+                return None
 
             if transcribed_text:
                 print(f"[WhisperSession] Partial ({audio_duration_sec:.2f}s, {transcription_time:.0f}ms): '{transcribed_text[:50]}...'")

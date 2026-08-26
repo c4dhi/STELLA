@@ -162,3 +162,60 @@ def test_collect_segments_handles_no_segments():
     text, metrics = _collect_segments([])
     assert text == ""
     assert metrics["segments"] == 0
+
+
+# ── hallucination suppression ────────────────────────────────────────────────
+
+class _Session:
+    """Just enough of WhisperSession to exercise the predicate."""
+
+    def __init__(self, **config):
+        self.config = config
+
+
+def _session(**config):
+    from providers.whisper_provider import WhisperSession
+    s = _Session(**config)
+    s._looks_hallucinated = WhisperSession._looks_hallucinated.__get__(s)
+    return s
+
+
+def _metrics(no_speech, logprob):
+    return {
+        "no_speech_prob": {"mean": no_speech, "worst": no_speech},
+        "avg_logprob": {"mean": logprob, "worst": logprob},
+    }
+
+
+def test_silence_filler_is_flagged():
+    """The production failure: whisper inventing "Thank you." / "You" over
+    near-silence, which then triggered a barge-in and stopped the agent."""
+    assert _session()._looks_hallucinated(_metrics(0.92, -1.8)) is True
+
+
+def test_confident_speech_is_not_flagged():
+    assert _session()._looks_hallucinated(_metrics(0.02, -0.3)) is False
+
+
+def test_both_signals_must_fire():
+    """Either alone is noisy — quiet-but-real speech can score a poor logprob,
+    and a confident decode can sit above the no-speech threshold. Requiring
+    both is what stops this eating genuine short turns like "ja"."""
+    assert _session()._looks_hallucinated(_metrics(0.92, -0.3)) is False   # silent-ish but confident
+    assert _session()._looks_hallucinated(_metrics(0.02, -1.8)) is False   # unsure but is speech
+
+
+def test_missing_metrics_never_suppress():
+    """No signal is not evidence of hallucination — a decode whose metrics the
+    model did not populate must pass through untouched."""
+    assert _session()._looks_hallucinated({}) is False
+    assert _session()._looks_hallucinated({"no_speech_prob": None, "avg_logprob": None}) is False
+
+
+def test_thresholds_follow_the_configured_ones():
+    """The predicate must track whisper's own configured thresholds rather than
+    carrying its own copies, or tuning one would silently desync the other."""
+    strict = _session(no_speech_threshold=0.99, log_prob_threshold=-5.0)
+    assert strict._looks_hallucinated(_metrics(0.92, -1.8)) is False
+    loose = _session(no_speech_threshold=0.1, log_prob_threshold=-0.1)
+    assert loose._looks_hallucinated(_metrics(0.92, -1.8)) is True

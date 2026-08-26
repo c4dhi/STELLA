@@ -98,6 +98,25 @@ def _latency_status(source: str, elapsed_ms: float) -> str:
 _BARGE_IN_REEVAL_GROWTH_CHARS = 4
 
 
+def _is_continuation(final_text: str, earlier_text: str) -> bool:
+    """True when final_text is the same utterance earlier_text was, extended.
+
+    Partials are not drafts that only ever grow — whisper REVISES. A partial of
+    "You" can finalize as "Mm-hmm.", which is a different utterance with a
+    different meaning, not a longer version of the same one.
+
+    That distinction is what makes a banked decision safe to spend: a verdict
+    computed on "Nein, das ist falsch." still applies to "Nein, das ist falsch.
+    Bitte wechsel..." but must NOT be applied to an unrelated final, or a
+    backchannel inherits a COMMIT and kills the agent's turn.
+    """
+    if not earlier_text:
+        return False
+    final_norm = " ".join(final_text.lower().split())
+    earlier_norm = " ".join(earlier_text.lower().split())
+    return final_norm.startswith(earlier_norm)
+
+
 def _speech_grew(new_text: str, seen_text: str) -> bool:
     """True when new_text carries materially more speech than seen_text.
 
@@ -2412,24 +2431,39 @@ class AudioPipeline:
         self._barge_in_speculative_decision = None
         self._barge_in_latest_text = ""
 
-    async def _take_speculative_decision(self) -> Optional["BargeInDecision"]:
-        """Return a decision already computed for this utterance, if any.
+    async def _take_speculative_decision(self, transcript: str) -> Optional["BargeInDecision"]:
+        """Return a decision already computed for THIS utterance, if any.
 
         If the classifier is still thinking, wait for it rather than starting a
         second request — it has a head start of however long the user kept
         talking, so waiting is strictly faster than asking again. Its own
         wall-clock timeout bounds this.
+
+        A banked verdict is only spent when the final is a continuation of the
+        text it was computed on. Whisper revises partials as often as it extends
+        them, and spending a verdict across a revision is how a COMMIT decided
+        on a hallucinated "You" ends up interrupting the agent for a final of
+        "Mm-hmm.".
         """
-        if self._barge_in_speculative_decision is not None:
-            return self._barge_in_speculative_decision
-        task = self._barge_in_speculative_task
-        if task is None:
+        decision = self._barge_in_speculative_decision
+        if decision is None:
+            task = self._barge_in_speculative_task
+            if task is None:
+                return None
+            try:
+                await task
+            except Exception:
+                return None
+            decision = self._barge_in_speculative_decision
+        if decision is None:
             return None
-        try:
-            await task
-        except Exception:
+        if not _is_continuation(transcript, self._barge_in_speculative_text):
+            logger.info(
+                f"[BARGE-IN] Discarding banked decision — transcript was revised "
+                f"('{self._barge_in_speculative_text[:30]}' -> '{transcript[:30]}')"
+            )
             return None
-        return self._barge_in_speculative_decision
+        return decision
 
     async def _resolve_barge_in(self, transcript: str) -> None:
         """Resolve a suspended barge-in given the user's transcript.
@@ -2448,7 +2482,7 @@ class AudioPipeline:
             # This is the whole point of speculating: by now the classifier has
             # usually finished, so the final transcript is acted on with no
             # further round trip.
-            decision = await self._take_speculative_decision()
+            decision = await self._take_speculative_decision(transcript)
             if decision is not None:
                 logger.info(f"[BARGE-IN] Using banked decision {decision.name} — no extra round trip")
             try:

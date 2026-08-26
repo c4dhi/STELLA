@@ -348,3 +348,41 @@ async def test_continued_speech_after_a_dismissal_does_re_arm():
     assert len(calls) == 2                       # re-armed on the new speech
     assert pipe._barge_in_active is True         # suspended again
     assert pipe._play_allowed.is_set() is False  # and staying quiet
+
+
+# ── revision vs. extension ───────────────────────────────────────────────────
+
+def test_continuation_accepts_an_extension_and_rejects_a_revision():
+    from stella_agent_sdk.audio.pipeline import _is_continuation
+    # Extension — the verdict still describes this utterance.
+    assert _is_continuation("Nein, das ist falsch. Bitte wechsel auf Deutsch.",
+                            "Nein, das ist falsch.") is True
+    # Revision — whisper replaced the text outright. Observed in production:
+    # a partial of "You" finalized as "Mm-hmm.".
+    assert _is_continuation("Mm-hmm.", "You") is False
+    assert _is_continuation("anything", "") is False
+
+
+@pytest.mark.asyncio
+async def test_revised_transcript_does_not_inherit_a_banked_commit():
+    """Production regression: a COMMIT decided on a hallucinated partial ("You")
+    was spent on the final ("Mm-hmm."), so a backchannel killed the agent's
+    turn. A revised final must be re-classified, not inherit the verdict."""
+    calls = []
+    decisions = {"You": BargeInDecision.COMMIT, "Mm-hmm.": BargeInDecision.RESUME}
+
+    async def _decider(text):
+        calls.append(text)
+        return decisions.get(text, BargeInDecision.COMMIT)
+
+    pipe = make_pipeline(_decider)
+    pipe.suspend_speech()
+    pipe._maybe_speculate_barge_in("You")
+    await pipe._barge_in_speculative_task
+    assert pipe._barge_in_speculative_decision == BargeInDecision.COMMIT
+
+    await pipe._resolve_barge_in("Mm-hmm.")
+
+    assert calls == ["You", "Mm-hmm."]           # re-classified on the real final
+    assert pipe._pending_barge_in is None        # NOT committed
+    assert pipe._play_allowed.is_set() is True   # agent kept talking
