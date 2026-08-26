@@ -1327,6 +1327,18 @@ export interface MetricsSummary {
   bridgeGeneration: { totalBridges: number; avgBridgeDuration_ms: number } | null
   bridgeDuration: { count: number; avg_ms: number } | null
   ttfr: { count: number; avg_ms: number } | null
+  /** STT decode diagnostics; null unless STT_DECODE_DIAGNOSTICS is enabled. */
+  sttDecode: {
+    totalTurns: number
+    avgSilenceFraction: number | null
+    avgNoSpeechWorst: number | null
+    avgLogprobWorst: number | null
+    shadowTurns: number
+    shadowAgreementRate: number | null
+    avgShadowEarlier_ms: number | null
+    partialTurns: number
+    partialAgreementRate: number | null
+  } | null
 }
 
 export interface AgentMetricsResponse {

@@ -54,6 +54,22 @@ export class MetricsSummaryDto {
     count: number;
     avg_ms: number;
   } | null;
+  /**
+   * STT decode diagnostics. Null unless the STT service is running with
+   * STT_DECODE_DIAGNOSTICS enabled — this is investigation instrumentation,
+   * not a metric every deployment produces.
+   */
+  sttDecode: {
+    totalTurns: number;
+    avgSilenceFraction: number | null;
+    avgNoSpeechWorst: number | null;
+    avgLogprobWorst: number | null;
+    shadowTurns: number;
+    shadowAgreementRate: number | null;
+    avgShadowEarlier_ms: number | null;
+    partialTurns: number;
+    partialAgreementRate: number | null;
+  } | null;
 }
 
 export class AgentMetricsResponseDto {

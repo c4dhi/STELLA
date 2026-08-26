@@ -1146,6 +1146,16 @@ export class AgentsService {
     const ttfabTimings: number[] = [];
     const bridgeDurationTimings: number[] = [];
     const ttfrTimings: number[] = [];
+    // STT decode diagnostics — only present when the STT service runs with
+    // STT_DECODE_DIAGNOSTICS on, so every field here stays optional.
+    const decodeEvents: Array<{
+      silenceFraction?: number;
+      noSpeechWorst?: number;
+      logprobWorst?: number;
+      shadowIdentical?: boolean;
+      shadowEarlierMs?: number;
+      partialIdentical?: boolean;
+    }> = [];
 
     for (const msg of messages) {
       const data = this.extractFullMetadata(msg.metadata);
@@ -1194,6 +1204,17 @@ export class AgentsService {
           if (typeof data.elapsed_ms === 'number') {
             bridgeDurationTimings.push(data.elapsed_ms);
           }
+          break;
+        case 'stt_decode':
+          decodeEvents.push({
+            silenceFraction: typeof data.silence_fraction === 'number' ? data.silence_fraction : undefined,
+            noSpeechWorst: typeof data.no_speech_prob_worst === 'number' ? data.no_speech_prob_worst : undefined,
+            logprobWorst: typeof data.avg_logprob_worst === 'number' ? data.avg_logprob_worst : undefined,
+            shadowIdentical: typeof data.shadow_identical === 'boolean' ? data.shadow_identical : undefined,
+            shadowEarlierMs:
+              typeof data.shadow_available_earlier_ms === 'number' ? data.shadow_available_earlier_ms : undefined,
+            partialIdentical: typeof data.partial_identical === 'boolean' ? data.partial_identical : undefined,
+          });
           break;
         case 'response_tts_first_byte':
           if (typeof data.elapsed_ms === 'number') {
@@ -1254,6 +1275,35 @@ export class AgentsService {
           (ttfrTimings.reduce((s, v) => s + v, 0) / ttfrTimings.length) * 100,
         ) / 100,
       } : null,
+
+      sttDecode: decodeEvents.length > 0 ? (() => {
+        const mean = (values: number[]) =>
+          values.length > 0 ? Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 10000) / 10000 : null;
+        const defined = <T>(values: Array<T | undefined>): T[] =>
+          values.filter((v): v is T => v !== undefined);
+
+        const shadow = defined(decodeEvents.map((e) => e.shadowIdentical));
+        const partial = defined(decodeEvents.map((e) => e.partialIdentical));
+        const earlier = defined(decodeEvents.map((e) => e.shadowEarlierMs));
+
+        return {
+          totalTurns: decodeEvents.length,
+          avgSilenceFraction: mean(defined(decodeEvents.map((e) => e.silenceFraction))),
+          // Worst-case per turn, averaged: a turn is suspicious if ANY segment
+          // scored badly, so averaging the per-turn worst is the right rollup.
+          avgNoSpeechWorst: mean(defined(decodeEvents.map((e) => e.noSpeechWorst))),
+          avgLogprobWorst: mean(defined(decodeEvents.map((e) => e.logprobWorst))),
+          // The decision number: how often the decode available a continuation
+          // window earlier already matched what we shipped.
+          shadowTurns: shadow.length,
+          shadowAgreementRate:
+            shadow.length > 0 ? Math.round((shadow.filter(Boolean).length / shadow.length) * 10000) / 10000 : null,
+          avgShadowEarlier_ms: mean(earlier),
+          partialTurns: partial.length,
+          partialAgreementRate:
+            partial.length > 0 ? Math.round((partial.filter(Boolean).length / partial.length) * 10000) / 10000 : null,
+        };
+      })() : null,
     };
   }
 
@@ -1308,6 +1358,7 @@ export class AgentsService {
           bridgeGeneration: null,
           bridgeDuration: null,
           ttfr: null,
+          sttDecode: null,
         },
       };
     }

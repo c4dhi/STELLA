@@ -7,15 +7,135 @@ Follows industry best practices (LiveKit, OpenAI Realtime, Deepgram, Pipecat):
 - Configurable endpointing delays for conversational speech
 """
 
+import difflib
+import json
 import os
+import re
 import time
+import unicodedata
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, Future
 import numpy as np
 
 from .base import STTProvider, STTSession
 import stt_pb2
+
+# ── Decode diagnostics (STT_DECODE_DIAGNOSTICS) ──────────────────────────────
+# Logging-only instrumentation for the endpointing/hallucination investigation.
+# Off by default; when on, each turn emits one `[Diag] {json}` line comparing
+# the decodes we could have used against the one we actually shipped:
+#
+#   final    — what we ship today: the full buffer, INCLUDING the ~1.1s of
+#              trailing silence accumulated through the silence + continuation
+#              windows.
+#   shadow   — the same utterance decoded at MAYBE_ENDING entry, i.e. ~600ms
+#              earlier. Complete speech, less trailing silence.
+#   partial  — the last in-flight partial, snapshotted while the user was still
+#              speaking, so structurally missing the tail.
+#   trimmed  — the final's audio with trailing silence removed, decoded after
+#              the fact. Isolates silence padding as a hallucination cause.
+#
+# The point of the comparison is that all four run identical decode parameters,
+# so any disagreement is attributable to the audio window, not to sampling.
+
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+
+# Bounded so a stuck shadow decode can never hold up a real turn. It is queued a
+# continuation window before the final needs it, so this should never be hit.
+_SHADOW_WAIT_TIMEOUT_S = 2.0
+
+
+def _normalize_for_compare(text: str) -> str:
+    r"""Casefold, drop punctuation, collapse whitespace.
+
+    Deliberately script-agnostic: unicodedata + ``\w`` rather than any
+    per-language table, so the comparison behaves identically in every language
+    the model transcribes.
+
+    NFKC, not NFKD. Decomposing splits a combining mark off its base character
+    (Cyrillic й -> и + U+0306, German ä -> a + U+0308), and ``\w`` does not
+    match combining marks — so NFKD silently tore words in half in every script
+    that uses them, inflating the difference rate for exactly the non-English
+    turns this investigation cares about.
+    """
+    if not text:
+        return ""
+    composed = unicodedata.normalize("NFKC", text)
+    return " ".join(_WORD_RE.findall(composed.casefold()))
+
+
+def _text_delta(candidate: str, reference: str) -> dict:
+    """Compare a candidate decode against the reference (the shipped final).
+
+    ``similarity`` is over normalized text so casing and punctuation don't count
+    as differences — we care whether the words match, not the formatting.
+    """
+    c_norm, r_norm = _normalize_for_compare(candidate), _normalize_for_compare(reference)
+    c_words, r_words = c_norm.split(), r_norm.split()
+    return {
+        "text": candidate,
+        "identical": c_norm == r_norm,
+        "similarity": round(difflib.SequenceMatcher(None, c_norm, r_norm).ratio(), 4),
+        "words": len(c_words),
+        "word_delta": len(c_words) - len(r_words),
+        # A candidate that is a strict prefix of the reference is the truncation
+        # signature (the tail was missing), as opposed to a differing decode.
+        "is_prefix_of_reference": bool(c_norm) and r_norm.startswith(c_norm) and c_norm != r_norm,
+    }
+
+
+def _collect_segments(segments) -> Tuple[str, dict]:
+    """Drain a faster-whisper segment generator into text + confidence metrics.
+
+    ``avg_logprob`` and ``no_speech_prob`` are the signals that separate a real
+    short utterance from a hallucinated one over near-silence. The live path
+    reads only ``.text`` and drops both; this keeps them.
+
+    Worst values (not means) are reported alongside the means, because a single
+    bad segment is what a hallucination looks like in a multi-segment decode.
+    """
+    texts, logprobs, no_speech, compression = [], [], [], []
+    for seg in segments:
+        texts.append(seg.text)
+        for attr, sink in (
+            ("avg_logprob", logprobs),
+            ("no_speech_prob", no_speech),
+            ("compression_ratio", compression),
+        ):
+            value = getattr(seg, attr, None)
+            if value is not None:
+                sink.append(float(value))
+
+    def _stats(values, worst):
+        if not values:
+            return None
+        return {"mean": round(sum(values) / len(values), 4), "worst": round(worst(values), 4)}
+
+    return "".join(texts).strip(), {
+        "segments": len(texts),
+        # Worst = lowest confidence / highest silence-likelihood / most repetitive.
+        "avg_logprob": _stats(logprobs, min),
+        "no_speech_prob": _stats(no_speech, max),
+        "compression_ratio": _stats(compression, max),
+    }
+
+
+def _trailing_silence_samples(samples: np.ndarray, rms_threshold: float, frame: int = 512) -> int:
+    """Count trailing samples that are below the RMS gate.
+
+    Uses the same energy gate the VAD path already applies, so "silence" here
+    means the same thing it means everywhere else in this file.
+    """
+    if samples.size == 0:
+        return 0
+    silent = 0
+    for start in range(samples.size - frame, -1, -frame):
+        window = samples[start:start + frame].astype(np.float32) / 32768.0
+        if float(np.sqrt(np.mean(window ** 2))) >= rms_threshold:
+            break
+        silent += frame
+    return min(silent, samples.size)
 
 # Try to import faster-whisper
 try:
@@ -125,6 +245,19 @@ class WhisperSession(STTSession):
 
         # Processing state
         self.chunk_count = 0
+
+        # ── Decode diagnostics (logging only, see module header) ──
+        self.diagnostics_enabled = bool(config.get('decode_diagnostics', False))
+        # The shadow decode shares the partial executor on purpose. It is a
+        # single worker, so every whisper call on this session stays serialized
+        # — the same property _generate_final already relies on when it drains
+        # pending_partial_future before decoding. A second executor would put
+        # two decodes on the model at once, which nothing here establishes as
+        # safe.
+        self.pending_shadow_future: Optional[Future] = None
+        self.shadow_result: Optional[dict] = None
+        self.shadow_submitted_at = 0.0
+        self.last_partial_snapshot = ""
 
     def set_language_hint(self, language: Optional[str]) -> None:
         """Pin transcription to a language (opt-in; forwarded from ``AudioChunk.language``).
@@ -257,6 +390,11 @@ class WhisperSession(STTSession):
             if self.pending_partial_future is not None and self.pending_partial_future.done():
                 try:
                     partial_text = self.pending_partial_future.result()
+                    if partial_text:
+                        # Keep the newest partial regardless of whether it is
+                        # emitted; the dedup below governs emission, not what the
+                        # diagnostics compare against.
+                        self.last_partial_snapshot = partial_text
                     if partial_text and partial_text != self.last_partial_text:
                         self.last_partial_text = partial_text
                         # Only emit if we're still in SPEAKING/MAYBE_ENDING and same transcript
@@ -334,6 +472,7 @@ class WhisperSession(STTSession):
                     if silence_ms >= self.silence_duration_ms:
                         self.state = "MAYBE_ENDING"
                         self.pending_final_time = current_time
+                        self._submit_shadow_decode()
                 elif self.state == "MAYBE_ENDING":
                     self._accumulate_speech(audio_int16)
                     time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
@@ -407,6 +546,10 @@ class WhisperSession(STTSession):
                         print(f"[WhisperSession] Entering MAYBE_ENDING ({silence_ms:.0f}ms silence)")
                         self.state = "MAYBE_ENDING"
                         self.pending_final_time = current_time
+                        # Speech buffer is complete here (the user has been quiet
+                        # for silence_duration_ms), so this decode is a candidate
+                        # final, not a partial. Diagnostics-gated; no-op when off.
+                        self._submit_shadow_decode()
                         # Don't emit final yet - wait for continuation window
 
                 elif self.state == "MAYBE_ENDING":
@@ -431,6 +574,71 @@ class WhisperSession(STTSession):
             print(f"[WhisperSession] VAD error: {e}")
 
         return events
+
+    def _decode_with_metrics(self, audio_float: np.ndarray) -> Tuple[str, dict]:
+        """Decode audio and return its text plus the confidence signals.
+
+        Same parameters as the live final path, so results are comparable. The
+        per-segment ``avg_logprob``/``no_speech_prob``/``compression_ratio`` are
+        the standard hallucination discriminators — the model computes them
+        either way, and reading them costs nothing.
+        """
+        segments, info = self.whisper_model.transcribe(
+            audio_float,
+            language=self._forced_language(),
+            beam_size=self.config.get('beam_size', 5),
+            vad_filter=False,
+            word_timestamps=False,
+            condition_on_previous_text=False,
+            initial_prompt=self.config.get('initial_prompt'),
+            temperature=0.0,
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+        )
+        text, metrics = _collect_segments(segments)
+        metrics["duration_sec"] = round(float(audio_float.size) / 16000, 3)
+        metrics["language"] = getattr(info, 'language', None) or ""
+        metrics["language_probability"] = round(float(getattr(info, 'language_probability', 0.0) or 0.0), 4)
+        return text, metrics
+
+    def _shadow_worker(self, audio_buffer: list) -> Optional[dict]:
+        """Decode the complete utterance at MAYBE_ENDING entry (diagnostics only).
+
+        By the time this runs the user has been silent for silence_duration_ms,
+        so the speech buffer is complete — this is not a truncated partial. It
+        exists to answer whether the continuation window could be overlapped
+        with the decode instead of spent waiting.
+        """
+        started = time.time()
+        try:
+            audio_samples = np.array(audio_buffer, dtype=np.int16)
+            audio_float = self._preprocess_audio(audio_samples.astype(np.float32) / 32768.0)
+            text, metrics = self._decode_with_metrics(audio_float)
+            metrics["decode_ms"] = round((time.time() - started) * 1000, 1)
+            return {"text": text, "metrics": metrics}
+        except Exception as e:
+            print(f"[WhisperSession] Shadow decode error: {e}")
+            return None
+
+    def _submit_shadow_decode(self) -> None:
+        """Queue the shadow decode on entering MAYBE_ENDING. Never blocks."""
+        if not self.diagnostics_enabled:
+            return
+        if self.pending_shadow_future is not None or self.pending_partial_future is not None:
+            # A decode is already queued on the single worker; adding another
+            # would only measure queueing delay, not decode latency.
+            return
+        if len(self.speech_buffer) < self.min_speech_samples:
+            return
+        try:
+            self.shadow_submitted_at = time.time()
+            self.pending_shadow_future = self.transcription_executor.submit(
+                self._shadow_worker, self.speech_buffer.copy()
+            )
+        except Exception as e:
+            print(f"[WhisperSession] Shadow submit error: {e}")
+            self.pending_shadow_future = None
 
     def _submit_async_partial(self) -> None:
         """Submit partial transcription to background thread (non-blocking)."""
@@ -516,12 +724,31 @@ class WhisperSession(STTSession):
         # Wait for any pending async partial to complete (with timeout)
         if self.pending_partial_future is not None:
             try:
-                self.pending_partial_future.result(timeout=2.0)
+                partial_result = self.pending_partial_future.result(timeout=2.0)
+                if partial_result:
+                    # Previously dropped on the floor. Kept so diagnostics can
+                    # compare the last partial against the shipped final.
+                    self.last_partial_snapshot = partial_result
             except Exception:
                 pass  # Ignore errors, we're generating final anyway
             finally:
                 self.pending_partial_future = None
                 self.pending_partial_transcript_id = None
+
+        # Drain the shadow decode queued on entering MAYBE_ENDING. It shares the
+        # single worker with partials and was submitted a continuation window
+        # ago, so it is normally already done. The wait is bounded regardless:
+        # instrumentation must not be able to stall a real turn.
+        self.shadow_result, shadow_wait_ms = None, 0.0
+        if self.pending_shadow_future is not None:
+            waited_from = time.time()
+            try:
+                self.shadow_result = self.pending_shadow_future.result(timeout=_SHADOW_WAIT_TIMEOUT_S)
+            except Exception as e:
+                print(f"[WhisperSession] Shadow decode unavailable: {e}")
+            finally:
+                shadow_wait_ms = (time.time() - waited_from) * 1000
+                self.pending_shadow_future = None
 
         self.is_transcribing = True
         start_time = time.time()
@@ -578,10 +805,15 @@ class WhisperSession(STTSession):
                       f"(conf={language_confidence:.2f}, "
                       f"{'pinned' if language else 'auto'}, {audio_duration_sec:.1f}s)")
 
+            # Materialize once: the shipped text is built exactly as before, and
+            # the confidence metrics are read off the same segments rather than
+            # from a second pass.
+            segment_list = list(segments)
             final_text = ""
-            for segment in segments:
+            for segment in segment_list:
                 final_text += segment.text + " "
             final_text = final_text.strip()
+            _, final_metrics = _collect_segments(segment_list)
 
             if not final_text or len(final_text) < 2:
                 return None
@@ -598,6 +830,16 @@ class WhisperSession(STTSession):
             self.last_final_text = final_text
             self.last_final_time = current_time
 
+            diagnostics_json = ""
+            if self.diagnostics_enabled:
+                diagnostics_json = self._log_decode_diagnostics(
+                    final_text=final_text,
+                    final_metrics=final_metrics,
+                    final_decode_ms=transcription_time,
+                    audio_samples=audio_samples,
+                    shadow_wait_ms=shadow_wait_ms,
+                )
+
             return stt_pb2.TranscriptEvent(
                 text=final_text,
                 is_final=True,
@@ -607,6 +849,7 @@ class WhisperSession(STTSession):
                 timestamp_ms=int(current_time * 1000),
                 detected_language=detected_language or "",
                 language_confidence=language_confidence,
+                decode_diagnostics=diagnostics_json,
             )
 
         except Exception as e:
@@ -618,6 +861,111 @@ class WhisperSession(STTSession):
         finally:
             self.is_transcribing = False
             self._clear_gpu_memory()
+
+    def _log_decode_diagnostics(
+        self,
+        final_text: str,
+        final_metrics: dict,
+        final_decode_ms: float,
+        audio_samples: np.ndarray,
+        shadow_wait_ms: float,
+    ) -> str:
+        """Emit one `[Diag] {json}` line per turn, then queue the trimmed decode.
+
+        Returns the same record as a JSON string so it can ride out on the
+        transcript event and reach the session metrics UI; "" on any failure.
+
+        Everything here is wrapped: a diagnostics failure must never take down a
+        turn that already produced a good transcript.
+        """
+        try:
+            trailing = _trailing_silence_samples(audio_samples, self.rms_threshold)
+            total = int(audio_samples.size)
+            speech = max(total - trailing, 0)
+
+            record = {
+                "session": self.session_id,
+                "transcript_id": self.transcript_id,
+                "audio": {
+                    "total_sec": round(total / 16000, 3),
+                    "speech_sec": round(speech / 16000, 3),
+                    "trailing_silence_sec": round(trailing / 16000, 3),
+                    # The hallucination suspect: how much of what whisper saw was
+                    # silence. Expected to be worst on short acknowledgements.
+                    "silence_fraction": round(trailing / total, 4) if total else None,
+                },
+                "final": {
+                    "text": final_text,
+                    "decode_ms": round(final_decode_ms, 1),
+                    "words": len(_normalize_for_compare(final_text).split()),
+                    **final_metrics,
+                },
+                "shadow_wait_ms": round(shadow_wait_ms, 1),
+            }
+
+            if self.shadow_result:
+                record["shadow"] = {
+                    **_text_delta(self.shadow_result.get("text", ""), final_text),
+                    "metrics": self.shadow_result.get("metrics"),
+                    # How much earlier the shadow was ready. This is the latency
+                    # the continuation window could give back if shadow == final.
+                    "available_earlier_ms": round(
+                        max((time.time() - self.shadow_submitted_at) * 1000 - shadow_wait_ms, 0), 1
+                    ),
+                }
+
+            if self.last_partial_snapshot:
+                # Expected to be a strict prefix of the final — partials are
+                # snapshotted mid-speech, so they miss the tail by construction.
+                record["last_partial"] = _text_delta(self.last_partial_snapshot, final_text)
+
+            print(f"[Diag] {json.dumps(record, ensure_ascii=False)}", flush=True)
+            shipped = json.dumps(record, ensure_ascii=False)
+
+            # Trimmed decode runs AFTER the final has been handed back, so it
+            # costs the live turn nothing. Correlate by transcript_id.
+            if trailing > 0 and speech >= self.min_speech_samples:
+                self.transcription_executor.submit(
+                    self._trimmed_worker,
+                    audio_samples[:speech].copy(),
+                    final_text,
+                    self.transcript_id,
+                    record["audio"],
+                )
+            return shipped
+        except Exception as e:
+            print(f"[WhisperSession] Diagnostics error (ignored): {e}")
+            return ""
+
+    def _trimmed_worker(
+        self, samples: np.ndarray, reference: str, transcript_id: Optional[str], audio_info: dict
+    ) -> None:
+        """Re-decode the utterance with trailing silence removed (diagnostics).
+
+        If this consistently agrees with the final on long turns but *disagrees*
+        on short ones — where it kills a hallucination the padded decode
+        produced — then trimming is the fix and no rerun is needed.
+        """
+        started = time.time()
+        try:
+            audio_float = self._preprocess_audio(samples.astype(np.float32) / 32768.0)
+            text, metrics = self._decode_with_metrics(audio_float)
+            metrics["decode_ms"] = round((time.time() - started) * 1000, 1)
+            print(
+                "[DiagTrim] "
+                + json.dumps(
+                    {
+                        "session": self.session_id,
+                        "transcript_id": transcript_id,
+                        "audio": audio_info,
+                        "trimmed": {**_text_delta(text, reference), "metrics": metrics},
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[WhisperSession] Trimmed decode error (ignored): {e}")
 
     def _reset(self) -> None:
         """Reset state for next utterance."""
@@ -636,6 +984,13 @@ class WhisperSession(STTSession):
         self.pending_partial_future = None
         self.pending_partial_transcript_id = None
         self.last_partial_text = ""
+
+        # Clear diagnostics state (the futures are fire-and-forget; dropping the
+        # handle just stops the next turn from reading a stale result).
+        self.pending_shadow_future = None
+        self.shadow_result = None
+        self.shadow_submitted_at = 0.0
+        self.last_partial_snapshot = ""
 
         # Reset Silero VAD internal state (critical for accurate detection)
         try:
@@ -693,6 +1048,11 @@ class WhisperProvider(STTProvider):
         # 0.008 = -42dB (permissive), 0.01 = -40dB (moderate), 0.02 = -34dB (strict)
         self.rms_threshold = float(os.getenv("VAD_RMS_THRESHOLD", "0.008"))
 
+        # Decode diagnostics: logging only, OFF by default. When on, each turn
+        # runs extra decodes (shadow + trimmed) on the same single worker, which
+        # costs GPU time — so this is an investigation switch, not a default.
+        self.decode_diagnostics = os.getenv("STT_DECODE_DIAGNOSTICS", "0").lower() in ("1", "true", "yes", "on")
+
         print(f"[WhisperProvider] Config: model={self.model_size}, device={self.device}, "
               f"compute_type={self.compute_type}, language={self.language or 'auto'}")
         print(f"[WhisperProvider] VAD (3-state): threshold={self.vad_threshold}, "
@@ -701,6 +1061,8 @@ class WhisperProvider(STTProvider):
         print(f"[WhisperProvider] VAD limits: min_speech_ms={self.min_speech_ms}, "
               f"max_duration_ms={self.max_speech_duration_ms}, inactivity_ms={self.audio_inactivity_timeout_ms}")
         print(f"[WhisperProvider] RMS energy gate: threshold={self.rms_threshold} (-{int(20*np.log10(self.rms_threshold))}dB)")
+        if self.decode_diagnostics:
+            print("[WhisperProvider] Decode diagnostics ENABLED — extra shadow/trimmed decodes per turn")
 
     @property
     def name(self) -> str:
@@ -861,6 +1223,7 @@ class WhisperProvider(STTProvider):
             'audio_inactivity_timeout_ms': self.audio_inactivity_timeout_ms,
             'pre_buffer_samples': 3200,  # 200ms fixed
             'rms_threshold': self.rms_threshold,
+            'decode_diagnostics': self.decode_diagnostics,
         }
 
         return WhisperSession(

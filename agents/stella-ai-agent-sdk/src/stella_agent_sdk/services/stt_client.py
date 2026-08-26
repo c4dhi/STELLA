@@ -31,6 +31,10 @@ class TranscriptEvent:
     # True when this transcript was produced by a committed barge-in and is
     # being injected as a new turn (set by the pipeline, not the STT service).
     is_barge_in: bool = False
+    # Raw JSON from the STT decode-diagnostics pass; "" unless the STT service
+    # has STT_DECODE_DIAGNOSTICS enabled. Forwarded verbatim — the SDK does not
+    # interpret the schema, it only surfaces it for analytics.
+    decode_diagnostics: str = ""
 
     @classmethod
     def from_proto(cls, proto) -> "TranscriptEvent":
@@ -45,6 +49,7 @@ class TranscriptEvent:
             speech_started=proto.speech_started,
             detected_language=getattr(proto, "detected_language", "") or "",
             language_confidence=getattr(proto, "language_confidence", 0.0) or 0.0,
+            decode_diagnostics=getattr(proto, "decode_diagnostics", "") or "",
         )
 
 

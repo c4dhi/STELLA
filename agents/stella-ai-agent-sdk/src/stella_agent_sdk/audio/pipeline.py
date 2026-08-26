@@ -92,6 +92,67 @@ def _latency_status(source: str, elapsed_ms: float) -> str:
     return "ok"
 
 
+def _decode_diagnostic_fields(raw: str) -> dict:
+    """Flatten the STT decode-diagnostics JSON into analytics event fields.
+
+    The STT service ships a nested record; the analytics pipeline aggregates
+    flat keys off ``data.<name>``, so nesting would mean a bespoke aggregator.
+    Unknown or malformed input yields {} — diagnostics must never be able to
+    break a turn, and they are absent entirely unless the STT service has them
+    switched on.
+    """
+    if not raw:
+        return {}
+    try:
+        record = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(record, dict):
+        return {}
+
+    fields: dict = {}
+
+    def _put(key, value, cast=float):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            fields[key] = cast(value)
+
+    def _section(name):
+        # `or {}` is not enough: a truthy non-dict (a string, a list) would sail
+        # through and blow up on .get inside a live turn.
+        value = record.get(name)
+        return value if isinstance(value, dict) else {}
+
+    audio = _section("audio")
+    _put("silence_fraction", audio.get("silence_fraction"))
+    _put("speech_sec", audio.get("speech_sec"))
+    _put("total_sec", audio.get("total_sec"))
+
+    final = _section("final")
+    _put("final_decode_ms", final.get("decode_ms"))
+    _put("final_words", final.get("words"), int)
+    for name in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+        stats = final.get(name)
+        if isinstance(stats, dict):
+            _put(f"{name}_worst", stats.get("worst"))
+            _put(f"{name}_mean", stats.get("mean"))
+
+    # The two comparisons the investigation turns on: could we have shipped the
+    # earlier decode (shadow), and how much does the mid-speech partial miss.
+    for source, prefix in (("shadow", "shadow"), ("last_partial", "partial")):
+        block = record.get(source)
+        if not isinstance(block, dict):
+            continue
+        if isinstance(block.get("identical"), bool):
+            fields[f"{prefix}_identical"] = block["identical"]
+        if isinstance(block.get("is_prefix_of_reference"), bool):
+            fields[f"{prefix}_is_prefix"] = block["is_prefix_of_reference"]
+        _put(f"{prefix}_similarity", block.get("similarity"))
+        _put(f"{prefix}_word_delta", block.get("word_delta"), int)
+        _put(f"{prefix}_available_earlier_ms", block.get("available_earlier_ms"))
+
+    return fields
+
+
 # TTS output format (matches RoomManager's AudioSource and the TTS service).
 _TTS_SAMPLE_RATE = 24000
 _BYTES_PER_SAMPLE = 2  # 16-bit mono PCM
@@ -1060,6 +1121,17 @@ class AudioPipeline:
                 if self._turn_stt_start_ts > 0:
                     vad_elapsed = (self._turn_stt_start_ts - self._turn_stt_end_ts) * 1000  # negative
                     asyncio.create_task(self._emit_analytics_event("vad_trigger", vad_elapsed))
+
+                # Decode diagnostics, when the STT service is running with them
+                # on. Flattened here rather than shipped as nested JSON so the
+                # backend aggregator stays a flat switch like every other stage.
+                decode_fields = _decode_diagnostic_fields(
+                    getattr(event, "decode_diagnostics", "")
+                )
+                if decode_fields:
+                    asyncio.create_task(
+                        self._emit_analytics_event("stt_decode", 0.0, **decode_fields)
+                    )
 
                 # Discard finals while agent is speaking
                 if self._transcript_gate_closed:

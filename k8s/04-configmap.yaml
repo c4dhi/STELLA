@@ -70,6 +70,10 @@ data:
   VAD_AUDIO_INACTIVITY_TIMEOUT_MS: "${VAD_AUDIO_INACTIVITY_TIMEOUT_MS}" # Force endpoint on no audio (default 1500ms)
   VAD_RMS_THRESHOLD: "${VAD_RMS_THRESHOLD}"                      # Energy gate threshold (default 0.008)
   PARTIAL_INTERVAL_MS: "${PARTIAL_INTERVAL_MS}"                  # Partial transcript interval (default 1000ms)
+  # Decode diagnostics: logging + per-turn metrics on the transcript event.
+  # Costs extra GPU decodes per turn — investigation switch, leave unset/0 in
+  # steady state. Set to 1 to populate the STT cards in the metrics modal.
+  STT_DECODE_DIAGNOSTICS: "${STT_DECODE_DIAGNOSTICS}"            # 0 (default) or 1
   WHISPER_INITIAL_PROMPT: "${WHISPER_INITIAL_PROMPT}"            # Domain context prompt for improved accuracy
 
   # Text-to-Speech (TTS) Provider

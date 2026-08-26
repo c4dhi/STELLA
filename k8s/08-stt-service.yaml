@@ -250,6 +250,12 @@ spec:
               name: stella-ai-config
               key: PARTIAL_INTERVAL_MS
               optional: true
+        - name: STT_DECODE_DIAGNOSTICS
+          valueFrom:
+            configMapKeyRef:
+              name: stella-ai-config
+              key: STT_DECODE_DIAGNOSTICS
+              optional: true
         - name: WHISPER_INITIAL_PROMPT
           valueFrom:
             configMapKeyRef:

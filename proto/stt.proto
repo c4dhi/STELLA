@@ -59,4 +59,11 @@ message TranscriptEvent {
   string detected_language = 8;    // ISO 639-1 language detected for this utterance
                                    // (independent probe, final events only)
   float language_confidence = 9;   // Detection confidence (0.0-1.0); 0 when absent
+  string decode_diagnostics = 10;  // JSON blob of decode confidence + comparison
+                                   // metrics for a final event. Empty unless
+                                   // STT_DECODE_DIAGNOSTICS is on. Carried as
+                                   // JSON, not typed fields, because which
+                                   // metrics matter is exactly what the
+                                   // investigation is still deciding — the
+                                   // schema would churn every iteration.
 }
