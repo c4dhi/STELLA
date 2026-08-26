@@ -1,6 +1,11 @@
 grpcio>=1.83.0
 grpcio-tools>=1.60.0
 sherpa-onnx>=1.12.0
-numpy>=2.5.1
+# Upper bound is the GPU image's Python, not a preference. base-gpu is
+# nvidia/cuda:12.4.1 on ubuntu22.04 with python3.11 from deadsnakes, and numpy
+# 2.5.x declares Requires-Python >=3.12 — so >=2.5.1 makes `pip install` fail
+# outright there. 2.4.6 is the newest release that still builds for 3.11.
+# Raise this only together with the interpreter in stt-service/Dockerfile.
+numpy>=2.0.0,<2.5
 scipy>=1.11.0
 python-dotenv>=1.2.2

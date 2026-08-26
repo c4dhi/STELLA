@@ -47,6 +47,16 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    ignore:
+      # numpy 2.5 raised its floor to Python >=3.12. stt-service's GPU image is
+      # nvidia/cuda on ubuntu22.04 with python3.11, so `numpy>=2.5.1` (merged
+      # 2026-07-30) made `pip install -r requirements.txt` fail outright — and,
+      # like the nvidia/cuda bump above, it stayed invisible until the next
+      # rebuild weeks later. requirements.txt carries the matching <2.5 bound.
+      # Lift both together with the interpreter, never on its own.
+      - dependency-name: "numpy"
+        versions:
+          - ">=2.5"
     groups:
       pip-minor-and-patch:
         applies-to: version-updates
