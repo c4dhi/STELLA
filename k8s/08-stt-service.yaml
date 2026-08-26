@@ -250,6 +250,12 @@ spec:
               name: stella-ai-config
               key: PARTIAL_INTERVAL_MS
               optional: true
+        - name: BARGE_IN_MIN_SPEECH_MS
+          valueFrom:
+            configMapKeyRef:
+              name: stella-ai-config
+              key: BARGE_IN_MIN_SPEECH_MS
+              optional: true
         - name: STT_DECODE_DIAGNOSTICS
           valueFrom:
             configMapKeyRef:

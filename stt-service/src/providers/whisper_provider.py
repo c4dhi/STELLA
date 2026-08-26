@@ -197,6 +197,12 @@ class WhisperSession(STTSession):
         self.max_speech_duration_ms = config.get('max_speech_duration_ms', 30000)
         self.partial_interval_ms = config.get('partial_interval_ms', 1000)
         self.audio_inactivity_timeout_ms = config.get('audio_inactivity_timeout_ms', 1500)
+        # Barge-in: how much CONTINUOUS voiced audio makes an utterance an
+        # interruption rather than a backchannel. This is the whole barge-in
+        # decision — see _check_speech_activity. A backchannel ("mhm", "ja",
+        # "aha") is acoustically short in every language, so duration separates
+        # it from a real interruption without any text, model or word list.
+        self.barge_in_min_speech_ms = config.get('barge_in_min_speech_ms', 600)
 
         # RMS energy gate (filters quiet background noise before VAD)
         # RMS threshold of 0.01 = -40dB, typical for speech vs ambient noise
@@ -213,6 +219,12 @@ class WhisperSession(STTSession):
 
         # Continuation window state (for MAYBE_ENDING)
         self.pending_final_time = None  # When we entered MAYBE_ENDING state
+
+        # Barge-in signal state. `voiced_samples` counts only frames that passed
+        # BOTH the RMS gate and VAD, so silence inside an utterance does not
+        # inflate it — 600ms here means 600ms of actual voice.
+        self.voiced_samples = 0
+        self.barge_in_signalled = False
 
         # Transcription state (prevent concurrent transcriptions)
         self.is_transcribing = False
@@ -524,6 +536,29 @@ class WhisperSession(STTSession):
 
                 # Accumulate audio (with buffer limits)
                 self._accumulate_speech(audio_int16)
+
+                # Barge-in trigger. Once the user has voiced enough audio, this
+                # is an interruption and not a backchannel — say so immediately,
+                # from VAD alone. Waiting for a partial would add a decode
+                # (~400-550ms measured) before the agent could even react, and
+                # the text would then have to be judged in a language we may not
+                # have identified yet. Duration needs neither.
+                self.voiced_samples += len(audio_int16)
+                if not self.barge_in_signalled:
+                    voiced_ms = self.voiced_samples / 16000 * 1000
+                    if voiced_ms >= self.barge_in_min_speech_ms:
+                        self.barge_in_signalled = True
+                        print(f"[WhisperSession] Barge-in signal ({voiced_ms:.0f}ms voiced)")
+                        events.append(stt_pb2.TranscriptEvent(
+                            text="",
+                            is_final=False,
+                            transcript_id=self.transcript_id,
+                            participant_id=self.participant_id,
+                            confidence=0.0,
+                            timestamp_ms=int(current_time * 1000),
+                            speech_started=False,
+                            speech_confirmed=True,
+                        ))
 
             else:
                 # Silence detected
@@ -1022,6 +1057,8 @@ class WhisperSession(STTSession):
         self.transcript_id = None
         self.pending_final_time = None  # Clear continuation window state
         self.is_transcribing = False  # Clear transcription lock
+        self.voiced_samples = 0
+        self.barge_in_signalled = False
 
         # Clear async partial state
         self.pending_partial_future = None
@@ -1090,6 +1127,12 @@ class WhisperProvider(STTProvider):
         # RMS energy gate - filters quiet background noise before VAD
         # 0.008 = -42dB (permissive), 0.01 = -40dB (moderate), 0.02 = -34dB (strict)
         self.rms_threshold = float(os.getenv("VAD_RMS_THRESHOLD", "0.008"))
+        # Barge-in sensitivity: milliseconds of voiced audio before an utterance
+        # counts as an interruption. Lives here, next to the other VAD knobs,
+        # because it IS a VAD knob — the agent only reacts to the signal.
+        # Lower = the agent yields sooner but backchannels start cutting it off;
+        # higher = it talks over the user for longer before noticing.
+        self.barge_in_min_speech_ms = int(os.getenv("BARGE_IN_MIN_SPEECH_MS", "600"))
 
         # Decode diagnostics: logging only, OFF by default. When on, each turn
         # runs extra decodes (shadow + trimmed) on the same single worker, which
@@ -1104,6 +1147,7 @@ class WhisperProvider(STTProvider):
         print(f"[WhisperProvider] VAD limits: min_speech_ms={self.min_speech_ms}, "
               f"max_duration_ms={self.max_speech_duration_ms}, inactivity_ms={self.audio_inactivity_timeout_ms}")
         print(f"[WhisperProvider] RMS energy gate: threshold={self.rms_threshold} (-{int(20*np.log10(self.rms_threshold))}dB)")
+        print(f"[WhisperProvider] Barge-in: {self.barge_in_min_speech_ms}ms of voiced audio")
         if self.decode_diagnostics:
             print("[WhisperProvider] Decode diagnostics ENABLED — extra shadow/trimmed decodes per turn")
 
@@ -1266,6 +1310,7 @@ class WhisperProvider(STTProvider):
             'audio_inactivity_timeout_ms': self.audio_inactivity_timeout_ms,
             'pre_buffer_samples': 3200,  # 200ms fixed
             'rms_threshold': self.rms_threshold,
+            'barge_in_min_speech_ms': self.barge_in_min_speech_ms,
             'decode_diagnostics': self.decode_diagnostics,
         }
 

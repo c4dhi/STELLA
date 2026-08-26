@@ -66,4 +66,11 @@ message TranscriptEvent {
                                    // metrics matter is exactly what the
                                    // investigation is still deciding — the
                                    // schema would churn every iteration.
+  bool speech_confirmed = 11;      // VAD has now heard enough CONTINUOUS speech
+                                   // that this utterance is an interruption
+                                   // rather than a backchannel ("mhm"). Emitted
+                                   // once per utterance, from VAD alone — no
+                                   // decode, no text, no language. This is the
+                                   // barge-in trigger: acting on it costs the
+                                   // threshold, not a transcription round trip.
 }

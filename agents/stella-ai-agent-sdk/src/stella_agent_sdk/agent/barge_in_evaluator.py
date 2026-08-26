@@ -1,8 +1,15 @@
-"""Barge-in Evaluator — decides whether a user interruption is worth acting on.
+"""Barge-in Evaluator — decides whether a TYPED interruption is worth acting on.
 
-When barge-in is enabled, the SDK suspends playback the instant the user starts
-speaking, transcribes them, and hands the final transcript here. This stage uses
-a dedicated, configurable LLM prompt to classify the interruption:
+Scope note: this runs on the text channel only (#278). Voice interruptions are
+decided in the SDK from VAD speech duration alone — see the barge-in block in
+audio/pipeline.py. Voice has an acoustic signal that arrives before any decode,
+so paying for a transcript and then an LLM round trip bought nothing but
+latency, and the machinery needed to hide that latency was where the bugs were.
+A typed message has no such signal: nothing about it says whether the user meant
+to cut the agent off, so the judgement below is worth making.
+
+The SDK suspends playback, pauses generation, and hands the typed text here.
+This stage uses a dedicated, configurable LLM prompt to classify it:
 
 - COMMIT  → a real interruption (question/correction/stop/new request). The SDK
             discards the rest of the current reply and processes the transcript.

@@ -70,6 +70,10 @@ data:
   VAD_AUDIO_INACTIVITY_TIMEOUT_MS: "${VAD_AUDIO_INACTIVITY_TIMEOUT_MS}" # Force endpoint on no audio (default 1500ms)
   VAD_RMS_THRESHOLD: "${VAD_RMS_THRESHOLD}"                      # Energy gate threshold (default 0.008)
   PARTIAL_INTERVAL_MS: "${PARTIAL_INTERVAL_MS}"                  # Partial transcript interval (default 1000ms)
+  # Barge-in sensitivity. The agent interrupts on this signal alone — no
+  # transcript, no classifier — so this one number is the entire voice
+  # barge-in policy.
+  BARGE_IN_MIN_SPEECH_MS: "${BARGE_IN_MIN_SPEECH_MS}"            # Voiced audio before interrupting (default 600ms)
   # Decode diagnostics: logging + per-turn metrics on the transcript event.
   # Costs extra GPU decodes per turn — investigation switch, leave unset/0 in
   # steady state. Set to 1 to populate the STT cards in the metrics modal.

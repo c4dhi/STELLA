@@ -22,6 +22,10 @@ class TranscriptEvent:
     confidence: float
     timestamp_ms: int
     speech_started: bool = False
+    # VAD has heard enough CONTINUOUS speech to call this an interruption rather
+    # than a backchannel. Emitted once per utterance, from VAD alone — no decode,
+    # no text, so it does not carry transcription latency or language risk.
+    speech_confirmed: bool = False
     # Independent per-utterance language detection (final events only).
     # ``detected_language`` is "" and confidence 0.0 when STT supplies no signal
     # (partials, short clips, typed text) — the agent then uses its text
@@ -47,6 +51,7 @@ class TranscriptEvent:
             confidence=proto.confidence,
             timestamp_ms=proto.timestamp_ms,
             speech_started=proto.speech_started,
+            speech_confirmed=getattr(proto, "speech_confirmed", False),
             detected_language=getattr(proto, "detected_language", "") or "",
             language_confidence=getattr(proto, "language_confidence", 0.0) or 0.0,
             decode_diagnostics=getattr(proto, "decode_diagnostics", "") or "",

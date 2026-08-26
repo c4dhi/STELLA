@@ -84,7 +84,7 @@ class FakeTTSClient:
             yield Chunk(bytes(_PLAYOUT_FRAME_BYTES))
 
 
-def _event(text, is_final, speech_started=False):
+def _event(text, is_final, speech_started=False, speech_confirmed=False):
     return TranscriptEvent(
         text=text,
         is_final=is_final,
@@ -93,7 +93,16 @@ def _event(text, is_final, speech_started=False):
         confidence=1.0,
         timestamp_ms=0,
         speech_started=speech_started,
+        speech_confirmed=speech_confirmed,
     )
+
+
+def _vad_barge_in():
+    """The STT service's VAD signal: enough voiced audio to be an interruption.
+
+    Carries no text — that is the point. It arrives before any decode.
+    """
+    return _event("", is_final=False, speech_confirmed=True)
 
 
 class Chunk:
@@ -223,128 +232,17 @@ async def test_suspend_is_noop_when_not_speaking():
     assert pipe.is_suspended is False
 
 
-# ── Resolution loop: decider → resume / commit ────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_resolve_resume_continues_playback():
-    pipe, room = make_pipeline()
-    pipe.set_barge_in_decider(lambda t: _async(BargeInDecision.RESUME))
-    pipe._is_speaking = True
-    task = asyncio.create_task(pipe._play_prefetched(silence(50)))
-    for _ in range(5):
-        await asyncio.sleep(0)
-
-    # Detect + suspend (as _handle_speech_started would).
-    pipe._barge_in_active = True
-    pipe.suspend_speech()
-    assert pipe.is_suspended is True
-
-    await pipe._resolve_barge_in("mhm")
-    # RESUME → playback un-paused, no new turn injected.
-    assert pipe.is_suspended is False
-    assert pipe._transcript_queue.empty()
-    assert pipe._pending_barge_in is None
-    await asyncio.wait_for(task, timeout=1.0)
-    assert len(room.published) >= _PLAYOUT_FRAME_BYTES * 50
-
-
-@pytest.mark.asyncio
-async def test_resolve_commit_injects_new_turn():
-    pipe, room = make_pipeline()
-    pipe.set_barge_in_decider(lambda t: _async(BargeInDecision.COMMIT))
-    pipe._is_speaking = True
-    pipe._speech_queue.put_nowait(("later sentence", "response"))
-    task = asyncio.create_task(pipe._play_prefetched(silence(50)))
-    for _ in range(5):
-        await asyncio.sleep(0)
-
-    pipe._barge_in_active = True
-    pipe.suspend_speech()
-    await pipe._resolve_barge_in("wait, stop")
-    await asyncio.wait_for(task, timeout=1.0)
-
-    # COMMIT → playback aborted, queue drained, transcript injected as new turn.
-    assert pipe._stop_speaking_event.is_set()
-    assert pipe._speech_queue.empty()
-    injected = pipe._pending_barge_in
-    assert injected is not None
-    assert injected.text == "wait, stop"
-    assert injected.is_final is True
-    assert injected.is_barge_in is True
-
-
-@pytest.mark.asyncio
-async def test_resolve_defaults_to_commit_when_no_decider():
-    pipe, room = make_pipeline()
-    pipe._is_speaking = True
-    task = asyncio.create_task(pipe._play_prefetched(silence(30)))
-    for _ in range(3):
-        await asyncio.sleep(0)
-    pipe._barge_in_active = True
-    pipe.suspend_speech()
-    await pipe._resolve_barge_in("do something")
-    await asyncio.wait_for(task, timeout=1.0)
-    assert pipe._stop_speaking_event.is_set()
-    assert pipe._pending_barge_in is not None
-    assert pipe._pending_barge_in.is_barge_in is True
-
-
-@pytest.mark.asyncio
-async def test_resolve_commits_when_decider_raises():
-    pipe, room = make_pipeline()
-
-    async def boom(_t):
-        raise RuntimeError("decider down")
-
-    pipe.set_barge_in_decider(boom)
-    pipe._is_speaking = True
-    task = asyncio.create_task(pipe._play_prefetched(silence(30)))
-    for _ in range(3):
-        await asyncio.sleep(0)
-    pipe._barge_in_active = True
-    pipe.suspend_speech()
-    await pipe._resolve_barge_in("x")
-    await asyncio.wait_for(task, timeout=1.0)
-    assert pipe._stop_speaking_event.is_set()  # failure → commit, never stuck
+# ── Voice barge-in: one VAD signal, no decider ────────────────────────────
+#
+# The voice path does not classify anything. The STT service's VAD reports that
+# the user has voiced more than BARGE_IN_MIN_SPEECH_MS, and that IS the
+# interruption. Nothing is suspended on a guess, so nothing is ever resumed.
 
 
 def _async(value):
     async def _coro():
         return value
     return _coro()
-
-
-@pytest.mark.asyncio
-async def test_commit_on_last_sentence_does_not_deadlock_worker():
-    # Committing a barge-in while the worker is on its LAST sentence (no
-    # prefetch in flight) must not hang the worker — the injected turn must
-    # become available and flush must return.
-    pipe, room = make_pipeline()
-    pipe._tts = FakeTTSClient()
-    pipe.set_barge_in_decider(lambda t: _async(BargeInDecision.COMMIT))
-
-    pipe.enqueue_sentence("the only sentence")  # single sentence → last sentence
-    for _ in range(60):                          # wait until audio is flowing
-        await asyncio.sleep(0)
-        if pipe._audio_active:
-            break
-    assert pipe._audio_active is True
-
-    # Barge-in: suspend, then commit (as detection + resolve would).
-    pipe._barge_in_active = True
-    pipe.suspend_speech()
-    await pipe._resolve_barge_in("wait stop")
-
-    # The worker must exit cleanly — flush must not hang (the bug deadlocked here).
-    await asyncio.wait_for(pipe.flush_speech_queue(), timeout=1.0)
-    injected = pipe._pending_barge_in
-    assert injected is not None
-    assert injected.is_barge_in is True
-    assert injected.text == "wait stop"
-
-
-# ── Detection loop: listens during speech, threshold-gated, resolves ──────
 
 
 async def _run_detection(pipe, events, audio_active=True):
@@ -360,65 +258,118 @@ async def _run_detection(pipe, events, audio_active=True):
     pipe.close_transcript_gate()          # gate closed == agent speaking
     pipe._stt = FakeSTT(events)
     await pipe._run_stt_stream_inner()
-    await asyncio.sleep(0.05)             # let the resolve task finish
+    await asyncio.sleep(0.05)
 
 
 @pytest.mark.asyncio
-async def test_detection_listens_and_commits_real_interruption():
+async def test_vad_signal_stops_playback_and_delivers_the_final():
+    """The whole voice path: VAD says interrupt, the final becomes the turn."""
     pipe, room = make_pipeline()
-    pipe.set_barge_in_decider(lambda t: _async(BargeInDecision.COMMIT))
     await _run_detection(pipe, [
-        _event("wait", is_final=False),          # >= 3 chars → suspend
-        _event("wait stop", is_final=True),      # final → resolve → COMMIT
+        _event("wait", is_final=False),       # partial alone does nothing
+        _vad_barge_in(),                      # VAD confirms → stop now
+        _event("wait stop", is_final=True),   # final → the interrupting turn
     ])
-    assert room.clear_count >= 1                  # playout flushed on suspend
+    assert pipe._stop_speaking_event.is_set()      # playback aborted
+    injected = pipe._pending_barge_in
+    assert injected is not None
+    assert injected.text == "wait stop"
+    assert injected.is_barge_in is True
+
+
+@pytest.mark.asyncio
+async def test_text_alone_never_interrupts():
+    """A backchannel produces partials and a final but never enough voiced
+    audio. Without the VAD signal the agent is not even paused — which is the
+    behaviour change: "mhm" no longer dents playback at all."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _event("mhm", is_final=False),
+        _event("Mm-hmm.", is_final=True),
+    ])
+    assert pipe.is_suspended is False
+    assert pipe._stop_speaking_event.is_set() is False
+    assert room.clear_count == 0
+    assert pipe._pending_barge_in is None
+    assert pipe._transcript_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_no_barge_in_when_agent_not_audibly_talking():
+    """Worker active (gate closed) but no frames flowing yet — e.g. still
+    synthesizing. There is nothing to interrupt, so the signal is ignored."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _vad_barge_in(),
+        _event("hello there, how are you", is_final=True),
+    ], audio_active=False)
+    assert pipe.is_suspended is False
+    assert room.clear_count == 0
+    assert pipe._pending_barge_in is None
+
+
+@pytest.mark.asyncio
+async def test_interruption_with_no_transcript_delivers_nothing():
+    """VAD fired but whisper returned nothing intelligible. The agent has
+    stopped — correctly, someone spoke — but there is no turn to deliver, and
+    it must not inject an empty one."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _vad_barge_in(),
+        _event("", is_final=True),
+    ])
+    assert pipe._stop_speaking_event.is_set()
+    assert pipe._pending_barge_in is None
+    assert pipe._barge_in_committed is False   # state cleared for the next one
+
+
+@pytest.mark.asyncio
+async def test_barge_in_state_does_not_leak_between_utterances():
+    """Regression: the previous design kept per-utterance text in a field that
+    only one exit path cleared, so a dismissed backchannel deafened the NEXT
+    interruption for the rest of the session. Two interruptions in a row must
+    both land."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _vad_barge_in(),
+        _event("Mm-hmm.", is_final=True),
+    ])
+    assert pipe._pending_barge_in is not None
+    pipe._pending_barge_in = None
+    pipe._stop_speaking_event.clear()
+
+    await _run_detection(pipe, [
+        _vad_barge_in(),
+        _event("nein warte", is_final=True),
+    ])
+    assert pipe._pending_barge_in is not None
+    assert pipe._pending_barge_in.text == "nein warte"
+
+
+@pytest.mark.asyncio
+async def test_commit_on_last_sentence_does_not_deadlock_worker():
+    # Committing a barge-in while the worker is on its LAST sentence (no
+    # prefetch in flight) must not hang the worker — the injected turn must
+    # become available and flush must return.
+    pipe, room = make_pipeline()
+    pipe._tts = FakeTTSClient()
+
+    pipe.enqueue_sentence("the only sentence")  # single sentence → last sentence
+    for _ in range(60):                          # wait until audio is flowing
+        await asyncio.sleep(0)
+        if pipe._audio_active:
+            break
+    assert pipe._audio_active is True
+
+    pipe.commit_interrupt()
+    pipe._deliver_barge_in_turn("wait stop")
+
+    # The worker must exit cleanly — flush must not hang (the bug deadlocked here).
+    await asyncio.wait_for(pipe.flush_speech_queue(), timeout=1.0)
     injected = pipe._pending_barge_in
     assert injected is not None
     assert injected.is_barge_in is True
     assert injected.text == "wait stop"
-    assert pipe._stop_speaking_event.is_set()     # committed → playback aborted
-
-
-@pytest.mark.asyncio
-async def test_detection_ignores_below_threshold_noise():
-    pipe, room = make_pipeline()
-    pipe.set_barge_in_decider(lambda t: _async(BargeInDecision.COMMIT))
-    await _run_detection(pipe, [
-        _event("a", is_final=False),             # < 3 chars
-        _event("uh", is_final=True),             # < 3 chars → never triggers
-    ])
-    assert pipe.is_suspended is False             # agent never paused
-    assert room.clear_count == 0
-    assert pipe._transcript_queue.empty()         # no new turn injected
-    assert pipe._pending_barge_in is None
-
-
-@pytest.mark.asyncio
-async def test_detection_skipped_when_agent_not_audibly_talking():
-    # Agent's worker is active (gate closed) but no audio frames are flowing
-    # yet (e.g. synthesizing). A user utterance must NOT trigger a barge-in.
-    pipe, room = make_pipeline()
-    pipe.set_barge_in_decider(lambda t: _async(BargeInDecision.COMMIT))
-    await _run_detection(pipe, [
-        _event("hello there, how are you", is_final=True),
-    ], audio_active=False)
-    assert pipe.is_suspended is False        # never suspended
-    assert room.clear_count == 0             # never flushed playout
-    assert pipe._transcript_queue.empty()    # no barge-in turn injected
-    assert pipe._pending_barge_in is None
-
-
-@pytest.mark.asyncio
-async def test_detection_resume_keeps_speaking():
-    pipe, room = make_pipeline()
-    pipe.set_barge_in_decider(lambda t: _async(BargeInDecision.RESUME))
-    await _run_detection(pipe, [
-        _event("hold on", is_final=True),        # >= 3 → suspend → RESUME
-    ])
-    assert pipe._transcript_queue.empty()         # resume → no new turn
-    assert pipe._pending_barge_in is None
-    assert pipe._play_allowed.is_set()            # playback re-allowed
-    assert pipe._barge_in_active is False         # re-armed for next time
 
 
 # ── Enablement: agent declaration vs env override ─────────────────────────
