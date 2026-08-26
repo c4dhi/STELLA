@@ -14,6 +14,7 @@ import re
 import time
 import unicodedata
 import uuid
+from array import array
 from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, Future
 import numpy as np
@@ -185,7 +186,11 @@ class WhisperSession(STTSession):
 
         # Core state (3-state machine: IDLE, SPEAKING, or MAYBE_ENDING)
         self.state = "IDLE"
-        self.speech_buffer = []
+        # Audio is held in typed int16 arrays, not Python lists. A list stores a
+        # boxed int object per sample — ~36 bytes each — so a 35s utterance costs
+        # 20MB per active session instead of 1.1MB. array('h') keeps len() in
+        # SAMPLES and slices to its own type, so it is a drop-in for the list.
+        self.speech_buffer = array('h')
         self.audio_buffer = []
 
         # VAD config (7 core parameters)
@@ -236,12 +241,27 @@ class WhisperSession(STTSession):
         self.pending_partial_transcript_id = None
         self.last_partial_text = ""  # Cache to avoid duplicate partials
 
-        # Buffer limits (prevent unbounded growth)
-        self.max_speech_buffer_samples = 16 * 16000  # 16 seconds @ 16kHz
+        # Buffer limit. DERIVED from the endpointing limit, never an independent
+        # number: the VAD forces a final at max_speech_duration_ms, so the buffer
+        # must be able to hold everything the VAD is willing to let the user say.
+        #
+        # These two used to disagree — endpointing allowed 30s while the buffer
+        # kept 16s — and the buffer discards the OLDEST audio, so anything
+        # between 16s and 30s silently lost its opening. A 21s answer was
+        # transcribed as "die wir da gegangen sind nach den Vorlesungen…",
+        # missing the clause that said what it was about. Silently: the drop
+        # happened in _accumulate_speech, which logged nothing.
+        #
+        # The headroom covers the 200ms pre-roll plus the endpointing tail
+        # (silence + continuation window) that keeps accumulating after the
+        # user stops.
+        self.max_speech_buffer_samples = int(
+            (self.max_speech_duration_ms + 5000) / 1000 * 16000
+        )
 
         # Pre-buffer for speech onset (captures audio before VAD triggers)
         self.pre_buffer_samples = config.get('pre_buffer_samples', 3200)  # 200ms
-        self.pre_buffer = []
+        self.pre_buffer = array('h')
 
         # Optional language PIN. When set (env WHISPER_LANGUAGE or an explicit
         # per-session hint), transcription is forced to this language. Default is
@@ -317,12 +337,21 @@ class WhisperSession(STTSession):
 
     def _accumulate_speech(self, audio_int16: np.ndarray) -> None:
         """Accumulate audio to speech buffer with size limits."""
-        self.speech_buffer.extend(audio_int16.tolist())
+        self.speech_buffer.frombytes(audio_int16.tobytes())
 
-        # Cap buffer to prevent unbounded growth
+        # Backstop only. Sized from max_speech_duration_ms, so the VAD should
+        # always force a final before this can trigger — if it ever does fire,
+        # the user is losing the START of what they said, which is where the
+        # subject of the sentence lives. Say so rather than dropping it in
+        # silence, the way this did for a year.
         if len(self.speech_buffer) > self.max_speech_buffer_samples:
-            # Keep most recent audio, discard oldest
             overflow = len(self.speech_buffer) - self.max_speech_buffer_samples
+            print(
+                f"[WhisperSession] BUFFER OVERFLOW: discarding the first "
+                f"{overflow / 16000:.1f}s of this utterance — endpointing "
+                f"(max_speech_duration_ms={self.max_speech_duration_ms}) should "
+                f"have closed it first"
+            )
             self.speech_buffer = self.speech_buffer[overflow:]
 
     def process_audio(self, audio_data: bytes, sample_rate: int = 16000) -> List[stt_pb2.TranscriptEvent]:
@@ -471,7 +500,7 @@ class WhisperSession(STTSession):
             if rms < self.rms_threshold:
                 # Audio too quiet to be speech - treat as silence
                 # Still update pre-buffer but don't check VAD
-                self.pre_buffer.extend(audio_int16.tolist())
+                self.pre_buffer.frombytes(audio_int16.tobytes())
                 if len(self.pre_buffer) > self.pre_buffer_samples:
                     self.pre_buffer = self.pre_buffer[-self.pre_buffer_samples:]
 
@@ -512,8 +541,8 @@ class WhisperSession(STTSession):
                     self.state = "SPEAKING"
                     self.speech_start_time = current_time
                     self.transcript_id = f"whisper_{uuid.uuid4().hex[:8]}"
-                    self.speech_buffer = self.pre_buffer.copy()
-                    self.pre_buffer = []
+                    self.speech_buffer = self.pre_buffer[:]
+                    self.pre_buffer = array('h')
                     print(f"[WhisperSession] Speech started (prob={speech_prob:.2f})")
 
                     # Emit speech_started event for barge-in detection
@@ -562,7 +591,7 @@ class WhisperSession(STTSession):
 
             else:
                 # Silence detected
-                self.pre_buffer.extend(audio_int16.tolist())
+                self.pre_buffer.frombytes(audio_int16.tobytes())
                 if len(self.pre_buffer) > self.pre_buffer_samples:
                     self.pre_buffer = self.pre_buffer[-self.pre_buffer_samples:]
 
@@ -669,7 +698,7 @@ class WhisperSession(STTSession):
         try:
             self.shadow_submitted_at = time.time()
             self.pending_shadow_future = self.transcription_executor.submit(
-                self._shadow_worker, self.speech_buffer.copy()
+                self._shadow_worker, self.speech_buffer[:]
             )
         except Exception as e:
             print(f"[WhisperSession] Shadow submit error: {e}")
@@ -708,9 +737,14 @@ class WhisperSession(STTSession):
         if self.pending_partial_future is not None:
             return
 
-        # Snapshot the audio buffer for the background thread
-        max_partial_samples = 10 * 16000
-        audio_snapshot = self.speech_buffer[-max_partial_samples:] if len(self.speech_buffer) > max_partial_samples else self.speech_buffer.copy()
+        # Snapshot the whole buffer. There used to be a second, tighter cap here
+        # (10s) so long utterances showed a sliding window that visibly dropped
+        # its own beginning as the user kept talking. It bought almost nothing:
+        # whisper's encoder pads every clip to 30s, so decode cost tracks the
+        # number of words produced, not the seconds of audio fed in — measured
+        # on prod, 3.5s decoded in 482ms and 16s in 776ms. The buffer cap above
+        # is the single limit.
+        audio_snapshot = self.speech_buffer[:]
 
         # Remember which transcript this is for
         self.pending_partial_transcript_id = self.transcript_id
@@ -832,9 +866,14 @@ class WhisperSession(STTSession):
         start_time = time.time()
 
         try:
-            # Cap buffer size to prevent memory issues
+            # Backstop; see _accumulate_speech. Reaching this means the final
+            # is about to be transcribed from an utterance missing its opening.
             if len(self.speech_buffer) > self.max_speech_buffer_samples:
-                print(f"[WhisperSession] Capping speech buffer from {len(self.speech_buffer)} to {self.max_speech_buffer_samples}")
+                dropped = len(self.speech_buffer) - self.max_speech_buffer_samples
+                print(
+                    f"[WhisperSession] BUFFER OVERFLOW at final: transcribing "
+                    f"without the first {dropped / 16000:.1f}s of the utterance"
+                )
                 self.speech_buffer = self.speech_buffer[-self.max_speech_buffer_samples:]
 
             audio_samples = np.array(self.speech_buffer, dtype=np.int16)
@@ -1048,9 +1087,9 @@ class WhisperSession(STTSession):
     def _reset(self) -> None:
         """Reset state for next utterance."""
         self.state = "IDLE"
-        self.speech_buffer = []
+        self.speech_buffer = array('h')
         self.audio_buffer = []  # Also clear audio buffer
-        self.pre_buffer = []  # Clear pre-buffer to prevent stale audio
+        self.pre_buffer = array('h')  # Clear pre-buffer to prevent stale audio
         self.silence_start_time = None
         self.speech_start_time = None
         self.last_audio_time = 0
