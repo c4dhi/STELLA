@@ -372,8 +372,25 @@ class AudioPipeline:
         self._stt_stream_task: Optional[asyncio.Task] = None
         self._transcript_queue: asyncio.Queue[TranscriptEvent] = asyncio.Queue()
 
-        # Transcript debouncing (secondary defense against rapid successive finals)
-        self._debounce_window_ms = _env_int("TRANSCRIPT_DEBOUNCE_MS", 300)
+        # Transcript debouncing (secondary defense against rapid successive finals).
+        #
+        # Off by default. The window only pays for itself if a second final can
+        # actually land inside it, and with either STT provider in this tree it
+        # cannot: both refuse to emit a final until they have seen a fixed span
+        # of silence, and both reset to IDLE immediately afterwards, so the
+        # floor between two consecutive finals is that span. whisper waits
+        # VAD_SILENCE_DURATION_MS + VAD_CONTINUATION_WINDOW_MS (500 + 600 in
+        # prod), sherpa waits SHERPA_SILENCE_THRESHOLD (1.5s). Both are far
+        # wider than any sane debounce window, and the continuation window is
+        # already the mechanism that stitches a mid-sentence pause back into
+        # one turn — it cancels its own pending final when speech resumes.
+        #
+        # So the sleep was a fixed tax on every turn (300ms straight off
+        # time-to-first-audio, measured from stt_end) guarding against an event
+        # the upstream endpointing makes unreachable. Set TRANSCRIPT_DEBOUNCE_MS
+        # to re-enable it for an STT provider that CAN fragment inside the
+        # window; the aggregation path below is unchanged and still correct.
+        self._debounce_window_ms = _env_int("TRANSCRIPT_DEBOUNCE_MS", 0)
         self._pending_transcript: Optional[TranscriptEvent] = None
         self._pending_transcript_time: float = 0
         self._debounce_task: Optional[asyncio.Task] = None

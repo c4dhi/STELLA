@@ -168,7 +168,7 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `AGENT_ID` | *(falls back to AGENT_IDENTITY)* | Unique agent identifier |
 | `AGENT_ICON` | `🤖` | Display icon for the agent |
 | `AGENT_CONFIG` | | JSON string with agent-specific configuration |
-| `TRANSCRIPT_DEBOUNCE_MS` | `300` | Aggregate rapid successive transcripts within this window (ms) |
+| `TRANSCRIPT_DEBOUNCE_MS` | `0` | Aggregate rapid successive finals within this window (ms). Off by default: STT endpointing already guarantees a &gt;1s gap between finals, so any window this size is unreachable. Set it only for an STT provider that can fragment faster than that. |
 | `INTERRUPT_MODE` | `none` | Barge-in behavior: `none` (strict gating) or `smart` |
 
 ## Examples
