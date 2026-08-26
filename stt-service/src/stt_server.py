@@ -170,10 +170,13 @@ class SpeechToTextServicer(stt_pb2_grpc.SpeechToTextServicer):
                           f"participant: {chunk.participant_id}, "
                           f"provider: {self.engine.provider_name}")
 
-                # Forward the agent's language hint (if any) so transcription can
-                # be steered to the resolved language. Detection stays independent.
-                if chunk.language:
-                    session.set_language_hint(chunk.language)
+                # Forward the agent's language pin so transcription is steered to
+                # the declared language. Forwarded on EVERY chunk, including when
+                # it is empty: the agent may clear a pin (plan swapped, session
+                # reused), and skipping the empty case would leave the old pin in
+                # place for the life of the session. set_language_hint() is a
+                # no-op when the value has not changed.
+                session.set_language_hint(chunk.language)
 
                 # Process audio and yield events
                 # Pass sample_rate from proto (default to 16000 for backwards compatibility)
