@@ -335,6 +335,27 @@ class WhisperSession(STTSession):
         except Exception as e:
             print(f"[WhisperSession] GPU cache clear error: {e}")
 
+    def _speech_boundary_event(
+        self, current_time: float, *, started: bool = False, ended: bool = False
+    ) -> stt_pb2.TranscriptEvent:
+        """A textless VAD event marking the edge of "the user is talking".
+
+        Emitted from VAD alone, so it costs nothing and arrives immediately —
+        which is the point: the agent ducks its own voice on `started` long
+        before any transcript could exist, and restores it on `ended` if the
+        user turned out to be backchannelling rather than taking the floor.
+        """
+        return stt_pb2.TranscriptEvent(
+            text="",
+            is_final=False,
+            transcript_id=self.transcript_id,
+            participant_id=self.participant_id,
+            confidence=0.0,
+            timestamp_ms=int(current_time * 1000),
+            speech_started=started,
+            speech_ended=ended,
+        )
+
     def _accumulate_speech(self, audio_int16: np.ndarray) -> None:
         """Accumulate audio to speech buffer with size limits."""
         self.speech_buffer.frombytes(audio_int16.tobytes())
@@ -514,6 +535,7 @@ class WhisperSession(STTSession):
                         self.state = "MAYBE_ENDING"
                         self.pending_final_time = current_time
                         self._submit_shadow_decode()
+                        events.append(self._speech_boundary_event(current_time, ended=True))
                 elif self.state == "MAYBE_ENDING":
                     self._accumulate_speech(audio_int16)
                     time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
@@ -562,6 +584,9 @@ class WhisperSession(STTSession):
                     self.state = "SPEAKING"
                     self.pending_final_time = None
                     # Keep same transcript_id - this is a continuation
+                    # Re-open the speaking bracket: the agent un-ducked when we
+                    # entered MAYBE_ENDING, and the user is talking again.
+                    events.append(self._speech_boundary_event(current_time, started=True))
 
                 # Accumulate audio (with buffer limits)
                 self._accumulate_speech(audio_int16)
@@ -614,6 +639,7 @@ class WhisperSession(STTSession):
                         # for silence_duration_ms), so this decode is a candidate
                         # final, not a partial. Diagnostics-gated; no-op when off.
                         self._submit_shadow_decode()
+                        events.append(self._speech_boundary_event(current_time, ended=True))
                         # Don't emit final yet - wait for continuation window
 
                 elif self.state == "MAYBE_ENDING":

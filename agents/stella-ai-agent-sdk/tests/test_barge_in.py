@@ -84,7 +84,7 @@ class FakeTTSClient:
             yield Chunk(bytes(_PLAYOUT_FRAME_BYTES))
 
 
-def _event(text, is_final, speech_started=False, speech_confirmed=False):
+def _event(text, is_final, speech_started=False, speech_confirmed=False, speech_ended=False):
     return TranscriptEvent(
         text=text,
         is_final=is_final,
@@ -94,6 +94,7 @@ def _event(text, is_final, speech_started=False, speech_confirmed=False):
         timestamp_ms=0,
         speech_started=speech_started,
         speech_confirmed=speech_confirmed,
+        speech_ended=speech_ended,
     )
 
 
@@ -270,7 +271,7 @@ async def test_vad_signal_stops_playback_and_delivers_the_final():
         _vad_barge_in(),                      # VAD confirms → stop now
         _event("wait stop", is_final=True),   # final → the interrupting turn
     ])
-    assert pipe._stop_speaking_event.is_set()      # playback aborted
+    assert pipe._stop_speaking_event.is_set()      # real turn -> playback aborted
     injected = pipe._pending_barge_in
     assert injected is not None
     assert injected.text == "wait stop"
@@ -309,18 +310,24 @@ async def test_no_barge_in_when_agent_not_audibly_talking():
 
 
 @pytest.mark.asyncio
-async def test_interruption_with_no_transcript_delivers_nothing():
-    """VAD fired but whisper returned nothing intelligible. The agent has
-    stopped — correctly, someone spoke — but there is no turn to deliver, and
-    it must not inject an empty one."""
+async def test_a_false_interruption_gives_the_turn_back():
+    """VAD heard enough to yield the floor, but whisper found nothing to
+    transcribe — a cough, a door, a chair. Killing the agent's sentence over
+    that is the worse error, so the suspend is taken back and playback carries
+    on from exactly where it paused.
+
+    This is why yielding SUSPENDS rather than discards: a stop you cannot undo
+    has to be right the first time, and VAD alone cannot be."""
     pipe, room = make_pipeline()
     await _run_detection(pipe, [
         _vad_barge_in(),
         _event("", is_final=True),
     ])
-    assert pipe._stop_speaking_event.is_set()
+    assert pipe._stop_speaking_event.is_set() is False   # turn NOT discarded
+    assert pipe._play_allowed.is_set() is True           # playing again
     assert pipe._pending_barge_in is None
-    assert pipe._barge_in_committed_tid is None   # state cleared for the next one
+    assert pipe._barge_in_committed_tid is None
+    assert pipe._ducked is False
 
 
 @pytest.mark.asyncio
@@ -494,3 +501,75 @@ async def test_suspend_watchdog_disarmed_on_normal_resume():
 
     await asyncio.sleep(0.12)                    # let the old window elapse
     await asyncio.wait_for(task, timeout=1.0)    # completes cleanly, no re-fire
+
+
+# ── Ducking: the reflex that precedes the decision ────────────────────────
+#
+# A human who gets interrupted trails off before they stop, and the other
+# person hears that immediately — long before either has parsed a word. The
+# agent does the same: VAD's first frame drops its volume, and only sustained
+# speech actually takes the floor. Because ducking is just a gain change, being
+# wrong about it costs nothing, which is what lets it be this eager.
+
+
+@pytest.mark.asyncio
+async def test_the_agent_ducks_as_soon_as_the_user_makes_a_sound():
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [_event("", is_final=False, speech_started=True)])
+    assert pipe._ducked is True
+    assert pipe._play_allowed.is_set() is True   # ducked, NOT paused
+    assert pipe._stop_speaking_event.is_set() is False
+
+
+@pytest.mark.asyncio
+async def test_a_backchannel_only_ducks_and_the_turn_survives():
+    """"mhm" never clears the threshold, so the agent dips and keeps going —
+    it never pauses, never loses its place, and never asks anyone."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _event("", is_final=False, speech_started=True),
+        _event("mhm", is_final=False),
+        _event("", is_final=False, speech_ended=True),
+        _event("Mm-hmm.", is_final=True),
+    ])
+    assert pipe._ducked is False                  # back to full volume
+    assert pipe._play_allowed.is_set() is True    # never paused
+    assert pipe._stop_speaking_event.is_set() is False
+    assert pipe._pending_barge_in is None
+
+
+@pytest.mark.asyncio
+async def test_ducking_does_not_survive_into_the_next_utterance():
+    """A stuck duck would leave the agent permanently quiet. Opening the gate
+    clears it, so even a lost un-duck signal cannot persist."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [_event("", is_final=False, speech_started=True)])
+    assert pipe._ducked is True
+    pipe.open_transcript_gate()
+    assert pipe._ducked is False
+
+
+def test_gain_scales_samples_and_is_a_no_op_at_full_volume():
+    from stella_agent_sdk.audio.pipeline import _apply_gain
+    import struct
+    frame = struct.pack("<4h", 1000, -1000, 32767, -32768)
+    assert _apply_gain(frame, 1.0) is frame
+    quiet = struct.unpack("<4h", _apply_gain(frame, 0.25))
+    assert quiet == (250, -250, 8191, -8192)
+
+
+@pytest.mark.asyncio
+async def test_speech_that_resumes_after_a_dip_ducks_again():
+    """"mhm… nein, warte" — the user pauses, the agent comes back up, then they
+    carry on and take the floor for real."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _event("", is_final=False, speech_started=True),
+        _event("", is_final=False, speech_ended=True),
+        _event("", is_final=False, speech_started=True),   # picked back up
+        _vad_barge_in(),
+        _event("nein, warte", is_final=True),
+    ])
+    assert pipe._stop_speaking_event.is_set()
+    assert pipe._pending_barge_in is not None
+    assert pipe._pending_barge_in.text == "nein, warte"

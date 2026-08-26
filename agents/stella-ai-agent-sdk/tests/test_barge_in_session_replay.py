@@ -62,10 +62,11 @@ class ScriptedSTT:
             await asyncio.sleep(0)
 
 
-def ev(text="", is_final=False, tid="t", confirmed=False):
+def ev(text="", is_final=False, tid="t", confirmed=False, started=False, ended=False):
     return TranscriptEvent(
         text=text, is_final=is_final, transcript_id=tid, participant_id="human",
         confidence=1.0, timestamp_ms=0, speech_confirmed=confirmed,
+        speech_started=started, speech_ended=ended,
     )
 
 
@@ -162,3 +163,35 @@ async def test_a_dropped_final_does_not_relabel_the_next_turn():
     ])
     assert pipe._barge_in_committed_tid is None
     assert pipe._pending_barge_in is None, "an unrelated turn was labelled a barge-in"
+
+
+@pytest.mark.asyncio
+async def test_the_reported_sequence_with_ducking():
+    """The same session, now with the volume reflex in front of the decision.
+
+    "Yeah." -> "Mm-hmm." dips the agent and it recovers on its own. The real
+    interruption behind it still takes the floor. Neither needs a transcript to
+    be judged, and neither can leave state behind for the other.
+    """
+    pipe = talking_pipeline()
+
+    await drive(pipe, [
+        ev(started=True, tid="A"),
+        ev("Yeah.", tid="A"),
+        ev(ended=True, tid="A"),
+        ev("Mm-hmm.", is_final=True, tid="A"),
+    ])
+    assert pipe._ducked is False
+    assert pipe._play_allowed.is_set() is True
+    assert pipe._stop_speaking_event.is_set() is False
+    assert pipe._pending_barge_in is None
+
+    await drive(pipe, [
+        ev(started=True, tid="B"),
+        ev("Yeah.", tid="B"),
+        ev(confirmed=True, tid="B"),
+        ev("ja, aber warte, das stimmt nicht", is_final=True, tid="B"),
+    ])
+    assert pipe._stop_speaking_event.is_set()
+    assert pipe._pending_barge_in is not None
+    assert pipe._pending_barge_in.text == "ja, aber warte, das stimmt nicht"

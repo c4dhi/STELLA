@@ -73,4 +73,12 @@ message TranscriptEvent {
                                    // decode, no text, no language. This is the
                                    // barge-in trigger: acting on it costs the
                                    // threshold, not a transcription round trip.
+  bool speech_ended = 12;          // VAD has stopped hearing speech (entering
+                                   // MAYBE_ENDING). Pairs with speech_started
+                                   // to bracket "the user is talking right
+                                   // now", which is what the agent ducks its
+                                   // own voice against. Not the end of the
+                                   // utterance — speech may resume inside the
+                                   // continuation window, and speech_started
+                                   // is re-emitted if it does.
 }

@@ -269,6 +269,19 @@ def _fade_in(frame: bytes) -> bytes:
     return bytes(out)
 
 
+def _apply_gain(frame: bytes, gain: float) -> bytes:
+    """Scale a PCM frame. Used to duck the agent under the user's voice."""
+    if gain >= 1.0:
+        return frame
+    out = bytearray(len(frame))
+    for off in range(0, len(frame) - _BYTES_PER_SAMPLE + 1, _BYTES_PER_SAMPLE):
+        sample = int.from_bytes(frame[off:off + _BYTES_PER_SAMPLE], "little", signed=True)
+        out[off:off + _BYTES_PER_SAMPLE] = int(sample * gain).to_bytes(
+            _BYTES_PER_SAMPLE, "little", signed=True
+        )
+    return bytes(out)
+
+
 def _silence_frame(fade_from: int = 0) -> bytes:
     """A frame of silence, ramping down from ``fade_from`` so it does not click."""
     out = bytearray(_PLAYOUT_FRAME_BYTES)
@@ -561,6 +574,17 @@ class AudioPipeline:
         self._barge_in_decider: Optional[
             Callable[[str], Awaitable["BargeInDecision"]]
         ] = None
+        # How far to duck the agent's own voice while the user is speaking.
+        # Ducking is the reflex; stopping is the decision. A human who is
+        # interrupted trails off before they stop, and the listener hears that
+        # instantly — long before anyone has parsed a word. Doing the same makes
+        # the agent feel like it is listening rather than being switched off,
+        # and because it is only a volume change it costs nothing to be wrong:
+        # a cough ducks it for a moment and it carries on mid-sentence.
+        self._barge_in_duck_gain = max(0.0, min(1.0, float(
+            os.getenv("BARGE_IN_DUCK_GAIN", "0.25")
+        )))
+        self._ducked = False
         # transcript_id of an utterance we have committed a voice barge-in for,
         # while waiting for its final to deliver as the interrupting turn.
         # Keyed on the id, not a bare flag, so the state cannot outlive its
@@ -847,6 +871,10 @@ class AudioPipeline:
     def open_transcript_gate(self) -> None:
         """Re-open the transcript gate. Drains stale items and applies
         a post-gate settling period to let echo from browser playback clear."""
+        # The agent has stopped talking, so there is nothing left to duck.
+        # Clearing it here guarantees the next utterance starts at full volume
+        # even if the un-duck signal never arrived (STT hiccup, reconnect).
+        self.unduck_speech()
         if self._transcript_gate_closed:
             drained = 0
             while not self._transcript_queue.empty():
@@ -1069,23 +1097,36 @@ class AudioPipeline:
             # worker does it on the way out), so by the time the final lands the
             # gate may be either side — and the turn must be delivered, and
             # flagged, either way.
+            # A voice barge-in was suspended for this utterance: its final
+            # decides what happens to the held speech. Handled before the gate
+            # check because the gate may open underneath us.
             if self._barge_in_committed_tid is not None:
                 if event.transcript_id != self._barge_in_committed_tid:
                     # A different utterance started first, so the interrupted
                     # one will never produce a final (STT dropped it or
-                    # reconnected). Let the state die with it rather than
-                    # re-labelling somebody else's turn as the interruption.
-                    logger.info("[BARGE-IN] Interrupted utterance ended without a final")
+                    # reconnected). Resume rather than leave the agent muted.
+                    logger.info("[BARGE-IN] Interrupted utterance ended without a final — resuming")
                     self._barge_in_committed_tid = None
+                    self.unduck_speech()
+                    self.resume_speech()
                 elif event.is_final:
                     self._barge_in_committed_tid = None
                     await self._publish_user_transcript(event)
                     text = (event.text or "").strip()
                     if text:
-                        logger.info(f"[BARGE-IN] Delivering interrupting turn: '{text[:40]}'")
+                        # A real turn. Discard the rest of what the agent was
+                        # saying and hand the transcript over.
+                        logger.info(f"[BARGE-IN] Committing — '{text[:40]}'")
+                        self.commit_interrupt()
                         self._deliver_barge_in_turn(text)
                     else:
-                        logger.info("[BARGE-IN] Interruption produced no transcript — nothing to deliver")
+                        # The user made a noise long enough to look like speech
+                        # but said nothing transcribable. Stopping the agent's
+                        # turn over that is the worse error, so take it back:
+                        # playback resumes from exactly where it paused.
+                        logger.info("[BARGE-IN] False interruption (no transcript) — resuming")
+                        self.unduck_speech()
+                        self.resume_speech()
                     continue
 
             # While the agent is speaking, the turn gate is closed.
@@ -1125,13 +1166,27 @@ class AudioPipeline:
                 # (LiveKit's min_interruption_duration, Pipecat's equivalent),
                 # and it is the only one that is language-agnostic: "mhm", "ja"
                 # and "aha" are short everywhere, with no word list to maintain.
+                # 1. The user started making sound: duck immediately. No
+                #    transcript, no decision, nothing to undo later.
+                if event.speech_started and self._audio_active:
+                    self.duck_speech()
+
+                # 2. They stopped without ever clearing the threshold — a
+                #    backchannel. Come back up; the agent never lost its turn.
+                if event.speech_ended and self._barge_in_committed_tid is None:
+                    self.unduck_speech()
+
+                # 3. They kept going past BARGE_IN_MIN_SPEECH_MS: they are
+                #    taking the floor. Go quiet — but SUSPEND rather than
+                #    discard, so the held sentence can still be resumed if the
+                #    utterance turns out to be nothing (see the final above).
                 if event.speech_confirmed and self._audio_active:
-                    logger.info("[BARGE-IN] Interruption confirmed by VAD — stopping")
+                    logger.info("[BARGE-IN] Interruption confirmed by VAD — yielding the floor")
                     self._barge_in_committed_tid = event.transcript_id
-                    self.commit_interrupt()
+                    self.suspend_speech()
                     await self._emit_barge_in_debug(
-                        "✋ Barge-in — user is speaking, stopping and listening",
-                        decision="commit",
+                        "✋ Barge-in — user has the floor, listening",
+                        decision="detecting",
                         transcript=text,
                     )
 
@@ -1787,6 +1842,26 @@ class AudioPipeline:
     # Barge-in: reversible suspend / resume / commit
     # ─────────────────────────────────────────────────────────────────────
 
+    def duck_speech(self) -> None:
+        """Drop the agent's own volume because the user has started speaking.
+
+        Reversible and instant — it acts on the VAD's first frame, with no
+        transcript and no decision. Being wrong is free: a cough ducks playback
+        for a few hundred milliseconds and the agent carries on mid-sentence,
+        never having lost its turn.
+        """
+        if self._ducked or self._barge_in_duck_gain >= 1.0:
+            return
+        self._ducked = True
+        logger.info(f"[BARGE-IN] Ducking to {self._barge_in_duck_gain:.0%} — user is speaking")
+
+    def unduck_speech(self) -> None:
+        """Restore full volume: the user stopped without taking the floor."""
+        if not self._ducked:
+            return
+        self._ducked = False
+        logger.info("[BARGE-IN] Restored volume — user stopped without interrupting")
+
     def suspend_speech(self) -> None:
         """Suspend playback reversibly (barge-in reflex).
 
@@ -1851,6 +1926,7 @@ class AudioPipeline:
         worker observes the stop and exits."""
         logger.info("[BARGE-IN] Committing interruption — discarding remaining speech")
         self._disarm_suspend_watchdog()
+        self.unduck_speech()
         # Teleprompter: freeze the highlight at the playhead before discarding.
         # (After a suspend the cursor is already rewound to what was heard.)
         self._emit_speech_progress("interrupted")
@@ -2086,6 +2162,8 @@ class AudioPipeline:
         self._barge_in_active = False
         self._barge_in_resolving = False
         self._pending_barge_in = None
+        self._barge_in_committed_tid = None
+        self.unduck_speech()
         self.resume_speech()
         await self._emit_barge_in_debug(
             "▶️ Barge-in never resolved (no final transcript) — auto-resumed",
@@ -2825,6 +2903,8 @@ class AudioPipeline:
 
                 # The agent is now audibly talking — a barge-in may start.
                 self._audio_active = True
+                if self._ducked:
+                    frame = _apply_gain(frame, self._barge_in_duck_gain)
                 await self._room.publish_audio(frame)
 
             # Did the utterance play to the end (vs. abort via break)?
