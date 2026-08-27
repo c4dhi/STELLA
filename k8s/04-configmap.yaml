@@ -114,7 +114,7 @@ data:
   # Acoustic Echo Cancellation (AEC) - Disable for debugging audio issues
   # When enabled (default), AEC removes TTS echo from microphone input
   # Set to "true" to disable AEC if audio is being incorrectly canceled
-  DISABLE_AEC: "${DISABLE_AEC:-false}"
+  DISABLE_AEC: "${DISABLE_AEC}"
 
   # ============================================================================
   # Public URLs for external access (injected by deployment scripts)

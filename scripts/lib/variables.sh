@@ -120,6 +120,8 @@ get_var_metadata() {
         VAD_AUDIO_INACTIVITY_TIMEOUT_MS) echo "stt|text|optional|1500|1500|Force endpoint on audio inactivity (ms)||" ;;
         VAD_RMS_THRESHOLD)     echo "stt|text|optional|0.008|0.01|Energy gate for background noise filtering||" ;;
         PARTIAL_INTERVAL_MS)   echo "stt|text|optional|1000|500|Partial transcript interval (ms)||" ;;
+        BARGE_IN_MIN_SPEECH_MS) echo "stt|text|optional|600|400|Voiced audio before an utterance interrupts the agent (ms)||" ;;
+        STT_DECODE_DIAGNOSTICS) echo "stt|text|optional|0|0|Extra GPU decodes for STT metrics: 0 or 1||" ;;
 
         # --- TTS ---
         TTS_PROVIDER)          echo "tts|select|optional|piper|kokoro|Text-to-speech engine|piper,kokoro,chatterbox,qwen3,elevenlabs,auto|" ;;
@@ -191,6 +193,8 @@ ALL_VARIABLES=(
     "VAD_AUDIO_INACTIVITY_TIMEOUT_MS"
     "VAD_RMS_THRESHOLD"
     "PARTIAL_INTERVAL_MS"
+    "BARGE_IN_MIN_SPEECH_MS"
+    "STT_DECODE_DIAGNOSTICS"
     "TTS_PROVIDER"
     "ELEVENLABS_VOICE_ID"
     "ELEVENLABS_MODEL_ID"
