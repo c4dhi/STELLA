@@ -42,6 +42,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, List, Optional
 
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
@@ -52,6 +53,41 @@ from stella_agent_sdk.services.tts_client import TTSClient
 from stella_agent_sdk.messages.types import BargeInDecision
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _Utterance:
+    """Provenance for one STT utterance, from speech_started to its final.
+
+    Whose floor an utterance began on is settled at its FIRST frame, but the
+    question is only asked at its LAST one — and a whisper decode sits between
+    the two (692ms-1.1s measured on prod). The gate routinely flips inside that
+    window, in both directions:
+
+      * the agent starts its bridge while the user is still mid-sentence, so a
+        final the user was entitled to arrives at a closed gate and is thrown
+        away — a whole sentence lost because they paused for breath 14ms past
+        the endpointer;
+      * a backchannel finishes decoding just after playback stops (26ms after,
+        measured), so an "mhm" arrives at an open gate, is promoted to a turn,
+        and re-closes the gate on the answer the user is actually giving.
+
+    Reading the gate at the final therefore answers a different question than
+    the one that matters. So the answer is recorded when it is true and read
+    when it is needed.
+    """
+
+    tid: str
+    #: Gate state at speech_started — did the user already hold the floor?
+    started_on_open_gate: bool
+    #: The user cleared BARGE_IN_MIN_SPEECH_MS at some point in this utterance.
+    #: Recorded whether or not the barge-in reflex could act on it (that needs
+    #: _audio_active, which is False in the gaps between sentences), because
+    #: this is the signal that separates a real turn from a backchannel.
+    confirmed: bool = False
+    #: speech_ended seen, and the gate state when it landed.
+    ended: bool = False
+    ended_on_open_gate: bool = False
 
 
 # ── First-audible-token latency budget (#304 A1) ─────────────────────────────
@@ -567,6 +603,9 @@ class AudioPipeline:
         # this is True; `_is_speaking` is too coarse (it's set before the first
         # frame plays and during idle gaps, when the agent isn't really talking).
         self._audio_active = False
+        # Provenance of the utterance currently in flight (see _Utterance).
+        # Retired by its own final, so it is None between utterances.
+        self._utterance: Optional[_Utterance] = None
         # The agent's interruption decider. Used by the TEXT barge-in path only
         # (#278): a typed message carries no acoustic signal, so whether it is
         # worth interrupting for genuinely needs judgement. The VOICE path does
@@ -858,7 +897,12 @@ class AudioPipeline:
         })
 
     def close_transcript_gate(self) -> None:
-        """Close the transcript gate — suppresses transcripts until reopened."""
+        """Close the transcript gate — suppresses transcripts until reopened.
+
+        If the user is mid-utterance and has already cleared the interruption
+        threshold, the floor is theirs and the agent does not take it: the
+        interruption is committed here rather than left to race the decode.
+        """
         if not self._transcript_gate_closed:
             logger.info("[GATE] Closing transcript gate")
             self._transcript_gate_closed = True
@@ -868,9 +912,36 @@ class AudioPipeline:
                 self._debounce_task = None
             self._pending_transcript = None
 
+            # The user is still talking and has already taken the floor by
+            # duration. Starting to speak over them is the one move to avoid,
+            # and waiting for their final to sort it out means talking over
+            # them for the length of a decode first. Yield now; their final
+            # commits it through the barge-in path above.
+            utt = self._utterance
+            if (
+                self._barge_in_enabled
+                and self._barge_in_committed_tid is None
+                and utt is not None
+                and utt.confirmed
+                and not utt.ended
+            ):
+                logger.info(
+                    "[BARGE-IN] User already held the floor when the agent "
+                    "started — yielding without speaking over them"
+                )
+                self._barge_in_committed_tid = utt.tid
+                self.suspend_speech()
+
     def open_transcript_gate(self) -> None:
-        """Re-open the transcript gate. Drains stale items and applies
-        a post-gate settling period to let echo from browser playback clear."""
+        """Re-open the transcript gate, draining transcripts queued behind it.
+
+        Note there is no settling delay here, and deliberately so: a final that
+        decoded late is filtered on its provenance at the point of use (see the
+        backchannel discard in _run_stt_stream_inner), which costs no latency
+        and cannot swallow speech the user was still producing. The queue drain
+        below is why a committed turn goes out through _pending_barge_in rather
+        than the queue.
+        """
         # The agent has stopped talking, so there is nothing left to duck.
         # Clearing it here guarantees the next utterance starts at full volume
         # even if the un-duck signal never arrived (STT hiccup, reconnect).
@@ -1039,6 +1110,11 @@ class AudioPipeline:
         """
         logger.info("STT stream task started, waiting for audio...")
         chunk_count = 0
+        # A reconnect can strand a record mid-utterance (confirmed, never
+        # finalised). Left standing, the next close_transcript_gate() would
+        # yield the floor to an utterance that ended minutes ago and wait out
+        # the watchdog. The stream is new; nothing is in flight on it.
+        self._utterance = None
 
         async def audio_generator():
             """Generate audio chunks from LiveKit, muting during gate/settling."""
@@ -1091,6 +1167,12 @@ class AudioPipeline:
         ):
             logger.debug(f"STT event: text='{event.text[:50] if event.text else ''}...', is_final={event.is_final}, speech_started={event.speech_started}")
 
+            # Record which side of the gate this utterance began on before any
+            # branch below reads it. Must run first: the barge-in block can
+            # consume the final and `continue`, and the record has to be
+            # retired by it either way.
+            utt = self._track_utterance(event)
+
             # A voice barge-in was committed for this utterance: its final IS
             # the interrupting turn. Handled before the gate check because
             # commit_interrupt() opens the gate asynchronously (the speech
@@ -1133,6 +1215,46 @@ class AudioPipeline:
             if self._transcript_gate_closed and self._tts_enabled:
                 if event.speech_started:
                     self._current_utterance_speaker = self._room.current_audio_speaker
+
+                # ── Carry-over ────────────────────────────────────────────
+                # The gate shut underneath this utterance. Either the user
+                # already held the floor when the agent started talking, or
+                # they cleared the interruption threshold and the reflex below
+                # could not act (nothing was audible to suspend). Both are real
+                # turns; the discard further down would delete speech the user
+                # was never signalled to stop.
+                if event.is_final and utt is not None and (
+                    utt.started_on_open_gate or utt.confirmed
+                ):
+                    await self._publish_user_transcript(event)
+                    text = (event.text or "").strip()
+                    if not text:
+                        # Voiced but nothing transcribable. Not a turn, and the
+                        # agent never yielded for it — just come back up.
+                        self.unduck_speech()
+                        continue
+                    why = (
+                        "user had the floor first"
+                        if utt.started_on_open_gate
+                        else "interruption confirmed"
+                    )
+                    if self._barge_in_enabled:
+                        logger.info(
+                            f"[GATE] Gate closed mid-utterance ({why}) — "
+                            f"delivering as interruption: '{text[:40]}'"
+                        )
+                        self.commit_interrupt()
+                        self._deliver_barge_in_turn(text)
+                    else:
+                        # Turn-based mode keeps strict alternation, so the agent
+                        # finishes its sentence — but the turn is handed over
+                        # out-of-band rather than dropped, and answered next.
+                        logger.info(
+                            f"[GATE] Gate closed mid-utterance ({why}) — "
+                            f"queued for the next turn: '{text[:40]}'"
+                        )
+                        self._deliver_barge_in_turn(text, is_barge_in=False)
+                    continue
 
                 # Turn-based mode (no barge-in): ignore user audio while speaking.
                 if not self._barge_in_enabled:
@@ -1205,6 +1327,32 @@ class AudioPipeline:
             # When TTS is disabled, gate still discards finals even though
             # partials are allowed through (lighter turn management).
             if event.is_final and event.text.strip():
+                # A backchannel that both began and ended while the agent held
+                # the floor, and whose decode simply landed after playback
+                # stopped. The gate is open now, but this was never a turn: it
+                # never cleared the interruption threshold, and the user had
+                # already stopped before the agent did. Letting it through
+                # promotes an "mhm" into a turn, which re-closes the gate on
+                # the answer the user is in the middle of giving.
+                #
+                # Decided on provenance rather than a settling delay: a timer
+                # wide enough to cover a 400ms decode would also swallow the
+                # start of a real reply, and would cost that delay on every
+                # turn. This costs nothing and cannot fire on speech the user
+                # was still producing when the floor came back to them.
+                if (
+                    utt is not None
+                    and not utt.started_on_open_gate
+                    and utt.ended
+                    and not utt.ended_on_open_gate
+                    and not utt.confirmed
+                ):
+                    logger.info(
+                        f"[GATE] Discarding backchannel decoded after playback: "
+                        f"'{event.text}'"
+                    )
+                    continue
+
                 logger.info(f"Final transcript: '{event.text}'")
 
                 # Capture stt_end and reset per-turn state
@@ -1238,6 +1386,37 @@ class AudioPipeline:
                     await self._debounce_transcript(event)
                 else:
                     await self._transcript_queue.put(event)
+
+    def _track_utterance(self, event: TranscriptEvent) -> Optional[_Utterance]:
+        """Maintain the provenance record for the utterance ``event`` belongs to.
+
+        Returns the record, and retires it on its final — so the caller holds
+        the last reference and every branch below reads the same one.
+        """
+        tid = getattr(event, "transcript_id", None)
+        if not tid:
+            return None
+
+        if event.speech_started:
+            self._utterance = _Utterance(
+                tid=tid, started_on_open_gate=not self._transcript_gate_closed
+            )
+
+        utt = self._utterance
+        if utt is None or utt.tid != tid:
+            # An utterance whose start this pipeline never saw (STT reconnect,
+            # or a stream restart mid-speech). Nothing can be said about whose
+            # floor it began on, so leave it to the gate-current behaviour.
+            return None
+
+        if event.speech_confirmed:
+            utt.confirmed = True
+        if event.speech_ended:
+            utt.ended = True
+            utt.ended_on_open_gate = not self._transcript_gate_closed
+        if event.is_final:
+            self._utterance = None
+        return utt
 
     async def _publish_user_transcript(self, event: TranscriptEvent) -> None:
         """Publish a user transcript (partial or final) to LiveKit for frontend
@@ -2444,7 +2623,10 @@ class AudioPipeline:
             self._barge_in_resolving = False
 
     def _deliver_barge_in_turn(
-        self, transcript: str, speaker: Optional[str] = None
+        self,
+        transcript: str,
+        speaker: Optional[str] = None,
+        is_barge_in: bool = True,
     ) -> None:
         """Deliver a committed interruption as the next user turn, out-of-band.
 
@@ -2453,6 +2635,11 @@ class AudioPipeline:
         this turn. audio_in() picks up _pending_barge_in first. Shared by the
         voice path (the VAD barge-in block in _run_stt_stream_inner) and the
         text path (_handle_text_barge_in).
+
+        ``is_barge_in`` reaches the agent as prompt context ("the user just
+        interrupted me"). The carry-over path passes False in turn-based mode,
+        where the same out-of-band delivery is used purely to keep a turn that
+        the queue drain would otherwise lose — the agent was not interrupted.
         """
         self._pending_barge_in = TranscriptEvent(
             text=transcript,
@@ -2462,7 +2649,7 @@ class AudioPipeline:
             confidence=1.0,
             timestamp_ms=int(time.time() * 1000),
             speech_started=False,
-            is_barge_in=True,
+            is_barge_in=is_barge_in,
         )
 
     # ─────────────────────────────────────────────────────────────────────
