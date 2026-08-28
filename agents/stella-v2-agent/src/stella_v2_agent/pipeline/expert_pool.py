@@ -137,6 +137,15 @@ class ExpertPool:
         tools = None
         if config.can_call_functions and self._tool_registry:
             tools = self._tool_registry.list_tools()
+            if config.tools:
+                allowed = set(config.tools)
+                tools = [t for t in tools if t.name in allowed]
+                missing = allowed - {t.name for t in tools}
+                if missing:
+                    logger.warning(
+                        "Expert '%s' allows tools that are not registered: %s",
+                        config.name, sorted(missing),
+                    )
 
         try:
             return await asyncio.wait_for(
