@@ -1,14 +1,23 @@
-"""Barge-in Evaluator — decides whether a TYPED interruption is worth acting on.
+"""Barge-in Evaluator — decides whether an interruption is worth acting on.
 
-Scope note: this runs on the text channel only (#278). Voice interruptions are
-decided in the SDK from VAD speech duration alone — see the barge-in block in
-audio/pipeline.py. Voice has an acoustic signal that arrives before any decode,
-so paying for a transcript and then an LLM round trip bought nothing but
-latency, and the machinery needed to hide that latency was where the bugs were.
-A typed message has no such signal: nothing about it says whether the user meant
-to cut the agent off, so the judgement below is worth making.
+Both channels arrive here, but they arrive differently.
 
-The SDK suspends playback, pauses generation, and hands the typed text here.
+VOICE is filtered twice before this stage sees anything, because acoustics
+answer most of the question for free and faster than any model can. The agent
+ducks its own volume on the VAD's first frame — reversible, so being wrong
+costs nothing — and goes silent once the user has been speaking for
+BARGE_IN_MIN_SPEECH_MS, which is what separates a cough from someone taking the
+floor. What duration cannot separate is "mhm" from "no, wait": both are short,
+and only meaning tells them apart. So the SDK suspends playback (reversibly,
+from the exact playhead) and asks this stage once, on the FINAL transcript.
+Never on a partial and never speculatively — that cost a decode before the
+judgement could even start, and the machinery built to hide that latency leaked
+state that silently swallowed real interruptions.
+
+TEXT has no acoustic signal at all — nothing about a typed message says whether
+the user meant to cut the agent off — so it comes straight here.
+
+Either way the SDK suspends playback, pauses generation, and hands the text on.
 This stage uses a dedicated, configurable LLM prompt to classify it:
 
 - COMMIT  → a real interruption (question/correction/stop/new request). The SDK

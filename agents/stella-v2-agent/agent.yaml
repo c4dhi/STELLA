@@ -316,8 +316,8 @@ pipelineSchema:
             templated one. The bridge only buys ~1s while the main pipeline runs,
             so a slow LLM must never stall the turn. Ignored when Fast Bridge is on.
     - id: barge_in
-      label: "Typed Interruption Evaluator"
-      description: "Decides whether a message TYPED while the agent is speaking should interrupt it (commit) or be ignored so speech continues (resume). Spoken interruptions do NOT come here: those are decided from how long the user has actually been speaking (BARGE_IN_MIN_SPEECH_MS, default 400ms), with no transcript and no model call, because waiting for one cost ~1s of the user talking over the agent. Typed text has no such signal, so it still needs judging. Operators can force barge-in off entirely with BARGE_IN_ENABLED=false."
+      label: "Barge-in Evaluator"
+      description: "Decides whether an interruption — spoken or typed — should stop the agent (COMMIT) or be ignored so it keeps talking (RESUME). A spoken one reaches this prompt only after two cheaper filters have run: the agent ducks its own voice the moment it hears sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms). This prompt then judges the FINAL transcript — the one question duration cannot answer, since 'mhm' and 'no, wait' are both short. RESUME resumes playback from exactly where it paused, so a wrong guess here is recoverable. Noise that transcribes to nothing never gets this far. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s) and speech is queued as the next turn instead. Operators can force barge-in off entirely with BARGE_IN_ENABLED=false."
       icon: "✋"
       # Sits above the main pipeline, horizontally centered (cols 0-3 → 1.5).
       # Barge-in spans the whole turn rather than being a stage in the flow.
@@ -326,7 +326,7 @@ pipelineSchema:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "Decides if a TYPED mid-turn message is a real interruption (spoken ones never reach this prompt — see the node description). The message itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-committed reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
+          description: "Decides whether a mid-turn interruption — spoken or typed — is real. The interruption itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-spoken reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking from where it paused). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
           default: |
             You decide whether a user's interruption of the assistant's speech is a real interruption that should be acted on, or just a backchannel/noise that should be ignored so the assistant keeps talking.
             {{#if conversationHistory}}

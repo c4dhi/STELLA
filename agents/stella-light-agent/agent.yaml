@@ -172,15 +172,15 @@ pipelineSchema:
           default: 800
 
     - id: barge_in
-      label: "Interrupt · Typed message (reversible)"
-      description: "One of two interrupt types. This one is reversible and local: the user TYPES while the agent talks, the agent pauses, and this evaluator decides COMMIT (act on it, drop the rest of the reply) or RESUME (ignore it, keep talking). Control returns to the conversation either way. SPOKEN interruptions do not come here — they are decided from how long the user has actually been speaking (BARGE_IN_MIN_SPEECH_MS, default 400ms), with no transcript and no model call, because waiting for one cost ~1s of the user talking over the agent. Typed text carries no such signal, so it still needs judging. (The terminal interrupt is 'Interrupt · Session End' below.) Force barge-in off entirely with BARGE_IN_ENABLED=false."
+      label: "Interrupt · Barge-in (reversible)"
+      description: "One of two interrupt types. This one is reversible and local: the user interrupts while the agent talks, the agent pauses, and this evaluator decides COMMIT (act on it, drop the rest of the reply) or RESUME (ignore it, resume from exactly where it paused). Control returns to the conversation either way. Spoken interruptions reach it only after two cheaper filters: the agent ducks its voice on the first sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms); this prompt then judges the FINAL transcript, which is the one question duration cannot answer. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s). (The terminal interrupt is 'Interrupt · Session End' below.) Force barge-in off entirely with BARGE_IN_ENABLED=false."
       icon: "✋"
       position: { row: -1, col: 0 }
       slots:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "Decides if a TYPED mid-turn message is a real interruption (spoken ones never reach this prompt — see the node description). The message itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-committed reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
+          description: "Decides whether a mid-turn interruption — spoken or typed — is real. The interruption itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-spoken reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking from where it paused). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
           default: |
             You decide whether a user's interruption of the assistant's speech is a real interruption that should be acted on, or just a backchannel/noise that should be ignored so the assistant keeps talking.
             {{#if conversationHistory}}

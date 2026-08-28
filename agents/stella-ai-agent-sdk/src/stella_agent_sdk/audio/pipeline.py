@@ -42,8 +42,9 @@ import logging
 import os
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable, List, Optional
+from typing import AsyncIterator, Awaitable, Callable, Deque, List, Optional
 
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
 from stella_agent_sdk.language import forced_language
@@ -606,10 +607,11 @@ class AudioPipeline:
         # Provenance of the utterance currently in flight (see _Utterance).
         # Retired by its own final, so it is None between utterances.
         self._utterance: Optional[_Utterance] = None
-        # The agent's interruption decider. Used by the TEXT barge-in path only
-        # (#278): a typed message carries no acoustic signal, so whether it is
-        # worth interrupting for genuinely needs judgement. The VOICE path does
-        # not consult it — see the barge-in block in _run_stt_stream_inner.
+        # The agent's interruption decider — the configurable Barge-in
+        # Evaluator. Both channels consult it on the same question: is this
+        # text worth abandoning the current reply for? Voice asks once, on the
+        # FINAL transcript (see _resolve_voice_barge_in); text asks as soon as
+        # the message lands, since it has no acoustic signal to wait for.
         self._barge_in_decider: Optional[
             Callable[[str], Awaitable["BargeInDecision"]]
         ] = None
@@ -629,6 +631,27 @@ class AudioPipeline:
         # Keyed on the id, not a bare flag, so the state cannot outlive its
         # utterance — which is exactly how the previous design broke.
         self._barge_in_committed_tid: Optional[str] = None
+        # ── False-interruption storm guard ────────────────────────────────
+        # A run of interruptions that turned out NOT to be turns means the
+        # environment is producing false triggers — a noisy room, a hot mic,
+        # someone else talking nearby — and every one of them stalls the agent
+        # mid-sentence. After enough within a window, stop honouring voice
+        # interruptions for a cooldown; the session falls back to the
+        # turn-based path that already exists, where the agent finishes its
+        # sentence and what the user said is queued as the next turn.
+        #
+        # ONLY false interruptions count. A user who genuinely cuts in three
+        # times in a minute is having a conversation, and locking them out
+        # would be the very failure this guard exists to prevent.
+        self._barge_in_storm_count = _env_int("BARGE_IN_STORM_COUNT", 3)
+        self._barge_in_storm_window_s = _env_float(
+            "BARGE_IN_STORM_WINDOW_MS", 60000.0
+        ) / 1000
+        self._barge_in_storm_cooldown_s = _env_float(
+            "BARGE_IN_STORM_COOLDOWN_MS", 120000.0
+        ) / 1000
+        self._false_interruptions: Deque[float] = deque()
+        self._barge_in_suppressed_until: float = 0.0
         # Session-end wrap-up handler (issue #198): invoked when the backend signals
         # a graceful close over the data channel ({"type":"session_end"}).
         self._session_end_handler: Optional[
@@ -643,6 +666,16 @@ class AudioPipeline:
             os.getenv("BARGE_IN_SUSPEND_TIMEOUT_MS", "8000")
         ) / 1000
         self._barge_in_watchdog_task: Optional[asyncio.Task] = None
+        # How long a barge-in decision may take. Playback is suspended and the
+        # user hears nothing for all of it, so it is bounded here rather than
+        # left to whatever the agent's hook does — the hook fetches
+        # conversation history BEFORE the evaluator's own budget starts, so the
+        # evaluator's timeout does not cover the whole call. Derived from the
+        # watchdog rather than configured separately so the ordering invariant
+        # cannot drift: the decision must resolve while there is still a
+        # suspension for it to resolve, otherwise the safety net fires first
+        # and the verdict lands on state that has already moved on.
+        self._barge_in_decision_timeout_s = self._barge_in_suspend_timeout_s / 2
 
         # ── Generation-level interrupt (text barge-in #278) ────────────────
         # Voice barge-in (above) acts at the audio layer: it suspends/commits
@@ -919,7 +952,7 @@ class AudioPipeline:
             # commits it through the barge-in path above.
             utt = self._utterance
             if (
-                self._barge_in_enabled
+                self._barge_in_available()
                 and self._barge_in_committed_tid is None
                 and utt is not None
                 and utt.confirmed
@@ -1189,26 +1222,13 @@ class AudioPipeline:
                     # reconnected). Resume rather than leave the agent muted.
                     logger.info("[BARGE-IN] Interrupted utterance ended without a final — resuming")
                     self._barge_in_committed_tid = None
+                    self._barge_in_active = False
                     self.unduck_speech()
                     self.resume_speech()
                 elif event.is_final:
                     self._barge_in_committed_tid = None
                     await self._publish_user_transcript(event)
-                    text = (event.text or "").strip()
-                    if text:
-                        # A real turn. Discard the rest of what the agent was
-                        # saying and hand the transcript over.
-                        logger.info(f"[BARGE-IN] Committing — '{text[:40]}'")
-                        self.commit_interrupt()
-                        self._deliver_barge_in_turn(text)
-                    else:
-                        # The user made a noise long enough to look like speech
-                        # but said nothing transcribable. Stopping the agent's
-                        # turn over that is the worse error, so take it back:
-                        # playback resumes from exactly where it paused.
-                        logger.info("[BARGE-IN] False interruption (no transcript) — resuming")
-                        self.unduck_speech()
-                        self.resume_speech()
+                    await self._resolve_voice_barge_in(event)
                     continue
 
             # While the agent is speaking, the turn gate is closed.
@@ -1233,12 +1253,28 @@ class AudioPipeline:
                         # agent never yielded for it — just come back up.
                         self.unduck_speech()
                         continue
+                    if not utt.started_on_open_gate:
+                        # An interruption that cleared the threshold while
+                        # nothing was audible to suspend — so the reflex never
+                        # ran, but the question is identical to the one
+                        # _resolve_voice_barge_in answers: turn, or noise? A
+                        # backchannel dropped into a gap between sentences
+                        # reaches the agent through here, and without this it
+                        # becomes a turn on the strength of being audible.
+                        # Nothing was suspended, so RESUME just drops the text.
+                        if await self._decide_barge_in(text) == BargeInDecision.RESUME:
+                            logger.info(
+                                f"[GATE] RESUME — '{text[:40]}' was not actionable"
+                            )
+                            self._note_false_interruption()
+                            self.unduck_speech()
+                            continue
                     why = (
                         "user had the floor first"
                         if utt.started_on_open_gate
                         else "interruption confirmed"
                     )
-                    if self._barge_in_enabled:
+                    if self._barge_in_available():
                         logger.info(
                             f"[GATE] Gate closed mid-utterance ({why}) — "
                             f"delivering as interruption: '{text[:40]}'"
@@ -1256,8 +1292,11 @@ class AudioPipeline:
                         self._deliver_barge_in_turn(text, is_barge_in=False)
                     continue
 
-                # Turn-based mode (no barge-in): ignore user audio while speaking.
-                if not self._barge_in_enabled:
+                # Turn-based mode — either configured that way, or voice
+                # interruptions are in a post-storm cooldown. Ignore user audio
+                # while speaking; anything they said that mattered is carried
+                # over as the next turn by the branch above.
+                if not self._barge_in_available():
                     continue
 
                 text = (event.text or "").strip()
@@ -1305,6 +1344,10 @@ class AudioPipeline:
                 if event.speech_confirmed and self._audio_active:
                     logger.info("[BARGE-IN] Interruption confirmed by VAD — yielding the floor")
                     self._barge_in_committed_tid = event.transcript_id
+                    # Claim the resolution so a typed message arriving now
+                    # queues behind this one instead of racing a second decider
+                    # against it (see _handle_data_message).
+                    self._barge_in_active = True
                     self.suspend_speech()
                     await self._emit_barge_in_debug(
                         "✋ Barge-in — user has the floor, listening",
@@ -1387,6 +1430,151 @@ class AudioPipeline:
                 else:
                     await self._transcript_queue.put(event)
 
+    async def _resolve_voice_barge_in(self, event: TranscriptEvent) -> None:
+        """Decide what a confirmed voice interruption actually was, now that its
+        final transcript is in, and either commit it or give the turn back.
+
+        Three outcomes, cheapest first:
+
+          * Nothing transcribable — a cough, a chair, a door. No decode found
+            words, so no judgement is needed and none is paid for: resume from
+            the playhead immediately.
+          * Words the evaluator judges not actionable ("mhm", "ja genau") —
+            resume, and drop the text. This is the one question duration cannot
+            answer: "mhm" and "nein, warte" are both short, and only meaning
+            separates them.
+          * Anything else — commit: discard the rest of the reply and hand the
+            transcript over as the next turn.
+
+        The judgement runs on the FINAL, inline, exactly once. Not on a partial,
+        which costs a decode before it can be judged and is least reliable on
+        precisely the short utterances at issue; and not speculatively, because
+        hiding that latency is what previously required banked verdicts and
+        staleness guards whose leaked state silently swallowed real
+        interruptions. Here the agent is already silent and the user has already
+        stopped talking, so the wait is dead air either way — the only open
+        question is what ends it.
+        """
+        text = (event.text or "").strip()
+        if not text:
+            # Loud enough and long enough to look like speech, but nothing was
+            # said. Ending the agent's turn over that is the worse error, so
+            # take it back: playback resumes exactly where it paused.
+            logger.info("[BARGE-IN] False interruption (no transcript) — resuming")
+            self._release_voice_barge_in(committed=False)
+            return
+
+        self._barge_in_resolving = True
+        try:
+            decision = await self._decide_barge_in(text)
+        finally:
+            self._barge_in_resolving = False
+
+        if decision == BargeInDecision.RESUME:
+            logger.info(f"[BARGE-IN] RESUME — '{text[:40]}' was not actionable")
+            await self._emit_barge_in_debug(
+                f'🔁 Barge-in RESUME — judged not actionable, resuming the '
+                f'previous turn. Heard: "{text[:100]}"',
+                decision="resume",
+                transcript=text,
+                channel="voice",
+            )
+            self._release_voice_barge_in(committed=False)
+            return
+
+        logger.info(f"[BARGE-IN] COMMIT — interrupting for '{text[:40]}'")
+        await self._emit_barge_in_debug(
+            f'✋ Barge-in COMMIT — interrupting and processing as a new turn: '
+            f'"{text[:100]}"',
+            decision="commit",
+            transcript=text,
+            channel="voice",
+        )
+        self._release_voice_barge_in(committed=True)
+        self._deliver_barge_in_turn(text)
+
+    def _release_voice_barge_in(self, *, committed: bool) -> None:
+        """End a voice barge-in: take the floor for the user, or hand it back.
+
+        ``committed=False`` also records the false interruption that feeds the
+        storm guard — every path that gives the agent its turn back goes
+        through here, so there is exactly one place that can forget to count.
+        """
+        self._barge_in_active = False
+        if committed:
+            self.commit_interrupt()
+            return
+        self._note_false_interruption()
+        self.unduck_speech()
+        self.resume_speech()
+
+    async def _decide_barge_in(self, transcript: str) -> BargeInDecision:
+        """Ask the agent's Barge-in Evaluator whether ``transcript`` is worth
+        abandoning the current reply for. Shared by both channels.
+
+        Bounded on wall-clock, and defaults to COMMIT when there is no decider
+        or the call fails or times out: never silently swallow a real
+        interruption because the classifier did not answer.
+        """
+        decider = self._barge_in_decider
+        if decider is None:
+            return BargeInDecision.COMMIT
+        try:
+            return await asyncio.wait_for(
+                decider(transcript), timeout=self._barge_in_decision_timeout_s
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[BARGE-IN] Decider did not answer within "
+                f"{self._barge_in_decision_timeout_s:.1f}s — committing"
+            )
+            return BargeInDecision.COMMIT
+        except Exception as e:
+            logger.error(f"[BARGE-IN] Decider failed: {e} — committing")
+            return BargeInDecision.COMMIT
+
+    def _barge_in_available(self) -> bool:
+        """Whether a voice interruption should be honoured right now.
+
+        Barge-in is configured on AND the session is not serving a cooldown
+        after a run of false interruptions.
+        """
+        if not self._barge_in_enabled:
+            return False
+        until = self._barge_in_suppressed_until
+        if not until:
+            return True
+        if time.monotonic() < until:
+            return False
+        self._barge_in_suppressed_until = 0.0
+        logger.info("[BARGE-IN] Cooldown over — interruptions are honoured again")
+        return True
+
+    def _note_false_interruption(self) -> None:
+        """Record an interruption that turned out not to be a turn, and start a
+        cooldown once too many land inside the window.
+
+        Counted only where the agent yielded the floor and then had to take it
+        back. Committed interruptions are deliberately not counted — see the
+        storm-guard note in __init__.
+        """
+        if self._barge_in_storm_count <= 0:
+            return
+        now = time.monotonic()
+        window = self._false_interruptions
+        window.append(now)
+        while window and now - window[0] > self._barge_in_storm_window_s:
+            window.popleft()
+        if len(window) < self._barge_in_storm_count:
+            return
+        window.clear()
+        self._barge_in_suppressed_until = now + self._barge_in_storm_cooldown_s
+        logger.warning(
+            f"[BARGE-IN] {self._barge_in_storm_count} false interruptions within "
+            f"{self._barge_in_storm_window_s:.0f}s — suspending voice barge-in "
+            f"for {self._barge_in_storm_cooldown_s:.0f}s"
+        )
+
     def _track_utterance(self, event: TranscriptEvent) -> Optional[_Utterance]:
         """Maintain the provenance record for the utterance ``event`` belongs to.
 
@@ -1426,7 +1614,18 @@ class AudioPipeline:
         locked utterance speaker, a mid-stream speaker change occurred (no
         silence gap), so update it. event.participant_id from STT is ignored —
         it's the value passed at stream init, not the actual speaker.
+
+        Textless events are dropped. The VAD boundary signals (speech_started /
+        speech_confirmed / speech_ended) ride the same TranscriptEvent as real
+        partials but carry no text, and they are control signals, not
+        transcripts: the frontend upserts by transcript_id and REPLACES, so
+        publishing one blanks the bubble the partials have been filling — for
+        the ~0.6-1.1s between speech_ended and the final, which is exactly when
+        the user is looking at it. An empty FINAL is dropped for the same
+        reason plus one more: it would also record an empty message.
         """
+        if not (event.text or "").strip():
+            return
         current_speaker = self._room.current_audio_speaker
         if current_speaker and current_speaker != self._current_utterance_speaker:
             self._current_utterance_speaker = current_speaker
@@ -2539,13 +2738,12 @@ class AudioPipeline:
     async def _handle_text_barge_in(self, event: TranscriptEvent) -> None:
         """Resolve a typed message that arrived mid-turn (#278).
 
-        Text is a deterministic interruption channel — there is no VAD or
-        noise-vs-intent ambiguity and the full utterance is known immediately,
-        so unlike the voice path there is no transcript to wait for, no
-        min-chars gate, and no suspend watchdog. We still run the SAME decider
-        the voice path uses (the agent's on_barge_in / BargeInEvaluator) so the
-        agent decides whether to RESUME its current thought or react — matching
-        the voice-path decision behavior (AC#2).
+        Text is a deterministic interruption channel — the full utterance is
+        known immediately, so unlike voice there is nothing to wait for and no
+        acoustic pre-filter to run first: no VAD duration gate, and no suspend
+        watchdog. It runs the SAME decider voice runs on its final (the agent's
+        on_barge_in / BargeInEvaluator), so both channels answer the same
+        question the same way — only the point at which they can ask differs.
 
         Flow:
           1. Suspend audio (reversible, instant) AND request a generation pause
@@ -2578,15 +2776,7 @@ class AudioPipeline:
             self.request_turn_suspend()
 
             transcript = event.text
-            decider = self._barge_in_decider
-            try:
-                if decider is not None:
-                    decision = await decider(transcript)
-                else:
-                    decision = BargeInDecision.COMMIT
-            except Exception as e:
-                logger.error(f"[TEXT BARGE-IN] Decider failed: {e} — committing")
-                decision = BargeInDecision.COMMIT
+            decision = await self._decide_barge_in(transcript)
 
             if decision == BargeInDecision.RESUME:
                 logger.info(

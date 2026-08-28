@@ -346,9 +346,10 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         # (an intrinsic capability — its config depends on it). If so, enable it
         # on the pipeline, honoring any explicit BARGE_IN_ENABLED override.
         #
-        # on_barge_in is wired for the TEXT channel only. Voice interruptions
-        # are decided from VAD speech duration in the pipeline and never reach
-        # the hook — see the barge-in block in audio/pipeline.py.
+        # on_barge_in serves BOTH channels. Voice reaches it only after the
+        # pipeline's cheap filters have already fired (duck on first sound,
+        # go silent at BARGE_IN_MIN_SPEECH_MS); the hook then judges the final
+        # transcript. Text has no acoustic signal, so it goes straight there.
         if getattr(agent, "supports_barge_in", False):
             audio_pipeline.enable_barge_in()
             if audio_pipeline.barge_in_enabled:
@@ -356,7 +357,8 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                     lambda transcript: agent.on_barge_in(session_id, transcript)
                 )
                 logger.info(
-                    "Barge-in enabled: voice on VAD duration, text via on_barge_in"
+                    "Barge-in enabled: VAD duration yields the floor, on_barge_in "
+                    "judges the transcript"
                 )
             else:
                 logger.info(
