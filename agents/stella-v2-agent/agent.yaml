@@ -186,7 +186,9 @@ pipelineSchema:
             - Natural contractions, always. Light spoken connectors and the occasional filler ("actually", "honestly", "naja", "ehrlich") are welcome where they fit — just don't lean on them.
 
             Response shape:
-            - 1-3 sentences, ~25-45 words. At most ONE question per turn, often none. Match the user's energy and length.
+            - 1-3 sentences, ~25-45 words. Match the user's energy and length.
+            - NEVER ask more than one question in a turn, and often ask none at all.
+            - If you do ask one, it is the LAST thing you say. They are LISTENING, not reading: whatever follows a question is talked over or forgotten, so a question in the middle costs you the rest of the turn. Say your observation first, then ask.
 
             Formatting:
             - No markdown, bullets, numbered lists, or emojis.

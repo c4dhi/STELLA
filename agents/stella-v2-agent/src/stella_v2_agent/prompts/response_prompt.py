@@ -153,7 +153,8 @@ def _conversation_guidelines() -> str:
 - Appraising their SITUATION is not the same as praising their ANSWER. "That's a solid base to build on" is fine when you mean it and it follows from what they've actually told you; "great answer!" never is. If the directive above asks for a cautious tone, don't appraise at all — they have told you something that deserves care instead.
 - Offer a thought as often as you ask; not every turn needs a question. Don't run "acknowledge + question" every turn — that's what makes you a questionnaire.
 - Natural contractions and the occasional light filler. Reuse the user's own words.
-- 1-3 sentences, ~25-45 words. At most one question per turn. No markdown, bullets, or emojis.
+- 1-3 sentences, ~25-45 words. No markdown, bullets, or emojis.
+- Never more than one question per turn, often none — and if you ask one it is the LAST thing you say. They are listening, not reading: anything after a question is talked over or forgotten.
 {{#if taskJustCollected}}{{#if stateCompleting}}
 
 The user just gave everything this phase needed. Don't re-ask any of it — acknowledge what they shared and glide into the next topic so it feels like a conversation, not a checklist.{{#if nextTopicHint}} Next topic: {{nextTopicHint}}{{/if}}{{else}}
@@ -190,10 +191,16 @@ Conversation so far:
 {{/if}}"""
 
 
-# How many not-yet-known items to name explicitly. Naming the entire backlog
-# every turn is what makes this section read as a form; naming what is live and
-# counting the rest keeps the agent oriented without handing it a checklist.
-_MAX_VISIBLE_PENDING = 3
+# How many not-yet-known items to name explicitly. ONE.
+#
+# A bulleted list of three open questions is a list of three things to ask, and
+# models follow structure over instruction — the same reason the old labelled
+# checklist beat the "you are not a form" persona. Three visible gaps produced
+# turns that closed two of them at once, which is precisely the multi-question
+# reply the guidelines forbid in prose. Naming the single live gap and counting
+# the rest orients the agent just as well and asks for exactly what it should
+# do next.
+_MAX_VISIBLE_PENDING = 1
 
 
 def _state_machine_section(sm_context: Dict[str, Any]) -> str:
@@ -281,7 +288,7 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
         rest = [d for d in pending if d["key"] not in task_del_keys]
         visible = (live + rest)[:_MAX_VISIBLE_PENDING]
 
-        parts.append("What you still don't know about them:")
+        parts.append("The one thing to find out next:")
         for d in visible:
             line = f"  - {d.get('description') or d['key']}"
             # Criteria only for what is in play — for backlog items they are

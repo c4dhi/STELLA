@@ -381,18 +381,24 @@ def test_pending_items_are_described_not_enumerated_as_fields():
     assert "Still need to collect" not in result
 
 
-def test_backlog_is_capped_and_counted_rather_than_listed():
-    # Four pending items, three shown — the rest is a count so the agent stays
-    # oriented without being handed the whole checklist.
+def test_only_the_next_gap_is_named_and_the_rest_counted():
+    # Four pending items, ONE shown. A list of gaps is a list of things to ask,
+    # and models follow structure over instruction — three visible gaps produced
+    # turns that closed two of them at once, which is the multi-question reply
+    # the guidelines forbid in prose. The count keeps the agent oriented.
     result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
-    assert "1 more" in result
+    assert "3 more" in result
+    assert "how well they sleep" not in result
+    assert "what they want out of it" not in result
     assert "any injuries" not in result
 
 
-def test_the_current_task_item_comes_first():
+def test_the_one_named_gap_is_the_current_task_s():
+    # With a single visible item, ordering IS the selection: the live task's
+    # deliverable must be the one that survives, never a backlog item.
     result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
-    section = result[result.index("still don't know"):]
-    assert section.index("how often they train") < section.index("how well they sleep")
+    section = result[result.index("The one thing to find out next"):]
+    assert "how often they train" in section
 
 
 def test_criteria_shown_only_for_what_is_in_play():
@@ -417,7 +423,7 @@ def test_just_collected_items_are_marked_as_answered():
     assert "they just told you this" in result
     # …and must not still be listed as unknown. Slice only the unknown block:
     # the phrase legitimately reappears under "already told you".
-    start = result.index("still don't know")
+    start = result.index("The one thing to find out next")
     end = result.index("They have already told you", start)
     assert "how often they train" not in result[start:end]
 
@@ -465,7 +471,7 @@ def test_unconfirmed_is_surfaced_as_something_to_check():
 def test_unconfirmed_is_not_listed_as_unknown():
     # Asking cold is the bug being fixed — it must not appear as a gap.
     result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
-    start = result.index("still don't know")
+    start = result.index("The one thing to find out next")
     end = result.index("They MENTIONED", start)
     assert "walk" not in result[start:end]
 
