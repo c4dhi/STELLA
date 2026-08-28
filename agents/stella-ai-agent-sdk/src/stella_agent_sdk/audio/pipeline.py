@@ -1258,7 +1258,10 @@ class AudioPipeline:
                     self.resume_speech()
                 elif event.is_final:
                     self._barge_in_committed_tid = None
-                    await self._publish_user_transcript(event)
+                    # Published inside _resolve_voice_barge_in, once the verdict
+                    # is known: the backend records every final it sees and has
+                    # no dedupe, so publishing now and again with the verdict
+                    # would put the utterance in the transcript twice.
                     await self._resolve_voice_barge_in(event)
                     continue
                 elif self.is_suspended:
@@ -1288,7 +1291,6 @@ class AudioPipeline:
                 if event.is_final and utt is not None and (
                     utt.started_on_open_gate or utt.confirmed
                 ):
-                    await self._publish_user_transcript(event)
                     text = (event.text or "").strip()
                     if not text:
                         # Voiced but nothing transcribable. Not a turn, and the
@@ -1308,9 +1310,11 @@ class AudioPipeline:
                             logger.info(
                                 f"[GATE] RESUME — '{text[:40]}' was not actionable"
                             )
+                            await self._publish_user_transcript(event, discarded=True)
                             self._note_false_interruption()
                             self.unduck_speech()
                             continue
+                    await self._publish_user_transcript(event)
                     why = (
                         "user had the floor first"
                         if utt.started_on_open_gate
@@ -1401,8 +1405,11 @@ class AudioPipeline:
                 await self._publish_user_transcript(event)
                 continue
 
-            # 1. Publish ALL transcripts to LiveKit for frontend display.
-            await self._publish_user_transcript(event)
+            # 1. Partials go out immediately so the bubble stays live. A FINAL
+            #    waits until we know whether it counts as a turn, so it can carry
+            #    that verdict — and so it reaches the recorder exactly once.
+            if not event.is_final:
+                await self._publish_user_transcript(event)
 
             # 2. Handle speech_started for barge-in
             if event.speech_started:
@@ -1436,6 +1443,7 @@ class AudioPipeline:
                         f"[GATE] Discarding backchannel decoded after playback: "
                         f"'{event.text}'"
                     )
+                    await self._publish_user_transcript(event, discarded=True)
                     continue
 
                 logger.info(f"Final transcript: '{event.text}'")
@@ -1464,7 +1472,12 @@ class AudioPipeline:
                 # Discard finals while agent is speaking
                 if self._transcript_gate_closed:
                     logger.info(f"[GATE] Discarding final (gate closed): '{event.text}'")
+                    await self._publish_user_transcript(event, discarded=True)
                     continue
+
+                # Nothing can discard it now: it is a turn, and this is the one
+                # publish the recorder will see.
+                await self._publish_user_transcript(event)
 
                 # Apply debouncing to aggregate rapid successive finals
                 if self._debounce_window_ms > 0:
@@ -1521,6 +1534,7 @@ class AudioPipeline:
 
         if decision == BargeInDecision.RESUME:
             logger.info(f"[BARGE-IN] RESUME — '{text[:40]}' was not actionable")
+            await self._publish_user_transcript(event, discarded=True)
             await self._emit_barge_in_debug(
                 f'🔁 Barge-in RESUME — judged not actionable, resuming the '
                 f'previous turn. Heard: "{text[:100]}"',
@@ -1532,6 +1546,7 @@ class AudioPipeline:
             return
 
         logger.info(f"[BARGE-IN] COMMIT — interrupting for '{text[:40]}'")
+        await self._publish_user_transcript(event)
         await self._emit_barge_in_debug(
             f'✋ Barge-in COMMIT — interrupting and processing as a new turn: '
             f'"{text[:100]}"',
@@ -1655,7 +1670,9 @@ class AudioPipeline:
             self._utterance = None
         return utt
 
-    async def _publish_user_transcript(self, event: TranscriptEvent) -> None:
+    async def _publish_user_transcript(
+        self, event: TranscriptEvent, *, discarded: bool = False
+    ) -> None:
         """Publish a user transcript (partial or final) to LiveKit for frontend
         display, with speaker attribution.
 
@@ -1690,6 +1707,13 @@ class AudioPipeline:
                 "speaker_id": speaker_id,
                 "speaker_name": speaker_name,
                 "source": "user_speech",
+                # True when the pipeline heard this, showed it, and then decided
+                # it was NOT a turn — a backchannel, or an interruption the
+                # evaluator judged not actionable. The words were really said,
+                # so they stay in the record; this flag is what lets the UI and
+                # a later reader tell "the agent answered this" apart from "the
+                # agent heard this and moved on", which is otherwise invisible.
+                "discarded": discarded,
                 # Backwards compat
                 "participant_id": speaker_id,
             },

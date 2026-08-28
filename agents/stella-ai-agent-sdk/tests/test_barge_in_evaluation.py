@@ -443,3 +443,68 @@ async def test_a_suppressed_session_still_drops_what_was_only_noise():
     assert pipe._pending_barge_in is None
     assert pipe._transcript_queue.empty()
     assert pipe.is_suspended is False
+
+
+# ── The record of what counted as a turn ─────────────────────────────────
+
+
+def _finals(room):
+    """Final user transcripts published to the room, in order."""
+    return [p["data"] for p in room.captured
+            if p.get("type") == "transcript" and p["data"].get("is_final")]
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_interruption_is_kept_but_marked_discarded():
+    """The words were really said, so they stay in the transcript — but nothing
+    answered them, and without a marker that is invisible. A reader scrolling
+    back cannot otherwise tell "the agent answered this" from "the agent heard
+    this and moved on"."""
+    pipe, room = make_pipeline(Decider(BargeInDecision.RESUME))
+    await _run_detection(pipe, [_vad_barge_in(), _event("Mhm, ja.", is_final=True)])
+
+    finals = _finals(room)
+    assert len(finals) == 1
+    assert finals[0]["text"] == "Mhm, ja."
+    assert finals[0]["discarded"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_committed_interruption_is_not_marked():
+    pipe, room = make_pipeline(Decider(BargeInDecision.COMMIT))
+    await _run_detection(pipe, [_vad_barge_in(), _event("Nein, warte.", is_final=True)])
+    finals = _finals(room)
+    assert len(finals) == 1
+    assert finals[0]["discarded"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("decision", [BargeInDecision.COMMIT, BargeInDecision.RESUME])
+async def test_a_final_reaches_the_recorder_exactly_once(decision):
+    """THE invariant behind publishing after the verdict rather than before.
+    room-monitor calls recordTranscript on every final it sees and has no
+    dedupe, so a second publish would put the utterance in the research
+    transcript twice."""
+    pipe, room = make_pipeline(Decider(decision))
+    await _run_detection(pipe, [
+        _event("wart", is_final=False),
+        _vad_barge_in(),
+        _event("warte kurz", is_final=True),
+    ])
+    assert len(_finals(room)) == 1
+    partials = [p["data"] for p in room.captured
+                if p.get("type") == "transcript" and not p["data"].get("is_final")]
+    assert [p["text"] for p in partials] == ["wart"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_turn_is_published_once_and_unmarked():
+    """The open-gate path: no barge-in involved at all."""
+    pipe, room = make_pipeline()
+    pipe._is_listening = True
+    pipe._stt = FakeSTT([_event("hallo Grace", is_final=True)])
+    await pipe._run_stt_stream_inner()
+    await asyncio.sleep(0.05)
+    finals = _finals(room)
+    assert len(finals) == 1
+    assert finals[0]["discarded"] is False

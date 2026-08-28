@@ -348,9 +348,13 @@ pipelineSchema:
 
             The user's interruption (what they said while the assistant was speaking) is given as the user message. JUDGE IT IN CONTEXT.
 
-            Output COMMIT if the user's words are meaningful given the conversation — a relevant answer to what the assistant just asked, a question, a correction, a new request, a clear "stop"/"wait", or a change of topic. An on-topic answer (e.g. giving their name right after being asked for it) is a real turn and must COMMIT.
+            JUDGE THE WHOLE UTTERANCE, NEVER ITS OPENING WORDS. People begin real answers with agreement all the time. "Ja, absolut." on its own is a backchannel; "Ja, absolut. Pausen würden auch gehen, aber ich habe leider wenig Zeit." is an ANSWER that happens to start with agreement, and it is a real turn. Read to the end before deciding.
 
-            Output RESUME if it was just acknowledgement, agreement, thinking-aloud, or noise that does not require the assistant to stop — e.g. "mhm", "yeah", "right", "go on", a cough, or a few filler words.
+            THE TEST: strip the acknowledgement words from the front. Is anything left that the assistant would need to respond to — a fact about the user, an opinion, a qualification, a question, a refusal? If yes, COMMIT. If removing the filler leaves nothing, RESUME.
+
+            Output COMMIT if the user's words are meaningful given the conversation — a relevant answer to what the assistant just asked, a question, a correction, a new request, a clear "stop"/"wait", or a change of topic. An on-topic answer (e.g. giving their name right after being asked for it) is a real turn and must COMMIT. If the assistant's last sentence was a question and these words could be an answer to it, COMMIT.
+
+            Output RESUME only when the utterance is nothing BUT acknowledgement or noise and carries no information of its own — "mhm", "ja", "genau", "okay", "right", "go on", a cough, a few filler words.
 
             When unsure, prefer COMMIT — ignoring a real interruption is worse than briefly pausing.
 

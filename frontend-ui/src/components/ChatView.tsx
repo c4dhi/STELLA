@@ -216,6 +216,7 @@ export default function ChatView({
           speaker_name: messageData?.speaker_name || getParticipantName(msg),
           agent_name: messageData?.agent_name,
           source: messageData?.source,  // Message source: user_speech, user_text, agent_response
+          discarded: messageData?.discarded === true,
           dataSource: 'db' as const,    // Data source: db or live
         }
       } else if (messageType === 'agent_text') {

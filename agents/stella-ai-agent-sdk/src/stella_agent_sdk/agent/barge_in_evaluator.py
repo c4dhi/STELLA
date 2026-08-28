@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 # Minimal fallback only. The full, editable prompt — including where the
 # conversation context goes — lives in agent.yaml (barge_in → system_prompt) and
 # is what runs in production. The interruption itself arrives as the user message.
-BARGE_IN_SYSTEM_PROMPT = """Decide whether the user's interruption of the assistant is a real interruption to act on (COMMIT) or backchannel/noise to ignore so the assistant keeps talking (RESUME).
+BARGE_IN_SYSTEM_PROMPT = """You decide whether a user's interruption of the assistant's speech is a real interruption that should be acted on, or just a backchannel/noise that should be ignored so the assistant keeps talking.
 {{#if conversationHistory}}
 
 Conversation so far:
@@ -60,10 +60,21 @@ Conversation so far:
 {{/if}}
 {{#if interruptedReply}}
 
-The assistant was mid-sentence saying (the user cut in here): {{interruptedReply}}
+The assistant was in the middle of saying (the user cut in here):
+{{interruptedReply}}
 {{/if}}
 
-COMMIT if the words are meaningful in context — an answer to what was just asked, a question, a correction, a new request, "stop"/"wait", or a topic change. RESUME if it's just acknowledgement, thinking-aloud, or noise ("mhm", "yeah", "go on", a cough). When unsure, prefer COMMIT.
+The user's interruption (what they said while the assistant was speaking) is given as the user message. JUDGE IT IN CONTEXT.
+
+JUDGE THE WHOLE UTTERANCE, NEVER ITS OPENING WORDS. People begin real answers with agreement all the time. "Ja, absolut." on its own is a backchannel; "Ja, absolut. Pausen würden auch gehen, aber ich habe leider wenig Zeit." is an ANSWER that happens to start with agreement, and it is a real turn. Read to the end before deciding.
+
+THE TEST: strip the acknowledgement words from the front. Is anything left that the assistant would need to respond to — a fact about the user, an opinion, a qualification, a question, a refusal? If yes, COMMIT. If removing the filler leaves nothing, RESUME.
+
+Output COMMIT if the user's words are meaningful given the conversation — a relevant answer to what the assistant just asked, a question, a correction, a new request, a clear "stop"/"wait", or a change of topic. An on-topic answer (e.g. giving their name right after being asked for it) is a real turn and must COMMIT. If the assistant's last sentence was a question and these words could be an answer to it, COMMIT.
+
+Output RESUME only when the utterance is nothing BUT acknowledgement or noise and carries no information of its own — "mhm", "ja", "genau", "okay", "right", "go on", a cough, a few filler words.
+
+When unsure, prefer COMMIT — ignoring a real interruption is worse than briefly pausing.
 
 Output ONLY one word: COMMIT or RESUME."""
 

@@ -38,6 +38,10 @@ export default function MessageBubble({
   const isPartial = message.status === 'partial'
   const isFinal = message.status === 'final'
   const isAgent = message.role === 'assistant'
+  // Heard and shown, but never treated as a turn. Kept visible on purpose —
+  // the words were said — but marked, because "the agent answered this" and
+  // "the agent heard this and moved on" look identical otherwise.
+  const isDiscarded = message.discarded === true
 
   // Teleprompter highlight for the agent reply being spoken; plain text otherwise.
   const content = (
@@ -79,12 +83,15 @@ export default function MessageBubble({
     // reply is as wide as a paragraph. Sizing to content is also what makes the
     // auto margin able to push user bubbles to the right.
     <motion.div
-      className={`w-fit max-w-[75%] relative group ${isUser ? 'ml-auto' : 'mr-auto'}`}
+      className={`w-fit max-w-[75%] relative group ${isUser ? 'ml-auto' : 'mr-auto'} ${
+        isDiscarded ? 'opacity-60' : ''
+      }`}
     >
       {/* Message Bubble */}
       <div
         className={`
           px-4 py-3 rounded-xl border overflow-hidden
+          ${isDiscarded ? 'border-dashed' : ''}
           ${isUser
             ? isPartial
               ? isDark
@@ -129,6 +136,17 @@ export default function MessageBubble({
                 minute: '2-digit',
               })}
             </span>
+            {isDiscarded && (
+              <>
+                <span className="opacity-50">•</span>
+                <span
+                  className="normal-case italic"
+                  title="Heard, but not treated as a turn — the agent kept speaking and did not respond to this."
+                >
+                  not counted as a turn
+                </span>
+              </>
+            )}
           </motion.div>
         )}
 
