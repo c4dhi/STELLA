@@ -96,14 +96,31 @@ class _Utterance:
 # around ~200 ms across languages (Stivers et al. 2009, PNAS); spoken-dialogue
 # systems start to feel unnatural past ~2 s and read as a breakdown past ~4 s
 # (assemblyai low-latency-voice-ai; arXiv 2507.22352 / 2404.16053).
-#   • bridge  — the floor-holding ack must land INSIDE the gap window to do its
-#               job, so its target is tight (~500 ms).
 #   • response — the first audible token of the substantive answer; ≤1 s is
 #               comfortable.
 # Both share warn (>2 s, unnatural) and alarm (>4 s, perceived dead air)
 # ceilings. Targets are visibility-only (log + analytics payload); no behavior
 # changes here. All four are env-tunable.
-_BRIDGE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_BRIDGE_FIRST_BYTE_TARGET_MS", 500)
+#
+# The bridge target is what THIS pipeline can reach, not the ~200ms gap the
+# research describes. An LLM-backed bridge cannot approach that, and a target
+# nothing can hit reports over_target on every single turn, which is the same
+# as reporting nothing. Measured on prod, the floor is roughly:
+#
+#     ~25ms   dispatch (stt_end → bridge_start)
+#   + ~420ms  time to first token from gpt-4o-mini (pooled client)
+#   + ~100ms  tokens to the end of the first sentence
+#   + ~150ms  Qwen3 first audio (dead constant across every sample)
+#   + ~490ms  playout pre-roll before the first frame goes out
+#   = ~1185ms
+#
+# 1200ms therefore means "nothing went wrong", and the sub-second bridge the
+# research asks for needs a different mechanism, not a tighter number — the
+# templated bridge, which skips the LLM entirely. Two of those legs are the
+# only ones worth chasing: the pre-roll (_DEFAULT_TTS_PREROLL_MS) and TTFT.
+# Cutting the pre-roll to ~300ms would put the floor near 700ms; move this
+# target with it, or it stops meaning anything again.
+_BRIDGE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_BRIDGE_FIRST_BYTE_TARGET_MS", 1200)
 _RESPONSE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_RESPONSE_FIRST_BYTE_TARGET_MS", 1000)
 _FIRST_BYTE_WARN_MS = _env_int("STELLA_FIRST_BYTE_WARN_MS", 2000)
 _FIRST_BYTE_ALARM_MS = _env_int("STELLA_FIRST_BYTE_ALARM_MS", 4000)

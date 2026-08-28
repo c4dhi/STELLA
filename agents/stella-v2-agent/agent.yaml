@@ -316,7 +316,11 @@ pipelineSchema:
           description: >
             How long to wait for the LLM bridge before falling back to an instant
             templated one. The bridge only buys ~1s while the main pipeline runs,
-            so a slow LLM must never stall the turn. Ignored when Fast Bridge is on.
+            so a slow LLM must never stall the turn. Note the LLM bridge returns
+            in ~550-1030ms measured, so at the 2000ms default it always wins and
+            the templated fallback never fires — lower this toward the LLM's own
+            floor if you want the instant bridge, which is the only variant that
+            can open inside the natural turn gap.
     - id: barge_in
       label: "Barge-in Evaluator"
       description: "Decides whether an interruption — spoken or typed — should stop the agent (COMMIT) or be ignored so it keeps talking (RESUME). A spoken one reaches this prompt only after two cheaper filters have run: the agent ducks its own voice the moment it hears sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms). This prompt then judges the FINAL transcript — the one question duration cannot answer, since 'mhm' and 'no, wait' are both short. RESUME resumes playback from exactly where it paused, so a wrong guess here is recoverable. Noise that transcribes to nothing never gets this far. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s) and speech is queued as the next turn instead. Operators can force barge-in off entirely with BARGE_IN_ENABLED=false."
