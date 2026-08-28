@@ -204,10 +204,71 @@ async def test_an_evaluator_that_never_answers_commits():
 
 @pytest.mark.asyncio
 async def test_the_decision_budget_stays_inside_the_watchdog():
-    """If the decision could outlive the suspension, the safety net would
-    resume playback and the verdict would land on state that has moved on."""
+    """Both bound the same silence; a decision allowed to outlast the net that
+    guards the suspension is one that can arrive after something else resolved
+    it."""
     pipe, _ = make_pipeline()
     assert pipe._barge_in_decision_timeout_s < pipe._barge_in_suspend_timeout_s
+
+
+@pytest.mark.asyncio
+async def test_the_watchdog_does_not_fire_while_the_decision_is_running():
+    """Observed on prod: the user interrupted, spoke for 7.6s, the final landed
+    inside the budget — and the watchdog, armed back at the SUSPEND, fired
+    375ms into an 822ms evaluator call. Playback resumed for 452ms before the
+    commit silenced it again: the "word or two" heard after going quiet.
+
+    The transcript being in hand means nothing can stall any more, so the net
+    comes down before the decision starts — as the text path already did."""
+    async def slow(transcript):
+        await asyncio.sleep(0.25)
+        return BargeInDecision.COMMIT
+
+    pipe, room = make_pipeline(slow)
+    pipe._barge_in_suspend_timeout_s = 0.05      # net would fire mid-decision
+
+    # The symptom is audible, not structural: the end state is a commit either
+    # way. What must not happen is playback restarting while we decide.
+    resumed = []
+    original = pipe.resume_speech
+    pipe.resume_speech = lambda: (resumed.append(1), original())[1]
+
+    await _run_detection(pipe, [_vad_barge_in(), _event("warte kurz", is_final=True)])
+
+    assert resumed == [], "playback resumed mid-decision — the user hears a word or two"
+    assert pipe._pending_barge_in is not None
+    assert pipe._pending_barge_in.text == "warte kurz"
+
+
+@pytest.mark.asyncio
+async def test_a_long_interruption_does_not_get_talked_over():
+    """The watchdog budget must measure silence FROM STT, not the length of the
+    interruption. Armed at the suspend and never pushed out, an answer longer
+    than BARGE_IN_SUSPEND_TIMEOUT_MS resumed playback on top of a user who was
+    still mid-sentence — the exact thing yielding the floor prevents."""
+    pipe, room = make_pipeline()
+    pipe._barge_in_enabled = True
+    pipe._is_speaking = True
+    pipe._audio_active = True
+    pipe._is_listening = True
+    pipe._barge_in_suspend_timeout_s = 0.12
+    pipe.close_transcript_gate()
+
+    async def slow_stream(audio_iter, **kwargs):
+        yield _vad_barge_in()
+        # Partials keep arriving for well over the watchdog budget.
+        for i in range(6):
+            await asyncio.sleep(0.04)
+            yield _event(f"ich habe {i}")
+        yield _event("ich habe bei der Uni unterrichten muessen", is_final=True)
+
+    pipe._stt = type("S", (), {"stream_transcribe": staticmethod(slow_stream)})()
+    await pipe._run_stt_stream_inner()
+    await asyncio.sleep(0.05)
+
+    # Never handed back mid-sentence: the turn was committed, not resumed.
+    assert pipe._pending_barge_in is not None
+    assert pipe._pending_barge_in.text == "ich habe bei der Uni unterrichten muessen"
 
 
 @pytest.mark.asyncio

@@ -59,7 +59,7 @@ Always:
 - VARY HOW YOU OPEN. Check what you already said in the recent context above and start this one differently — different words AND a different construction. Opening several turns in a row with the same frame ("That sounds like...", "Das klingt nach...") is the single most robotic thing you can do, even when each sentence is individually fine.
 - No "hmm", "uh" or "erm" — they render badly in our synth.
 {{#if isBargeIn}}
-- The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead."). Do not continue your previous point.
+- The user just interrupted you. Yield the floor: two or three words that hand it to them, then stop. No example is given here on purpose — a quoted one gets repeated verbatim, in the language it was written in. Do not continue your previous point.
 {{/if}}
 - Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult. Naming what you hear in it ("that sounds draining") is welcome; judging it is not.
 - Say only what follows from what they actually told you. Do not invent a mood, a motive or a situation they have not mentioned.
@@ -489,8 +489,10 @@ class BridgeGenerator:
             system_prompt += "\n\n" + directive
         if language:
             system_prompt += (
-                f"\n\nRESOLVED LANGUAGE (overrides the rule above): "
-                f"Produce the bridge in {_LANGUAGE_NAMES.get(language, language)} only."
+                f"\n\nRESOLVED LANGUAGE (overrides every rule above): "
+                f"Produce the bridge in {_LANGUAGE_NAMES.get(language, language)} only. "
+                f"This includes any wording quoted as an example earlier in this "
+                f"prompt — examples show the MOVE, never the words to say."
             )
         return [
             LLMMessage(role="system", content=system_prompt),

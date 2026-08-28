@@ -671,10 +671,10 @@ class AudioPipeline:
         # left to whatever the agent's hook does — the hook fetches
         # conversation history BEFORE the evaluator's own budget starts, so the
         # evaluator's timeout does not cover the whole call. Derived from the
-        # watchdog rather than configured separately so the ordering invariant
-        # cannot drift: the decision must resolve while there is still a
-        # suspension for it to resolve, otherwise the safety net fires first
-        # and the verdict lands on state that has already moved on.
+        # watchdog rather than configured separately: the two bound the same
+        # silence, and a decision allowed to outlast the net that guards the
+        # suspension is a decision that can arrive after something else has
+        # already resolved it.
         self._barge_in_decision_timeout_s = self._barge_in_suspend_timeout_s / 2
 
         # ── Generation-level interrupt (text barge-in #278) ────────────────
@@ -1230,6 +1230,17 @@ class AudioPipeline:
                     await self._publish_user_transcript(event)
                     await self._resolve_voice_barge_in(event)
                     continue
+                elif self.is_suspended:
+                    # Still hearing from the utterance we yielded to. The user
+                    # is talking, which is not a stall — but the watchdog was
+                    # armed at the suspend, so its budget was being spent on
+                    # the length of the interruption. An answer longer than
+                    # BARGE_IN_SUSPEND_TIMEOUT_MS therefore resumed playback
+                    # ON TOP of the user, which is the one thing yielding the
+                    # floor exists to prevent. Push it out on every sign of
+                    # life so it measures silence FROM STT, which is the
+                    # failure it is actually there to catch.
+                    self._arm_suspend_watchdog()
 
             # While the agent is speaking, the turn gate is closed.
             if self._transcript_gate_closed and self._tts_enabled:
@@ -1455,6 +1466,13 @@ class AudioPipeline:
         stopped talking, so the wait is dead air either way — the only open
         question is what ends it.
         """
+        # The transcript is here, so nothing can stall any more: every path
+        # below ends in a commit or a resume, and the decider is bounded by
+        # _barge_in_decision_timeout_s. Disarm now — exactly as the text path
+        # does — or the net fires mid-decision and resumes playback for the
+        # length of the LLM call before the commit silences it again.
+        self._disarm_suspend_watchdog()
+
         text = (event.text or "").strip()
         if not text:
             # Loud enough and long enough to look like speech, but nothing was
