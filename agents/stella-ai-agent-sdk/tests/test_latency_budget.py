@@ -21,14 +21,14 @@ def test_targets_per_source():
 def test_the_bridge_target_is_reachable_by_the_bridge():
     """The bridge target used to be 500ms, taken from the ~200ms natural turn
     gap. An LLM-backed bridge cannot get near that — measured on prod the floor
-    is ~1185ms (TTFT ~420 + tokens ~100 + Qwen3 first audio ~150 + pre-roll
-    ~490 + dispatch ~25) — so every single turn logged over_target, which
-    carries the same information as logging nothing.
+    is ~825ms (dispatch ~25 + TTFT ~420 + tokens-to-sentence ~100 + ~280 from
+    TTS request to the first frame) — so every single turn logged over_target,
+    which carries the same information as logging nothing.
 
     A target has to be reachable to mean anything. This one is deliberately
     LOOSER than the response target: the bridge pays the same TTFT and the same
     synthesis, plus a pre-roll, and has no head start to make up for it."""
-    floor_ms = 25 + 420 + 100 + 150 + 490
+    floor_ms = 25 + 420 + 100 + 280
     assert _BRIDGE_FIRST_BYTE_TARGET_MS >= floor_ms
     assert _latency_status("bridge", floor_ms) == "ok"
     # Still well inside the "unnatural" ceiling, which is what actually flags a

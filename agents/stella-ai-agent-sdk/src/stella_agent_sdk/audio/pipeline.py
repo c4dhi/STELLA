@@ -110,17 +110,16 @@ class _Utterance:
 #     ~25ms   dispatch (stt_end → bridge_start)
 #   + ~420ms  time to first token from gpt-4o-mini (pooled client)
 #   + ~100ms  tokens to the end of the first sentence
-#   + ~150ms  Qwen3 first audio (dead constant across every sample)
-#   + ~490ms  playout pre-roll before the first frame goes out
-#   = ~1185ms
+#   + ~280ms  TTS request → first frame out (~150ms to the first chunk, then
+#             ~130ms to accumulate the 200ms pre-roll at RTF ~0.8)
+#   = ~825ms
 #
-# 1200ms therefore means "nothing went wrong", and the sub-second bridge the
-# research asks for needs a different mechanism, not a tighter number — the
-# templated bridge, which skips the LLM entirely. Two of those legs are the
-# only ones worth chasing: the pre-roll (_DEFAULT_TTS_PREROLL_MS) and TTFT.
-# Cutting the pre-roll to ~300ms would put the floor near 700ms; move this
-# target with it, or it stops meaning anything again.
-_BRIDGE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_BRIDGE_FIRST_BYTE_TARGET_MS", 1200)
+# 900ms therefore means "nothing went wrong". The remaining floor is TTFT, and
+# the sub-second-into-the-gap bridge the research asks for needs a different
+# mechanism rather than a tighter number — the templated bridge, which skips
+# the LLM entirely. This target is tied to _DEFAULT_TTS_PREROLL_MS: move it
+# whenever that moves, or it stops meaning anything again.
+_BRIDGE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_BRIDGE_FIRST_BYTE_TARGET_MS", 900)
 _RESPONSE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_RESPONSE_FIRST_BYTE_TARGET_MS", 1000)
 _FIRST_BYTE_WARN_MS = _env_int("STELLA_FIRST_BYTE_WARN_MS", 2000)
 _FIRST_BYTE_ALARM_MS = _env_int("STELLA_FIRST_BYTE_ALARM_MS", 4000)
@@ -232,18 +231,33 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 #                                              arrival when started with no cushion
 #
 # The deficit is the number that sets this constant: playout must start late
-# enough that it never catches up with synthesis. 300ms was NOT enough (starts
-# at ~434ms, under the 756ms deficit) and still underran mid-sentence. 700-800ms
-# clears it with margin, and lands in the same arriving lump, so 800ms costs
-# nothing over 700ms.
+# enough that it never catches up with synthesis. On those figures 300ms was NOT
+# enough (started at ~434ms, under the 756ms deficit) and underran mid-sentence,
+# so the cushion was set to 800ms.
 #
-# At 800ms the first frame goes out ~1037ms in, against 2235-3907ms before —
-# and it is now CONSTANT rather than scaling with sentence length.
+# RE-MEASURED 2026-08-28, same service, five German sentences of 0.88-2.72s of
+# audio (the earlier run used three of 1.7-4.2s):
 #
-# The real fix is a faster provider: at the RTF ~0.3 the Qwen3 docs quote (4090,
-# 0.6B) a 300ms cushion would be ample and first audio would land near 350ms.
-# On this hardware there is no headroom to stream into.
-_DEFAULT_TTS_PREROLL_MS = 800
+#   real-time factor          0.75 - 0.82   (synthesis now comfortably OUTRUNS
+#                                             playback, at every length tested)
+#   first chunk               ~150ms        (constant to within 1ms)
+#   max playout deficit       130 - 131ms   <- and that is just the wait for the
+#                                              first chunk; once audio starts
+#                                              arriving, production never falls
+#                                              behind 1x again
+#
+# The premise changed, so the constant has to. 800ms was ~6x the worst case it
+# guards against. 200ms keeps ~1.5x margin over the measured 131ms, and going
+# below ~150ms would buy nothing because the first chunk cannot arrive sooner.
+#
+# What did NOT change is the guard behind it: _bridge_underrun still pushes real
+# silence if the source actually drains, and logs the milliseconds it had to
+# insert. That number is the acceptance test for this constant — if "bridged
+# Xms" is ever non-zero, the cushion is too small for the hardware of the day.
+# Prefer raising it back over adding a rate controller: the only reason a fixed
+# cushion works at all is that RTF < 1, and if that stops holding under GPU
+# contention no amount of prediction saves it either.
+_DEFAULT_TTS_PREROLL_MS = 200
 
 # Wall-clock covered by one playout frame.
 _PLAYOUT_FRAME_MS = _PLAYOUT_FRAME_SAMPLES * 1000 // _TTS_SAMPLE_RATE
