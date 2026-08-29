@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, MaxLength, IsBoolean, IsObject, IsUUID } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, IsBoolean, IsObject, IsUUID, IsIn, IsArray, ArrayMaxSize } from 'class-validator';
 
 export class CreateAgentDto {
   @IsString()
@@ -36,6 +36,23 @@ export class CreateAgentDto {
   @IsUUID()
   @IsOptional()
   personaId?: string;
+
+  // Companion mode: the agent runs free-flow and the user picks from these plans
+  // mid-conversation, instead of one plan being loaded up front. Omitted =
+  // today's plan-following behaviour, unchanged.
+  @IsString()
+  @IsOptional()
+  @IsIn(['plan', 'companion'])
+  mode?: 'plan' | 'companion';
+
+  // Plans the companion may offer. Resolved and snapshotted server-side into
+  // config.available_plans, so the activity set is fixed for the deployment and
+  // a later plan edit cannot change a running session.
+  @IsArray()
+  @IsOptional()
+  @ArrayMaxSize(20)
+  @IsUUID('4', { each: true })
+  availablePlanIds?: string[];
 
   @IsUUID()
   @IsOptional()

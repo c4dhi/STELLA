@@ -487,6 +487,18 @@ export class AgentsService {
       agentConfig.persona = persona;
     }
 
+    // Companion mode: snapshot the allow-listed plans into the config, the same
+    // way persona and pipeline_config are snapshotted. The activity set is then
+    // fixed for this deployment — editing a plan afterwards cannot change what a
+    // running session offers, and a restart reproduces the original set.
+    if (createAgentDto.mode === 'companion') {
+      agentConfig.mode = 'companion';
+      agentConfig.available_plans = await this.resolveAvailablePlans(
+        createAgentDto.availablePlanIds ?? [],
+        userId,
+      );
+    }
+
     if (!envVarTemplateId && !agentConfigurationId) return;
 
     // Scoping requires a known AgentType row to compare against.
@@ -513,6 +525,57 @@ export class AgentsService {
           agentTypeRecord,
         );
     }
+  }
+
+  /**
+   * Resolve the plans a companion may offer into self-contained activities.
+   *
+   * Each carries its FULL plan rather than an id: the agent loads one mid-turn,
+   * and a fetch at that moment would put a network round trip inside a
+   * conversational pause. Plans are a few KB each and capped at 20, which is
+   * well inside what the pod's config Secret holds.
+   *
+   * Ownership is enforced per plan through PlanTemplatesService, so a companion
+   * cannot be pointed at someone else's plan by id.
+   */
+  private async resolveAvailablePlans(
+    planIds: string[],
+    userId: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const activities: Array<Record<string, unknown>> = [];
+
+    for (const id of planIds) {
+      const template = await this.prisma.planTemplate.findUnique({
+        where: { id },
+      });
+      if (!template || template.userId !== userId) {
+        throw new BadRequestException(
+          `Plan ${id} is not available to this user`,
+        );
+      }
+
+      const content = (template.content ?? {}) as Record<string, unknown>;
+      activities.push({
+        id: template.id,
+        title: template.name,
+        description: template.description ?? '',
+        // Mapped to the canonical SDK plan shape, matching what the deploy modal
+        // builds for plan-following mode so both paths hand the agent one shape.
+        plan: {
+          id: template.id,
+          title: template.name,
+          description: template.description ?? '',
+          ...content,
+        },
+      });
+    }
+
+    if (activities.length === 0) {
+      this.logger.warn(
+        'Companion deployed with no available plans — it can converse but has nothing to offer',
+      );
+    }
+    return activities;
   }
 
   /**

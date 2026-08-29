@@ -252,6 +252,12 @@ export interface CreateAgentDto {
   // into config.persona, so a later edit reaches the next deployment rather than
   // this one. Omitted = the system default persona.
   personaId?: string
+  // 'companion' = free-flow conversation the user can start activities from.
+  // Omitted / 'plan' = today's behaviour: one plan, loaded up front.
+  mode?: 'plan' | 'companion'
+  // Plans a companion may offer. Resolved and snapshotted server-side, so the
+  // activity set is fixed for the deployment.
+  availablePlanIds?: string[]
   envVarTemplateId?: string // environment variable template to use
   envVars?: Record<string, string> // additional env vars to merge with template (overrides template values)
 }

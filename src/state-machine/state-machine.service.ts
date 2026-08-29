@@ -464,6 +464,71 @@ export class StateMachineService {
   }
 
   /**
+   * Replace the session's plan, discarding any progress.
+   *
+   * Deliberately NOT initializeForSession, which resumes an existing state so a
+   * paused agent can restart without losing progress. Starting an activity in
+   * companion mode is the opposite intent: the user just chose this plan and
+   * expects it from the top, even if they ran it earlier in the same session.
+   */
+  async loadPlanForSession(
+    sessionId: string,
+    plan: PlanData,
+  ): Promise<SessionState> {
+    const normalizedPlan = this.ensureTransitions(plan);
+    const initialStateId =
+      normalizedPlan.initial_state_id || normalizedPlan.states[0]?.id;
+
+    if (!initialStateId) {
+      throw new BadRequestException('Plan must have at least one state');
+    }
+
+    this.logger.log(
+      `Loading plan ${normalizedPlan.id} into session ${sessionId} (replacing any existing state)`,
+    );
+
+    const data = {
+      planId: normalizedPlan.id,
+      planData: normalizedPlan as unknown as Prisma.InputJsonValue,
+      currentStateId: initialStateId,
+      completedTasks: [],
+      skippedTasks: [],
+      deliverables: {},
+      turnsWithoutProgress: 0,
+      totalTurns: 0,
+      lastTransitionAt: null,
+    };
+
+    // Upsert rather than delete+create: SessionState is 1:1 with the session, and
+    // a delete would briefly leave a live session with no row for a concurrent
+    // reader to find.
+    return this.prisma.sessionState.upsert({
+      where: { sessionId },
+      create: { sessionId, ...data },
+      update: data,
+    });
+  }
+
+  /**
+   * Drop the session's plan and return to free-flow companion conversation.
+   *
+   * The row is removed rather than blanked so every reader's existing
+   * "no state machine for this session" path applies unchanged — that is exactly
+   * the condition a plan-less companion turn is in.
+   */
+  async clearPlanForSession(sessionId: string): Promise<void> {
+    const existing = await this.prisma.sessionState.findUnique({
+      where: { sessionId },
+    });
+    if (!existing) return;
+
+    this.logger.log(
+      `Clearing plan ${existing.planId ?? '(none)'} from session ${sessionId} — back to companion`,
+    );
+    await this.prisma.sessionState.delete({ where: { sessionId } });
+  }
+
+  /**
    * Get state machine state for a session
    */
   async getState(sessionId: string): Promise<SessionState | null> {

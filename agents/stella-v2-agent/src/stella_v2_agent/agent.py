@@ -37,6 +37,7 @@ from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.tools import ToolRegistry
 from stella_agent_sdk.tools.state_machine import create_state_machine_tools
+from stella_agent_sdk.tools.companion import create_companion_tools
 
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
@@ -187,6 +188,13 @@ class StellaV2Agent(BaseAgent):
         # Deployed Persona (#467): identity, resolved and snapshotted backend-side
         # at deploy time. Independent of the plan and of the pipeline config.
         self._persona_config: Optional[Dict[str, Any]] = None
+        # Companion mode: the agent converses freely and loads one of the
+        # allow-listed activities when the user picks it, instead of running a
+        # single plan from the start. Absent config = plan-following, unchanged.
+        self._companion_mode: bool = False
+        self._available_plans: List[Dict[str, Any]] = []
+        # Title of the activity currently running, for logs and the reply's context.
+        self._active_activity: Optional[str] = None
         self._custom_history_limit: int = 20  # overridable via pipeline_config thresholds
         self._last_known_state_id: Optional[str] = None
         self._last_state_id: Optional[str] = None  # for detecting state transitions between turns
@@ -463,9 +471,25 @@ class StellaV2Agent(BaseAgent):
                 turn_id=turn_id,
             )
 
+            # Companion routing (#467): the router's tools have already acted on the
+            # state machine; this reconciles the agent's own view and tells the
+            # reply what just happened.
+            companion = (
+                self._apply_companion_tool_results(all_verdicts)
+                if self._companion_mode
+                else {}
+            )
+            if companion:
+                sm_context["companion"] = companion
+
             # Deterministic verdict directive: a flagging expert can replace the
             # generated response with a literature-informed template.
             directive = arb_result.directive
+            if companion:
+                # Fold it into the directive the response prompt already renders,
+                # rather than adding a second channel into the reply. Without this
+                # the model would invent activity names instead of reading them.
+                directive.primary_action = self._companion_directive(companion)
             deterministic_response = (
                 directive.resolved_response
                 or directive.redirect_message
@@ -708,10 +732,18 @@ class StellaV2Agent(BaseAgent):
                 farewell = self._plan_farewell_message()
             if farewell:
                 yield AgentOutput.text_final(session_id, farewell)
-            self._session_completed = True
-            logger.info(
-                f"Session {session_id} reached __end__ — fallback completion applied"
-            )
+
+            if self._companion_mode:
+                # A finished activity is not a finished conversation. The companion
+                # takes the floor back and keeps talking, so __end__ means "pop",
+                # not "hang up" — the plan's own farewell still plays as the
+                # hand-back line.
+                await self._return_to_companion(reason="activity reached its end")
+            else:
+                self._session_completed = True
+                logger.info(
+                    f"Session {session_id} reached __end__ — fallback completion applied"
+                )
 
         # Increment turn counter only when no progress was made and session is still active.
         if not deliverables_found and not tasks_completed and not reached_end_state:
@@ -824,7 +856,20 @@ class StellaV2Agent(BaseAgent):
             # resolves, so without this the agent's FIRST words come out in the
             # provider default while everything after them follows the plan.
             self.audio.set_tts_language(self.language_resolver.forced)
-        if plan:
+        # Companion mode is declared by the deploy config. A companion starts with
+        # NO plan — it converses until the user picks an activity — so the state
+        # machine connection cannot be gated on having one up front.
+        self._companion_mode = config.get("mode") == "companion"
+        self._available_plans = config.get("available_plans") or []
+        self._active_activity = None
+        if self._companion_mode:
+            logger.info(
+                "Companion mode: %d activit%s available",
+                len(self._available_plans),
+                "y" if len(self._available_plans) == 1 else "ies",
+            )
+
+        if plan or self._companion_mode:
             self._plan_config = plan
 
             # Connect to gRPC state machine service
@@ -833,18 +878,28 @@ class StellaV2Agent(BaseAgent):
                 address=self._state_machine_address,
             )
             await self.sm_client.connect()
-            result = await self.sm_client.initialize(plan)
 
-            if result and result.get("success"):
-                logger.info(f"State machine initialized via gRPC: {plan.get('title', 'Unknown')}")
-            else:
-                error = result.get("error", "unknown") if result else "no response"
-                logger.error(f"Failed to initialize state machine: {error}")
+            if plan:
+                result = await self.sm_client.initialize(plan)
+                if result and result.get("success"):
+                    logger.info(f"State machine initialized via gRPC: {plan.get('title', 'Unknown')}")
+                else:
+                    error = result.get("error", "unknown") if result else "no response"
+                    logger.error(f"Failed to initialize state machine: {error}")
 
             # Create tool registry with SDK state machine tools
             self.tool_registry = ToolRegistry()
             for tool in create_state_machine_tools(self.sm_client):
                 self.tool_registry.register(tool)
+
+            if self._companion_mode:
+                for tool in create_companion_tools(self._available_plans, self.sm_client):
+                    self.tool_registry.register(tool)
+                # The router is shipped disabled so plan-following deployments are
+                # untouched; companion mode is the only thing that turns it on.
+                self.expert_registry.apply_config(
+                    {"experts": {"companion_router": {"enabled": True}}}
+                )
 
             # Wire tool registry into expert pool
             self.expert_pool.set_tool_registry(self.tool_registry)
@@ -1054,6 +1109,89 @@ class StellaV2Agent(BaseAgent):
     # ─────────────────────────────────────────────────────────────────────
     # Helper methods
     # ─────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _companion_directive(companion: Dict[str, Any]) -> str:
+        """Turn what the router did into one instruction for the reply.
+
+        Naming the options explicitly matters: without them the model happily
+        invents plausible-sounding activities that do not exist, which reads as a
+        broken promise the moment the user picks one.
+        """
+        if companion.get("activities") is not None:
+            activities = companion["activities"]
+            if not activities:
+                return (
+                    "The user asked what you can do together, but no activities are "
+                    "available. Say so plainly and keep the conversation going."
+                )
+            listed = "; ".join(
+                f"{a.get('title')}" + (f" ({a.get('description')})" if a.get("description") else "")
+                for a in activities
+            )
+            return (
+                "The user asked what you can do together. Offer exactly these, in "
+                f"your own words, and invite them to pick one: {listed}. "
+                "Do not invent any others."
+            )
+        if companion.get("started"):
+            return (
+                f"The user just chose '{companion['started']}' and it is now starting. "
+                "Acknowledge briefly and begin — do not re-ask which activity they want."
+            )
+        if companion.get("ended"):
+            return (
+                "The activity has just been stopped at the user's request. Close it "
+                "warmly, do not try to resume it, and return to open conversation."
+            )
+        return ""
+
+    async def _return_to_companion(self, reason: str) -> None:
+        """Drop the running activity and go back to free-flow conversation.
+
+        Clears the state machine so every "no plan" path — prompts, progress,
+        experts — applies unchanged, which is exactly the state a companion turn
+        should be in. Leaves the session open: in companion mode the conversation
+        outlives any single activity.
+        """
+        if self.sm_client:
+            await self.sm_client.clear_plan()
+        self._plan_config = None
+        self._active_activity = None
+        self._last_known_state_id = None
+        logger.info("Back to companion mode (%s)", reason)
+
+    def _apply_companion_tool_results(self, verdicts: List[Any]) -> Dict[str, Any]:
+        """Read what the router did this turn, and reconcile the agent to it.
+
+        The tools already performed their side effects against the state machine;
+        this only syncs the agent's own view and returns what the reply needs to
+        know. Returns a dict that is empty on the common turn where the router
+        abstained.
+        """
+        outcome: Dict[str, Any] = {}
+        for verdict in verdicts or []:
+            if getattr(verdict, "expert_name", "") != "companion_router":
+                continue
+            for result in (verdict.raw_output or {}).get("tool_results", []) or []:
+                data = result.get("data") or {}
+                if data.get("offer_activities"):
+                    outcome["activities"] = data.get("activities", [])
+                if data.get("activity_started"):
+                    self._active_activity = data.get("activity_title")
+                    # The plan was loaded backend-side by the tool; adopt it locally
+                    # so farewell/voice/language lookups resolve against it.
+                    for activity in self._available_plans:
+                        if activity.get("id") == data.get("activity_id"):
+                            self._plan_config = activity.get("plan")
+                            break
+                    outcome["started"] = self._active_activity
+                if data.get("activity_ended"):
+                    self._plan_config = None
+                    self._active_activity = None
+                    self._last_known_state_id = None
+                    outcome["ended"] = True
+        return outcome
 
     def _plan_farewell_message(self) -> Optional[str]:
         """Resolve the configured farewell from plan metadata, if any.
