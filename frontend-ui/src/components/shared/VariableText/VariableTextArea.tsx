@@ -1,4 +1,4 @@
-import { useRef, useMemo, useState } from 'react'
+import { useRef, useMemo, useState, useLayoutEffect } from 'react'
 import { useThemeStore } from '../../../store/themeStore'
 import type { Persona } from '../../../lib/api-types'
 import {
@@ -47,7 +47,6 @@ export default function VariableTextArea({
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
   const ref = useRef<HTMLTextAreaElement>(null)
-  const backdropRef = useRef<HTMLDivElement>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   const options = useMemo(() => collectPersonaTokens(personas), [personas])
@@ -68,17 +67,32 @@ export default function VariableTextArea({
     })
   }
 
-  // The backdrop must scroll in lockstep with the textarea or the highlight
-  // drifts away from the text on longer values.
-  const syncScroll = () => {
-    if (backdropRef.current && ref.current) {
-      backdropRef.current.scrollTop = ref.current.scrollTop
-      backdropRef.current.scrollLeft = ref.current.scrollLeft
-    }
-  }
+  // Grow to fit instead of scrolling. A scrollbar on the textarea narrows its
+  // content box, so it wraps a line earlier than the backdrop behind it and the
+  // two layers desynchronise from that line on. Never scrolling removes the
+  // whole class of drift, and reads better for short plan fields anyway.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [value, rows])
 
-  const shared =
-    'w-full px-3 py-2 text-[13px] leading-relaxed font-normal whitespace-pre-wrap break-words'
+  const shared = 'w-full px-3 py-2'
+  // Typography is pinned identically on BOTH layers rather than inherited, so a
+  // stray ancestor style cannot desynchronise them. Every property here affects
+  // where characters land; they must not diverge.
+  const metrics: React.CSSProperties = {
+    fontFamily: 'inherit',
+    fontSize: '13px',
+    lineHeight: '1.625',
+    fontWeight: 400,
+    letterSpacing: 'normal',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'break-word',
+    wordBreak: 'normal',
+    tabSize: 4,
+  }
   const box = isDark
     ? 'bg-zinc-800 border-zinc-700'
     : 'bg-white border-neutral-200'
@@ -87,25 +101,26 @@ export default function VariableTextArea({
     <div className={className}>
       <div className={`relative rounded-lg border ${box} focus-within:border-fuchsia-400/60 transition-colors`}>
         <div
-          ref={backdropRef}
           aria-hidden="true"
-          className={`${shared} absolute inset-0 overflow-hidden pointer-events-none`}
-          style={{ fontFamily: 'inherit' }}
+          className={`${shared} absolute inset-0 pointer-events-none`}
+          style={metrics}
         >
           {highlightPersonaTokens(value, isDark, knownKeys)}
+          {/* A trailing newline is not rendered by a div but IS a line in the
+              textarea; without this the last line's highlight sits one row high. */}
+          {value.endsWith('\n') ? '\u200b' : null}
         </div>
         <textarea
           ref={ref}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onScroll={syncScroll}
           placeholder={placeholder}
           rows={singleLine ? 1 : rows}
           spellCheck={false}
-          className={`${shared} relative bg-transparent resize-none focus:outline-none ${
+          className={`${shared} relative block bg-transparent resize-none overflow-hidden focus:outline-none ${
             isDark ? 'text-transparent caret-zinc-100' : 'text-transparent caret-neutral-900'
           } placeholder:text-neutral-400`}
-          style={{ fontFamily: 'inherit' }}
+          style={metrics}
         />
       </div>
 

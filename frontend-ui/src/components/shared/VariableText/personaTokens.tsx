@@ -94,13 +94,23 @@ export function highlightPersonaTokens(
     const isKnown = known.has(match[1])
     const cls = isKnown
       ? isDark
-        ? 'bg-fuchsia-500/20 text-fuchsia-300'
-        : 'bg-fuchsia-100/80 text-fuchsia-700'
+        ? 'bg-fuchsia-500/25 text-fuchsia-300'
+        : 'bg-fuchsia-100 text-fuchsia-700'
       : isDark
-        ? 'bg-amber-500/15 text-amber-400 line-through decoration-amber-500/40'
-        : 'bg-amber-50 text-amber-700 line-through decoration-amber-400/50'
+        ? 'bg-amber-500/20 text-amber-400 line-through decoration-amber-500/40'
+        : 'bg-amber-100 text-amber-700 line-through decoration-amber-400/50'
+    // CRITICAL: this span may not change the text's METRICS. The backdrop has to
+    // lay out character-for-character identically to the textarea on top of it,
+    // so horizontal padding, font-weight, letter-spacing and font-size are all
+    // off limits — any of them shifts every character after the token and the
+    // caret stops matching what you see. Colour and background only.
+    // box-decoration-break keeps the tint on both halves of a wrapped token.
     return (
-      <span key={i} className={`${cls} rounded px-0.5 font-medium`}>
+      <span
+        key={i}
+        className={`${cls} rounded-[2px]`}
+        style={{ WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone' }}
+      >
         {part}
       </span>
     )

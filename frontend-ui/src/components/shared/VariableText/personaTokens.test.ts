@@ -54,3 +54,40 @@ describe('PERSONA_TOKEN_RE', () => {
     expect(parts).not.toContain('{{current_focus}}')
   })
 })
+
+describe('highlight markup must not change text metrics', () => {
+  // The backdrop lays out behind a transparent textarea, so it has to render
+  // character-for-character identically. Any class that changes width — padding,
+  // font-weight, font-size, letter-spacing, margin — shifts every character
+  // after the token and the caret stops matching what the user sees.
+  //
+  // This is a real bug that shipped: `px-0.5 font-medium` on the token span made
+  // editing anything after a token behave erratically.
+  const FORBIDDEN = /\b(?:p|px|pl|pr|m|mx|ml|mr)-|font-(?:medium|semibold|bold|light)|text-(?:xs|sm|base|lg|\[)|tracking-/
+
+  it('rejects metric-changing classes on highlighted tokens', async () => {
+    const { highlightPersonaTokens } = await import('./personaTokens')
+    const nodes = highlightPersonaTokens('a {{persona.name}} b', false, new Set(['name']))
+
+    const classes = nodes
+      .map((n: any) => n?.props?.className)
+      .filter(Boolean)
+      .join(' ')
+
+    expect(classes).not.toMatch(FORBIDDEN)
+  })
+
+  it('still visually distinguishes known from unknown tokens', async () => {
+    const { highlightPersonaTokens } = await import('./personaTokens')
+    const known = highlightPersonaTokens('{{persona.name}}', false, new Set(['name']))
+    const unknown = highlightPersonaTokens('{{persona.nope}}', false, new Set(['name']))
+
+    const cls = (nodes: any[]) =>
+      nodes.map((n: any) => n?.props?.className).filter(Boolean).join(' ')
+
+    expect(cls(known)).toContain('fuchsia')
+    // An undefined token resolves to an empty string at runtime — silent, and
+    // easy to miss — so it has to look wrong while editing.
+    expect(cls(unknown)).toContain('line-through')
+  })
+})
