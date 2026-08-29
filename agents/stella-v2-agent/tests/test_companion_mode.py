@@ -264,3 +264,54 @@ def test_plan_following_agents_send_no_companion_metadata():
     # Its absence is what tells the UI to keep rendering the plan it was
     # deployed with — a plan agent must never look like an idle companion.
     assert _agent(companion=False)._companion_progress_metadata() is None
+
+
+# ---------------------------------------------------------------------------
+# Authoring the reply against the plan that was JUST loaded
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_starting_turn_is_reanchored_to_the_loaded_plan():
+    """Regression: the agent invented the activity's opening question.
+
+    start_activity loads the plan mid-turn, but sm_context was read at turn
+    START — when the session had no plan at all. Authoring against that snapshot
+    left the model with nothing but the activity's NAME to go on, so it opened
+    the fitness check-in with a plausible-sounding frequency question while the
+    state machine sat waiting on "greet and ask for name". Observed live in
+    session 9e664a34; the two never resynced because the user stopped it first.
+    """
+    agent = _agent()
+    loaded = {"state": {"id": "greeting", "title": "Greeting"}, "deliverables": []}
+
+    async def _fake_fetch():
+        return loaded
+
+    agent._fetch_sm_context = _fake_fetch  # type: ignore
+
+    outcome = agent._apply_companion_tool_results([_verdict(
+        activity_started=True,
+        activity_id="checkin",
+        activity_title="Fitness Check-in",
+        current_state_id="greeting",
+    )])
+    assert outcome["started_state_id"] == "greeting"
+
+    turn_start = {"state": None, "deliverables": []}
+    resolved = await agent._resolve_response_context(
+        turn_start,
+        "de",
+        transitioned=bool(outcome.get("started_state_id")),
+        new_state_id=outcome.get("started_state_id"),
+        session_completed=False,
+    )
+    assert resolved is loaded
+    assert resolved["state"]["id"] == "greeting"
+
+
+def test_the_start_directive_defers_to_the_plans_first_step():
+    # "begin" alone is an invitation to improvise, which is exactly what went
+    # wrong — the reply must be pointed at the step the plan actually specifies.
+    directive = StellaV2Agent._companion_directive({"started": "Fitness Check-in"})
+    assert "current step" in directive
+    assert "invent" in directive

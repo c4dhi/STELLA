@@ -573,11 +573,19 @@ class StellaV2Agent(BaseAgent):
                     ),
                     {},
                 )
+                # Starting an activity is the SAME class of event as a mid-turn
+                # phase advance: the state machine changed after `sm_context` was
+                # read, so the turn-start snapshot no longer describes reality.
+                # Here it describes a session with no plan at all, and the reply
+                # would be improvised — the agent opened the fitness check-in by
+                # inventing a frequency question while the plan sat waiting on
+                # "greet and ask for name".
+                started_state_id = companion.get("started_state_id")
                 response_sm_context = await self._resolve_response_context(
                     sm_context,
                     resolved_language,
-                    transitioned=bool(te_raw.get("transitioned")),
-                    new_state_id=te_raw.get("new_state_id"),
+                    transitioned=bool(te_raw.get("transitioned")) or bool(started_state_id),
+                    new_state_id=te_raw.get("new_state_id") or started_state_id,
                     session_completed=bool(te_raw.get("session_completed")),
                 )
                 response_sm_context["_collected_keys"] = collected_keys
@@ -1196,7 +1204,9 @@ class StellaV2Agent(BaseAgent):
         if companion.get("started"):
             return (
                 f"The user just chose '{companion['started']}' and it is now starting. "
-                "Acknowledge briefly and begin — do not re-ask which activity they want."
+                "Acknowledge briefly, then do exactly what the current step below "
+                "instructs — do not re-ask which activity they want, and do not "
+                "invent an opening question of your own."
             )
         if companion.get("ended"):
             return (
@@ -1307,6 +1317,9 @@ class StellaV2Agent(BaseAgent):
                             self._plan_config = activity.get("plan")
                             break
                     outcome["started"] = self._active_activity
+                    # Where LoadPlan left the state machine. The response for THIS
+                    # turn must be authored against it — see _resolve_response_context.
+                    outcome["started_state_id"] = data.get("current_state_id")
                 if data.get("activity_ended"):
                     # Capture the title BEFORE clearing it — the decision tag and
                     # the sidebar both need to name what was just left, and by the
