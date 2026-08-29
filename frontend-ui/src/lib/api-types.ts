@@ -1107,6 +1107,8 @@ export interface PublicAgentConfig {
   // ID (type/version-checked, defaults-merged). pipelineConfig is kept only as a
   // backward-compatible snapshot for public projects saved before this field.
   agentConfigurationId?: string
+  /** Persona (agent identity), resolved by ID at spawn. Absent = system default. */
+  personaId?: string
   envVarTemplateId?: string
   envVars?: Record<string, string>
 }

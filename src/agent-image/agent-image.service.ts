@@ -41,6 +41,12 @@ export class AgentImageService {
   // a non-k3s "production" deploy doesn't get stuck NotReady on a missing k3s CLI.
   private readonly containerRuntime: 'k3s' | 'docker' | 'none';
 
+  // How many historical cfg-* tags to keep per agent image (newest first).
+  // Every source change mints a new ~900MB tag and nothing else ever deletes the
+  // old ones, so without a sweep the image store grows without bound.
+  // Override with AGENT_IMAGE_KEEP_VERSIONS.
+  private readonly keepConfigImageVersions: number;
+
   // Registry of known agent types and their build contexts
   // Paths are relative to stella-backend/ directory (the new context)
   private readonly agentRegistry: Map<string, AgentImageConfig> = new Map([
@@ -83,6 +89,9 @@ export class AgentImageService {
       this.containerRuntime = this.isProduction && !!process.env.KUBERNETES_SERVICE_HOST ? 'k3s' : 'none';
     }
 
+    const keepVersions = parseInt(this.configService.get<string>('AGENT_IMAGE_KEEP_VERSIONS', '3'), 10);
+    this.keepConfigImageVersions = Number.isFinite(keepVersions) && keepVersions > 0 ? keepVersions : 3;
+
     // In K8s, use the mounted workspace path from AGENT_WORKSPACE_ROOT env var
     // Otherwise, compute it relative to this file's location
     if (this.isRunningInK8s && process.env.AGENT_WORKSPACE_ROOT) {
@@ -102,6 +111,7 @@ export class AgentImageService {
     this.logger.log(`Container runtime (readiness probe): ${this.containerRuntime}`);
     this.logger.log(`Running in K8s: ${this.isRunningInK8s}`);
     this.logger.log(`Docker socket available: ${this.hasDockerSocket}`);
+    this.logger.log(`Retained cfg-* image versions: ${this.keepConfigImageVersions}`);
 
     if (this.isRunningInK8s && !this.hasDockerSocket) {
       this.logger.warn(`Running inside K8s pod without Docker socket - images must be pre-built`);
@@ -242,12 +252,16 @@ export class AgentImageService {
     const buildPromise = (async (): Promise<string> => {
       if (!forceRebuild) {
         const tagged = await this.tryTagFromLatest(config, fullImageName);
-        if (tagged) return fullImageName;
+        if (tagged) {
+          await this.pruneOldConfigImages(config, fullImageName);
+          return fullImageName;
+        }
       }
       // If tagging failed (e.g., ctr not available inside K8s pod),
       // fall back to the pre-built :latest image rather than blocking pod creation.
       try {
         await this.buildAndImportImage(config, fullImageName, forceRebuild);
+        await this.pruneOldConfigImages(config, fullImageName);
         return fullImageName;
       } catch (error) {
         this.logger.warn(
@@ -413,9 +427,10 @@ export class AgentImageService {
   private async importToK3s(imageName: string): Promise<void> {
     this.logger.log(`Importing ${imageName} into K3s containerd...`);
 
+    const tarPath = `/tmp/${imageName.replace(':', '-').replace('/', '-')}.tar`;
+
     try {
       // Export from Docker to tar file
-      const tarPath = `/tmp/${imageName.replace(':', '-').replace('/', '-')}.tar`;
       this.logger.log(`Exporting image to ${tarPath}...`);
       await execAsync(`docker save ${imageName} -o ${tarPath}`, { timeout: 120000 });
 
@@ -431,13 +446,14 @@ export class AgentImageService {
         await execAsync(`ctr --address /run/k3s/containerd/containerd.sock -n k8s.io images import ${tarPath}`, { timeout: 120000 });
       }
 
-      // Clean up tar file
-      await execAsync(`rm -f ${tarPath}`);
-
       this.logger.log(`Successfully imported ${imageName} into K3s containerd`);
     } catch (error) {
       this.logger.error(`Failed to import image into K3s: ${error.message}`);
       throw error;
+    } finally {
+      // Always drop the export, including when the import above threw. Otherwise
+      // every failed import strands a ~900MB tarball on the host disk forever.
+      await execAsync(`rm -f ${tarPath}`).catch(() => undefined);
     }
   }
 
@@ -503,6 +519,160 @@ export class AgentImageService {
       } catch (error) {
         this.logger.warn(`Error removing image ${imageName}: ${error.message}`);
       }
+    }
+  }
+
+  /**
+   * Delete stale cfg-* tags for an agent image, keeping the newest
+   * `keepConfigImageVersions` plus anything a live workload still references.
+   *
+   * The cfg tag fingerprints the Dockerfile and its COPY sources, so every source
+   * change strands the previous tag. removeImage() only ever drops the tag for the
+   * *current* fingerprint, so nothing reclaimed the history until this sweep.
+   *
+   * Safe against the auto-pause/wake flow: resuming an agent goes through
+   * restartAgent() -> createAgentPod() -> ensureImageExists(), which recomputes the
+   * fingerprint from current source. A resumed agent therefore always lands on the
+   * current tag, never a pruned one. Only pods that are still alive can depend on
+   * an older tag, and those are protected below.
+   *
+   * Fails safe: if the in-use set cannot be determined, nothing is removed.
+   */
+  private async pruneOldConfigImages(config: AgentImageConfig, currentImageName: string): Promise<void> {
+    try {
+      const tags = await this.listConfigImageTags(config);
+      if (tags.length <= this.keepConfigImageVersions) {
+        return;
+      }
+
+      const inUse = await this.listInUseImageRefs();
+      if (!inUse) {
+        this.logger.warn(
+          `Skipping cfg-* prune for ${config.imageName}: could not determine which images are in use`,
+        );
+        return;
+      }
+
+      const protectedRefs = new Set<string>([
+        currentImageName,
+        `${config.imageName}:${config.tag}`,
+        ...inUse,
+      ]);
+
+      // listConfigImageTags() returns newest-first, so slice() keeps the newest N.
+      const stale = tags
+        .slice(this.keepConfigImageVersions)
+        .filter((ref) => !protectedRefs.has(ref));
+
+      if (stale.length === 0) {
+        return;
+      }
+
+      for (const ref of stale) {
+        await this.removeImageRef(ref);
+      }
+      this.logger.log(
+        `Pruned ${stale.length} stale ${config.imageName} cfg-* image(s), ` +
+        `kept the ${this.keepConfigImageVersions} newest`,
+      );
+    } catch (error) {
+      // Never let housekeeping block an agent spawn.
+      this.logger.warn(`cfg-* prune for ${config.imageName} failed: ${(error as Error).message?.trim()}`);
+    }
+  }
+
+  /**
+   * List cfg-* tags for an agent image as `name:tag`, newest first
+   * (`docker images` sorts by creation time descending).
+   */
+  private async listConfigImageTags(config: AgentImageConfig): Promise<string[]> {
+    const { stdout } = await execAsync(
+      `docker images --filter=reference='${config.imageName}:cfg-*' --format '{{.Repository}}:{{.Tag}}'`,
+      { timeout: 15000 },
+    );
+    return stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+  }
+
+  /**
+   * Images referenced by live workloads, normalised to `name:tag`.
+   *
+   * The cluster is asked first: a pod spec pins its image even while the pod is
+   * being recreated, which the local container list would miss. Falls back to the
+   * Docker container list (enough locally, where K8s shares the Docker daemon).
+   *
+   * Returns null when no source can be reached, which disables pruning entirely.
+   */
+  private async listInUseImageRefs(): Promise<Set<string> | null> {
+    const jsonPath =
+      '{range .items[*]}' +
+      '{range .spec.containers[*]}{.image}{"\\n"}{end}' +
+      '{range .spec.initContainers[*]}{.image}{"\\n"}{end}' +
+      '{end}';
+
+    const sources = [
+      `kubectl get pods -A -o jsonpath='${jsonPath}'`,
+      `k3s kubectl get pods -A -o jsonpath='${jsonPath}'`,
+      `docker ps -a --format '{{.Image}}'`,
+    ];
+
+    for (const cmd of sources) {
+      try {
+        const { stdout } = await execAsync(cmd, { timeout: 15000 });
+        const refs = stdout
+          .split('\n')
+          .map((line) => this.normalizeImageRef(line))
+          .filter(Boolean);
+        if (refs.length > 0) {
+          return new Set(refs);
+        }
+      } catch {
+        // Unreachable source - try the next one.
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Normalise an image reference to `name:tag` so refs from kubectl, ctr and
+   * docker compare equal.
+   */
+  private normalizeImageRef(raw: string): string {
+    const ref = raw.trim().replace(/^docker\.io\/library\//, '');
+    if (!ref || ref.includes('@')) {
+      return '';
+    }
+    return ref.includes(':') ? ref : `${ref}:latest`;
+  }
+
+  /**
+   * Remove one image ref from every runtime that may hold it.
+   *
+   * Deliberately never uses `docker rmi -f`: the daemon's own in-use check is the
+   * last line of defence behind listInUseImageRefs().
+   */
+  private async removeImageRef(imageName: string): Promise<void> {
+    if (this.isProduction) {
+      try {
+        await execAsync(`k3s ctr images rm docker.io/library/${imageName}`, { timeout: 30000 });
+      } catch (k3sErr) {
+        this.logger.warn(`k3s ctr image rm failed (${(k3sErr as Error).message?.trim()}), falling back to ctr binary`);
+        try {
+          await execAsync(
+            `ctr --address /run/k3s/containerd/containerd.sock -n k8s.io images rm docker.io/library/${imageName}`,
+            { timeout: 30000 },
+          );
+        } catch (ctrErr) {
+          this.logger.warn(`Could not remove ${imageName} from containerd: ${(ctrErr as Error).message?.trim()}`);
+        }
+      }
+    }
+
+    try {
+      await execAsync(`docker rmi ${imageName}`, { timeout: 30000 });
+      this.logger.log(`Removed stale image ${imageName}`);
+    } catch (error) {
+      this.logger.warn(`Could not remove ${imageName} from Docker: ${(error as Error).message?.trim()}`);
     }
   }
 

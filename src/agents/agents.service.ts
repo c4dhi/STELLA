@@ -479,12 +479,21 @@ export class AgentsService {
 
     // Persona resolves even when nothing else is scoped: omitting personaId means
     // "the system default", not "no persona", so this runs before the early return.
-    const persona = await this.personasService.resolveForDeploy(
-      personaId,
-      userId,
-    );
-    if (persona) {
-      agentConfig.persona = persona;
+    //
+    // Unless the config ALREADY carries a persona snapshot. That means this is a
+    // restart or an auto-pause wake replaying a previous deployment, not a fresh
+    // one — and agentConfig is defined to reproduce the original deployment
+    // rather than today's defaults. Resolving here regardless is how a paused
+    // Grace came back as STELLA: the wake path has no personaId to pass, so the
+    // system default silently overwrote the snapshot.
+    if (!agentConfig.persona) {
+      const persona = await this.personasService.resolveForDeploy(
+        personaId,
+        userId,
+      );
+      if (persona) {
+        agentConfig.persona = persona;
+      }
     }
 
     // Companion mode: snapshot the allow-listed plans into the config, the same

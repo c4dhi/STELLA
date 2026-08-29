@@ -61,6 +61,7 @@ const sidebars: SidebarsConfig = {
           },
           items: [
             'agents/stella-v2/pipeline-configurator',
+            'agents/stella-v2/companion-mode',
             'agents/stella-v2/pipeline-schema',
           ],
         },
