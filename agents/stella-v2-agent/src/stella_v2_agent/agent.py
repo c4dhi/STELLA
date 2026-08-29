@@ -470,6 +470,26 @@ class StellaV2Agent(BaseAgent):
                 user_input=input.text,
             )
 
+            # Companion routing (#467): the router's tools have already acted on the
+            # state machine; this reconciles the agent's own view and tells the
+            # reply what just happened. Folded in BEFORE the arbitration debug is
+            # published so that debug line reports the directive the response is
+            # actually written from, not a pre-companion draft of it.
+            companion = (
+                self._apply_companion_tool_results(all_verdicts)
+                if self._companion_mode
+                else {}
+            )
+            directive = arb_result.directive
+            if companion:
+                sm_context["companion"] = companion
+                # Its OWN field, not primary_action: primary_action loses to any
+                # expert follow-up question, and probing reliably produces one on
+                # exactly the turns the router fires — "what can we do?" is a
+                # probing cue too. Grace then spoke probing's question and invented
+                # household chores while the real activity list sat unread.
+                directive.routing_directive = self._companion_directive(companion)
+
             yield AgentOutput.debug(
                 input.session_id,
                 f"Arbitration: tone={arb_result.directive.tone}, favored={arb_result.favored_expert}",
@@ -485,27 +505,12 @@ class StellaV2Agent(BaseAgent):
                 turn_id=turn_id,
             )
 
-            # Companion routing (#467): the router's tools have already acted on the
-            # state machine; this reconciles the agent's own view and tells the
-            # reply what just happened.
-            companion = (
-                self._apply_companion_tool_results(all_verdicts)
-                if self._companion_mode
-                else {}
-            )
             if companion:
-                sm_context["companion"] = companion
                 for decision in self._companion_decisions(input.session_id, companion):
                     yield decision
 
             # Deterministic verdict directive: a flagging expert can replace the
             # generated response with a literature-informed template.
-            directive = arb_result.directive
-            if companion:
-                # Fold it into the directive the response prompt already renders,
-                # rather than adding a second channel into the reply. Without this
-                # the model would invent activity names instead of reading them.
-                directive.primary_action = self._companion_directive(companion)
             deterministic_response = (
                 directive.resolved_response
                 or directive.redirect_message

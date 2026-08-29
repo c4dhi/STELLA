@@ -315,3 +315,62 @@ def test_the_start_directive_defers_to_the_plans_first_step():
     directive = StellaV2Agent._companion_directive({"started": "Fitness Check-in"})
     assert "current step" in directive
     assert "invent" in directive
+
+
+# ---------------------------------------------------------------------------
+# The routing outcome must survive arbitration
+# ---------------------------------------------------------------------------
+
+def test_routing_directive_outranks_an_expert_followup():
+    """Regression: the reply ignored the activity list and invented chores.
+
+    to_prompt_section() emits ONE direction, and primary_action sat at the
+    BOTTOM of that pick — below any expert follow-up question. Probing produces
+    one on precisely the turns the router fires ("what can we do together?" is a
+    probing cue too), so the companion directive was dropped almost every time
+    it mattered. Observed live: Grace spoke probing's "Welche Aufgaben möchtest
+    du zusammen machen?" and then offered to tidy a room.
+    """
+    from stella_v2_agent.models.arbitration_result import ResponseDirective
+
+    directive = ResponseDirective(
+        ask_followup=True,
+        followup_question="Welche Aufgaben möchtest du zusammen machen?",
+        primary_action="No extractions",
+    )
+    directive.routing_directive = StellaV2Agent._companion_directive(
+        {"activities": ACTIVITIES}
+    )
+    section = directive.to_prompt_section()
+
+    assert "Memory Game" in section and "Fitness Check-in" in section
+    assert "Welche Aufgaben" not in section  # the stale suggestion is gone
+    assert "No extractions" not in section
+
+
+def test_safety_boundaries_still_outrank_a_routing_directive():
+    # Routing outranks SUGGESTIONS, not safety. must_avoid is emitted
+    # unconditionally and must stay that way.
+    from stella_v2_agent.models.arbitration_result import ResponseDirective
+
+    directive = ResponseDirective(must_avoid=["giving medical advice"])
+    directive.routing_directive = "Start the activity."
+    section = directive.to_prompt_section()
+
+    assert "Avoid: giving medical advice" in section
+    assert "Start the activity." in section
+
+
+def test_plan_following_turns_are_unchanged():
+    # Nothing sets routing_directive outside companion mode, so the existing
+    # follow-up-wins-over-primary_action rule must still hold exactly.
+    from stella_v2_agent.models.arbitration_result import ResponseDirective
+
+    section = ResponseDirective(
+        ask_followup=True,
+        followup_question="How often do you exercise?",
+        primary_action="Ask about exercise",
+    ).to_prompt_section()
+
+    assert "How often do you exercise?" in section
+    assert "Ask about exercise" not in section
