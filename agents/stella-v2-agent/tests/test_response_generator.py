@@ -92,22 +92,20 @@ def test_deployed_persona_replaces_default_persona():
     assert "STELLA" not in result
 
 
-def test_custom_persona_replaces_default_when_no_plan():
-    result = build_response_system_prompt({}, ResponseDirective(), custom_persona="You are a nurse.")
+def test_persona_replaces_the_default():
+    result = build_response_system_prompt({}, ResponseDirective(), persona="You are a nurse.")
     assert "You are a nurse." in result
     assert "STELLA" not in result
 
 
-def test_deployed_persona_outranks_the_configurator_slot():
-    # Exactly one identity is spoken. The two no longer stack: concatenating them
-    # is what gave one voice two authors, resolved by ordering.
-    result = build_response_system_prompt(
-        {}, ResponseDirective(),
-        persona="You are Max.",
-        custom_persona="You are someone else.",
-    )
-    assert "You are Max." in result
-    assert "You are someone else." not in result
+def test_only_the_persona_can_supply_identity():
+    # The Configurator's persona slot was removed with the schema (#467), so a
+    # configuration cannot describe who the agent is — many personas share one
+    # configuration, which is the whole point of separating them.
+    import inspect
+    params = inspect.signature(build_response_system_prompt).parameters
+    assert "custom_persona" not in params
+    assert "plan_system_prompt" not in params
 
 
 def test_custom_guidelines_replace_default_guidelines():
@@ -244,11 +242,13 @@ def test_apply_config_overrides_model_tokens_temperature():
     assert gen.response_temperature == 0.3
 
 
-def test_apply_config_overrides_persona_and_history_limit():
+def test_apply_config_overrides_history_limit_but_never_identity():
     gen = ResponseGenerator(llm_service=None)
+    # "persona" is a key old saved configurations still carry. It is ignored
+    # rather than pruned (#467), so no stored data has to be rewritten.
     gen.apply_config({"persona": "You are a coach.", "history_limit": 5})
-    assert gen.custom_persona == "You are a coach."
     assert gen.history_limit == 5
+    assert gen.persona is None
 
 
 # ---------------------------------------------------------------------------

@@ -20,13 +20,11 @@ from stella_agent_sdk.prompts import format_history
 def build_response_system_prompt(
     sm_context: Dict[str, Any],
     directive: ResponseDirective,
-    custom_persona: Optional[str] = None,
     custom_guidelines: Optional[str] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
     history_limit: int = 10,
     bridge: str = "",
     persona: Optional[str] = None,
-    persona_is_system_default: bool = False,
 ) -> str:
     """Build the complete system prompt for the Response Generator.
 
@@ -40,15 +38,9 @@ def build_response_system_prompt(
     Args:
         sm_context: State machine context for conversation awareness.
         directive: Arbitration directive with expert guidance.
-        custom_persona: Optional custom persona from Agent Configurator.
         custom_guidelines: Optional custom guidelines from Agent Configurator.
         persona: Identity from the deployed Persona entity (#467), snapshotted into
             the deploy config. Like every persona source it is used VERBATIM.
-        persona_is_system_default: Whether ``persona`` is the built-in default
-            rather than an operator's choice. An explicit choice outranks the
-            Agent Configurator's persona slot; the default only fills the slot the
-            hardcoded fallback used to fill, so introducing personas does not
-            change the voice of a deployment that configured one the old way.
         conversation_history: Recent turns, exposed as {{conversationHistory}}.
         history_limit: How many recent turns to include.
         bridge: The short acknowledgment already spoken to the user this turn
@@ -68,15 +60,11 @@ def build_response_system_prompt(
     #    only, and a plan that needs to name the agent references {{persona.*}}
     #    rather than restating who it is.
     #
-    #    An operator-selected Persona outranks the Agent Configurator's persona
-    #    slot; the system default ranks last, since omitting a persona resolves to
-    #    it and ranking it higher would restyle deployments configured the old way.
-    chosen_persona = persona if (persona and not persona_is_system_default) else None
-    default_persona = persona if persona_is_system_default else None
-
-    sections.append(
-        chosen_persona or custom_persona or default_persona or _default_persona()
-    )
+    #    There is now exactly one source. The Agent Configurator's persona slot
+    #    was removed with the schema (#467), so no precedence rule is needed: the
+    #    deployed Persona IS the identity, and _default_persona() only covers an
+    #    agent running against a backend that has none.
+    sections.append(persona or _default_persona())
 
     # 2. Guidelines — rendered with the turn's context as template variables, so
     #    the configured prompt places state / directive / history / language

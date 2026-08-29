@@ -1,58 +1,40 @@
-"""Persona precedence in the response system prompt (#467).
+"""Identity has exactly one source (#467).
 
-The identity a deployment speaks with can arrive from three places, and getting
-their order wrong is silent: the agent still talks, just as somebody else. These
-tests pin the table.
+This file used to pin a precedence table — plan prompt vs. Agent Configurator
+slot vs. deployed Persona vs. built-in fallback — because identity could come
+from three places and the order decided who won. Both rival sources are gone:
+plans carry structure only, and the Configurator's persona slot was removed with
+the pipeline schema so that many personas can share one configuration.
 
-Phase 1 keeps `plan_system_prompt` alive (the clean cut is phase 2), so the cases
-below also guard the pre-existing behaviour against regressions — in particular
-that a plan prompt REPLACES the built-in fallback rather than stacking with it.
+What is left to guard is that it stays that way.
 """
 
+import inspect
+
 from stella_v2_agent.models.arbitration_result import ResponseDirective
+from stella_v2_agent.pipeline.response_generator import ResponseGenerator
+from stella_v2_agent.prompts import response_prompt
 from stella_v2_agent.prompts.response_prompt import build_response_system_prompt
 
 
-CHOSEN = "You are Grace, a clinical companion."
-CONFIGURATOR = "You are the Agent Configurator's persona."
-DEFAULT_FROM_DB = "You are the system default persona row."
+PERSONA = "You are Grace, a clinical companion."
 
 
 def _build(**kwargs) -> str:
     return build_response_system_prompt({}, ResponseDirective(), **kwargs)
 
 
-def test_operator_selected_persona_outranks_configurator_slot():
-    # The whole point of the entity: choosing a Persona at deploy time beats the
-    # persona slot buried in the agent's pipeline config.
-    prompt = _build(persona=CHOSEN, custom_persona=CONFIGURATOR)
-    assert CHOSEN in prompt
-    assert CONFIGURATOR not in prompt
+def test_the_deployed_persona_is_the_identity():
+    prompt = _build(persona=PERSONA)
+    assert PERSONA in prompt
+    assert "You are STELLA" not in prompt
 
 
-def test_system_default_does_not_override_a_configured_persona():
-    # Every deployment now resolves a persona — omitting one means "the default".
-    # If the default outranked the Configurator slot, merely shipping this feature
-    # would restyle every agent already configured the old way.
-    prompt = _build(
-        persona=DEFAULT_FROM_DB,
-        persona_is_system_default=True,
-        custom_persona=CONFIGURATOR,
-    )
-    assert CONFIGURATOR in prompt
-    assert DEFAULT_FROM_DB not in prompt
-
-
-def test_system_default_fills_the_fallback_slot():
-    # With nothing else configured, the DB-backed default is the identity.
-    prompt = _build(persona=DEFAULT_FROM_DB, persona_is_system_default=True)
-    assert DEFAULT_FROM_DB in prompt
-
-
-def test_falls_back_to_in_code_default_without_a_persona():
-    # Agent running headless, or against a backend predating the Persona table.
-    prompt = _build()
-    assert "You are STELLA" in prompt
+def test_falls_back_to_the_in_code_default_without_a_persona():
+    # Reachable when an agent runs headless, or against a backend with no
+    # Persona table. Never in a normal deployment: omitting a persona resolves
+    # to the system default row server-side.
+    assert "You are STELLA" in _build()
 
 
 def test_persona_is_never_rendered_as_a_template():
@@ -63,22 +45,42 @@ def test_persona_is_never_rendered_as_a_template():
     assert "{{current_focus}}" in _build(persona=persona)
 
 
-def test_a_plans_system_prompt_is_ignored():
-    """A plan cannot supply identity, even by carrying the old field.
+# ---------------------------------------------------------------------------
+# The two removed sources must not come back
+# ---------------------------------------------------------------------------
 
-    Guardrail for the phase-2 cut (#467): the extraction migration strips
-    system_prompt from stored plans, but a hand-authored plan JSON dropped into
-    config/plans/ could still contain one. The agent simply never reads it, so
-    there is no path back to two sources.
+def test_the_prompt_builder_accepts_no_rival_identity_source():
+    # A regression here would not fail loudly — it would just mean two blocks
+    # describing who the agent is, concatenated, exactly as before #467.
+    params = inspect.signature(build_response_system_prompt).parameters
+    assert "plan_system_prompt" not in params, "a plan cannot supply identity"
+    assert "custom_persona" not in params, "the Configurator slot cannot supply identity"
+
+
+def test_pipeline_config_cannot_set_a_persona():
+    """A configuration saved before the slot was removed still carries the key.
+
+    It is deliberately ignored rather than pruned — no stored data is rewritten —
+    so this asserts the key is inert rather than absent.
     """
-    plan = {"id": "p1", "system_prompt": "You are somebody else entirely.", "states": []}
-    # _load_plan_config returns the plan as-is; nothing consumes system_prompt.
-    from stella_v2_agent.prompts import response_prompt
+    generator = ResponseGenerator.__new__(ResponseGenerator)
+    generator.custom_guidelines = None
+    generator.history_limit = 0
+    generator.response_model = "m"
+    generator.response_max_tokens = 1
+    generator.response_temperature = 0.0
+    generator.persona = None
 
-    import inspect
-    signature = inspect.signature(response_prompt.build_response_system_prompt)
-    assert "plan_system_prompt" not in signature.parameters
+    generator.apply_config({"persona": "You are somebody the config invented."})
 
-    prompt = _build(persona=CHOSEN)
-    assert plan["system_prompt"] not in prompt
-    assert CHOSEN in prompt
+    assert generator.persona is None
+    assert not hasattr(generator, "custom_persona")
+
+
+def test_a_plans_system_prompt_is_ignored():
+    """Guardrail against a hand-authored plan JSON reintroducing a second source.
+
+    The extraction migration strips system_prompt from stored plans, but a file
+    dropped into config/plans/ could still contain one. Nothing reads it.
+    """
+    assert "plan_system_prompt" not in inspect.getsource(response_prompt)

@@ -895,15 +895,11 @@ class StellaV2Agent(BaseAgent):
         if self._plan_config:
             self._resolve_persona_in_plan_text(self._plan_config)
 
-        # Persona is applied AFTER the pipeline config on purpose: the Configurator's
-        # persona slot is part of pipeline_config, and an operator-selected Persona
-        # outranks it (#467). Applying in the other order would let the pipeline
-        # config quietly win.
+        # The Configurator's persona slot is gone (#467), so there is no ordering
+        # hazard left here — identity has one source and this is simply where it
+        # is handed to the stage that speaks it.
         if self._persona_config:
             self.response_generator.persona = self._persona_config.get("system_prompt")
-            self.response_generator.persona_is_system_default = bool(
-                self._persona_config.get("is_system_default")
-            )
 
         logger.info(f"Session started: {session_id}")
 

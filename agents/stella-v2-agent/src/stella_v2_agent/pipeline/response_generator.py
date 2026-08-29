@@ -44,13 +44,11 @@ class ResponseGenerator:
         self.response_model = "gpt-4o-mini"
         self.response_max_tokens = 200
         self.response_temperature = 0.7
-        self.custom_persona: Optional[str] = None
         self.custom_guidelines: Optional[str] = None
         # Identity from the deployed Persona entity (#467). Set by the agent from
         # the deploy config, not by apply_config: a persona is deliberately NOT a
         # pipeline slot, which is what keeps it free of agent-type version pinning.
         self.persona: Optional[str] = None
-        self.persona_is_system_default: bool = False
         # 0 = use every turn the agent fetched. The agent decides how much
         # history is worth carrying (_custom_history_limit, 20 by default) and
         # hands exactly that much to generate(); this stage must not silently
@@ -67,8 +65,11 @@ class ResponseGenerator:
             self.response_max_tokens = int(config["max_tokens"])
         if "temperature" in config:
             self.response_temperature = float(config["temperature"])
-        if "persona" in config:
-            self.custom_persona = config["persona"]
+        # "persona" was a slot here until #467. Identity is not pipeline config:
+        # binding it to an agent type meant one saved configuration per persona,
+        # when the whole point is that many personas share one configuration.
+        # Configs saved before the slot was removed still carry the key; it is
+        # deliberately ignored rather than pruned, so no stored data is rewritten.
         if "conversation_guidelines" in config:
             self.custom_guidelines = config["conversation_guidelines"]
         if "history_limit" in config:
@@ -105,10 +106,8 @@ class ResponseGenerator:
         """
         system_prompt = build_response_system_prompt(
             sm_context, directive,
-            custom_persona=self.custom_persona,
             custom_guidelines=self.custom_guidelines,
             persona=self.persona,
-            persona_is_system_default=self.persona_is_system_default,
             conversation_history=conversation_history,
             history_limit=self.history_limit or len(conversation_history or []),
             bridge=bridge,

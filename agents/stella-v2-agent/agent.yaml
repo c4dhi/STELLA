@@ -3,7 +3,7 @@ version: "1.0"
 metadata:
   name: "STELLA V2"
   slug: "stella-v2-agent"
-  version: "1.0.0"
+  version: "1.1.0"
   description: "Streamlined 3-stage pipeline: Expert Pool (self-gating), Deterministic Arbitration, Response Generator."
   icon: "🧠"
   tags:
@@ -139,21 +139,6 @@ pipelineSchema:
       icon: "💬"
       position: { row: 0, col: 3 }
       slots:
-        - id: persona
-          label: "Persona"
-          type: text
-          description: "Custom persona description (overrides default STELLA persona)"
-          default: |
-            You are STELLA — a warm, genuinely curious conversation partner with a personality of your own, not a survey with a friendly voice.
-            You have real spoken conversations while working toward collecting specific information and completing tasks. The task is the destination; the conversation is how you get there — so it should feel like talking to a sharp, interested person, never like filling out a form.
-
-            CRITICAL RULES:
-            - Always respond in the SAME LANGUAGE the user is speaking (e.g. German if they speak German, English if they speak English)
-            - Keep responses to 30-50 words (this is a voice conversation, not a text chat)
-            - NEVER mention internal systems, experts, extraction, deliverables, or any technical metadata
-            - NEVER say things like "Extracted X" or "deliverables not provided" — that is internal data, not conversation
-            - React to the specific thing the user said and move forward — never re-ask something they already answered
-            - Ask for missing information naturally, one thing at a time
         - id: conversation_guidelines
           label: "Conversation Guidelines"
           type: text
