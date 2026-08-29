@@ -12,6 +12,13 @@ import ParticipantNotification from './ParticipantNotification'
 import { MessageBubble, useMessaging } from './messaging'
 import { determineMessageRole, extractSpeakerInfo } from '../lib/messageUtils'
 import type { ListenerStatus } from '../lib/api-types'
+import type { DebugData } from '../lib/types'
+
+/** Decisions ride the debug channel but are not diagnostics — see the filter
+ *  below. One predicate so the live and replayed paths cannot disagree. */
+function isDecisionMessage(msg: { type?: string; data?: unknown }): boolean {
+  return msg.type === 'debug' && !!(msg.data as DebugData | undefined)?.decision
+}
 
 interface ChatViewProps {
   listenerStatus?: ListenerStatus | null
@@ -275,6 +282,7 @@ export default function ChatView({
             component: messageData.component || 'agent',
             level: messageData.level || 'info',
             message: messageData.content || messageData.message || '',
+            decision: messageData.metadata?.decision,
             metadata: messageData.metadata || messageData
           },
           messageType: 'processing' as const,
@@ -350,16 +358,20 @@ export default function ChatView({
     }).filter((msg): msg is NonNullable<typeof msg> => msg !== null) // Remove nulls with type guard
 
     // Filter historical messages based on showProcessingMessages toggle
-    // When processing/debug is disabled, hide those messages from DB as well
+    // When processing/debug is disabled, hide those messages from DB as well —
+    // EXCEPT decisions. Those ride the debug channel for transport, but they are
+    // narrative, not diagnostics: "she started the memory game" is part of
+    // reading the conversation back, so the debug toggle must not swallow it.
     const filteredHistorical = showProcessingMessages
       ? historical
-      : historical.filter(msg => msg.messageType !== 'processing')
+      : historical.filter(msg => msg.messageType !== 'processing' || isDecisionMessage(msg))
 
     // Combine with live messages
     const liveTranscripts = turns.map(t => ({ ...t, messageType: 'transcript' as const, dataSource: 'live' as const }))
-    const processing = showProcessingMessages
-      ? processingMessages.map(p => ({ ...p, messageType: 'processing' as const, dataSource: 'live' as const }))
-      : []
+    const processing = (showProcessingMessages
+      ? processingMessages
+      : processingMessages.filter(isDecisionMessage)
+    ).map(p => ({ ...p, messageType: 'processing' as const, dataSource: 'live' as const }))
     const events = participantEvents.map(e => ({ ...e, messageType: 'participant' as const, dataSource: 'live' as const }))
 
     const combined = [...filteredHistorical, ...liveTranscripts, ...processing, ...events]

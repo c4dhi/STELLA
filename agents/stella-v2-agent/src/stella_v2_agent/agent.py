@@ -423,6 +423,20 @@ class StellaV2Agent(BaseAgent):
                     component=f"expert:{v.expert_name}",
                     **v.to_debug_dict(),
                 )
+                # A verdict says what an expert concluded, not what it DID. Tool
+                # calls are the actual side effects of the turn — setting a
+                # deliverable, advancing the plan, starting an activity — and
+                # they were previously visible only in pod logs.
+                for call in (v.raw_output or {}).get("tool_results", []) or []:
+                    yield AgentOutput.tool_call(
+                        input.session_id,
+                        call.get("name", "unknown"),
+                        caller=v.expert_name,
+                        arguments=call.get("arguments"),
+                        success=bool(call.get("success")),
+                        data=call.get("data"),
+                        error=call.get("error"),
+                    )
 
             # Determine which deliverables were just collected by task_extraction
             # by comparing state machine before/after. This is more reliable than
@@ -481,6 +495,8 @@ class StellaV2Agent(BaseAgent):
             )
             if companion:
                 sm_context["companion"] = companion
+                for decision in self._companion_decisions(input.session_id, companion):
+                    yield decision
 
             # Deterministic verdict directive: a flagging expert can replace the
             # generated response with a literature-informed template.
@@ -738,7 +754,15 @@ class StellaV2Agent(BaseAgent):
                 # takes the floor back and keeps talking, so __end__ means "pop",
                 # not "hang up" — the plan's own farewell still plays as the
                 # hand-back line.
+                finished = self._active_activity
                 await self._return_to_companion(reason="activity reached its end")
+                yield AgentOutput.decision(
+                    session_id,
+                    "activity_completed",
+                    f"Finished “{finished}”" if finished else "Finished the activity",
+                    detail="Back to free conversation",
+                    component="companion_router",
+                )
             else:
                 self._session_completed = True
                 logger.info(
@@ -764,7 +788,23 @@ class StellaV2Agent(BaseAgent):
                 farewell = self._plan_farewell_message()
                 if farewell:
                     yield AgentOutput.text_final(session_id, farewell)
-                self._session_completed = True
+                if self._companion_mode:
+                    # Same "pop, don't hang up" rule as the path above. An authored
+                    # turn_count_exceeded -> __end__ route reaches the end HERE, so
+                    # without this a stalled activity would end the whole session.
+                    finished = self._active_activity
+                    await self._return_to_companion(
+                        reason="activity reached its end via turn increment"
+                    )
+                    yield AgentOutput.decision(
+                        session_id,
+                        "activity_completed",
+                        f"Finished “{finished}”" if finished else "Finished the activity",
+                        detail="Back to free conversation",
+                        component="companion_router",
+                    )
+                else:
+                    self._session_completed = True
                 logger.info(
                     f"Session {session_id} reached __end__ via turn increment — "
                     "fallback completion applied"
@@ -795,7 +835,15 @@ class StellaV2Agent(BaseAgent):
             )
 
         # Emit final progress for this turn.
-        if full_state:
+        companion_meta = self._companion_progress_metadata()
+        full_state = full_state or {}
+        if self._companion_mode and not self._plan_config:
+            # The activity can have been dropped mid-turn — stopped by the user,
+            # or reached its end — AFTER full_state was fetched. Trust the agent's
+            # own view over that stale snapshot: publishing it would leave a
+            # finished plan on the panel with nothing left to advance it.
+            full_state = {}
+        if full_state or companion_meta:
             current_state_id = full_state.get("current_state_id")
             last_transition = self._build_last_transition_metadata(
                 from_state_id=self._last_known_state_id,
@@ -805,7 +853,8 @@ class StellaV2Agent(BaseAgent):
 
             # The progress panel renders this text to the user, so it must show
             # the resolved persona rather than the author's {{persona.*}} tokens.
-            self._resolve_persona_in_plan_text(full_state)
+            if full_state:
+                self._resolve_persona_in_plan_text(full_state)
             progress_state = progress_from_full_state(
                 full_state,
                 plan=self._plan_config,
@@ -813,6 +862,7 @@ class StellaV2Agent(BaseAgent):
                 extra_metadata={
                     "architecture": "stella_v2_pipeline",
                     "last_transition": last_transition,
+                    **({"companion": companion_meta} if companion_meta else {}),
                 },
             )
             yield AgentOutput.progress_update(
@@ -961,10 +1011,18 @@ class StellaV2Agent(BaseAgent):
     async def on_ready(self, session_id: str) -> AsyncIterator[AgentOutput]:
         """Send initial progress state when agent joins the room."""
         if self.sm_client:
-            full_state = await self.sm_client.get_full_state()
-            if full_state:
+            # ``or {}`` so the companion branch below can read it uninitialised:
+            # get_full_state() returns None when no plan row exists, which is the
+            # normal state for a companion that has not started an activity.
+            full_state = await self.sm_client.get_full_state() or {}
+            # A companion joins with no plan at all, so gating on full_state alone
+            # would publish nothing and the panel would have no way to learn what
+            # this session can offer until the user happened to ask.
+            companion_meta = self._companion_progress_metadata()
+            if full_state or companion_meta:
                 self._last_known_state_id = full_state.get("current_state_id")
-                self._resolve_persona_in_plan_text(full_state)
+                if full_state:
+                    self._resolve_persona_in_plan_text(full_state)
                 progress_state = progress_from_full_state(
                     full_state,
                     plan=self._plan_config,
@@ -972,6 +1030,7 @@ class StellaV2Agent(BaseAgent):
                     extra_metadata={
                         "architecture": "stella_v2_pipeline",
                         "last_transition": None,
+                        **({"companion": companion_meta} if companion_meta else {}),
                     },
                 )
                 yield AgentOutput.progress_update(
@@ -1146,6 +1205,68 @@ class StellaV2Agent(BaseAgent):
             )
         return ""
 
+    @staticmethod
+    def _companion_decisions(
+        session_id: str, companion: Dict[str, Any]
+    ) -> List[AgentOutput]:
+        """Turn this turn's routing outcome into user-visible decision tags.
+
+        One outcome can only be one of these — the router calls a single tool
+        per turn — but returning a list keeps the caller a plain loop rather
+        than a chain of conditionals it would have to keep in sync.
+        """
+        decisions: List[AgentOutput] = []
+        activities = companion.get("activities")
+        if activities is not None:
+            titles = [a.get("title", "") for a in activities if a.get("title")]
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activities_offered",
+                f"Offered {len(titles)} activit{'y' if len(titles) == 1 else 'ies'}"
+                if titles else "No activities available",
+                options=titles,
+                component="companion_router",
+            ))
+        if companion.get("started"):
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activity_started",
+                f"Started “{companion['started']}”",
+                component="companion_router",
+            ))
+        if companion.get("ended"):
+            title = companion.get("ended_title")
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activity_ended",
+                f"Left “{title}”" if title else "Left the activity",
+                detail="Back to free conversation",
+                component="companion_router",
+            ))
+        return decisions
+
+    def _companion_progress_metadata(self) -> Optional[Dict[str, Any]]:
+        """What the progress panel needs to know about companion state.
+
+        Rides on every progress update so the panel can answer "is an activity
+        running right now, and if not what can I pick?" from one payload,
+        instead of the UI inferring it from a deploy-time snapshot that cannot
+        know what happened mid-session.
+        """
+        if not self._companion_mode:
+            return None
+        return {
+            "active_activity": self._active_activity,
+            "activities": [
+                {
+                    "id": a.get("id"),
+                    "title": a.get("title"),
+                    "description": a.get("description"),
+                }
+                for a in self._available_plans
+            ],
+        }
+
     async def _return_to_companion(self, reason: str) -> None:
         """Drop the running activity and go back to free-flow conversation.
 
@@ -1187,10 +1308,16 @@ class StellaV2Agent(BaseAgent):
                             break
                     outcome["started"] = self._active_activity
                 if data.get("activity_ended"):
+                    # Capture the title BEFORE clearing it — the decision tag and
+                    # the sidebar both need to name what was just left, and by the
+                    # next line there is nothing left to name it with.
+                    outcome["ended"] = True
+                    outcome["ended_title"] = (
+                        self._active_activity or data.get("activity_title")
+                    )
                     self._plan_config = None
                     self._active_activity = None
                     self._last_known_state_id = None
-                    outcome["ended"] = True
         return outcome
 
     def _plan_farewell_message(self) -> Optional[str]:

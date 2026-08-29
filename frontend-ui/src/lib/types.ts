@@ -100,11 +100,34 @@ export interface SafetyCheckData {
   stream_id: string
 }
 
+/** A routing decision the agent made, worth showing the user as a tag.
+ *
+ * Decisions travel on the debug channel — same envelope, same persistence — and
+ * this block is the only thing that separates them from a diagnostic line. Its
+ * presence is what makes the chat render a tag instead of a debug card. */
+export interface AgentDecisionData {
+  kind: string
+  label: string
+  detail?: string
+  options?: string[]
+}
+
 export interface DebugData {
   component: string
   level: 'info' | 'debug' | 'warn' | 'error'
   message: string
+  decision?: AgentDecisionData
   metadata?: Record<string, any>
+}
+
+/** Companion-mode state carried on every progress update.
+ *
+ * The panel cannot infer this from the deploy snapshot: a companion starts with
+ * no plan and picks one up (or drops it) mid-session, so "what is running right
+ * now" is only knowable from the live stream. */
+export interface CompanionState {
+  active_activity: string | null
+  activities: Array<{ id?: string; title?: string; description?: string }>
 }
 
 // Processing message types that will be displayed in chat
@@ -453,6 +476,8 @@ export interface TodoList {
   }
   conversation_age_minutes: number
   last_updated: string
+  /** Present only for companion-mode agents. */
+  companion?: CompanionState
   last_transition?: {
     from_state_id?: string
     to_state_id?: string

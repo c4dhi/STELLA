@@ -933,6 +933,9 @@ export class PeerTransport implements Transport {
           component: serverData.component || 'agent',
           level: serverData.level || 'info',
           message: serverData.content || serverData.message || '',
+          // Lifted out of metadata so every reader can test one field for
+          // "is this a decision?" without reaching into the debug blob.
+          decision: serverData.metadata?.decision,
           metadata: serverData.metadata || serverData
         }
       }

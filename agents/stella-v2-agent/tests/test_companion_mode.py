@@ -164,3 +164,103 @@ def test_ended_directive_forbids_resuming():
 
 def test_no_routing_produces_no_directive():
     assert StellaV2Agent._companion_directive({}) == ""
+
+
+# ---------------------------------------------------------------------------
+# Decision tags: what the user sees the agent decide (#467 follow-up)
+# ---------------------------------------------------------------------------
+
+def _decision_meta(output):
+    return output.metadata["decision"]
+
+
+def test_offering_activities_tags_the_options_it_actually_named():
+    agent = _agent()
+    outcome = agent._apply_companion_tool_results(
+        [_verdict(offer_activities=True, activities=ACTIVITIES)]
+    )
+    (tag,) = agent._companion_decisions("s1", outcome)
+
+    assert _decision_meta(tag)["kind"] == "activities_offered"
+    # The options carried on the tag ARE the options the reply was told to
+    # offer, so the chat cannot show a different menu than the agent spoke.
+    assert _decision_meta(tag)["options"] == ["Memory Game", "Fitness Check-in"]
+
+
+def test_no_activities_available_still_produces_a_tag():
+    agent = _agent()
+    outcome = agent._apply_companion_tool_results(
+        [_verdict(offer_activities=True, activities=[])]
+    )
+    (tag,) = agent._companion_decisions("s1", outcome)
+    assert _decision_meta(tag)["kind"] == "activities_offered"
+    assert _decision_meta(tag)["options"] == []
+
+
+def test_starting_an_activity_names_it():
+    agent = _agent()
+    outcome = agent._apply_companion_tool_results(
+        [_verdict(activity_started=True, activity_id="memory", activity_title="Memory Game")]
+    )
+    (tag,) = agent._companion_decisions("s1", outcome)
+    assert _decision_meta(tag)["kind"] == "activity_started"
+    assert "Memory Game" in _decision_meta(tag)["label"]
+
+
+def test_ending_an_activity_names_what_was_left():
+    # Regression: the title lives ONLY on the agent until the tool clears it, so
+    # reading it after _apply_companion_tool_results would always yield "the
+    # activity" and the tag would never say which one the user stopped.
+    agent = _agent()
+    agent._active_activity = "Memory Game"
+    outcome = agent._apply_companion_tool_results([_verdict(activity_ended=True)])
+
+    assert outcome["ended_title"] == "Memory Game"
+    (tag,) = agent._companion_decisions("s1", outcome)
+    assert _decision_meta(tag)["kind"] == "activity_ended"
+    assert "Memory Game" in _decision_meta(tag)["label"]
+
+
+def test_an_abstaining_turn_produces_no_tags():
+    # The common case by far — a tag on every turn would be noise, not signal.
+    assert StellaV2Agent._companion_decisions("s1", {}) == []
+
+
+def test_decisions_ride_the_debug_channel():
+    # They must transport and persist exactly like any other debug output; the
+    # `decision` block is the ONLY thing that separates them.
+    agent = _agent()
+    outcome = agent._apply_companion_tool_results(
+        [_verdict(activity_started=True, activity_id="memory", activity_title="Memory Game")]
+    )
+    (tag,) = agent._companion_decisions("s1", outcome)
+    payload = tag.to_data_payload()
+
+    assert payload["type"] == "debug"
+    assert payload["data"]["component"] == "companion_router"
+    assert payload["data"]["metadata"]["decision"]["kind"] == "activity_started"
+
+
+# ---------------------------------------------------------------------------
+# Progress metadata: what the sidebar reads to answer "is anything running?"
+# ---------------------------------------------------------------------------
+
+def test_progress_metadata_reports_the_running_activity():
+    agent = _agent()
+    agent._active_activity = "Memory Game"
+    meta = agent._companion_progress_metadata()
+    assert meta["active_activity"] == "Memory Game"
+    assert [a["title"] for a in meta["activities"]] == ["Memory Game", "Fitness Check-in"]
+
+
+def test_progress_metadata_offers_the_options_when_nothing_is_running():
+    agent = _agent()
+    meta = agent._companion_progress_metadata()
+    assert meta["active_activity"] is None
+    assert len(meta["activities"]) == 2
+
+
+def test_plan_following_agents_send_no_companion_metadata():
+    # Its absence is what tells the UI to keep rendering the plan it was
+    # deployed with — a plan agent must never look like an idle companion.
+    assert _agent(companion=False)._companion_progress_metadata() is None

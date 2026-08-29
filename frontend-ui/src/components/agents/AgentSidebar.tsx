@@ -59,6 +59,29 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
   // Track previous agent statuses to detect STARTING -> RUNNING transitions
   const prevAgentStatusesRef = useRef<Map<string, string>>(new Map())
 
+  /** The live progress state for an agent, if it has published one yet.
+   *
+   * Progress updates are keyed by whatever the agent reported as its id, which
+   * is not always the DB id — hence the same pod-name fuzzy match the delete
+   * path uses. Keep the two in step: a mismatch here shows a stale plan, a
+   * mismatch there leaks a deleted agent's timeline. */
+  const findLiveTaskList = (agent: AgentInstance) => {
+    const direct = agentTaskLists.get(agent.id)
+    if (direct) return direct
+    const podName = (agent as AgentWithPodStatus).podName
+    if (!podName) return undefined
+    for (const [taskAgentId, list] of agentTaskLists.entries()) {
+      if (
+        taskAgentId === podName ||
+        podName.startsWith(taskAgentId + '-') ||
+        podName.includes(taskAgentId)
+      ) {
+        return list
+      }
+    }
+    return undefined
+  }
+
   // Sync agents when initialAgents prop changes (immediate update from parent)
   useEffect(() => {
     setAgents(initialAgents)
@@ -573,22 +596,68 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
                     const cfg = (agent.agentConfig || {}) as {
                       persona?: { name?: string; icon?: string }
                       plan?: { title?: string }
+                      mode?: string
+                      available_plans?: Array<{ title?: string }>
                     }
                     const personaName = cfg.persona?.name
-                    const planTitle = cfg.plan?.title
-                    if (!personaName && !planTitle) return null
+
+                    // A companion has no plan at deploy time and picks one up (or
+                    // drops it) mid-session, so the deploy snapshot cannot answer
+                    // "what is running right now" — only the live progress stream can.
+                    const companion = findLiveTaskList(agent)?.companion
+                    const isCompanion = !!companion || cfg.mode === 'companion'
+                    const activePlan = isCompanion
+                      ? companion?.active_activity || null
+                      : cfg.plan?.title || null
+
+                    // Nothing running: show what the user can actually pick. Falls
+                    // back to the deploy snapshot for the window between deploy and
+                    // the agent's first progress update, when there is no live state.
+                    const options = isCompanion && !activePlan
+                      ? (companion?.activities ?? cfg.available_plans ?? [])
+                          .map(a => a.title)
+                          .filter((t): t is string => !!t)
+                      : []
+
+                    if (!personaName && !activePlan && options.length === 0) return null
                     return (
-                      <div className={`text-xs font-light mb-3 flex items-center gap-1.5 min-w-0 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
-                        {personaName && (
-                          <span className="truncate" title={`Persona: ${personaName}`}>
-                            {cfg.persona?.icon || '🎭'} {personaName}
-                          </span>
-                        )}
-                        {personaName && planTitle && <span className="opacity-40">·</span>}
-                        {planTitle && (
-                          <span className="truncate" title={`Plan: ${planTitle}`}>
-                            {planTitle}
-                          </span>
+                      <div className={`text-xs font-light mb-3 min-w-0 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {personaName && (
+                            <span className="truncate" title={`Persona: ${personaName}`}>
+                              {cfg.persona?.icon || '🎭'} {personaName}
+                            </span>
+                          )}
+                          {personaName && activePlan && <span className="opacity-40">·</span>}
+                          {activePlan && (
+                            <span className="truncate" title={`Running: ${activePlan}`}>
+                              {isCompanion && '▶️ '}{activePlan}
+                            </span>
+                          )}
+                          {personaName && !activePlan && isCompanion && (
+                            <>
+                              <span className="opacity-40">·</span>
+                              <span className="truncate opacity-70">Free conversation</span>
+                            </>
+                          )}
+                        </div>
+                        {options.length > 0 && (
+                          <div className="mt-1.5">
+                            <div className={`text-[10px] tracking-wider uppercase mb-1 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
+                              Can offer
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {options.map(title => (
+                                <span
+                                  key={title}
+                                  className={`px-1.5 py-0.5 rounded border max-w-full truncate ${isDark ? 'border-zinc-700 bg-zinc-800/60' : 'border-border bg-surface-secondary'}`}
+                                  title={title}
+                                >
+                                  {title}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
                         )}
                       </div>
                     )

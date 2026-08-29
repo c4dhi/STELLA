@@ -1,10 +1,67 @@
-import type { ProcessingMessage, DecisionStreamData, PromptExecutionData, ExpertStatusData, SafetyCheckData, DebugData } from '../lib/types'
+import type { ProcessingMessage, DecisionStreamData, PromptExecutionData, ExpertStatusData, SafetyCheckData, DebugData, AgentDecisionData } from '../lib/types'
 
 interface ProcessingMessageViewProps {
   message: ProcessingMessage
 }
 
+/** Icon and accent per decision kind. Unknown kinds still render — a new agent
+ *  decision should show up as a tag, not disappear until the UI catches up. */
+const DECISION_STYLES: Record<string, { icon: string; accent: string }> = {
+  activities_offered: { icon: '🗂️', accent: 'text-sky-700 dark:text-sky-300 border-sky-300/70 dark:border-sky-600/60 bg-sky-50/80 dark:bg-sky-950/60' },
+  activity_started: { icon: '▶️', accent: 'text-emerald-700 dark:text-emerald-300 border-emerald-300/70 dark:border-emerald-600/60 bg-emerald-50/80 dark:bg-emerald-950/60' },
+  activity_ended: { icon: '⏹️', accent: 'text-amber-700 dark:text-amber-300 border-amber-300/70 dark:border-amber-600/60 bg-amber-50/80 dark:bg-amber-950/60' },
+  activity_completed: { icon: '🏁', accent: 'text-amber-700 dark:text-amber-300 border-amber-300/70 dark:border-amber-600/60 bg-amber-50/80 dark:bg-amber-950/60' },
+}
+
+const DEFAULT_DECISION_STYLE = {
+  icon: '🔀',
+  accent: 'text-neutral-700 dark:text-neutral-300 border-neutral-300/70 dark:border-neutral-600/60 bg-neutral-50/80 dark:bg-neutral-900/60',
+}
+
+/** A decision the agent made, rendered as a tag in the conversation.
+ *
+ * Deliberately NOT the debug card: this is something the reader is meant to
+ * follow along with, so it is a slim centred chip that reads as part of the
+ * conversation rather than a diagnostic panel bolted beside it. */
+function DecisionTag({ decision, at }: { decision: AgentDecisionData; at: number }) {
+  const style = DECISION_STYLES[decision.kind] || DEFAULT_DECISION_STYLE
+  const hasOptions = !!decision.options?.length
+  return (
+    <div className={`mx-auto max-w-[85%] px-3 py-1.5 border text-xs ${hasOptions ? 'rounded-2xl' : 'rounded-full'} ${style.accent}`}>
+      <div className="flex items-center gap-2 justify-center flex-wrap">
+        <span aria-hidden>{style.icon}</span>
+        <span className="font-medium">{decision.label}</span>
+        {decision.detail && <span className="opacity-70 font-light">· {decision.detail}</span>}
+        <span className="opacity-50 font-light">
+          {new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      </div>
+      {decision.options && decision.options.length > 0 && (
+        <div className="flex items-center gap-1.5 justify-center flex-wrap mt-1.5">
+          {decision.options.map(option => (
+            <span
+              key={option}
+              className="px-2 py-0.5 rounded-full bg-white/60 dark:bg-black/30 font-light"
+            >
+              {option}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ProcessingMessageView({ message }: ProcessingMessageViewProps) {
+  // A decision replaces the whole card, so this check comes before any of the
+  // per-type styling below — none of which applies to a tag.
+  const decision = message.type === 'debug'
+    ? (message.data as DebugData).decision
+    : undefined
+  if (decision) {
+    return <DecisionTag decision={decision} at={message.startedAt} />
+  }
+
   const getIcon = () => {
     switch (message.type) {
       case 'decision': return '🧠'
