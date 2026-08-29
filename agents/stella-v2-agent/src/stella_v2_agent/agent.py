@@ -1028,6 +1028,9 @@ class StellaV2Agent(BaseAgent):
             # get_full_state() returns None when no plan row exists, which is the
             # normal state for a companion that has not started an activity.
             full_state = await self.sm_client.get_full_state() or {}
+            # Before anything reads companion state: the session may already be in
+            # an activity this pod knows nothing about.
+            self._rehydrate_active_activity(full_state)
             # A companion joins with no plan at all, so gating on full_state alone
             # would publish nothing and the panel would have no way to learn what
             # this session can offer until the user happened to ask.
@@ -1259,6 +1262,40 @@ class StellaV2Agent(BaseAgent):
                 component="companion_router",
             ))
         return decisions
+
+    def _rehydrate_active_activity(self, full_state: Dict[str, Any]) -> None:
+        """A companion that restarts mid-activity must remember it.
+
+        on_session_start builds companion state from the DEPLOY config, which by
+        definition carries no plan — but the state-machine row outlives the pod,
+        so after a crash, a restart, or an auto-pause wake the session IS still
+        in an activity while the agent believes it is not. Left unfixed the agent
+        blanks the live plan off the panel on its first turn and authors replies
+        with no plan context at all — the same failure as starting an activity
+        without re-anchoring, arrived at from the other direction.
+        """
+        if not self._companion_mode or self._plan_config:
+            return
+        plan_id = full_state.get("plan_id")
+        if not plan_id:
+            return
+        for activity in self._available_plans:
+            if activity.get("id") == plan_id:
+                self._plan_config = activity.get("plan")
+                self._active_activity = activity.get("title")
+                self._resolve_persona_in_plan_text(self._plan_config)
+                logger.info(
+                    "Resumed mid-activity after restart: %s", self._active_activity
+                )
+                return
+        # The allow-list changed under a running activity (redeploy with a
+        # different selection). Nothing to resume onto, so drop back to free
+        # flow rather than running a plan the deployment no longer offers.
+        logger.warning(
+            "Session is in activity %s, which this deployment no longer offers — "
+            "returning to free conversation",
+            plan_id,
+        )
 
     def _companion_progress_metadata(self) -> Optional[Dict[str, Any]]:
         """What the progress panel needs to know about companion state.

@@ -937,8 +937,6 @@ export interface Persona {
   icon?: string
   /** Injected verbatim — any {{placeholder}} here is passed through, not resolved. */
   systemPrompt: string
-  /** Not yet consumed by the agent; reserved for companion mode (RFC phase 4). */
-  greeting?: string
   /** TTS voice identity (a voice id, not a language). Empty = provider default. */
   voice?: string
   /** Fallback language for plan-less deployments. A plan's declared language wins. */
@@ -960,7 +958,6 @@ export interface CreatePersonaDto {
   description?: string
   icon?: string
   systemPrompt: string
-  greeting?: string
   voice?: string
   language?: string
   variables?: Record<string, string>
@@ -971,7 +968,6 @@ export interface UpdatePersonaDto {
   description?: string
   icon?: string
   systemPrompt?: string
-  greeting?: string
   voice?: string
   language?: string
   variables?: Record<string, string>

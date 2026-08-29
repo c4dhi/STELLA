@@ -642,11 +642,6 @@ model Persona {
   // The identity prompt. Injected verbatim into the response prompt, so any
   // {{placeholder}} written here is passed through untouched rather than resolved.
   systemPrompt String  @db.Text
-  // Opening line. NOT YET CONSUMED: the agent has no greeting emitter — today the
-  // opening turn comes from the plan's first task. This exists for companion mode
-  // (RFC phase 4), where there is no plan to trigger one.
-  greeting     String? @db.Text
-
   // TTS voice IDENTITY, not a language. The provider joins (voice, language) at
   // synthesis and prefers keeping the voice over matching the language, so this
   // stays stable while the conversation language is resolved per turn.

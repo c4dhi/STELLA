@@ -84,7 +84,6 @@ export class PersonasService {
         description: persona.description,
         icon: persona.icon,
         systemPrompt: persona.systemPrompt,
-        greeting: persona.greeting,
         voice: persona.voice,
         language: persona.language,
         variables: (persona.variables ?? undefined) as never,
@@ -134,7 +133,6 @@ export class PersonasService {
       name: persona.name,
       icon: persona.icon ?? undefined,
       system_prompt: persona.systemPrompt,
-      greeting: persona.greeting ?? undefined,
       voice: persona.voice ?? undefined,
       language: persona.language ?? undefined,
       // Referenced elsewhere as {{persona.<key>}} — in an AgentConfiguration's

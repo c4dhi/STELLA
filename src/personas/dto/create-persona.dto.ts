@@ -37,11 +37,6 @@ export class CreatePersonaDto {
   @MaxLength(20000)
   systemPrompt: string;
 
-  @IsString()
-  @IsOptional()
-  @MaxLength(2000)
-  greeting?: string;
-
   /** TTS voice identity (a voice id, not a language). Empty = provider default. */
   @IsString()
   @IsOptional()

@@ -43,6 +43,10 @@ def _agent(companion=True):
     agent._active_activity = None
     agent._plan_config = None
     agent._last_known_state_id = None
+    # Set in __init__ in production; listed here because this harness builds the
+    # agent with __new__ and so gets no initialisation. Kept explicit rather than
+    # made defensive in the agent, where a missing attribute is a real init bug.
+    agent._persona_config = None
     agent.sm_client = _FakeSM()
     return agent
 
@@ -374,3 +378,60 @@ def test_plan_following_turns_are_unchanged():
 
     assert "How often do you exercise?" in section
     assert "Ask about exercise" not in section
+
+
+# ---------------------------------------------------------------------------
+# Surviving a restart mid-activity
+# ---------------------------------------------------------------------------
+
+def _restarted_agent():
+    """A companion pod that just came up: deploy config only, no memory."""
+    agent = _agent()
+    agent._plan_config = None
+    agent._active_activity = None
+    return agent
+
+
+def test_a_restart_mid_activity_resumes_the_running_plan():
+    # on_session_start rebuilds companion state from the DEPLOY config, which has
+    # no plan — but the state-machine row outlives the pod. Without this the
+    # agent wakes believing nothing is running.
+    agent = _restarted_agent()
+    agent._rehydrate_active_activity({"plan_id": "memory", "plan_title": "Memory Game"})
+
+    assert agent._active_activity == "Memory Game"
+    assert agent._plan_config == ACTIVITIES[0]["plan"]
+    assert agent._companion_progress_metadata()["active_activity"] == "Memory Game"
+
+
+def test_a_restart_with_no_activity_running_stays_in_free_flow():
+    agent = _restarted_agent()
+    agent._rehydrate_active_activity({})
+    assert agent._active_activity is None
+    assert agent._plan_config is None
+
+
+def test_an_activity_dropped_from_the_allow_list_is_not_resumed():
+    # Redeployed with a different selection while a session was mid-activity.
+    # Running a plan the deployment no longer offers is worse than dropping back.
+    agent = _restarted_agent()
+    agent._rehydrate_active_activity({"plan_id": "removed-plan"})
+    assert agent._active_activity is None
+    assert agent._plan_config is None
+
+
+def test_rehydration_never_overwrites_a_live_activity():
+    # on_ready also runs on a normal join; it must not clobber state the agent
+    # already holds, or a mid-session restart could resurrect a stale plan.
+    agent = _agent()
+    agent._plan_config = {"id": "checkin"}
+    agent._active_activity = "Fitness Check-in"
+    agent._rehydrate_active_activity({"plan_id": "memory"})
+    assert agent._active_activity == "Fitness Check-in"
+
+
+def test_plan_following_agents_are_untouched_by_rehydration():
+    agent = _agent(companion=False)
+    agent._rehydrate_active_activity({"plan_id": "memory"})
+    assert agent._plan_config is None
+    assert agent._active_activity is None

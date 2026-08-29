@@ -33,11 +33,6 @@ export class UpdatePersonaDto {
 
   @IsString()
   @IsOptional()
-  @MaxLength(2000)
-  greeting?: string;
-
-  @IsString()
-  @IsOptional()
   @MaxLength(128)
   voice?: string;
 

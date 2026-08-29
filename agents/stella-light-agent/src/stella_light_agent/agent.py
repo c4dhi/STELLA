@@ -116,12 +116,11 @@ class StellaLightAgent(BaseAgent):
         # Last state seen on a progress emit, so the next update can describe the
         # "branch chosen" (last_transition) at parity with stella-v2 (#310).
         self._last_known_state_id: Optional[str] = None
-        self._plan_system_prompt: Optional[str] = None
-        # Configurator overrides injected via SDK config (pipeline_config).
-        # Light exposes a single combined System Prompt (identity + conversational style).
-        self._custom_system_prompt: Optional[str] = None
-        # Legacy fields, still honored for configs saved before persona/guidelines were merged.
-        self._custom_persona: Optional[str] = None
+        # The deployed persona — the ONLY source of identity (#467). Snapshotted
+        # into the deploy config server-side, exactly as stella-v2 receives it.
+        self._persona_config: Optional[Dict[str, Any]] = None
+        # Configurator override for DELIVERY only. Identity is the persona's job;
+        # this shapes how the reply is spoken, not who is speaking.
         self._custom_guidelines: Optional[str] = None
         # Operator-editable prose blocks (response.* slots) — default text lives in
         # the prompt builder; these override it so the developer owns them from the
@@ -172,12 +171,12 @@ class StellaLightAgent(BaseAgent):
             self.llm_service.default_config.temperature = float(response["temperature"])
         if "max_tokens" in response:
             self.llm_service.default_config.max_tokens = int(response["max_tokens"])
-        # Combined identity + conversational style (current). Legacy persona/guidelines
-        # are still read so configs saved before the merge keep working.
-        if response.get("system_prompt"):
-            self._custom_system_prompt = response["system_prompt"]
-        if response.get("persona"):
-            self._custom_persona = response["persona"]
+        # Delivery style only. `system_prompt` / `persona` are deliberately NOT
+        # read any more: both carried identity, and identity now comes from the
+        # persona. Honouring them would silently reinstate the second source that
+        # #467 removed, and it would outrank the persona the operator picked.
+        if response.get("conversation_style"):
+            self._custom_guidelines = response["conversation_style"]
         if response.get("conversation_guidelines"):
             self._custom_guidelines = response["conversation_guidelines"]
         if response.get("safety_guidelines"):
@@ -207,7 +206,8 @@ class StellaLightAgent(BaseAgent):
             f"model={self.llm_service.default_config.model}, "
             f"temperature={self.llm_service.default_config.temperature}, "
             f"max_tokens={self.llm_service.default_config.max_tokens}, "
-            f"system_prompt={'custom' if (self._custom_system_prompt or self._custom_persona or self._custom_guidelines) else 'default'}, "
+            f"persona={'set' if self._persona_config else 'default'}, "
+            f"style={'custom' if self._custom_guidelines else 'default'}, "
             f"history_limit={self._history_limit}"
         )
 
@@ -235,19 +235,15 @@ class StellaLightAgent(BaseAgent):
                 user_input=user_input,
             )
 
-        if self._custom_system_prompt:
-            sm_context["custom_system_prompt"] = render(self._custom_system_prompt)
-        if self._custom_persona:
-            sm_context["custom_persona"] = render(self._custom_persona)
         if self._custom_guidelines:
             sm_context["custom_guidelines"] = render(self._custom_guidelines)
         if self._custom_safety_guidelines:
             sm_context["custom_safety_guidelines"] = render(self._custom_safety_guidelines)
         if self._custom_state_transition_note:
             sm_context["custom_state_transition_note"] = render(self._custom_state_transition_note)
-        # The plan system prompt may also contain placeholders.
-        if sm_context.get("plan_system_prompt"):
-            sm_context["plan_system_prompt"] = render(sm_context["plan_system_prompt"])
+        # The persona is injected verbatim, NOT rendered: a {{token}} an author
+        # writes in an identity prompt is part of the character's words, and
+        # stella-v2 makes the same choice — the two must not diverge.
 
     async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
         """
@@ -259,9 +255,7 @@ class StellaLightAgent(BaseAgent):
         """
         self.config = config
         self._session_started_at = datetime.now(timezone.utc).isoformat()
-        self._plan_system_prompt = None
-        self._custom_system_prompt = None
-        self._custom_persona = None
+        self._persona_config = config.get("persona")
         self._custom_guidelines = None
         self._custom_safety_guidelines = None
         self._custom_state_transition_note = None
@@ -296,11 +290,6 @@ class StellaLightAgent(BaseAgent):
 
         # Initialize tool-based state management (the only path).
         await self._init_tool_mode(session_id, plan_config)
-
-        # Extract custom system prompt from plan if provided
-        if plan_config and "system_prompt" in plan_config:
-            self._plan_system_prompt = plan_config["system_prompt"]
-            print("[StellaLightAgent] Using custom system prompt from plan")
 
         # Apply LLM config overrides
         llm_overrides = config.get("llm", {})
@@ -556,10 +545,9 @@ class StellaLightAgent(BaseAgent):
         else:
             print("[StellaLightAgent] WARNING: sm_client is None!")
 
-        # Add custom system prompt from plan if available
-        if self._plan_system_prompt:
-            sm_context["plan_system_prompt"] = self._plan_system_prompt
-            print(f"[StellaLightAgent] Using plan system prompt: {self._plan_system_prompt[:100]}...")
+        # Identity for this turn. One source, snapshotted at deploy.
+        if self._persona_config:
+            sm_context["persona"] = self._persona_config.get("system_prompt")
 
         # Resolve the conversation language for this turn (single source of truth,
         # shared SDK logic — identical to stella-v2). A declared plan language

@@ -3,7 +3,8 @@ version: "1.0"
 metadata:
   name: "Stella Light"
   slug: "stella-light-agent"
-  version: "1.0.0"
+  # 1.1.0 — the identity slot is gone; the persona owns identity (#467).
+  version: "1.1.0"
   description: "Lightweight conversational AI with prompt-based guardrails. Faster responses, lower cost."
   icon: "💡"
   tags:
@@ -85,25 +86,15 @@ pipelineSchema:
   nodes:
     - id: response
       label: "Response Generator"
-      description: "The single LLM call that produces the spoken response. Override its system prompt (identity + conversational style), model, and limits."
+      description: "The single LLM call that produces the spoken response. Override HOW it speaks, its model, and its limits. WHO it is comes from the persona chosen at deploy time, not from here."
       icon: "💬"
       position: { row: 0, col: 0 }
       slots:
-        - id: system_prompt
-          label: "System Prompt"
+        - id: conversation_style
+          label: "Conversation Style"
           type: text
-          description: "STELLA Light's identity and conversational style in one prompt (overrides the defaults). Plan system prompts, when present, are applied alongside this. Supports {{variables}}."
+          description: "How the reply is delivered — register, rhythm, sentence shape. NOT identity: who the agent is comes from the persona selected at deploy time, so the same style can front any persona. Replaces the built-in style block. Supports {{variables}} and {{persona.*}}."
           default: |
-            You are STELLA, a warm and engaging AI companion supporting cognitive health and wellbeing.
-
-            Personality:
-            - Friendly, warm, and genuinely interested in the person you're speaking with
-            - Supportive and encouraging, never judgmental
-            - Natural and conversational - avoid sounding robotic or scripted
-            - Concise but thorough - aim for 30-50 words per response
-            - Ask only ONE question at a time to keep the conversation flowing naturally
-            - When you ask it, it is the LAST thing you say. They are listening, not reading: anything after a question is talked over or forgotten
-
             ## Conversational Style (CRITICAL - Follow These Rules)
             You are a calm, observant, and grounded conversationalist. Your goal is to sound like a thoughtful peer.
 
@@ -111,6 +102,8 @@ pipelineSchema:
             - Use natural contractions (don't, it's, I'm).
             - Start occasionally with a safe filler ("Yeah,", "Well,", "Right,") followed by a comma.
             - Keep responses under 4 sentences; end with one low-pressure follow-up question.
+            - Concise but thorough - aim for 30-50 words per response.
+            - Ask only ONE question at a time, and make it the LAST thing you say: they are listening, not reading, so anything after a question is talked over or forgotten.
         - id: safety_guidelines
           label: "Safety Guidelines"
           type: text

@@ -9,7 +9,6 @@ type PersonaRow = {
   description: string | null;
   icon: string | null;
   systemPrompt: string;
-  greeting: string | null;
   voice: string | null;
   language: string | null;
   isSystemDefault: boolean;
@@ -22,7 +21,6 @@ const MINE: PersonaRow = {
   description: null,
   icon: '🩺',
   systemPrompt: 'You are Grace.',
-  greeting: null,
   voice: 'grace',
   language: null,
   isSystemDefault: false,
