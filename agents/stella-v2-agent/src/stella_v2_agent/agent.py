@@ -958,11 +958,6 @@ class StellaV2Agent(BaseAgent):
             if self._companion_mode:
                 for tool in create_companion_tools(self._available_plans, self.sm_client):
                     self.tool_registry.register(tool)
-                # The router is shipped disabled so plan-following deployments are
-                # untouched; companion mode is the only thing that turns it on.
-                self.expert_registry.apply_config(
-                    {"experts": {"companion_router": {"enabled": True}}}
-                )
 
             # Wire tool registry into expert pool
             self.expert_pool.set_tool_registry(self.tool_registry)
@@ -1005,6 +1000,22 @@ class StellaV2Agent(BaseAgent):
                 "configuration before deploying the agent."
             )
         self._apply_pipeline_config(pipeline_config)
+        # AFTER the saved configuration, and deliberately so. The router is not an
+        # assessment expert an operator opts into — it is the mechanism companion
+        # mode is made of, in the same way task_extraction is the mechanism plans
+        # are made of. Its enablement is therefore a function of the deploy MODE,
+        # not of the expert list, and a saved configuration must not be able to
+        # countermand it in either direction:
+        #   * enabled in companion mode — otherwise a config that happens to carry
+        #     `companion_router: {enabled: false}` (which is what the Configurator
+        #     saves today, since it ships disabled) degrades the session into a
+        #     companion that can never offer, start or stop anything, silently.
+        #   * disabled in plan mode — otherwise an operator who switched it on to
+        #     look at it pays for an LLM call every turn, for a router whose tools
+        #     are not even registered.
+        self.expert_registry.apply_config(
+            {"experts": {"companion_router": {"enabled": self._companion_mode}}}
+        )
 
         # Plan text is persona-resolved once for the session. _fetch_sm_context
         # resolves the per-turn copy it builds for prompts, but _plan_config is

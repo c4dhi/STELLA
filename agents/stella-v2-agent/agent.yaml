@@ -17,6 +17,10 @@ capabilities:
   - text
   - plans
   - experts
+  # Free-flow mode that can load, run and drop plans mid-conversation. Gates the
+  # companion_router the same way `plans` gates task_extraction: both are
+  # mechanisms a mode is MADE of, not assessment experts an operator opts into.
+  - companion
 
 image:
   dockerfile: "Dockerfile"

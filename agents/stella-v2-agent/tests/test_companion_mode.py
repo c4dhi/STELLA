@@ -435,3 +435,71 @@ def test_plan_following_agents_are_untouched_by_rehydration():
     agent._rehydrate_active_activity({"plan_id": "memory"})
     assert agent._plan_config is None
     assert agent._active_activity is None
+
+
+# ---------------------------------------------------------------------------
+# The router is structural, not an expert you opt into
+# ---------------------------------------------------------------------------
+
+class _FakeRegistry:
+    """Records apply_config calls in order, like the real expert registry."""
+
+    def __init__(self):
+        self.calls = []
+
+    def apply_config(self, config):
+        self.calls.append(config)
+
+    def enabled_for(self, name):
+        """The LAST write wins, which is what the ordering guarantee rests on."""
+        state = None
+        for call in self.calls:
+            entry = (call.get("experts") or {}).get(name)
+            if isinstance(entry, dict) and "enabled" in entry:
+                state = entry["enabled"]
+        return state
+
+
+def _apply(companion_mode, saved_config):
+    """Replay the two writes on_session_start makes, in the order it makes them."""
+    registry = _FakeRegistry()
+    registry.apply_config({"experts": saved_config})          # _apply_pipeline_config
+    registry.apply_config(                                     # the structural write
+        {"experts": {"companion_router": {"enabled": companion_mode}}}
+    )
+    return registry
+
+
+def test_a_saved_config_cannot_disable_the_router_in_companion_mode():
+    """Regression: this silently broke companion mode.
+
+    The router ships enabled:false and appears in the Configurator like any
+    other expert, so a saved configuration carrying
+    `companion_router: {enabled: false}` is the NORMAL case, not an exotic one.
+    Applying the pipeline config after the enable meant that config won, and the
+    session became a companion that could never offer, start or stop anything —
+    with no error anywhere.
+    """
+    registry = _apply(True, {"companion_router": {"enabled": False}})
+    assert registry.enabled_for("companion_router") is True
+
+
+def test_a_saved_config_cannot_enable_the_router_in_plan_mode():
+    # The other direction matters too: an operator who switched it on to look at
+    # it would otherwise pay for an LLM call every turn, for a router whose tools
+    # are not registered outside companion mode.
+    registry = _apply(False, {"companion_router": {"enabled": True}})
+    assert registry.enabled_for("companion_router") is False
+
+
+def test_the_structural_write_is_last():
+    # The guarantee is entirely about ORDER. If _apply_pipeline_config ever moves
+    # after this write, both tests above still pass on their own — so pin it.
+    registry = _apply(True, {"companion_router": {"enabled": False}})
+    assert registry.calls[-1] == {"experts": {"companion_router": {"enabled": True}}}
+
+
+def test_other_experts_keep_honouring_their_saved_config():
+    # Only the router is structural. Everything else stays operator-controlled.
+    registry = _apply(True, {"probing": {"enabled": False}})
+    assert registry.enabled_for("probing") is False

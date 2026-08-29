@@ -142,8 +142,9 @@ function discoverBuiltinAgents(): BuiltinAgentInfo[] {
  * Read an agent's declared default experts from config/experts/*.json.
  *
  * Capability-gated per expert: `task_extraction` rides on the "plans" capability
- * (its job is to fill the plan's deliverables), while the assessment experts ride
- * on the "experts" capability. The parsed array (each file = one expert:
+ * (its job is to fill the plan's deliverables) and `companion_router` on
+ * "companion" (its job is to drive activity transitions), while the assessment
+ * experts ride on the "experts" capability. The parsed array (each file = one expert:
  * name/model/prompt/verdict_directives/…) is stored on AgentType.expertDefaults so
  * the Configurator's Expert Module renders the agent's declared experts/verdicts/
  * actions instead of hardcoding them.
@@ -155,7 +156,8 @@ function readExpertDefaults(
   const caps = Array.isArray(capabilities) ? (capabilities as string[]) : []
   const hasExperts = caps.includes('experts')
   const hasPlans = caps.includes('plans')
-  if (!hasExperts && !hasPlans) return Prisma.DbNull
+  const hasCompanion = caps.includes('companion')
+  if (!hasExperts && !hasPlans && !hasCompanion) return Prisma.DbNull
 
   const expertsDir = path.join(directoryPath, 'config', 'experts')
   if (!fs.existsSync(expertsDir)) return Prisma.DbNull
@@ -171,7 +173,16 @@ function readExpertDefaults(
     }
     if (!parsed || typeof parsed !== 'object') continue
     const name = (parsed as Record<string, unknown>).name
-    const include = name === 'task_extraction' ? hasPlans : hasExperts
+    // Two experts are structural rather than assessment: task_extraction is how
+    // plans are executed, companion_router is how companion mode is executed.
+    // Each rides on the capability for the mode it implements, so an agent that
+    // does not support that mode never publishes it at all.
+    const include =
+      name === 'task_extraction'
+        ? hasPlans
+        : name === 'companion_router'
+          ? hasCompanion
+          : hasExperts
     if (include) experts.push(parsed as Record<string, unknown>)
   }
 

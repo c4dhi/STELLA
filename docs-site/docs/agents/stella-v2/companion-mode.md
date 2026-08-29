@@ -42,7 +42,13 @@ The router is an ordinary expert — `companion_router` — with three tools:
 
 `LoadPlan` deliberately is **not** `Initialize`. `Initialize` resumes existing state so a paused agent restarts where it left off, which is wrong here: a user who runs an activity, stops, and picks it again expects it from the top. `ClearPlan` deletes the row rather than blanking it, so every existing "no plan" code path applies unchanged — which is exactly the state a free-flow turn is in.
 
-The router ships **disabled** (`enabled: false` in `config/experts/companion_router.json`) and is switched on only by a companion deployment, so existing agents never load it.
+### It is structural, not an expert you opt into
+
+The router sits in its own section of the Pipeline Configurator, beside Task Extraction, and has **no on/off switch**. That is deliberate: it is the mechanism companion mode is made of, the same way `task_extraction` is the mechanism plans are made of. Deleting either does not leave a working system with one fewer opinion in it — it removes the thing the mode runs on.
+
+So its enablement is a function of the **deploy mode**, not of the configuration: forced on in companion mode, forced off in plan mode, applied *after* the saved configuration so neither direction can be countermanded. One configuration therefore works for both modes, and in plan mode the router costs nothing — it never runs.
+
+It rides on the `companion` capability, so an agent that does not declare that capability never shows the router at all.
 
 ### The router is asymmetric on purpose
 
