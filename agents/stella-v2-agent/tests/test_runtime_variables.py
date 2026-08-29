@@ -12,10 +12,10 @@ from stella_agent_sdk.prompts import KNOWN_PLACEHOLDERS, get_compiler
 
 AGENT_DIR = os.path.dirname(os.path.dirname(__file__))
 MANIFEST_PATH = os.path.join(AGENT_DIR, "agent.yaml")
-AGENT_PY = os.path.join(AGENT_DIR, "src", "stella_light_agent", "agent.py")
+AGENT_PY = os.path.join(AGENT_DIR, "src", "stella_v2_agent", "agent.py")
 
 
-# stella-light exposes the SDK's full placeholder palette. If a resolver is ever
+# stella-v2 exposes the SDK's full placeholder palette. If a resolver is ever
 # added to the SDK that this agent intentionally should NOT surface, list its token
 # here (with a reason) so the reverse drift guard below stays green by decision, not
 # by oversight.
@@ -46,7 +46,7 @@ def _namespaced(runtime_vars):
 def test_declared_runtime_variables_are_resolvable_by_the_compiler():
     """Forward drift guard: every declared variable must be resolvable by the SDK."""
     runtime_vars = _manifest().get("runtimeVariables") or []
-    assert runtime_vars, "stella-light must declare runtimeVariables"
+    assert runtime_vars, "stella-v2 must declare runtimeVariables"
     for token in _declared_tokens(runtime_vars):
         assert token in KNOWN_PLACEHOLDERS, (
             f"runtimeVariable token '{token}' is declared but not resolvable by the "
@@ -90,7 +90,7 @@ def test_namespaced_variables_are_supported_by_the_pinned_compiler():
 
 def test_manifest_compiler_version_matches_pinned_constant():
     declared = (_manifest().get("promptCompiler") or {}).get("version")
-    assert declared, "stella-light must declare promptCompiler.version"
+    assert declared, "stella-v2 must declare promptCompiler.version"
     with open(AGENT_PY) as f:
         source = f.read()
     m = re.search(r'PROMPT_COMPILER_VERSION\s*=\s*"([^"]+)"', source)

@@ -21,6 +21,7 @@ from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.tools import ToolRegistry
 from stella_agent_sdk.tools.state_machine import create_state_machine_tools
+from stella_agent_sdk.prompts import resolve_persona_tokens
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
 
@@ -36,7 +37,9 @@ from stella_agent_sdk import prompts as sdk_prompts
 # purpose (not the SDK's latest) so an SDK upgrade can't silently change how this
 # agent's prompts compile. Bump deliberately when adopting a new compiler version.
 # Can be overridden per deployment via config["compiler_version"].
-PROMPT_COMPILER_VERSION = "1.0.0"
+# 1.1.0 resolves the {{persona.*}} namespace. 1.0.0 stays registered in the
+# SDK, so configurations pinned to it keep compiling exactly as before.
+PROMPT_COMPILER_VERSION = "1.1.0"
 
 
 class StellaLightAgent(BaseAgent):
@@ -273,6 +276,10 @@ class StellaLightAgent(BaseAgent):
 
         # Load plan configuration
         plan_config = self._load_plan_config(config)
+        # {{persona.name}} in plan prose is SPOKEN ALOUD, so it has to be
+        # resolved before the plan reaches a prompt or a progress payload —
+        # a raw token would be read out to the user verbatim.
+        self._resolve_persona_in_plan_text(plan_config)
         # Retain the raw plan so progress updates can expose per-state transitions.
         self._plan_config = plan_config
 
@@ -280,7 +287,7 @@ class StellaLightAgent(BaseAgent):
         # on the first turn is too late: the opening utterance is exactly the one
         # that gets misdetected (it is short, and often starts with a name), and
         # it is what confirms the lock for the rest of the session.
-        self.language_resolver.set_plan_language((plan_config or {}).get("language"))
+        self.language_resolver.set_plan_language(self._resolved_pin_language(plan_config))
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
             # Seed TTS too. The opening greeting is synthesised before any turn
@@ -305,6 +312,45 @@ class StellaLightAgent(BaseAgent):
         pipeline_config = config.get("pipeline_config")
         if pipeline_config:
             self._apply_pipeline_config(pipeline_config)
+
+    _PLAN_TEXT_FIELDS = (
+        "title", "description", "instruction", "acceptance_criteria",
+        "goal_objective", "goal_context", "goal_depth_guidance",
+        "goal_boundaries", "goal_success_description",
+    )
+
+    def _resolve_persona_in_plan_text(self, node: Any) -> None:
+        """Resolve {{persona.*}} in plan-authored prose, in place.
+
+        Identical to stella-v2's: the two agents run the SAME plans, so a plan
+        that reads correctly under one and prints raw tokens under the other is
+        the worst kind of divergence — and these strings are spoken aloud.
+        No-ops when no persona is deployed.
+        """
+        persona = self._persona_config
+        if not persona:
+            return
+
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in self._PLAN_TEXT_FIELDS and isinstance(value, str):
+                    node[key] = resolve_persona_tokens(value, persona)
+                else:
+                    self._resolve_persona_in_plan_text(value)
+        elif isinstance(node, list):
+            for item in node:
+                self._resolve_persona_in_plan_text(item)
+
+    def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
+        """The declared language for the session, or None to detect per turn.
+
+        A plan's declaration always wins: a plan whose prompts and acceptance
+        criteria are written in German is German wherever it is deployed. The
+        persona's language is only a FALLBACK, for deployments with no plan —
+        it must never override a plan, or a stale persona setting could silently
+        contradict the language the plan is actually written in.
+        """
+        return (plan or {}).get("language") or (self._persona_config or {}).get("language")
 
     def _load_plan_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Load plan configuration from config or disk."""
@@ -399,6 +445,7 @@ class StellaLightAgent(BaseAgent):
                 print(f"[StellaLightAgent] Full state received: {full_state is not None}, keys: {list(full_state.keys()) if full_state else 'None'}")
 
                 if full_state:
+                    self._resolve_persona_in_plan_text(full_state)
                     # Anchor the transition tracker; the initial snapshot has no
                     # prior state, so there is no branch to report yet.
                     self._last_known_state_id = full_state.get("current_state_id")
@@ -560,7 +607,7 @@ class StellaLightAgent(BaseAgent):
         # mis-hears — which is how a fully-German plan ran its whole session
         # in English. A declaration removes the guess entirely.
         self.language_resolver.set_plan_language(
-            (self._plan_config or {}).get("language")
+            self._resolved_pin_language(self._plan_config)
         )
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
@@ -663,6 +710,7 @@ class StellaLightAgent(BaseAgent):
             try:
                 full_state = await self.sm_client.get_full_state()
                 if full_state:
+                    self._resolve_persona_in_plan_text(full_state)
                     # Describe the "branch chosen" if the state changed this turn,
                     # then advance the tracker (parity with stella-v2, #310).
                     current_state_id = full_state.get("current_state_id")

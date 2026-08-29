@@ -488,6 +488,9 @@ runtimeVariables:
     preview: "German"
   - name: persona
     label: persona.key
+    # A NAMESPACE, not a flat token: it resolves as {{persona.<key>}} against the
+    # deployed persona, so the compiler matches it by pattern rather than by name.
+    namespaced: true
     parametric: true
     description: "A value defined once on the deployed Persona (e.g. {{persona.name}}). Built-ins: name, voice, language; any other key comes from the persona's own variables. Resolvable here and in a plan's own text, so identity is stated in one place."
     preview: "Grace"
