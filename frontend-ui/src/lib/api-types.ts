@@ -937,6 +937,12 @@ export interface Persona {
   voice?: string
   /** Fallback language for plan-less deployments. A plan's declared language wins. */
   language?: string
+  /**
+   * Author-defined values, referenced from plans and agent configurations as
+   * {{persona.<key>}} so a fact about the agent is written down once.
+   * Keys must match /^[A-Za-z_][A-Za-z0-9_]*$/ to be addressable in a prompt.
+   */
+  variables?: Record<string, string>
   /** The built-in fallback. Readable and duplicable by anyone; editable by nobody. */
   isSystemDefault: boolean
   createdAt: string
@@ -951,6 +957,7 @@ export interface CreatePersonaDto {
   greeting?: string
   voice?: string
   language?: string
+  variables?: Record<string, string>
 }
 
 export interface UpdatePersonaDto {
@@ -961,6 +968,7 @@ export interface UpdatePersonaDto {
   greeting?: string
   voice?: string
   language?: string
+  variables?: Record<string, string>
 }
 
 // ============================================================================

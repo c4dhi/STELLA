@@ -139,3 +139,33 @@ describe('PersonasService system default protection', () => {
     expect(copy.userId).toBe('user-1');
   });
 });
+
+describe('PersonasService variables', () => {
+  const WITH_VARS: PersonaRow & { variables?: Record<string, string> } = {
+    ...MINE,
+    variables: { role: 'wellbeing companion' },
+  };
+
+  it('snapshots variables so {{persona.*}} resolves against deploy-time values', async () => {
+    const resolved = await createService([WITH_VARS as PersonaRow]).resolveForDeploy(
+      'persona-1',
+      'user-1',
+    );
+    expect(resolved).toMatchObject({ variables: { role: 'wellbeing companion' } });
+  });
+
+  it('always sends a variables map, so the agent never has to guard for null', async () => {
+    const resolved = await createService([MINE]).resolveForDeploy('persona-1', 'user-1');
+    expect(resolved).toMatchObject({ variables: {} });
+  });
+
+  it('carries variables through a duplicate', async () => {
+    // A copy that silently lost its variables would break every prompt that
+    // referenced them, with no error anywhere.
+    const copy: any = await createService([WITH_VARS as PersonaRow]).duplicate(
+      'persona-1',
+      'user-1',
+    );
+    expect(copy.variables).toEqual({ role: 'wellbeing companion' });
+  });
+});

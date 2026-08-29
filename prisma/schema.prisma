@@ -656,6 +656,13 @@ model Persona {
   // language always wins — see frontend-ui/src/lib/sessionLanguage.ts.
   language String?
 
+  // Author-defined values, referenced elsewhere as {{persona.<key>}} — in an
+  // AgentConfiguration's prompts and in a plan's own text. This is what lets a
+  // fact about the agent be stated ONCE here and inserted wherever it is needed,
+  // instead of being restated (and drifting) in each place.
+  // Shape: { "<key>": "<value>" }, flat, string values.
+  variables Json?
+
   // Exactly one row has this set; it is the fallback when a deployment names no
   // persona, or when a persona's owner has been deleted. Not user-deletable.
   isSystemDefault Boolean @default(false)

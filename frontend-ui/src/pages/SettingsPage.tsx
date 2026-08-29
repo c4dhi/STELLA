@@ -7,6 +7,7 @@ import SettingsSidebar, { type SettingsSection } from '../components/settings/Se
 import ProfileSection from '../components/settings/ProfileSection'
 import PreferencesSection from '../components/settings/PreferencesSection'
 import PlanBuilderSection from '../components/settings/PlanBuilderSection'
+import PersonasSection from '../components/settings/PersonasSection'
 import EnvVarBuilderSection from '../components/settings/EnvVarBuilderSection'
 import AgentLibrarySection from '../components/settings/AgentLibrarySection'
 import InboxSection from '../components/settings/InboxSection'
@@ -15,7 +16,7 @@ import AgentConfigSection from '../components/settings/AgentConfigSection'
 import AnalyticsSection from '../components/settings/AnalyticsSection'
 import { useAuthStore } from '../store/authStore'
 
-const validSections: SettingsSection[] = ['profile', 'preferences', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin']
+const validSections: SettingsSection[] = ['profile', 'preferences', 'personas', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin']
 
 // Animation variants for page transitions
 const pageVariants = {
@@ -77,6 +78,8 @@ export default function SettingsPage() {
         return <ProfileSection />
       case 'preferences':
         return <PreferencesSection />
+      case 'personas':
+        return <PersonasSection />
       case 'plan-builder':
         return <PlanBuilderSection />
       case 'agent-configs':

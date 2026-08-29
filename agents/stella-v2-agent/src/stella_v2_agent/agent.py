@@ -53,6 +53,7 @@ from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 from stella_agent_sdk.language import LanguageResolver
 from stella_agent_sdk.agent import BargeInEvaluator
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
+from stella_agent_sdk.prompts import resolve_persona_tokens
 from stella_v2_agent.utils import normalize_transition_priority
 import logging
 
@@ -92,7 +93,7 @@ logger = logging.getLogger(__name__)
 # purpose (not the SDK's latest) so an SDK upgrade can't silently change how this
 # agent's expert prompts compile. Bump deliberately when adopting a new compiler
 # version. Can be overridden per deployment via config["compiler_version"].
-PROMPT_COMPILER_VERSION = "1.0.0"
+PROMPT_COMPILER_VERSION = "1.1.0"
 
 
 class StellaV2Agent(BaseAgent):
@@ -1072,6 +1073,36 @@ class StellaV2Agent(BaseAgent):
             .get("farewell_message")
         )
 
+    # Plan-authored fields that a plan author writes prose into, and which may
+    # therefore want to name the agent. Structural fields (ids, types, statuses)
+    # are deliberately excluded.
+    _PLAN_TEXT_FIELDS = (
+        "title", "description", "instruction", "acceptance_criteria",
+        "goal_objective", "goal_context", "goal_depth_guidance",
+        "goal_boundaries", "goal_success_description",
+    )
+
+    def _resolve_persona_in_plan_text(self, node: Any) -> None:
+        """Resolve {{persona.*}} in plan-authored prose, in place.
+
+        Walks the assembled plan structures rather than the raw plan config,
+        because that is the form the prompt placeholders are rendered from.
+        No-ops when no persona is deployed.
+        """
+        persona = self._persona_config
+        if not persona:
+            return
+
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in self._PLAN_TEXT_FIELDS and isinstance(value, str):
+                    node[key] = resolve_persona_tokens(value, persona)
+                else:
+                    self._resolve_persona_in_plan_text(value)
+        elif isinstance(node, list):
+            for item in node:
+                self._resolve_persona_in_plan_text(item)
+
     def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
         """The declared language for the session, or None to detect per turn.
 
@@ -1293,6 +1324,13 @@ class StellaV2Agent(BaseAgent):
                 state_entry["tasks"].append(task_entry)
             full_plan.append(state_entry)
 
+        # Plan-authored text is written by a plan author who cannot know which
+        # persona will run it, so {{persona.*}} is resolved here — once, centrally,
+        # before any of it is formatted into a prompt. Nothing else is substituted:
+        # this text becomes {{plan}} and {{current_focus}}, so resolving the wider
+        # palette here would be recursive.
+        self._resolve_persona_in_plan_text(full_plan)
+
         # Build deliverables list (pending with full detail + completed summary)
         deliverables_list: List[Dict[str, Any]] = [
             {
@@ -1327,6 +1365,9 @@ class StellaV2Agent(BaseAgent):
         self._last_state_id = current_state_id
 
         return {
+            # Persona reaches the prompt compiler through here, which is what makes
+            # {{persona.*}} resolvable in expert prompts and verdict templates.
+            "persona": self._persona_config or {},
             "full_plan": full_plan,
             "state": {
                 "id": current_state.get("state_id"),

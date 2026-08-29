@@ -202,6 +202,9 @@ export default function PersonaSelectionStep({
           </p>
         </div>
 
+        {/* Variables are edited in Settings > Personas. Duplicating that editor
+            here would create a second place to define the same thing, which is
+            exactly what personas exist to stop. */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <input
@@ -331,10 +334,18 @@ export default function PersonaSelectionStep({
                 {persona.description || persona.systemPrompt.slice(0, 120)}
               </p>
 
-              <div className={`mt-2 flex items-center gap-2 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+              <div className={`mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
                 {persona.isSystemDefault && <span>Default</span>}
                 {persona.voice && <span>Voice: {persona.voice}</span>}
                 {persona.language && <span>{persona.language.toUpperCase()}</span>}
+                {Object.keys(persona.variables || {}).length > 0 && (
+                  <span className="font-mono">
+                    {Object.keys(persona.variables || {})
+                      .slice(0, 3)
+                      .map((k) => `{{persona.${k}}}`)
+                      .join(' ')}
+                  </span>
+                )}
               </div>
             </motion.button>
           )

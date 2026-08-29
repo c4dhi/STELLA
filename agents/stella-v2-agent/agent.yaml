@@ -446,8 +446,10 @@ pipelineSchema:
       default: 1
 
 # SDK prompt-compiler version this agent resolves {{placeholder}} tokens with.
+# 1.1.0 adds the {{persona.*}} namespace. 1.0.0 stays registered in the SDK, so
+# configurations authored against it keep compiling unchanged.
 promptCompiler:
-  version: "1.0.0"
+  version: "1.1.0"
 
 # {{placeholder}} palette offered in the Agent Configurator. Mirrors the SDK
 # placeholder compiler's resolvable set (stella_agent_sdk.prompts palette()).
@@ -499,6 +501,11 @@ runtimeVariables:
     label: language
     description: "Resolved session language (single source of truth, #214)"
     preview: "German"
+  - name: persona
+    label: persona.key
+    parametric: true
+    description: "A value defined once on the deployed Persona (e.g. {{persona.name}}). Built-ins: name, voice, language; any other key comes from the persona's own variables. Resolvable here and in a plan's own text, so identity is stated in one place."
+    preview: "Grace"
 
 sdk:
   minVersion: "0.4.0"

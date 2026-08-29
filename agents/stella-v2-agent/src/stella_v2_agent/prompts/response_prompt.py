@@ -111,6 +111,10 @@ def build_response_system_prompt(
             sm_context.get("language"), pinned=bool(sm_context.get("language_pinned"))
         ) or "",
         "bridge": bridge or "",
+        # {{persona.*}} in the configured guidelines. This engine and the
+        # placeholder compiler resolve the same namespace from the same values, so
+        # a variable reads identically wherever it is written.
+        **_persona_variables(sm_context),
         # Runtime flags so the editable guidelines own the "just collected /
         # phase completing / just transitioned" behavioral prose via {{#if ...}}.
         **_state_conditions(sm_context),
@@ -118,6 +122,27 @@ def build_response_system_prompt(
     sections.append(render_prompt(guidelines, ctx))
 
     return "\n\n".join(s for s in sections if s)
+
+
+def _persona_variables(sm_context: Dict[str, Any]) -> Dict[str, str]:
+    """Flatten the deployed persona into ``persona.<key>`` entries for render_prompt.
+
+    Author-defined variables win over the built-in identity fields, matching the
+    placeholder compiler's precedence exactly — the two engines must not disagree
+    about what {{persona.name}} means.
+    """
+    persona = sm_context.get("persona") or {}
+    if not persona:
+        return {}
+
+    flat: Dict[str, str] = {}
+    for key in ("name", "voice", "language"):
+        value = persona.get(key)
+        if value:
+            flat[f"persona.{key}"] = str(value)
+    for key, value in (persona.get("variables") or {}).items():
+        flat[f"persona.{key}"] = str(value)
+    return flat
 
 
 def _language_directive(language: Optional[str], pinned: bool = False) -> Optional[str]:

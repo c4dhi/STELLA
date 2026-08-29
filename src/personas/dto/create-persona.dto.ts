@@ -2,9 +2,12 @@ import {
   IsString,
   IsNotEmpty,
   IsOptional,
+  IsObject,
   MinLength,
   MaxLength,
+  Validate,
 } from 'class-validator';
+import { IsPersonaVariableMap } from './persona-variables.validator';
 
 export class CreatePersonaDto {
   @IsString()
@@ -53,4 +56,13 @@ export class CreatePersonaDto {
   @IsOptional()
   @MaxLength(16)
   language?: string;
+
+  /**
+   * Author-defined values referenced elsewhere as {{persona.<key>}}.
+   * Flat map of identifier-safe keys to short string values.
+   */
+  @IsObject()
+  @IsOptional()
+  @Validate(IsPersonaVariableMap)
+  variables?: Record<string, string>;
 }

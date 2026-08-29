@@ -1,9 +1,12 @@
 import {
   IsString,
   IsOptional,
+  IsObject,
   MinLength,
   MaxLength,
+  Validate,
 } from 'class-validator';
+import { IsPersonaVariableMap } from './persona-variables.validator';
 
 export class UpdatePersonaDto {
   @IsString()
@@ -42,4 +45,9 @@ export class UpdatePersonaDto {
   @IsOptional()
   @MaxLength(16)
   language?: string;
+
+  @IsObject()
+  @IsOptional()
+  @Validate(IsPersonaVariableMap)
+  variables?: Record<string, string>;
 }

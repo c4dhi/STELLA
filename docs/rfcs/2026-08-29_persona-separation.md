@@ -211,6 +211,31 @@ With those, the entire cost of user-scoping is *"a second user must build their 
 
 ---
 
+## 10b. Persona variables — define once, reference everywhere
+
+The clean cut removes identity from plans, but a plan author still sometimes needs to *name* the agent. Restating it there would reintroduce exactly the duplication the cut removes, so instead a persona carries author-defined `variables` that anything else can reference as `{{persona.<key>}}`.
+
+**Persona is the source, never a consumer.** Its own prompt stays verbatim — the invariant from [§2](#2-the-seam-already-exists-in-the-code) — so it gains no dependency on any agent type.
+
+Three template paths had to be brought into agreement, and they did not start that way:
+
+| Path | Engine | Before |
+|---|---|---|
+| Expert prompts, verdict templates | `placeholder_compiler` | compiled |
+| Configured prompt slots (guidelines, bridge, barge-in) | `render_prompt` | compiled, different engine |
+| **Plan-authored text** | — | **not compiled at all** |
+
+- Both engines' token patterns were widened to accept one dotted segment, and both resolve `persona.*` with the same precedence (author-defined variables beat the built-in `name`/`voice`/`language`). They must not disagree about what `{{persona.name}}` means.
+- Plan text resolves the persona namespace **only**, via `resolve_persona_tokens`. Plan text is rendered *into* `{{plan}}` and `{{current_focus}}`, so running the full palette over it would be recursive; and a plan has no business reaching conversation state this way.
+- Substitution is single-pass and values are never re-scanned, so an author-supplied variable cannot smuggle in a placeholder of its own.
+- An unknown key inside the known namespace resolves to the **empty string** rather than being left literal — the inverse of the fixed palette's policy, for the reason arbitration already applies to verdict templates: a literal `{{persona.nickname}}` reaching the LLM, or being spoken, is worse than the sentence not containing it.
+
+### Compiler versioning
+
+`{{persona.*}}` ships as compiler **1.1.0**, registered *alongside* 1.0.0 rather than replacing it. `get_compiler()` raises on an unknown version, so bumping `COMPILER_VERSION` in place would have unregistered 1.0.0 and broken every prompt and saved configuration pinned to it. Under 1.0.0 a `{{persona.x}}` token is left as-is, like any other unknown placeholder. Saved configurations declaring `minCompilerVersion: 1.0.0` stay valid, since the check is `available >= required`.
+
+---
+
 ## 11. Open questions
 
 - **Light-agent convergence.** Does it eventually adopt the verbatim contract, or does Persona grow a rendered variant? Deferred, but the answer determines whether `Persona.systemPrompt` can ever contain `{{placeholders}}`.

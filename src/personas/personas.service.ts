@@ -87,6 +87,7 @@ export class PersonasService {
         greeting: persona.greeting,
         voice: persona.voice,
         language: persona.language,
+        variables: (persona.variables ?? undefined) as never,
         userId,
         // A copy is always an ordinary persona, never a second system default.
         isSystemDefault: false,
@@ -136,6 +137,11 @@ export class PersonasService {
       greeting: persona.greeting ?? undefined,
       voice: persona.voice ?? undefined,
       language: persona.language ?? undefined,
+      // Referenced elsewhere as {{persona.<key>}} — in an AgentConfiguration's
+      // prompts and in a plan's own text. Snapshotted with the rest of the
+      // persona, so a variable is resolved against the values that were current
+      // when the agent was deployed.
+      variables: (persona.variables as Record<string, string> | null) ?? {},
       // Lets the agent tell "the operator chose this identity" from "nobody chose
       // one, here is the floor". Until the phase-2 clean cut, a deployment that
       // configured its persona in the Agent Configurator must keep winning over
