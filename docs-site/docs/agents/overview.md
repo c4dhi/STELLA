@@ -13,7 +13,7 @@ STELLA supports multiple agent types, each designed for different use cases. All
 |-------|-------------|----------|
 | **stella-v2** | Streamlined 5-stage pipeline with deterministic arbitration and configurable pipeline | Configurable deployments, lower latency, predictable behavior |
 | **stella-agent** | Full-featured agent with LLM-based aggregation pipeline | Production conversations requiring high quality |
-| **stella-light-agent** | Lightweight agent with simplified pipeline | Quick responses, lower resource usage |
+| **stella-light-agent** | ⚠️ **Deprecated** — superseded by stella-v2 | Nothing new. Use stella-v2 with a lean expert configuration |
 | **echo-agent** | Simple test agent that echoes back messages | Testing and development |
 
 ## Architecture
@@ -58,13 +58,11 @@ Use the full-featured `stella-agent` when you need:
 - Complex dialogue flows
 - Production deployments
 
-### stella-light-agent
+### stella-light-agent (deprecated)
 
-Use `stella-light-agent` when you need:
-- Faster response times
-- Lower resource consumption
-- Simpler conversations
-- Development and testing
+**Do not choose this for new work.** It is superseded by `stella-v2` and no longer developed; existing deployments keep running.
+
+If you wanted it for lower cost, use `stella-v2` with only the experts you need enabled — the Expert Pool node has a per-expert on/off switch. You get comparable per-turn cost and keep the bridge (so the agent starts speaking immediately instead of waiting in silence), analytics, and companion mode. See [stella-light-agent](./stella-light-agent.md) for the full rationale and a migration table.
 
 ### echo-agent
 
@@ -107,6 +105,6 @@ All agents support these common environment variables:
 
 - [stella-v2](./stella-v2/index.md) - Streamlined pipeline with configurator
 - [stella-agent](./stella-agent/index.md) - Full-featured agent details
-- [stella-light-agent](./stella-light-agent.md) - Lightweight agent details
+- [stella-light-agent](./stella-light-agent.md) - ⚠️ Deprecated; migration guidance
 - [echo-agent](./echo-agent.md) - Test agent details
 - [Agent SDK](../agent-sdk/overview.md) - Build custom agents

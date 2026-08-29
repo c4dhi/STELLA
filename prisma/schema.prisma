@@ -203,6 +203,13 @@ model AgentType {
   // Built-in vs custom
   isBuiltIn Boolean @default(true)
 
+  // Superseded, but still deployable. Distinct from validationStatus REJECTED,
+  // which hides a type entirely: a deprecated type keeps working for the
+  // deployments that already use it, and keeps its saved configurations valid.
+  // It is only demoted in the gallery so nobody picks it for something new.
+  deprecated      Boolean @default(false)
+  deprecationNote String? // What to use instead, shown next to the badge
+
   // Ownership (for custom agents)
   userId String? // Owner of custom agent (null for built-in)
   user   User?   @relation(fields: [userId], references: [id])

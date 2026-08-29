@@ -270,6 +270,10 @@ export interface AgentType {
   icon: string | null
   version: string
   isBuiltIn: boolean
+  /** Superseded but still deployable — existing deployments keep working. */
+  deprecated?: boolean
+  /** What to use instead. Shown next to the badge. */
+  deprecationNote?: string | null
   capabilities: string[]
   defaultConfig: Record<string, unknown>  // Default config for this agent type
   validationStatus?: AgentValidationStatus

@@ -205,6 +205,8 @@ function mapManifestToDbFields(manifest: AgentManifest): Prisma.AgentTypeCreateI
     runtimeVariables: manifest.runtimeVariables ? (manifest.runtimeVariables as Prisma.InputJsonValue) : Prisma.DbNull,
     compilerVersion: manifest.promptCompiler?.version || null,
     sdkMinVersion: manifest.sdk?.minVersion || null,
+    deprecated: manifest.metadata.deprecated === true,
+    deprecationNote: manifest.metadata.deprecationNote || null,
   }
 }
 
@@ -508,6 +510,11 @@ async function main() {
         expertDefaults,
         compilerVersion: dbFields.compilerVersion,
         sdkMinVersion: dbFields.sdkMinVersion,
+        // The manifest is the source of truth for deprecation, so an UPDATE
+        // must carry it — otherwise marking an agent deprecated would only
+        // take effect on databases that had never seeded it.
+        deprecated: dbFields.deprecated,
+        deprecationNote: dbFields.deprecationNote,
         // Preserve isBuiltIn and validationStatus on update
       },
       create: {

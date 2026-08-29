@@ -224,7 +224,7 @@ export class PublicProjectsService {
       {
         name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
         icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-        agentType: project.publicAgentType?.slug || 'stella-light-agent',
+        agentType: project.publicAgentType?.slug || 'stella-v2-agent',
         config: this.buildRuntimeAgentConfig(agentConfig),
         agentConfigurationId: agentConfig?.agentConfigurationId,
         personaId: agentConfig?.personaId,
@@ -290,7 +290,7 @@ export class PublicProjectsService {
     const lastAgentConfig = {
       name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
       icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-      agentType: project.publicAgentType?.slug || 'stella-light-agent',
+      agentType: project.publicAgentType?.slug || 'stella-v2-agent',
       agentConfig: this.buildRuntimeAgentConfig(agentConfig),
       agentConfigurationId: agentConfig?.agentConfigurationId || null,
       personaId: agentConfig?.personaId || null,
@@ -416,7 +416,7 @@ export class PublicProjectsService {
           {
             name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
             icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-            agentType: project.publicAgentType?.slug || 'stella-light-agent',
+            agentType: project.publicAgentType?.slug || 'stella-v2-agent',
             config: this.buildRuntimeAgentConfig(agentConfig),
             agentConfigurationId: agentConfig?.agentConfigurationId,
             personaId: agentConfig?.personaId,

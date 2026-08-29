@@ -5,8 +5,19 @@ metadata:
   slug: "stella-light-agent"
   # 1.1.0 — the identity slot is gone; the persona owns identity (#467).
   version: "1.1.0"
-  description: "Lightweight conversational AI with prompt-based guardrails. Faster responses, lower cost."
+  description: "DEPRECATED — superseded by STELLA V2 with a lean expert configuration. Lightweight single-LLM agent with prompt-based guardrails."
   icon: "💡"
+  # Deprecated in favour of stella-v2. Its remaining advantage was cost — fewer
+  # LLM calls per turn — and that is now expressible as a v2 configuration:
+  # disable the experts you do not need on the Expert Pool node. What you keep
+  # by doing that instead is everything stella-light never grew: the bridge (so
+  # the agent starts speaking immediately rather than waiting in silence),
+  # analytics, companion mode, and one codebase where a fix lands once.
+  #
+  # Not retired: existing deployments keep running and their saved
+  # configurations stay valid. It is only demoted in the gallery.
+  deprecated: true
+  deprecationNote: "Use STELLA V2. For a comparably cheap agent, save a V2 configuration with only the experts you need enabled — you keep the bridge, analytics and companion mode."
   tags:
     - voice
     - ai

@@ -269,8 +269,10 @@ export class AgentsService {
       throw new NotFoundException('Session does not have an associated room');
     }
 
-    // Determine agent type (default to stella-light-agent)
-    const agentType = createAgentDto.agentType || 'stella-light-agent';
+    // Determine agent type. Defaults to stella-v2: an omitted agentType used
+    // to land silently on stella-light, which is deprecated — the least
+    // maintained agent was the one you got by not choosing.
+    const agentType = createAgentDto.agentType || 'stella-v2-agent';
 
     // Security: Validate agent type against allowed list
     const allowedAgentTypes = ['stella-v2-agent', 'stella-light-agent'];
@@ -608,8 +610,10 @@ export class AgentsService {
       throw new Error('Session does not have an associated room');
     }
 
-    // Determine agent type (default to stella-light-agent)
-    const agentType = createAgentDto.agentType || 'stella-light-agent';
+    // Determine agent type. Defaults to stella-v2: an omitted agentType used
+    // to land silently on stella-light, which is deprecated — the least
+    // maintained agent was the one you got by not choosing.
+    const agentType = createAgentDto.agentType || 'stella-v2-agent';
     // Encrypt manual env vars so standalone agents have the same restart behavior as regular agents.
     const manualEnvVarsEncrypted = this.encryptManualEnvVarsForStorage(createAgentDto.envVars);
 
@@ -1012,7 +1016,7 @@ export class AgentsService {
 
     // Emit SSE event so frontend updates in real-time
     if (this.sessionsService) {
-      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agent.agentType || 'stella-light-agent');
+      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agent.agentType || 'stella-v2-agent');
     }
 
     // Get environment variables
@@ -1046,7 +1050,7 @@ export class AgentsService {
     }
 
     // Register pending session so gRPC agent registration can match
-    const agentType = agent.agentType || 'stella-light-agent';
+    const agentType = agent.agentType || 'stella-v2-agent';
     if (this.agentServerService) {
       const config: Record<string, string> = {
         sessionId: agent.sessionId,
