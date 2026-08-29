@@ -363,8 +363,7 @@ export default function ExpertSidebar({
           <p className={`text-[11px] font-light leading-relaxed mb-3 ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
             Runs only when this agent is deployed in <strong>Companion</strong> mode, where it
             notices that the user wants to see, start or stop an activity. In Plan mode it never
-            runs and costs nothing. There is no on/off here on purpose: the deploy mode decides,
-            so the same configuration works for both. What you can tune is how it decides.
+            runs and costs nothing.
           </p>
 
           <div
