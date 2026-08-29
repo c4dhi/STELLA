@@ -84,8 +84,10 @@ def test_no_plan_no_persona_uses_default_persona():
     assert "STELLA" in result
 
 
-def test_plan_system_prompt_replaces_default_persona():
-    result = build_response_system_prompt({}, ResponseDirective(), plan_system_prompt="You are Max.")
+def test_deployed_persona_replaces_default_persona():
+    # Identity now has one source: the deployed Persona (#467). A plan cannot
+    # supply one — see test_a_plans_system_prompt_is_ignored below.
+    result = build_response_system_prompt({}, ResponseDirective(), persona="You are Max.")
     assert "You are Max." in result
     assert "STELLA" not in result
 
@@ -96,14 +98,16 @@ def test_custom_persona_replaces_default_when_no_plan():
     assert "STELLA" not in result
 
 
-def test_plan_and_custom_persona_both_included():
+def test_deployed_persona_outranks_the_configurator_slot():
+    # Exactly one identity is spoken. The two no longer stack: concatenating them
+    # is what gave one voice two authors, resolved by ordering.
     result = build_response_system_prompt(
         {}, ResponseDirective(),
-        plan_system_prompt="You are Max.",
-        custom_persona="Extra rules here.",
+        persona="You are Max.",
+        custom_persona="You are someone else.",
     )
     assert "You are Max." in result
-    assert "Extra rules here." in result
+    assert "You are someone else." not in result
 
 
 def test_custom_guidelines_replace_default_guidelines():

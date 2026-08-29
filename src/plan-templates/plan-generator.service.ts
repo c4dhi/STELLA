@@ -59,7 +59,6 @@ interface PlanContent {
   initial_state_id?: string;
   states: PlanState[];
   metadata?: Record<string, unknown>;
-  system_prompt?: string;
   // ISO 639-1 code the conversation is conducted in. Pins STT transcription for
   // the session; omitted/"auto" falls back to per-utterance detection, which is
   // unreliable on short turns and translates rather than mis-hears when wrong.
@@ -217,7 +216,6 @@ The structure must follow this exact schema:
         ]
       }
     ],
-    "system_prompt": "AI agent persona description",
     "metadata": {}
   },
   "suggestedName": "Short plan name (max 50 chars)",
@@ -324,7 +322,6 @@ EXAMPLE 1 — Structured plan with strict/loose states:
         ]
       }
     ],
-    "system_prompt": "You are a friendly fitness coach conducting a quick check-in. Be encouraging and enthusiastic about exercise. Use casual, supportive language.",
     "language": "en"
   },
   "suggestedName": "Fitness Activity Check-in",
@@ -430,7 +427,6 @@ EXAMPLE 2 — Goal-oriented plan for natural conversation:
         ]
       }
     ],
-    "system_prompt": "You are a warm, experienced life coach conducting a discovery session. Listen more than you speak. Use reflective listening. Be genuinely curious about their experience. Never judge or prescribe — your role is to understand."
   },
   "suggestedName": "Life Coaching Discovery",
   "suggestedDescription": "A natural coaching conversation to understand the client's situation, aspirations, and obstacles."
@@ -528,7 +524,6 @@ EXAMPLE 3 — Conditional branching transitions:
         "tasks": []
       }
     ],
-    "system_prompt": "You are a calm support triage assistant. Gather facts clearly and route deterministically."
   },
   "suggestedName": "Support Triage Flow",
   "suggestedDescription": "Routes users by issue category and urgency."
@@ -647,7 +642,6 @@ EXAMPLE 4 — Branching with explicit fallback path:
         "tasks": []
       }
     ],
-    "system_prompt": "You are a practical onboarding specialist. Ask clear questions, classify intent accurately, and route users to the right next step without over-talking."
   },
   "suggestedName": "Onboarding Intake Router",
   "suggestedDescription": "Routes users to escalation, onboarding, or standard flow using explicit branching transitions."
@@ -666,12 +660,13 @@ Guidelines:
 7. Use appropriate types: string (open text), number (counts), boolean (yes/no), enum (choices)
 8. Generate snake_case keys for deliverables: user_name, workout_frequency, etc.
 9. ALWAYS include acceptance_criteria for deliverables — describe what constitutes a valid answer, include concrete examples of good AND bad answers
-10. ALWAYS generate a system_prompt with:
-    - Clear role (e.g., "You are a friendly fitness coach...")
-    - Communication style (casual, professional, enthusiastic, etc.)
-    - 2-3 sentences max
+10. NEVER generate a "system_prompt". A plan describes WHAT happens, never WHO
+    the agent is — identity lives in a separate Persona the operator selects at
+    deploy time (#467), and a plan that emits one would be rejected on save.
+    To refer to the agent inside a task, use the {{persona.name}} placeholder
+    rather than naming or describing it.
 10b. ALWAYS set "language" to the ISO 639-1 code you wrote the plan in — if the
-    instructions and system_prompt are German, set "language": "de". This pins
+    instructions are German, set "language": "de". This pins
     speech recognition for the session. Omitting it leaves the language to be
     guessed per utterance from under a second of audio, which is how a German
     plan ends up transcribed (and answered) in English.

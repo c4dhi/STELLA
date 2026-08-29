@@ -15,7 +15,6 @@ from stella_v2_agent.prompts.response_prompt import build_response_system_prompt
 
 CHOSEN = "You are Grace, a clinical companion."
 CONFIGURATOR = "You are the Agent Configurator's persona."
-PLAN = "You are the plan's own system prompt."
 DEFAULT_FROM_DB = "You are the system default persona row."
 
 
@@ -56,33 +55,30 @@ def test_falls_back_to_in_code_default_without_a_persona():
     assert "You are STELLA" in prompt
 
 
-def test_plan_prompt_replaces_the_fallback_rather_than_stacking():
-    # Pre-existing behaviour, easy to break while refactoring: a plan that carries
-    # its own prompt must not ALSO get the generic fallback appended.
-    prompt = _build(plan_system_prompt=PLAN)
-    assert PLAN in prompt
-    assert "You are STELLA" not in prompt
-
-
-def test_plan_prompt_and_chosen_persona_stack_with_plan_first():
-    # Until the phase-2 cut removes plan prompts, both are spoken — plan first,
-    # matching the ordering that shipped before personas existed.
-    prompt = _build(plan_system_prompt=PLAN, persona=CHOSEN)
-    assert prompt.index(PLAN) < prompt.index(CHOSEN)
-
-
-def test_plan_prompt_does_not_stack_with_the_system_default():
-    # A plan prompt plus the default would give the agent two generic identities.
-    prompt = _build(
-        plan_system_prompt=PLAN, persona=DEFAULT_FROM_DB, persona_is_system_default=True
-    )
-    assert PLAN in prompt
-    assert DEFAULT_FROM_DB not in prompt
-
-
 def test_persona_is_never_rendered_as_a_template():
     # Personas are inserted verbatim; a {{placeholder}} written in one is passed
     # through untouched. This is what frees a persona from any agent type's
     # variable palette — and therefore from its version pinning.
     persona = "You are Grace. Never resolve {{current_focus}}."
     assert "{{current_focus}}" in _build(persona=persona)
+
+
+def test_a_plans_system_prompt_is_ignored():
+    """A plan cannot supply identity, even by carrying the old field.
+
+    Guardrail for the phase-2 cut (#467): the extraction migration strips
+    system_prompt from stored plans, but a hand-authored plan JSON dropped into
+    config/plans/ could still contain one. The agent simply never reads it, so
+    there is no path back to two sources.
+    """
+    plan = {"id": "p1", "system_prompt": "You are somebody else entirely.", "states": []}
+    # _load_plan_config returns the plan as-is; nothing consumes system_prompt.
+    from stella_v2_agent.prompts import response_prompt
+
+    import inspect
+    signature = inspect.signature(response_prompt.build_response_system_prompt)
+    assert "plan_system_prompt" not in signature.parameters
+
+    prompt = _build(persona=CHOSEN)
+    assert plan["system_prompt"] not in prompt
+    assert CHOSEN in prompt

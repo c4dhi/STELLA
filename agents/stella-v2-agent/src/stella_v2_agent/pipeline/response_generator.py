@@ -81,7 +81,6 @@ class ResponseGenerator:
         directive: ResponseDirective,
         conversation_history: List[Dict[str, str]],
         sm_context: Dict[str, Any],
-        plan_system_prompt: Optional[str] = None,
         bridge: str = "",
         prepend: str = "",
         transcript_id: Optional[str] = None,
@@ -94,7 +93,6 @@ class ResponseGenerator:
             directive: Arbitration directive with expert guidance.
             conversation_history: Recent conversation messages.
             sm_context: State machine context.
-            plan_system_prompt: Optional custom system prompt from the plan.
             bridge: Optional bridge phrase already emitted to TTS. The LLM
                     continues from this prefix so the response is coherent.
             prepend: Optional deterministic, literature-informed line (from a
@@ -106,7 +104,7 @@ class ResponseGenerator:
             AgentOutput.text_chunk() for each token, with is_final=True on the last one.
         """
         system_prompt = build_response_system_prompt(
-            sm_context, directive, plan_system_prompt,
+            sm_context, directive,
             custom_persona=self.custom_persona,
             custom_guidelines=self.custom_guidelines,
             persona=self.persona,

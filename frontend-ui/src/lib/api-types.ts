@@ -858,7 +858,7 @@ export interface PlanMetadata {
  * When passed to the agent, these should be populated from PlanTemplate fields.
  *
  * Execution-focused fields:
- * - `states`, `initial_state_id`, `system_prompt`, `session_context`
+ * - `states`, `initial_state_id`, `session_context`
  *
  * Builder metadata:
  * - `metadata.plan_builder.start` for start-node behavior
@@ -872,7 +872,7 @@ export interface PlanContent {
   states: PlanState[]
   metadata?: PlanMetadata
   // Initial prompt configuration
-  system_prompt?: string           // Agent persona (snake_case for SDK consistency)
+  // system_prompt removed in #467 — identity lives on a Persona, not a plan.
   session_context?: SessionContext
   /**
    * ISO 639-1 code the conversation is conducted in (e.g. "de"). Absent or

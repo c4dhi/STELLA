@@ -183,7 +183,6 @@ class StellaV2Agent(BaseAgent):
         # Session state
         self.config: Dict[str, Any] = {}
         self._session_started_at: Optional[str] = None
-        self._plan_system_prompt: Optional[str] = None
         self._plan_config: Optional[Dict[str, Any]] = None  # stored for context building
         # Deployed Persona (#467): identity, resolved and snapshotted backend-side
         # at deploy time. Independent of the plan and of the pipeline config.
@@ -256,8 +255,6 @@ class StellaV2Agent(BaseAgent):
             sm_context = {}
             if self.sm_client:
                 sm_context = await self._fetch_sm_context()
-            if self._plan_system_prompt:
-                sm_context["plan_system_prompt"] = self._plan_system_prompt
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
@@ -294,14 +291,10 @@ class StellaV2Agent(BaseAgent):
             # on every chunk so bridge and response are spoken in one coherent
             # voice. Providers that support voice selection honor it; others
             # disregard it. None → provider/env default.
-            # Persona owns voice IDENTITY (#467); plan.voice is the legacy field and
-            # still wins while it exists, so nothing changes for an existing
-            # deployment. The phase-2 clean cut deletes plan.voice entirely.
-            resolved_voice = (
-                (self._plan_config or {}).get("voice")
-                or (self._persona_config or {}).get("voice")
-                or None
-            )
+            # Persona owns voice identity (#467). plan.voice is gone: nothing ever
+            # wrote it, and keeping a second source would reintroduce the ambiguity
+            # the persona split removed.
+            resolved_voice = (self._persona_config or {}).get("voice") or None
             self._session_voice = resolved_voice
 
             yield AgentOutput.status(
@@ -558,7 +551,6 @@ class StellaV2Agent(BaseAgent):
                     directive=arb_result.directive,
                     conversation_history=history,
                     sm_context=response_sm_context,
-                    plan_system_prompt=self._plan_system_prompt,
                     bridge=bridge,
                     prepend=prepend_text,
                     transcript_id=transcript_id,
@@ -809,7 +801,6 @@ class StellaV2Agent(BaseAgent):
 
         self._session_started_at = datetime.utcnow().isoformat() + "Z"
         self.config = config
-        self._plan_system_prompt = None
         self._plan_config = None
         self._persona_config = self._load_persona_config(config)
         # Clear any resolved language from a previous session on this instance.
@@ -858,8 +849,9 @@ class StellaV2Agent(BaseAgent):
             # Wire tool registry into expert pool
             self.expert_pool.set_tool_registry(self.tool_registry)
 
-            if "system_prompt" in plan:
-                self._plan_system_prompt = plan["system_prompt"]
+            # A plan's system_prompt is deliberately NOT read (#467 phase 2).
+            # Identity comes from the deployed Persona alone; a hand-authored plan
+            # JSON cannot reintroduce a second source by carrying the old field.
 
         # Apply per-session expert overrides from config
         expert_overrides = config.get("expert_overrides", {})
@@ -1255,8 +1247,6 @@ class StellaV2Agent(BaseAgent):
         if not (refreshed and refreshed.get("state")):
             return sm_context
 
-        if self._plan_system_prompt:
-            refreshed["plan_system_prompt"] = self._plan_system_prompt
         refreshed["language"] = resolved_language
         # _fetch_sm_context already detects the change vs the turn-start state;
         # set it explicitly so the response eases into the new phase.

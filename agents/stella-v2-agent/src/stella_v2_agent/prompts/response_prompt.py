@@ -1,10 +1,12 @@
 """System prompt builder for the Response Generator stage.
 
 Composes the final system prompt from:
-- Base persona and conversation guidelines
+- Identity (the deployed Persona) and conversation guidelines
 - State machine context (current state, tasks, deliverables)
 - Arbitration directive (injected expert guidance)
-- Optional custom system prompt from the plan
+
+Identity has exactly one source (#467). Plans carry structure only; one that needs
+to name the agent references {{persona.*}} instead of restating it.
 """
 
 from typing import Dict, Any, List, Optional
@@ -18,7 +20,6 @@ from stella_agent_sdk.prompts import format_history
 def build_response_system_prompt(
     sm_context: Dict[str, Any],
     directive: ResponseDirective,
-    plan_system_prompt: Optional[str] = None,
     custom_persona: Optional[str] = None,
     custom_guidelines: Optional[str] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
@@ -39,9 +40,6 @@ def build_response_system_prompt(
     Args:
         sm_context: State machine context for conversation awareness.
         directive: Arbitration directive with expert guidance.
-        plan_system_prompt: Optional custom system prompt from the plan.
-            DEPRECATED — removed by the phase-2 clean cut (#467); identity moves to
-            ``persona`` and a plan carries structure only.
         custom_persona: Optional custom persona from Agent Configurator.
         custom_guidelines: Optional custom guidelines from Agent Configurator.
         persona: Identity from the deployed Persona entity (#467), snapshotted into
@@ -65,39 +63,20 @@ def build_response_system_prompt(
     """
     sections: List[str] = []
 
-    # 1. Persona — verbatim, NOT rendered, so any {{...}} in a persona is left
-    #    untouched.
+    # 1. Identity — verbatim, NOT rendered, so any {{...}} in a persona is left
+    #    untouched. ONE source, no chain (#467 phase 2): plans carry structure
+    #    only, and a plan that needs to name the agent references {{persona.*}}
+    #    rather than restating who it is.
     #
-    #    Precedence (#467, phase 1). A deployed Persona the operator actually chose
-    #    is the identity and outranks the Agent Configurator's persona slot. The
-    #    system default persona ranks LAST instead, filling the slot that the
-    #    hardcoded _default_persona() used to fill — because every deployment now
-    #    resolves a persona (omitting one means "the default"), and ranking the
-    #    default highly would silently restyle every agent already configured the
-    #    old way.
-    #
-    #    plan_system_prompt still stacks in front, as it always has. The phase-2
-    #    clean cut deletes it, leaving one source and no chain.
-    #    The branch shape below is unchanged from before personas existed: a plan
-    #    prompt REPLACES the fallback rather than stacking with it, so a plan-only
-    #    deployment keeps reading exactly as it did.
+    #    An operator-selected Persona outranks the Agent Configurator's persona
+    #    slot; the system default ranks last, since omitting a persona resolves to
+    #    it and ranking it higher would restyle deployments configured the old way.
     chosen_persona = persona if (persona and not persona_is_system_default) else None
     default_persona = persona if persona_is_system_default else None
 
-    # The operator's explicit identity, whichever way they expressed it.
-    identity = chosen_persona or custom_persona
-
-    if plan_system_prompt and identity:
-        sections.append(plan_system_prompt)
-        sections.append(identity)
-    elif plan_system_prompt:
-        sections.append(plan_system_prompt)
-    elif identity:
-        sections.append(identity)
-    else:
-        # The DB-backed default, else the in-code one (agent running headless, or
-        # against a backend predating the Persona table).
-        sections.append(default_persona or _default_persona())
+    sections.append(
+        chosen_persona or custom_persona or default_persona or _default_persona()
+    )
 
     # 2. Guidelines — rendered with the turn's context as template variables, so
     #    the configured prompt places state / directive / history / language
