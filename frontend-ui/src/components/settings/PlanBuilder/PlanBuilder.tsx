@@ -4,6 +4,7 @@ import { useThemeStore } from '../../../store/themeStore'
 import { useToastStore } from '../../../store/toastStore'
 import { apiClient } from '../../../services/ApiClient'
 import type {
+  Persona,
   PlanTemplate,
   PlanContent,
   PlanMetadata,
@@ -471,6 +472,9 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
   const [name, setName] = useState(template?.name || '')
   const [description, setDescription] = useState(template?.description || '')
   const [planLanguage, setPlanLanguage] = useState(template?.content.language || '')
+  // Drives the {{persona.*}} palette — a plan does not know which persona will
+  // run it, so the offer is the union of what the author's personas define.
+  const [personas, setPersonas] = useState<Persona[]>([])
   const [sessionContext, setSessionContext] = useState<SessionContext>(template?.content.session_context || { fields: [] })
   const [agentSpawnMode, setAgentSpawnMode] = useState<AgentSpawnMode>(extractSpawnMode(template?.content.metadata))
   const [onParticipantJoin, setOnParticipantJoin] = useState(
@@ -1074,6 +1078,10 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
   }
 
   useEffect(() => {
+    apiClient.listPersonas().then(setPersonas).catch(() => setPersonas([]))
+  }, [])
+
+  useEffect(() => {
     if (states.length === 0) {
       setInitialStateId(null)
       return
@@ -1503,6 +1511,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
                     className="h-full"
                   >
                     <PlanStateEditor
+                      personas={personas}
                       state={states[selectedStateIndex]}
                       onChange={(updated) => handleUpdateState(selectedStateIndex, updated)}
                       onDelete={() => handleDeleteState(selectedStateIndex)}
