@@ -46,6 +46,11 @@ class ResponseGenerator:
         self.response_temperature = 0.7
         self.custom_persona: Optional[str] = None
         self.custom_guidelines: Optional[str] = None
+        # Identity from the deployed Persona entity (#467). Set by the agent from
+        # the deploy config, not by apply_config: a persona is deliberately NOT a
+        # pipeline slot, which is what keeps it free of agent-type version pinning.
+        self.persona: Optional[str] = None
+        self.persona_is_system_default: bool = False
         # 0 = use every turn the agent fetched. The agent decides how much
         # history is worth carrying (_custom_history_limit, 20 by default) and
         # hands exactly that much to generate(); this stage must not silently
@@ -104,6 +109,8 @@ class ResponseGenerator:
             sm_context, directive, plan_system_prompt,
             custom_persona=self.custom_persona,
             custom_guidelines=self.custom_guidelines,
+            persona=self.persona,
+            persona_is_system_default=self.persona_is_system_default,
             conversation_history=conversation_history,
             history_limit=self.history_limit or len(conversation_history or []),
             bridge=bridge,

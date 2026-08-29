@@ -70,6 +70,8 @@ def _make_agent(
     agent._custom_history_limit = 20
     agent._plan_system_prompt = None
     agent._plan_config = {}
+    # Set by __init__ in production, which this harness bypasses (#467).
+    agent._persona_config = None
     agent._compiler_version = "1.0.0"
 
     # Mirrors production: task_extraction sets deliverables via tools DURING the

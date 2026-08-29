@@ -24,6 +24,8 @@ def build_response_system_prompt(
     conversation_history: Optional[List[Dict[str, str]]] = None,
     history_limit: int = 10,
     bridge: str = "",
+    persona: Optional[str] = None,
+    persona_is_system_default: bool = False,
 ) -> str:
     """Build the complete system prompt for the Response Generator.
 
@@ -38,8 +40,17 @@ def build_response_system_prompt(
         sm_context: State machine context for conversation awareness.
         directive: Arbitration directive with expert guidance.
         plan_system_prompt: Optional custom system prompt from the plan.
+            DEPRECATED — removed by the phase-2 clean cut (#467); identity moves to
+            ``persona`` and a plan carries structure only.
         custom_persona: Optional custom persona from Agent Configurator.
         custom_guidelines: Optional custom guidelines from Agent Configurator.
+        persona: Identity from the deployed Persona entity (#467), snapshotted into
+            the deploy config. Like every persona source it is used VERBATIM.
+        persona_is_system_default: Whether ``persona`` is the built-in default
+            rather than an operator's choice. An explicit choice outranks the
+            Agent Configurator's persona slot; the default only fills the slot the
+            hardcoded fallback used to fill, so introducing personas does not
+            change the voice of a deployment that configured one the old way.
         conversation_history: Recent turns, exposed as {{conversationHistory}}.
         history_limit: How many recent turns to include.
         bridge: The short acknowledgment already spoken to the user this turn
@@ -54,17 +65,39 @@ def build_response_system_prompt(
     """
     sections: List[str] = []
 
-    # 1. Persona — verbatim, NOT rendered, so any {{...}} in a plan persona is
-    #    left untouched. Plan persona + configurator persona stack; else default.
-    if plan_system_prompt and custom_persona:
+    # 1. Persona — verbatim, NOT rendered, so any {{...}} in a persona is left
+    #    untouched.
+    #
+    #    Precedence (#467, phase 1). A deployed Persona the operator actually chose
+    #    is the identity and outranks the Agent Configurator's persona slot. The
+    #    system default persona ranks LAST instead, filling the slot that the
+    #    hardcoded _default_persona() used to fill — because every deployment now
+    #    resolves a persona (omitting one means "the default"), and ranking the
+    #    default highly would silently restyle every agent already configured the
+    #    old way.
+    #
+    #    plan_system_prompt still stacks in front, as it always has. The phase-2
+    #    clean cut deletes it, leaving one source and no chain.
+    #    The branch shape below is unchanged from before personas existed: a plan
+    #    prompt REPLACES the fallback rather than stacking with it, so a plan-only
+    #    deployment keeps reading exactly as it did.
+    chosen_persona = persona if (persona and not persona_is_system_default) else None
+    default_persona = persona if persona_is_system_default else None
+
+    # The operator's explicit identity, whichever way they expressed it.
+    identity = chosen_persona or custom_persona
+
+    if plan_system_prompt and identity:
         sections.append(plan_system_prompt)
-        sections.append(custom_persona)
+        sections.append(identity)
     elif plan_system_prompt:
         sections.append(plan_system_prompt)
-    elif custom_persona:
-        sections.append(custom_persona)
+    elif identity:
+        sections.append(identity)
     else:
-        sections.append(_default_persona())
+        # The DB-backed default, else the in-code one (agent running headless, or
+        # against a backend predating the Persona table).
+        sections.append(default_persona or _default_persona())
 
     # 2. Guidelines — rendered with the turn's context as template variables, so
     #    the configured prompt places state / directive / history / language

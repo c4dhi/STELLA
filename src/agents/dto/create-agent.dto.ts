@@ -29,6 +29,14 @@ export class CreateAgentDto {
   @IsOptional()
   agentConfigurationId?: string;
 
+  // Persona (agent identity) to deploy with. Resolved server-side and snapshotted
+  // into config.persona, so a later edit reaches the next deployment rather than
+  // this one — the same rule pipeline_config follows. Omitted = the system default
+  // persona. See docs/rfcs/2026-08-29_persona-separation.md.
+  @IsUUID()
+  @IsOptional()
+  personaId?: string;
+
   @IsUUID()
   @IsOptional()
   envVarTemplateId?: string;  // Environment variable template to use for agent pod

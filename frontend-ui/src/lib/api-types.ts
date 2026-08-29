@@ -248,6 +248,10 @@ export interface CreateAgentDto {
   // verifies it matches this agent's type and is not outdated, and uses its
   // (defaults-merged) overrides as pipeline_config — ignoring any client pipeline_config.
   agentConfigurationId?: string
+  // Persona (agent identity) to deploy with. Resolved server-side and snapshotted
+  // into config.persona, so a later edit reaches the next deployment rather than
+  // this one. Omitted = the system default persona.
+  personaId?: string
   envVarTemplateId?: string // environment variable template to use
   envVars?: Record<string, string> // additional env vars to merge with template (overrides template values)
 }
@@ -903,6 +907,60 @@ export interface UpdatePlanTemplateDto {
   name?: string
   description?: string
   content?: PlanContent
+}
+
+// ============================================================================
+// Persona Types (agent identity — see docs/rfcs/2026-08-29_persona-separation.md)
+// ============================================================================
+
+/**
+ * Who the agent IS, separate from what it does (PlanTemplate) and how it runs
+ * (AgentConfiguration).
+ *
+ * Unlike an AgentConfiguration, a persona is NOT bound to an agent type and
+ * carries no version pinning — its prompt is injected verbatim by the agent
+ * rather than rendered through a per-agent-type variable palette, so it can
+ * never be invalidated by an agent version bump.
+ */
+export interface Persona {
+  id: string
+  /** Null for the system-owned default persona. */
+  userId?: string | null
+  name: string
+  description?: string
+  icon?: string
+  /** Injected verbatim — any {{placeholder}} here is passed through, not resolved. */
+  systemPrompt: string
+  /** Not yet consumed by the agent; reserved for companion mode (RFC phase 4). */
+  greeting?: string
+  /** TTS voice identity (a voice id, not a language). Empty = provider default. */
+  voice?: string
+  /** Fallback language for plan-less deployments. A plan's declared language wins. */
+  language?: string
+  /** The built-in fallback. Readable and duplicable by anyone; editable by nobody. */
+  isSystemDefault: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreatePersonaDto {
+  name: string
+  description?: string
+  icon?: string
+  systemPrompt: string
+  greeting?: string
+  voice?: string
+  language?: string
+}
+
+export interface UpdatePersonaDto {
+  name?: string
+  description?: string
+  icon?: string
+  systemPrompt?: string
+  greeting?: string
+  voice?: string
+  language?: string
 }
 
 // ============================================================================

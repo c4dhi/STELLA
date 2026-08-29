@@ -184,6 +184,9 @@ class StellaV2Agent(BaseAgent):
         self._session_started_at: Optional[str] = None
         self._plan_system_prompt: Optional[str] = None
         self._plan_config: Optional[Dict[str, Any]] = None  # stored for context building
+        # Deployed Persona (#467): identity, resolved and snapshotted backend-side
+        # at deploy time. Independent of the plan and of the pipeline config.
+        self._persona_config: Optional[Dict[str, Any]] = None
         self._custom_history_limit: int = 20  # overridable via pipeline_config thresholds
         self._last_known_state_id: Optional[str] = None
         self._last_state_id: Optional[str] = None  # for detecting state transitions between turns
@@ -263,7 +266,7 @@ class StellaV2Agent(BaseAgent):
             # a very short window and, guessing wrong, translates rather than
             # mis-hears — which is how a fully-German plan ran its whole session
             # in English. A declaration removes the guess entirely.
-            plan_language = (self._plan_config or {}).get("language")
+            plan_language = self._resolved_pin_language(self._plan_config)
             self.language_resolver.set_plan_language(plan_language)
             if self.has_audio:
                 self.audio.set_stt_language(self.language_resolver.forced)
@@ -290,7 +293,14 @@ class StellaV2Agent(BaseAgent):
             # on every chunk so bridge and response are spoken in one coherent
             # voice. Providers that support voice selection honor it; others
             # disregard it. None → provider/env default.
-            resolved_voice = (self._plan_config or {}).get("voice") or None
+            # Persona owns voice IDENTITY (#467); plan.voice is the legacy field and
+            # still wins while it exists, so nothing changes for an existing
+            # deployment. The phase-2 clean cut deletes plan.voice entirely.
+            resolved_voice = (
+                (self._plan_config or {}).get("voice")
+                or (self._persona_config or {}).get("voice")
+                or None
+            )
             self._session_voice = resolved_voice
 
             yield AgentOutput.status(
@@ -797,6 +807,7 @@ class StellaV2Agent(BaseAgent):
         self.config = config
         self._plan_system_prompt = None
         self._plan_config = None
+        self._persona_config = self._load_persona_config(config)
         # Clear any resolved language from a previous session on this instance.
         self.language_resolver.reset()
         self._session_language = None
@@ -811,7 +822,7 @@ class StellaV2Agent(BaseAgent):
         # on the first turn is too late: the opening utterance is exactly the one
         # that gets misdetected (it is short, and often starts with a name), and
         # it is what confirms the lock for the rest of the session.
-        self.language_resolver.set_plan_language((plan or {}).get("language"))
+        self.language_resolver.set_plan_language(self._resolved_pin_language(plan))
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
             # Seed TTS too. The opening greeting is synthesised before any turn
@@ -880,6 +891,16 @@ class StellaV2Agent(BaseAgent):
                 "configuration before deploying the agent."
             )
         self._apply_pipeline_config(pipeline_config)
+
+        # Persona is applied AFTER the pipeline config on purpose: the Configurator's
+        # persona slot is part of pipeline_config, and an operator-selected Persona
+        # outranks it (#467). Applying in the other order would let the pipeline
+        # config quietly win.
+        if self._persona_config:
+            self.response_generator.persona = self._persona_config.get("system_prompt")
+            self.response_generator.persona_is_system_default = bool(
+                self._persona_config.get("is_system_default")
+            )
 
         logger.info(f"Session started: {session_id}")
 
@@ -981,6 +1002,7 @@ class StellaV2Agent(BaseAgent):
 
         self.config = {}
         self._plan_config = None
+        self._persona_config = None
         self._last_known_state_id = None
         logger.info(f"Session ended: {session_id}")
         return summary
@@ -1049,6 +1071,40 @@ class StellaV2Agent(BaseAgent):
             .get("end_node_config", {})
             .get("farewell_message")
         )
+
+    def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
+        """The declared language for the session, or None to detect per turn.
+
+        A plan's declaration always wins: a plan whose prompts and acceptance
+        criteria are written in German is German wherever it is deployed, so the
+        language belongs to that content. The persona's language is only a FALLBACK,
+        for deployments that have no plan at all (companion mode) — it must never
+        override a plan, or a stale persona setting could silently contradict the
+        language the plan is actually written in.
+        """
+        return (plan or {}).get("language") or (self._persona_config or {}).get("language")
+
+    def _load_persona_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Read the persona snapshot the backend resolved at deploy time (#467).
+
+        By value, never by reference: the backend writes the resolved fields into
+        the deploy config, so editing or deleting a Persona reaches the NEXT
+        deployment and can never restyle a session that is already running — the
+        same rule pipeline_config follows on restart. It is also what makes a study
+        session reproducible from its own config snapshot.
+
+        Absent for agents deployed before personas existed, which is why every
+        reader below treats it as optional.
+        """
+        persona = config.get("persona")
+        if not isinstance(persona, dict) or not persona.get("system_prompt"):
+            return None
+        logger.info(
+            "Loaded persona '%s' (%s)",
+            persona.get("name", "unnamed"),
+            "system default" if persona.get("is_system_default") else "operator-selected",
+        )
+        return persona
 
     def _load_plan_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Load plan configuration from config or disk."""

@@ -57,6 +57,8 @@ The verbatim half has no dependency on the agent type; the rendered half does. T
 - **Persona never acquires pipeline knobs.** The moment it holds a model name or a threshold it needs schema validation, and it inherits the version pinning this RFC exists to escape. This is the invariant that keeps it useful.
 - **Persona is verbatim.** `stella-light-agent` renders its merged `system_prompt` slot through the compiler (`agent.py:239`). That contract is not adopted here — see [§8](#8-what-is-explicitly-out-of-scope).
 - **One source, no chain.** `persona.systemPrompt`, else the system default persona. No fallback to `plan.system_prompt` — see [§6](#6-the-clean-cut).
+- **Resolved at deploy, frozen for the deployment.** Persona is resolved in `applyScopedConfiguration` and snapshotted into `agentConfig.persona`, exactly as `pipeline_config` already is. `restartAgent` documents the existing rule — *"the persisted `agentConfig` … is the deploy-time snapshot and is reused verbatim on restart … Re-deploy the agent to adopt an updated config"* — and persona inherits it rather than inventing a second policy. Edits therefore reach the **next** deployment, never a running or resuming one. Beyond consistency, this is what makes a study session reproducible from its own snapshot: a persona edited mid-study cannot retroactively change what earlier participants experienced.
+- **Deletion degrades, never breaks.** `userId` is `onDelete: SetNull` and a persona that loses its owner falls back to the system default. Cascade-deleting personas with their author would let offboarding one user change the voice of a live or resumable session.
 
 ---
 
@@ -167,6 +169,14 @@ Personas are the natural owner of an uploaded reference clip. The registry alrea
 
 Also required: 5–10s trim validation (the provider docstring is explicit — the clip sets the x-vector and prefills ICL mode), format/sample-rate normalization, and a **consent/provenance record** — whose voice this is and who attested to it. This is voice cloning in a care context; that belongs in a column, not a convention.
 
+### 7.4 Clip ids are immutable
+
+The deploy-time snapshot ([§3](#decisions)) protects the persona's *prose* but not its *audio*: `agentConfig.persona.system_prompt` is snapshotted text, whereas `voice` is an **id** the TTS service resolves against its registry at synthesis time. Re-uploading a clip under an existing voice id would therefore change the voice of every running session on its next utterance — the one mid-session mutation path the snapshot does not close.
+
+**A new upload mints a new voice id; it never overwrites one.** The persona row repoints to the new id, and existing deployments keep resolving the old one. This gives both halves of a persona the same semantics.
+
+The cost is that clips accumulate and eventually need a reaper (*"unreferenced by any deployment for N days"*). That is a far more tractable problem than a live session changing voice with no way to reconstruct why.
+
 ---
 
 ## 8. What is explicitly out of scope
@@ -188,7 +198,20 @@ Also required: 5–10s trim validation (the provider docstring is explicit — t
 
 ---
 
-## 10. Open questions
+## 10. Scope: resolved
 
-- **Persona scope.** `PlanTemplate` and `AgentConfiguration` are both `userId`-scoped with cascade delete. If personas are as reusable as this RFC argues, they will want project scope or sharing sooner than plans did. Changing an ownership column after rows exist is the expensive migration — **decide before the phase 1 migration runs.**
+`PlanTemplate` and `AgentConfiguration` are both `userId`-scoped with cascade delete, and nothing in the system is project-scoped — `ProjectMembership` and `ProjectAccessGuard` exist, but no content entity consults them. The concern was that personas, being reusable by design, would want project scope sooner than plans did, and that retrofitting an ownership column after rows (and voice clips) exist is the expensive migration.
+
+**Persona ships `userId`-scoped, and project scope is deferred.** The two decisions in [§3](#decisions) are what make deferring safe rather than merely postponed:
+
+- Deploy-time snapshots mean an edit or deletion can never reach an in-flight session.
+- `SetNull` + the system default mean losing an owner degrades the voice rather than breaking it.
+
+With those, the entire cost of user-scoping is *"a second user must build their own copy"* — annoying, not corrupting, and nothing needs undoing. Project scope then lands later as a purely additive nullable `projectId`, with the ownership of existing rows asked of users at that point instead of guessed at now.
+
+---
+
+## 11. Open questions
+
 - **Light-agent convergence.** Does it eventually adopt the verbatim contract, or does Persona grow a rendered variant? Deferred, but the answer determines whether `Persona.systemPrompt` can ever contain `{{placeholders}}`.
+- **Clip reaper policy.** [§7.4](#74-clip-ids-are-immutable) makes clips immutable, so they accumulate. The retention rule ("unreferenced for N days") is a phase-3 decision, not a phase-1 blocker.

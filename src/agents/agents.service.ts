@@ -22,6 +22,7 @@ import { sanitizeAgentConfig } from '../common/utils/sanitize-config';
 import { EncryptionService } from '../env-var-templates/encryption.service';
 import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service';
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service';
+import { PersonasService } from '../personas/personas.service';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -45,6 +46,8 @@ export class AgentsService {
     private readonly envVarTemplatesService: EnvVarTemplatesService,
     // Used to resolve + validate a stored pipeline configuration at deploy time.
     private readonly agentConfigurationsService: AgentConfigurationsService,
+    // Resolves the deploy-time persona snapshot (identity), independent of agent type.
+    private readonly personasService: PersonasService,
     private readonly eventEmitter: EventEmitter2,
     @Optional() private agentServerService?: AgentServerService,
     @Optional() @Inject(forwardRef(() => SessionsService)) private sessionsService?: SessionsService,
@@ -472,7 +475,17 @@ export class AgentsService {
       | null,
     agentConfig: Record<string, unknown>,
   ): Promise<void> {
-    const { envVarTemplateId, agentConfigurationId } = createAgentDto;
+    const { envVarTemplateId, agentConfigurationId, personaId } = createAgentDto;
+
+    // Persona resolves even when nothing else is scoped: omitting personaId means
+    // "the system default", not "no persona", so this runs before the early return.
+    const persona = await this.personasService.resolveForDeploy(
+      personaId,
+      userId,
+    );
+    if (persona) {
+      agentConfig.persona = persona;
+    }
 
     if (!envVarTemplateId && !agentConfigurationId) return;
 
