@@ -183,6 +183,31 @@ export interface AgentSpeechProgress {
 }
 
 /**
+ * Emotion tags (#face-emotions): one cue parsed out of the agent's reply.
+ *
+ * `char` indexes the published `agent_text` — the same coordinate space
+ * `AgentSpeechProgress` reports the playhead in — so the client fires a cue
+ * when the teleprompter cursor reaches it, i.e. as its word is spoken.
+ */
+export interface AgentEmotionCue {
+  char: number
+  tag: string
+  /** 'expression' holds until the next cue; 'gesture' plays once. */
+  kind: 'expression' | 'gesture'
+}
+
+/**
+ * An `agent_emotion_cues` envelope. Carries the FULL cue list for the
+ * transcript every time, not a delta — replace by `transcript_id`, so a dropped
+ * packet heals on the next one rather than stranding the face on a stale
+ * expression.
+ */
+export interface AgentEmotionCues {
+  transcript_id?: string
+  cues?: AgentEmotionCue[]
+}
+
+/**
  * Barge-in (#15): an `agent_playback` envelope. A teleprompter-independent
  * signal emitted by the SDK whenever agent playback is interrupted/resumed, so
  * the client can silence the agent track on barge-in even when the teleprompter
@@ -201,6 +226,8 @@ export interface TransportEvents {
   onTranscript: (chunk: TranscriptChunk) => void
   /** Teleprompter (#241): word-by-word speech-progress for the agent's reply. */
   onSpeechProgress: (data: AgentSpeechProgress) => void
+  /** Emotion tags (#face-emotions): face cues keyed to offsets in agent_text. */
+  onEmotionCues: (data: AgentEmotionCues) => void
   onProcessingMessage: (message: ProcessingMessage) => void
   onServerMessage: (msg: unknown) => void
   onTTSStart: () => void
@@ -245,6 +272,7 @@ export type EnvelopeType =
   | 'transcript_chunk'
   | 'agent_text'
   | 'agent_speech_progress'
+  | 'agent_emotion_cues'
   | 'agent_playback'
   | 'system'
   | 'audio_data'

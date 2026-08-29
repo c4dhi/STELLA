@@ -18,6 +18,7 @@ import TranscriptOverlay from '../face/TranscriptOverlay'
 import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
 import VisualizerRenderer from '../face/VisualizerRenderer'
+import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
@@ -173,9 +174,24 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     spokenText: teleprompterText,
     applyProgress: applySpeechProgress,
     noteAgentText: noteTeleprompterText,
+    noteEmotionCues,
+    faceExpression,
+    faceGesture,
     clearSpoken: clearTeleprompterText,
   } = useTeleprompter()
   const [messages, setMessages] = useState<ParticipantMessage[]>([])
+
+  // Emotion tags (#face-emotions): publish what the cursor resolves to the
+  // store, which is where StellaFace reads it from — the same path the
+  // organizer takes, so one face implementation serves both surfaces.
+  const setFaceExpression = useStore(s => s.setFaceExpression)
+  const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
+  useEffect(() => {
+    setFaceExpression(faceExpression)
+  }, [faceExpression, setFaceExpression])
+  useEffect(() => {
+    if (faceGesture) triggerFaceGesture(faceGesture.tag)
+  }, [faceGesture, triggerFaceGesture])
 
   // Close the transcript-settings menu (#343) on outside click or Escape.
   useEffect(() => {
@@ -574,6 +590,13 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           return
         }
 
+        // Emotion tags (#face-emotions): face cues for the reply being spoken.
+        if (envelope.type === 'agent_emotion_cues') {
+          const data = envelope.data || {}
+          noteEmotionCues(data.transcript_id || '', data.cues || [])
+          return
+        }
+
         // Start session timer on first agent message (only if a max duration is configured)
         if (
           !sessionTimerStartedRef.current &&
@@ -792,7 +815,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         console.error('Error parsing data:', error)
       }
     },
-    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, clearTeleprompterText]
+    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, noteEmotionCues, clearTeleprompterText]
   )
 
   // Handle room disconnection
@@ -1277,7 +1300,11 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           type={currentVisualizer}
           audioLevel={audioLevel}
           isRemoteSpeaking={isRemoteSpeaking}
-          isUserSpeaking={!isMuted}
+          // NOT `!isMuted`: an open mic is not someone talking. Passing it meant
+          // every unmuted participant read as permanently speaking, which pinned
+          // the eye-widen on and — worse — reset the idle timer on every frame,
+          // so this face could never idle at all. There is no local VAD on this
+          // surface yet, so say nothing rather than say something false.
         />
       </div>
 

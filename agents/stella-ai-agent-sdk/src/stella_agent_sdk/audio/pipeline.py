@@ -46,6 +46,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Deque, List, Optional
 
+from stella_agent_sdk.emotion.tags import EmotionCue
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
 from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
@@ -745,6 +746,17 @@ class AudioPipeline:
         else:
             self._teleprompter_enabled = _tp_env.lower() in ("true", "1", "yes")
             self._teleprompter_env_locked = True
+        # Emotion tags (#face-emotions): the agent strips [tags] out of the
+        # reply and publishes them as cues keyed to offsets in the stripped
+        # text. Same default-on / env-locked contract as the teleprompter,
+        # which the cues share a coordinate space with.
+        _et_env = os.getenv("STELLA_EMOTION_TAGS_ENABLED")
+        if _et_env is None:
+            self._emotion_tags_enabled = True  # default on
+            self._emotion_tags_env_locked = False
+        else:
+            self._emotion_tags_enabled = _et_env.lower() in ("true", "1", "yes")
+            self._emotion_tags_env_locked = True
         # Character span of the sentence currently held in _cur_audio, used to
         # translate the byte-accurate playhead into a character offset in the
         # published agent_text. None when the held audio carries no offsets.
@@ -2099,6 +2111,39 @@ class AudioPipeline:
             },
         })
 
+    async def publish_emotion_cues(
+        self,
+        cues: List[EmotionCue],
+        transcript_id: str,
+    ) -> None:
+        """Publish the emotion cues parsed out of a reply (#face-emotions).
+
+        Carries the FULL cue list for the transcript every time, not a delta.
+        Same accumulated-snapshot contract as ``agent_text``: the client
+        replaces by ``transcript_id``, so a dropped packet heals on the next
+        one instead of leaving the face stuck on a stale expression.
+
+        Offsets index the STRIPPED text — the same text ``agent_text`` carries
+        and the same coordinate space ``agent_speech_progress`` reports its
+        playhead in — so the client fires each cue when its word is heard.
+
+        Unlike the teleprompter's ``target_char``, this needs no coupled
+        deploy: an older client ignores the unknown envelope type, and a newer
+        client against an older agent simply receives no cues.
+        """
+        logger.info(
+            "[EMOTION-TAGS] Publishing %d cue(s) for %s: %s",
+            len(cues), transcript_id, ", ".join(f"{c.tag}@{c.char}" for c in cues),
+        )
+        await self._room.publish_data({
+            "type": "agent_emotion_cues",
+            "data": {
+                "transcript_id": transcript_id,
+                "agent_id": self._agent_id,
+                "cues": [cue.to_payload() for cue in cues],
+            },
+        })
+
     async def speak(
         self,
         text: str,
@@ -2503,6 +2548,26 @@ class AudioPipeline:
             return
         self._teleprompter_enabled = True
         logger.info("[TELEPROMPTER] Enabled from agent declaration")
+
+    def enable_emotion_tags(self) -> None:
+        """Enable emotion-tag parsing because the agent declares support.
+
+        Same override contract as :meth:`enable_teleprompter`: an explicit
+        STELLA_EMOTION_TAGS_ENABLED wins either way.
+        """
+        if self._emotion_tags_env_locked:
+            logger.info(
+                f"[EMOTION-TAGS] Agent declares support; env override in effect "
+                f"(enabled={self._emotion_tags_enabled})"
+            )
+            return
+        self._emotion_tags_enabled = True
+        logger.info("[EMOTION-TAGS] Enabled from agent declaration")
+
+    @property
+    def emotion_tags_enabled(self) -> bool:
+        """Whether the agent should strip [tags] and publish cues for them."""
+        return self._emotion_tags_enabled
 
     def set_barge_in_decider(
         self, decider: Callable[[str], Awaitable["BargeInDecision"]]

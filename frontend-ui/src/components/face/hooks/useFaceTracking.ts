@@ -1,10 +1,15 @@
 /**
  * useFaceTracking Hook
- * Implements webcam face detection with mouse tracking fallback
- * Uses @vladmandic/face-api for face detection
+ * Webcam face detection via @vladmandic/face-api.
+ *
+ * There is deliberately NO mouse fallback. A cursor is not a face: treating it
+ * as one meant every desktop without webcam permission reported a permanent
+ * detection, so the eyes tracked the pointer and the idle behavior could never
+ * run. With no face detected the gaze re-centers and looks straight ahead, and
+ * `useFaceBehavior` takes over with the idle look-around.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as faceapi from '@vladmandic/face-api';
 import type { UseFaceTrackingOptions, FaceTrackingData, FacePosition } from '../types';
 
@@ -13,7 +18,6 @@ const DETECTION_INTERVAL_MS = 100; // 10 FPS for face detection
 
 export const useFaceTracking = ({
   enableWebcam = true,
-  fallbackToMouse = true,
   smoothingFactor = LERP_FACTOR
 }: UseFaceTrackingOptions = {}) => {
   const [trackingData, setTrackingData] = useState<FaceTrackingData>({
@@ -46,7 +50,7 @@ export const useFaceTracking = ({
         setModelsLoaded(true);
       } catch (error) {
         console.error('[FaceTracking] ❌ Failed to load models:', error);
-        // Continue without webcam, use mouse fallback
+        // Continue without webcam — the face just looks straight ahead and idles
         setModelsLoaded(false);
       }
     };
@@ -76,7 +80,7 @@ export const useFaceTracking = ({
           console.log('[FaceTracking] ✅ Webcam initialized');
         }
       } catch (error) {
-        console.warn('[FaceTracking] ⚠️ Webcam access denied, using mouse fallback');
+        console.warn('[FaceTracking] ⚠️ Webcam unavailable — face will look straight ahead and idle');
         setIsWebcamReady(false);
       }
     };
@@ -150,41 +154,6 @@ export const useFaceTracking = ({
     };
   }, [isWebcamReady, smoothingFactor]);
 
-  // Mouse tracking fallback
-  const handleMouseMove = useCallback(
-    (event: MouseEvent) => {
-      if (trackingData.method === 'webcam' && trackingData.hasDetection) {
-        // Don't override webcam tracking if it's working
-        return;
-      }
-
-      // Normalize mouse position (0-1)
-      const x = event.clientX / window.innerWidth;
-      const y = event.clientY / window.innerHeight;
-
-      // Apply smoothing
-      smoothPositionRef.current.x += (x - smoothPositionRef.current.x) * smoothingFactor;
-      smoothPositionRef.current.y += (y - smoothPositionRef.current.y) * smoothingFactor;
-
-      setTrackingData({
-        position: { ...smoothPositionRef.current },
-        hasDetection: true,
-        method: 'mouse'
-      });
-    },
-    [trackingData.method, trackingData.hasDetection, smoothingFactor]
-  );
-
-  useEffect(() => {
-    if (!fallbackToMouse) return;
-
-    window.addEventListener('mousemove', handleMouseMove);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-    };
-  }, [fallbackToMouse, handleMouseMove]);
-
   // Create hidden video element for webcam
   useEffect(() => {
     if (!enableWebcam) return;
@@ -212,7 +181,6 @@ export const useFaceTracking = ({
 
   return {
     trackingData,
-    isWebcamActive: isWebcamReady && trackingData.method === 'webcam',
-    isMouseTracking: trackingData.method === 'mouse'
+    isWebcamActive: isWebcamReady && trackingData.method === 'webcam'
   };
 };

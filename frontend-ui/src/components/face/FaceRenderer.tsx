@@ -4,8 +4,8 @@
  * Renders eyes, eyebrows, and mouth using SVG
  */
 
-import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import React, { useEffect, useRef } from 'react';
+import { motion, useTransform } from 'framer-motion';
 import type { FaceRendererProps, MouthEmotion, EyeEmotion } from './types';
 
 // Constants (matching mobile client)
@@ -199,33 +199,62 @@ const calculateEyebrowPath = (
 
 const FaceRenderer: React.FC<FaceRendererProps> = ({
   size,
-  leftEye,
-  rightEye,
+  gazeX,
+  gazeY,
+  headRotation,
+  headPitch,
+  faceScale,
+  leftEyeScaleY,
+  rightEyeScaleY,
+  pupilDilation,
   mouthOpenness,
-  mouthSpread = 0.5,
+  mouthSpread,
   mouthEmotion,
   eyeEmotion,
-  headRotation,
-  eyebrowHeight,
-  pupilDilation = 1.0,
-  leftEyeScaleY,
-  rightEyeScaleY
+  eyebrowHeight
 }) => {
   const scale = size / 600; // Base size is 600px
 
-  // Hysteresis for smooth mouth shape transitions (prevents jitter)
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const ENTER_THRESHOLD = 0.15;  // Must exceed this to start showing oval (increased from 0.10)
+  // Normalized gaze (-1..1) -> pixel offset within the iris. Both eyes share
+  // one pair of transforms: they always look at the same thing, and deriving
+  // them per eye would mean calling hooks inside the render helper.
+  const pupilOffsetX = useTransform(gazeX, (v) =>
+    clamp(v * MAX_PUPIL_OFFSET_X, -MAX_PUPIL_OFFSET_X, MAX_PUPIL_OFFSET_X) * scale
+  );
+  const pupilOffsetY = useTransform(gazeY, (v) =>
+    clamp(v * MAX_PUPIL_OFFSET_Y, -MAX_PUPIL_OFFSET_Y, MAX_PUPIL_OFFSET_Y) * scale
+  );
+
+  // The mouth is written straight to the DOM from its MotionValues, never
+  // through React. It used to be sampled with `.get()` during render, so it
+  // only moved when something else re-rendered the face — at the store's audio
+  // update rate, in visible steps. Framer's own 0.05s tween on the path then
+  // smeared each step, which is what read as lag. Subscribing here gives the
+  // mouth every frame of the spring that drives it.
+  const pathRef = useRef<SVGPathElement | null>(null);
+  const speakingRef = useRef(false);
+  const ENTER_THRESHOLD = 0.15;  // Must exceed this to start showing oval
   const EXIT_THRESHOLD = 0.03;   // Must drop below this to show smile
 
-  // Apply hysteresis to prevent rapid switching between line and oval
   useEffect(() => {
-    if (!isSpeaking && mouthOpenness > ENTER_THRESHOLD) {
-      setIsSpeaking(true);
-    } else if (isSpeaking && mouthOpenness < EXIT_THRESHOLD) {
-      setIsSpeaking(false);
-    }
-  }, [mouthOpenness, isSpeaking]);
+    const draw = () => {
+      const openness = mouthOpenness.get();
+      const spread = mouthSpread?.get() ?? 0.5;
+      // Hysteresis, held in a ref: crossing the threshold changes the SHAPE,
+      // and routing that through state would re-render the whole face twice a
+      // word for a value only this callback reads.
+      if (!speakingRef.current && openness > ENTER_THRESHOLD) speakingRef.current = true;
+      else if (speakingRef.current && openness < EXIT_THRESHOLD) speakingRef.current = false;
+      pathRef.current?.setAttribute(
+        'd',
+        calculateMouthPath(openness, spread, mouthEmotion, speakingRef.current)
+      );
+    };
+    draw();
+    const unsubscribe = [mouthOpenness.on('change', draw)];
+    if (mouthSpread) unsubscribe.push(mouthSpread.on('change', draw));
+    return () => unsubscribe.forEach((u) => u());
+  }, [mouthOpenness, mouthSpread, mouthEmotion]);
 
   const eyebrowShape = EYEBROW_EXPRESSIONS[eyeEmotion] || EYEBROW_EXPRESSIONS.neutral;
   const leftEyebrowPath = calculateEyebrowPath(
@@ -239,11 +268,7 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
     false
   );
 
-  const mouthPath = calculateMouthPath(mouthOpenness, mouthSpread, mouthEmotion, isSpeaking);
-
-  const renderEye = (eye: typeof leftEye, index: number) => {
-    const pupilOffsetX = clamp(eye.x * MAX_PUPIL_OFFSET_X, -MAX_PUPIL_OFFSET_X, MAX_PUPIL_OFFSET_X);
-    const pupilOffsetY = clamp(eye.y * MAX_PUPIL_OFFSET_Y, -MAX_PUPIL_OFFSET_Y, MAX_PUPIL_OFFSET_Y);
+  const renderEye = (index: number) => {
     const eyeMotionValue = index === 0 ? leftEyeScaleY : rightEyeScaleY;
     const basePupilSize = PUPIL_SIZE_BASE * scale;
     const baseReflectionSize = PUPIL_SIZE_BASE * 0.3 * scale;
@@ -278,12 +303,8 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
             height: EYE_SIZE * scale,
             backgroundColor: 'transparent',
             boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-            ...(eyeMotionValue ? { scaleY: eyeMotionValue } : {})
+            scaleY: eyeMotionValue
           }}
-          {...(!eyeMotionValue ? {
-            animate: { scaleY: eye.scale },
-            transition: { duration: 0.15 }
-          } : {})}
         >
           {/* Iris */}
           <div
@@ -299,17 +320,10 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
               className="relative flex items-center justify-center"
               style={{
                 width: basePupilSize,
-                height: basePupilSize
-              }}
-              animate={{
-                x: pupilOffsetX * scale,
-                y: pupilOffsetY * scale,
+                height: basePupilSize,
+                x: pupilOffsetX,
+                y: pupilOffsetY,
                 scale: pupilDilation
-              }}
-              transition={{
-                x: { type: 'spring', stiffness: 300, damping: 30 },
-                y: { type: 'spring', stiffness: 300, damping: 30 },
-                scale: { duration: 0.6, ease: 'easeInOut' }
               }}
             >
               {/* Pupil */}
@@ -344,15 +358,12 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
   return (
     <motion.div
       className="flex flex-col items-center justify-center"
-      animate={{
-        rotate: headRotation
-      }}
-      transition={{ type: 'spring', stiffness: 150, damping: 20 }}
+      style={{ rotate: headRotation, y: headPitch, scale: faceScale }}
     >
       {/* Eyes Row */}
       <div className="flex items-center" style={{ marginBottom: EYE_SIZE * 0.05 * scale }}>
-        {renderEye(leftEye, 0)}
-        {renderEye(rightEye, 1)}
+        {renderEye(0)}
+        {renderEye(1)}
       </div>
 
       {/* Mouth */}
@@ -365,15 +376,12 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
         }}
       >
         <svg width="100%" height="100%" viewBox="0 0 220 90">
-          <motion.path
-            d={mouthPath}
+          <path
+            ref={pathRef}
             stroke={MOUTH_COLOR}
             strokeWidth="8"
             strokeLinecap="round"
             fill="none"
-            initial={false}
-            animate={{ d: mouthPath }}
-            transition={{ duration: 0.05 }}  // Near-instant path updates for snappy mouth
           />
         </svg>
       </div>

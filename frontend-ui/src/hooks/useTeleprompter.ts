@@ -18,9 +18,9 @@
  * `frozenSpoken` (see `SpokenMessageText`).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentSpeechProgress } from '../lib/types'
+import type { AgentSpeechProgress, AgentEmotionCue } from '../lib/types'
 
-export type { AgentSpeechProgress }
+export type { AgentSpeechProgress, AgentEmotionCue }
 
 // The speech-progress data event reaches the client ahead of the audio it
 // describes (the audio waits in the browser's jitter buffer before it is
@@ -86,6 +86,49 @@ export function planSegment(input: {
   return { startAt, endAt: startAt + Math.max(1, durationMs), rebase }
 }
 
+/**
+ * Which expression the face should be wearing at ``cursor`` (#face-emotions).
+ *
+ * Last expression cue at or before the cursor wins, which is exactly the
+ * "holds until the next tag" rule. Null before the first one, so a reply that
+ * opens without a tag starts from rest rather than inheriting the last turn's
+ * mood.
+ *
+ * Pure for the same reason planSegment is: this decides what the user sees, and
+ * it is far easier to state as a table of cursor positions than to observe on a
+ * running face.
+ */
+export function activeExpressionAt(
+  cues: AgentEmotionCue[],
+  cursor: number
+): string | null {
+  let active: string | null = null
+  for (const cue of cues) {
+    if (cue.kind !== 'expression') continue
+    if (cue.char > cursor) break // cues are ordered; nothing later can apply
+    active = cue.tag
+  }
+  return active
+}
+
+/**
+ * Gesture cues the cursor has just passed over, in order.
+ *
+ * Half-open ``(from, to]`` so each gesture fires exactly once as the cursor
+ * sweeps: a frame boundary landing on a cue must not replay it, and a cue at
+ * offset 0 must still fire on the first frame (call with ``from = -1``).
+ */
+export function gesturesCrossed(
+  cues: AgentEmotionCue[],
+  from: number,
+  to: number
+): string[] {
+  if (to <= from) return []
+  return cues
+    .filter(c => c.kind === 'gesture' && c.char > from && c.char <= to)
+    .map(c => c.tag)
+}
+
 export interface Teleprompter {
   /** Absolute char offset spoken so far; drives the highlight. */
   spokenChar: number
@@ -99,6 +142,12 @@ export interface Teleprompter {
   applyProgress: (data: AgentSpeechProgress) => void
   /** Record the latest `agent_text` for a transcript (binds + dims ahead of voice). */
   noteAgentText: (transcriptId: string, text: string) => void
+  /** Record the emotion cues for a transcript (#face-emotions). Full list each time. */
+  noteEmotionCues: (transcriptId: string, cues: AgentEmotionCue[]) => void
+  /** Expression the cursor has reached; holds until the next cue or turn end. */
+  faceExpression: string | null
+  /** One-shot gesture the cursor just crossed. The seq re-fires a repeated tag. */
+  faceGesture: { tag: string; seq: number } | null
   /**
    * Drop the visible spoken backdrop so a finished/interrupted agent turn stops
    * lingering on screen (e.g. once the user has finalized their reply). The
@@ -113,6 +162,17 @@ export function useTeleprompter(): Teleprompter {
   const [spokenTranscriptId, setSpokenTranscriptId] = useState('')
   const [frozenSpoken, setFrozenSpoken] = useState<Record<string, number>>({})
   const [spokenText, setSpokenText] = useState('')
+  // Emotion tags (#face-emotions). Cues arrive on their own envelope and are
+  // resolved against the SAME cursor that drives the word highlight, so the
+  // face changes on the word the tag was written before — not when the packet
+  // happened to arrive.
+  const [faceExpression, setFaceExpression] = useState<string | null>(null)
+  const [faceGesture, setFaceGesture] = useState<{ tag: string; seq: number } | null>(null)
+  const cuesByTranscriptRef = useRef<Map<string, AgentEmotionCue[]>>(new Map())
+  // Cursor position the cues were last resolved at. -1, not 0, so a cue sitting
+  // at offset 0 still fires on the first frame.
+  const cueCursorRef = useRef(-1)
+  const expressionRef = useRef<string | null>(null)
 
   // The SDK pushes audio ahead of actual playout, so speech-progress events
   // arrive earlier than the audio is heard — sometimes a whole sentence at
@@ -138,6 +198,37 @@ export function useTeleprompter(): Teleprompter {
     typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   )
+
+  // Advance the emotion cues to `cursor`: adopt the expression in force there,
+  // and fire any gesture the cursor has just swept past. Called from the frame
+  // loop and from every path that moves the cursor without one (reduced motion,
+  // and a TTS-off session where there is no audio to track).
+  const syncCues = useCallback((cursor: number) => {
+    const cues = cuesByTranscriptRef.current.get(transcriptIdRef.current)
+    if (!cues || cues.length === 0) return
+    const previous = cueCursorRef.current
+    if (cursor <= previous) return
+    cueCursorRef.current = cursor
+
+    const expression = activeExpressionAt(cues, cursor)
+    if (expression !== expressionRef.current) {
+      expressionRef.current = expression
+      setFaceExpression(expression)
+    }
+    for (const tag of gesturesCrossed(cues, previous, cursor)) {
+      setFaceGesture(prev => ({ tag, seq: (prev?.seq ?? 0) + 1 }))
+    }
+  }, [])
+
+  // Drop back to rest. An expression lasts until the next cue or the end of the
+  // message; a new turn and a committed barge-in are both "end of message".
+  const resetCues = useCallback(() => {
+    cueCursorRef.current = -1
+    if (expressionRef.current !== null) {
+      expressionRef.current = null
+      setFaceExpression(null)
+    }
+  }, [])
 
   // Word-cursor loop: derive the lit char offset from the scheduled segments
   // against the wall clock. Held when frozen; self-cancels once the last
@@ -165,10 +256,11 @@ export function useTeleprompter(): Teleprompter {
       }
     }
     setSpokenChar(cursor)
+    syncCues(cursor)
 
     const last = segs[segs.length - 1]
     rafRef.current = now < last.endAt ? requestAnimationFrame(tick) : null
-  }, [])
+  }, [syncCues])
 
   const ensureLoop = useCallback(() => {
     if (rafRef.current == null) {
@@ -205,11 +297,12 @@ export function useTeleprompter(): Teleprompter {
       if (!transcriptId || transcriptIdRef.current === transcriptId) return
       transcriptIdRef.current = transcriptId
       resetSchedule()
+      resetCues()
       setSpokenTranscriptId(transcriptId)
       setSpokenChar(0)
       setSpokenText(textByTranscriptRef.current.get(transcriptId) ?? '')
     },
-    [resetSchedule]
+    [resetSchedule, resetCues]
   )
 
   const noteAgentText = useCallback(
@@ -218,11 +311,32 @@ export function useTeleprompter(): Teleprompter {
       textByTranscriptRef.current.set(transcriptId, text)
       // Once live, bind each new reply on its first chunk so it renders dimmed
       // ahead of the voice and lights up as the audio catches up.
-      if (!activeRef.current) return
+      if (!activeRef.current) {
+        // No audio this session — see noteEmotionCues.
+        if (transcriptId === transcriptIdRef.current) syncCues(text.length)
+        return
+      }
       beginTranscript(transcriptId)
       setSpokenText(text)
     },
-    [beginTranscript]
+    [beginTranscript, syncCues]
+  )
+
+  const noteEmotionCues = useCallback(
+    (transcriptId: string, cues: AgentEmotionCue[]) => {
+      if (!transcriptId) return
+      // The envelope carries the full list for its transcript, so replacing is
+      // always right and a dropped packet heals on the next one.
+      cuesByTranscriptRef.current.set(transcriptId, [...cues].sort((a, b) => a.char - b.char))
+      // With TTS off there is no audio to track and no cursor will ever move,
+      // so nothing past offset 0 would ever fire. Fall back to the text itself:
+      // published text IS the progress in that mode.
+      if (!activeRef.current && transcriptId === transcriptIdRef.current) {
+        const text = textByTranscriptRef.current.get(transcriptId)
+        if (text) syncCues(text.length)
+      }
+    },
+    [syncCues]
   )
 
   const applyProgress = useCallback(
@@ -253,6 +367,7 @@ export function useTeleprompter(): Teleprompter {
         frozenRef.current = false
         if (prefersReducedMotionRef.current) {
           setSpokenChar(target) // no animation — step straight to this tick's target
+          syncCues(target)
           return
         }
         const now = performance.now()
@@ -285,12 +400,15 @@ export function useTeleprompter(): Teleprompter {
         // Freeze exactly where the audio stopped, drop pending segments, and
         // remember the point so the bubble keeps its partial highlight.
         resetSchedule()
+        // A committed barge-in ends the message, so the expression it was
+        // wearing ends with it rather than outliving the turn.
+        resetCues()
         frozenRef.current = true
         setSpokenChar(spoken)
         setFrozenSpoken(prev => ({ ...prev, [transcriptId]: spoken }))
       }
     },
-    [beginTranscript, clearFrozen, ensureLoop, resetSchedule]
+    [beginTranscript, clearFrozen, ensureLoop, resetSchedule, resetCues, syncCues]
   )
 
   // Clear the dim backdrop without disturbing the turn binding or frozen
@@ -313,5 +431,16 @@ export function useTeleprompter(): Teleprompter {
     []
   )
 
-  return { spokenChar, spokenTranscriptId, frozenSpoken, spokenText, applyProgress, noteAgentText, clearSpoken }
+  return {
+    spokenChar,
+    spokenTranscriptId,
+    frozenSpoken,
+    spokenText,
+    applyProgress,
+    noteAgentText,
+    noteEmotionCues,
+    faceExpression,
+    faceGesture,
+    clearSpoken,
+  }
 }

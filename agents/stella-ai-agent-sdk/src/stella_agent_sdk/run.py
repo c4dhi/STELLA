@@ -372,6 +372,11 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         if getattr(agent, "supports_teleprompter", False):
             audio_pipeline.enable_teleprompter()
 
+        # 6c. Wire emotion tags (#face-emotions): the agent strips [tags] from
+        # its reply and publishes them as cues the face animates from.
+        if getattr(agent, "supports_emotion_tags", False):
+            audio_pipeline.enable_emotion_tags()
+
         # 7. Create HistoryClient for chat history access
         # Generate JWT token with same claims as LiveKit token (for validation)
         now = int(time.time())

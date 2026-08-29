@@ -49,6 +49,11 @@ class ResponseGenerator:
         # the deploy config, not by apply_config: a persona is deliberately NOT a
         # pipeline slot, which is what keeps it free of agent-type version pinning.
         self.persona: Optional[str] = None
+        # Emotion tags (#face-emotions): set by the agent from the pipeline's
+        # own flag, so the prompt only asks for tags while something is there to
+        # strip them back out.
+        self.emotion_tags: bool = False
+        self._logged_emotion_prompt: bool = False
         # 0 = use every turn the agent fetched. The agent decides how much
         # history is worth carrying (_custom_history_limit, 20 by default) and
         # hands exactly that much to generate(); this stage must not silently
@@ -108,10 +113,18 @@ class ResponseGenerator:
             sm_context, directive,
             custom_guidelines=self.custom_guidelines,
             persona=self.persona,
+            emotion_tags=self.emotion_tags,
             conversation_history=conversation_history,
             history_limit=self.history_limit or len(conversation_history or []),
             bridge=bridge,
         )
+        if self.emotion_tags and not self._logged_emotion_prompt:
+            self._logged_emotion_prompt = True
+            logger.info(
+                "[EMOTION-TAGS] directive present in system prompt: %s",
+                "EMOTIONAL EXPRESSION" in system_prompt,
+            )
+
         user_message = build_response_user_message(user_input)
 
         messages = [

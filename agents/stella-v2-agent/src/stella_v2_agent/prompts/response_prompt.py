@@ -12,6 +12,7 @@ to name the agent references {{persona.*}} instead of restating it.
 from typing import Dict, Any, List, Optional
 
 from stella_v2_agent.models.arbitration_result import ResponseDirective
+from stella_agent_sdk.emotion.tags import EXPRESSION_TAGS, GESTURE_TAGS
 from stella_agent_sdk.language import LANGUAGE_NAMES
 from stella_v2_agent.prompts.template import render_prompt
 from stella_agent_sdk.prompts import format_history
@@ -25,6 +26,7 @@ def build_response_system_prompt(
     history_limit: int = 10,
     bridge: str = "",
     persona: Optional[str] = None,
+    emotion_tags: bool = False,
 ) -> str:
     """Build the complete system prompt for the Response Generator.
 
@@ -43,6 +45,10 @@ def build_response_system_prompt(
             the deploy config. Like every persona source it is used VERBATIM.
         conversation_history: Recent turns, exposed as {{conversationHistory}}.
         history_limit: How many recent turns to include.
+        emotion_tags: Whether the agent is stripping [emotion tags] out of the
+            reply (#face-emotions). Exposed as {{emotionTags}}, and EMPTY when
+            False — asking for tags that nothing removes would have them read
+            aloud, so this flag must track the parser, not the other way round.
         bridge: The short acknowledgment already spoken to the user this turn
             (the Bridge stage). Exposed as {{bridge}} so the editable guidelines
             can instruct the reply to continue seamlessly from it instead of
@@ -78,6 +84,7 @@ def build_response_system_prompt(
             sm_context.get("language"), pinned=bool(sm_context.get("language_pinned"))
         ) or "",
         "bridge": bridge or "",
+        "emotionTags": _emotion_tag_directive() if emotion_tags else "",
         # {{persona.*}} in the configured guidelines. This engine and the
         # placeholder compiler resolve the same namespace from the same values, so
         # a variable reads identically wherever it is written.
@@ -110,6 +117,28 @@ def _persona_variables(sm_context: Dict[str, Any]) -> Dict[str, str]:
     for key, value in (persona.get("variables") or {}).items():
         flat[f"persona.{key}"] = str(value)
     return flat
+
+
+def _emotion_tag_directive() -> str:
+    """The instruction that teaches the model the emotion-tag vocabulary.
+
+    Generated from the SDK's registry rather than written out here, so the
+    prompt cannot drift from the tags the parser actually recognizes — a tag
+    named here but missing there would be dropped silently, and the face would
+    simply never react.
+    """
+    expressions = " ".join(f"[{tag}]" for tag in EXPRESSION_TAGS)
+    gestures = " ".join(f"[{tag}]" for tag in GESTURE_TAGS)
+    return f"""EMOTIONAL EXPRESSION (drives your animated face):
+You have a face, and these inline tags are how you move it. They are stripped out before anything is spoken or displayed — the user never hears or sees them — so never mention them, explain them, or describe what your face is doing in words.
+- Expressions, held until the next tag: {expressions}
+- Gestures, a single beat after which the current expression resumes: {gestures}
+How to use them:
+- ALWAYS open your reply with the expression tag that matches how you feel about what you are about to say. Every reply starts with one — a face that stays blank while you talk is the thing this exists to fix.
+- Change it mid-reply whenever the feeling changes: [thinking] while you work something out, [laughing] at something funny, [concerned] at something heavy. Two or three across a reply is normal.
+- Add a gesture where a person would make one — a [nod] agreeing, a [brow_flash] acknowledging, a [wink] at a shared joke. Not in every reply.
+- Put a tag immediately BEFORE the words it belongs to, at the start of a sentence — never inside a word, and never as the last thing in your reply, since there would be nothing left to say under it.
+- ONLY the tags listed above, spelled exactly. Never invent one and never write stage directions like [smiles] or [laughs]."""
 
 
 def _language_directive(language: Optional[str], pinned: bool = False) -> Optional[str]:
@@ -180,6 +209,10 @@ def _conversation_guidelines() -> str:
 - Natural contractions and the occasional light filler. Reuse the user's own words.
 - 1-3 sentences, ~25-45 words. No markdown, bullets, or emojis.
 - Never more than one question per turn, often none — and if you ask one it is the LAST thing you say. They are listening, not reading: anything after a question is talked over or forgotten.
+{{#if emotionTags}}
+
+{{emotionTags}}
+{{/if}}
 {{#if taskJustCollected}}{{#if stateCompleting}}
 
 The user just gave everything this phase needed. Don't re-ask any of it — acknowledge what they shared and glide into the next topic so it feels like a conversation, not a checklist.{{#if nextTopicHint}} Next topic: {{nextTopicHint}}{{/if}}{{else}}

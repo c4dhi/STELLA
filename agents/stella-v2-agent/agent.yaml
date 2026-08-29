@@ -146,7 +146,7 @@ pipelineSchema:
         - id: conversation_guidelines
           label: "Conversation Guidelines"
           type: text
-          description: "Custom conversation style guidelines (overrides defaults). Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
+          description: "Custom conversation style guidelines (overrides defaults). Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
           default: |
             CONVERSATIONAL STYLE (spoken aloud via TTS — follow strictly):
 
@@ -181,6 +181,10 @@ pipelineSchema:
 
             Formatting:
             - No markdown, bullets, numbered lists, or emojis.
+            {{#if emotionTags}}
+
+            {{emotionTags}}
+            {{/if}}
 
             The right feel (match the spirit, never copy):
             - "I like bodyweight stuff and running." -> "Oh, the no-equipment route — you can train anywhere, no excuses. Is the running your wind-down or the main event?"

@@ -3,6 +3,7 @@ import type {
   Transport,
   TranscriptChunk,
   AgentSpeechProgress,
+  AgentEmotionCues,
   ProcessingMessage,
   ProcessingMessageType,
   DecisionStreamData,
@@ -114,6 +115,7 @@ export class PeerTransport implements Transport {
   onRemoteAudioTrack = (_track: MediaStreamTrack) => {}
   onTranscript = (_chunk: TranscriptChunk) => {}
   onSpeechProgress = (_data: AgentSpeechProgress) => {}
+  onEmotionCues = (_data: AgentEmotionCues) => {}
   onProcessingMessage = (_message: ProcessingMessage) => {}
   onServerMessage = (_msg: unknown) => {}
   onTTSStart = () => {}
@@ -291,6 +293,12 @@ export class PeerTransport implements Transport {
           // Teleprompter (#241): word-by-word highlight progress for agent speech.
           if (env.type === 'agent_speech_progress') {
             this.onSpeechProgress(env.data || {})
+            return
+          }
+
+          // Emotion tags (#face-emotions): face cues for the reply being spoken.
+          if (env.type === 'agent_emotion_cues') {
+            this.onEmotionCues(env.data || {})
             return
           }
 
@@ -1132,6 +1140,7 @@ export class PeerTransport implements Transport {
 
     let lastSpeakingState = false
     let resumeAttempted = false
+    let warnedNoAnalyser = false
     // Throttle the RMS math + emits to ~30 Hz — plenty for a mouth visualizer, and a
     // fraction of the per-frame work the old unconditional 60 fps loop did.
     const MIN_INTERVAL_MS = 33
@@ -1185,9 +1194,30 @@ export class PeerTransport implements Transport {
         // Speech detection: RMS threshold of 0.02 (empirically tuned)
         isSpeaking = rms > 0.02
       } else {
-        // Fallback: use basic volume detection if Web Audio failed or not running
-        audioLevel = this.remoteAudioTrack.getVolume() || 0
-        isSpeaking = audioLevel > 0.05
+        // No analyser (Web Audio failed, or the AudioContext is still suspended
+        // under the autoplay policy): we have NO loudness information, so say so.
+        //
+        // This used to read `remoteAudioTrack.getVolume()`, which is not a
+        // loudness measure at all — LiveKit documents it as "the volume of
+        // attached audio elements", i.e. the PLAYBACK VOLUME SETTING, which is
+        // 1.0 by default. So the fallback reported a full-scale level and
+        // `isSpeaking = true` on every frame, forever, whether or not the agent
+        // was making a sound. That pinned the mouth open and — once the face
+        // gained an idle timer keyed on "has anyone spoken recently" — kept the
+        // face permanently awake, so the idle look-around could never start.
+        //
+        // Reporting silence is the honest answer when we cannot measure: it
+        // degrades to a still mouth rather than to a fake speaker.
+        audioLevel = 0
+        isSpeaking = false
+        if (!warnedNoAnalyser) {
+          warnedNoAnalyser = true
+          console.warn(
+            '⚠️ [AUDIO] No analyser available (context state: ' +
+              `${this.audioContext?.state ?? 'none'}) — reporting silence. ` +
+              'Mouth and face idle behaviour will not track the agent voice.'
+          )
+        }
       }
 
       // Emit audio level only on a meaningful change (or the very first frame).

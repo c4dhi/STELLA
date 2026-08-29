@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional, TYPE_CHECKING
 
+from stella_agent_sdk.emotion.tags import strip_emotion_tags
 from stella_agent_sdk.messages.input import AgentInput
 from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.messages.types import (
@@ -77,6 +78,15 @@ class BaseAgent(ABC):
     #: STELLA_TELEPROMPTER_ENABLED=false env value forces it off.
     supports_teleprompter: bool = True
 
+    #: Emotion tags (#face-emotions): when True, ``[tags]`` written by the LLM
+    #: are stripped out of the reply before it reaches TTS or the published
+    #: agent_text, and republished as cues keyed to character offsets in the
+    #: stripped text so the animated face can act on them in time with the
+    #: voice. On by default; STELLA_EMOTION_TAGS_ENABLED=false forces it off.
+    #: Stripping is unconditional once on — an unrecognized tag is dropped
+    #: rather than spoken (see stella_agent_sdk.emotion.tags).
+    supports_emotion_tags: bool = True
+
     #: Backchannel / filler tokens treated as "not a real interruption" by the
     #: default ``on_barge_in()`` heuristic. Subclasses may override this set or
     #: override ``on_barge_in()`` entirely for semantic evaluation.
@@ -112,6 +122,12 @@ class BaseAgent(ABC):
         self._tp_transcript_id: Optional[str] = None
         self._tp_text: str = ""
         self._tp_cursor: int = 0
+        # Emotion tags (#face-emotions): how many cues have been published for
+        # the current transcript, so a re-parse of the accumulated text only
+        # publishes when the list has actually grown, and whether this
+        # transcript emits cues at all (final replies do; bridges do not).
+        self._tp_cue_count: int = 0
+        self._tp_emit_cues: bool = False
         # Set to True by the agent when the plan reaches __end__.
         # run_audio_loop checks this after each turn and exits cleanly.
         self._session_completed: bool = False
@@ -817,6 +833,12 @@ class BaseAgent(ABC):
                                 # New teleprompter transcript — reset the span cursor.
                                 self._tp_transcript_id = current_transcript_id
                                 self._tp_cursor = 0
+                                # Emotion cues ride the final reply only — a
+                                # bridge ("Good question.") is too short to
+                                # animate against and would just flicker the
+                                # face between the ack and the real answer.
+                                self._tp_cue_count = 0
+                                self._tp_emit_cues = self._current_sentence_source == "response"
 
                             # Explicit tts_source metadata overrides prefix detection
                             if output.metadata.get("tts_source"):
@@ -839,26 +861,43 @@ class BaseAgent(ABC):
                             if output.metadata.get("speed") is not None:
                                 self.audio.set_tts_speed(output.metadata["speed"])
 
+                            # Emotion tags (#face-emotions): strip [tags] BEFORE
+                            # anything sees the text. The frontend, the sentence
+                            # splitter and TTS all work on the stripped text, and
+                            # the cue offsets index that same string — which is
+                            # why this happens here and not in the client.
+                            content, cues = self._parse_emotion_tags(
+                                output.content, is_final=output.is_final
+                            )
+
                             # Stream text to frontend (agent sends accumulated text)
                             await self.audio.publish_text(
-                                output.content,
+                                content,
                                 is_final=output.is_final,
                                 transcript_id=current_transcript_id
                             )
                             # Teleprompter: the accumulated text just published
                             # is what sentence spans are measured against.
-                            self._tp_text = output.content
+                            self._tp_text = content
+
+                            # Publish the cue list once it grows. Always the FULL
+                            # list, so a dropped packet heals on the next one.
+                            if self._tp_emit_cues and len(cues) > self._tp_cue_count:
+                                self._tp_cue_count = len(cues)
+                                await self.audio.publish_emotion_cues(
+                                    cues, transcript_id=current_transcript_id
+                                )
 
                             # Sentence-level TTS: extract new text from accumulated content.
                             # output.content is the full accumulated text so far.
                             # Safety: if content doesn't extend tts_buffer (e.g. new
                             # transcript), reset and treat full content as new.
-                            if output.content.startswith(tts_buffer):
-                                new_text = output.content[len(tts_buffer):]
+                            if content.startswith(tts_buffer):
+                                new_text = content[len(tts_buffer):]
                             else:
-                                new_text = output.content
+                                new_text = content
                                 self._sentence_buffer = ""
-                            tts_buffer = output.content
+                            tts_buffer = content
 
                             # Check for sentence boundaries in the new text and dispatch
                             self._dispatch_sentences(new_text)
@@ -883,6 +922,18 @@ class BaseAgent(ABC):
                                         self._current_sentence_source = "response"
 
                             if output.is_final:
+                                # Say which of the two failure modes happened.
+                                # Without this, "the face never reacts" gives no
+                                # evidence at all: the tags are stripped before
+                                # anything is published, so a reply with none
+                                # looks identical to a reply whose cues were
+                                # dropped somewhere downstream.
+                                if self._tp_emit_cues and self._tp_cue_count == 0:
+                                    logger.info(
+                                        "[EMOTION-TAGS] Reply finished with no tags — "
+                                        "the model wrote none. Check that the prompt "
+                                        "carries the {{emotionTags}} directive."
+                                    )
                                 # Flush any remaining partial sentence to TTS
                                 remaining = self._flush_sentence_buffer()
                                 if remaining:
@@ -895,20 +946,27 @@ class BaseAgent(ABC):
                             # Direct final response - publish and speak
                             if output.content.strip():
                                 transcript_id = f"final_{uuid.uuid4().hex[:8]}"
+                                content, cues = self._parse_emotion_tags(
+                                    output.content, is_final=True
+                                )
 
                                 # Publish to frontend as final
                                 await self.audio.publish_text(
-                                    output.content,
+                                    content,
                                     is_final=True,
                                     transcript_id=transcript_id
                                 )
+                                if cues:
+                                    await self.audio.publish_emotion_cues(
+                                        cues, transcript_id=transcript_id
+                                    )
 
                                 # Send to TTS via sentence queue, tagged so the
                                 # teleprompter can light up this final message.
                                 self._tp_transcript_id = transcript_id
-                                self._tp_text = output.content
+                                self._tp_text = content
                                 self._tp_cursor = 0
-                                self._enqueue_sentence(output.content)
+                                self._enqueue_sentence(content)
 
                         else:
                             # All non-text side-channel outputs (DEBUG, STATUS,
@@ -1005,6 +1063,30 @@ class BaseAgent(ABC):
             return False
         token = tokens[-1].rstrip(".!?").lower()
         return bool(token) and token in cls._ABBREVIATIONS
+
+    def _parse_emotion_tags(self, raw: str, *, is_final: bool):
+        """Strip emotion tags out of ``raw`` and return ``(text, cues)``.
+
+        Called on the ACCUMULATED reply each chunk rather than on the delta:
+        re-parsing the whole string is what keeps a tag split across a chunk
+        boundary ("...[thin" + "king] ...") from being missed, and the parser is
+        pure so the result is stable.
+
+        While streaming, a trailing half-written tag is withheld from the
+        returned text, so it never reaches the screen or the synthesizer. On the
+        final chunk nothing is withheld — there is no next chunk to release it.
+
+        Returns ``raw`` unchanged with no cues when the feature is off, so the
+        only thing a disabled flag costs is the animation.
+        """
+        if not getattr(self, "supports_emotion_tags", False):
+            return raw, []
+        # getattr default True: an older pipeline (or a test double) without the
+        # flag should still strip, because the alternative is speaking the tags.
+        if not getattr(self._audio_pipeline, "emotion_tags_enabled", True):
+            return raw, []
+        result = strip_emotion_tags(raw, allow_partial_hold=not is_final)
+        return result.text, result.cues
 
     def _enqueue_sentence(self, sentence: str, source: str = "response") -> None:
         """Enqueue a sentence for TTS, tagged with its character span in the

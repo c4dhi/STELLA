@@ -1092,6 +1092,35 @@ class StellaV2Agent(BaseAgent):
                 stage.apply_config(node_config)
                 logger.info(f"Applied config to {node_id}")
 
+        # Emotion tags (#face-emotions). MUST come after apply_config: the
+        # guidelines this inspects are populated by it, so running earlier
+        # inspected an empty generator and the warning below could never fire —
+        # which is exactly how "the face never reacts" stayed undiagnosed.
+        #
+        # The flag only goes on while the pipeline is stripping tags. Asking the
+        # model for markup nothing removes would have TTS read "playful" aloud.
+        self.response_generator.emotion_tags = bool(
+            getattr(self, "supports_emotion_tags", False)
+            and getattr(self._audio_pipeline, "emotion_tags_enabled", False)
+        )
+        guidelines = getattr(self.response_generator, "custom_guidelines", None)
+        logger.info(
+            "[EMOTION-TAGS] enabled=%s, custom_guidelines=%s, carries_directive=%s",
+            self.response_generator.emotion_tags,
+            "yes" if guidelines else "no (SDK default)",
+            "{{emotionTags}}" in guidelines if guidelines else "n/a",
+        )
+        if self.response_generator.emotion_tags and guidelines and "{{emotionTags}}" not in guidelines:
+            # Nothing is appended in code — the guidelines own their layout — so
+            # a configured template without the variable simply never asks for
+            # tags, and the face never reacts with nothing to explain why.
+            logger.warning(
+                "[EMOTION-TAGS] Enabled, but the configured conversation "
+                "guidelines do not reference {{emotionTags}} — the model will "
+                "not be told the vocabulary and the face will not react. Add "
+                "{{emotionTags}} to the guidelines."
+            )
+
         # Apply expert registry config (experts and custom_experts are in expert_pool node)
         expert_pool_config = nodes.get("expert_pool", {})
         if isinstance(expert_pool_config, dict):

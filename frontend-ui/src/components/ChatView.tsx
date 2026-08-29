@@ -42,12 +42,22 @@ export default function ChatView({
   // discrete progress events arrive via the store (bridged from PeerTransport);
   // the 60fps word cursor lives here, local to the chat subtree.
   const lastSpeechProgress = useStore(s => s.lastSpeechProgress)
+  // Emotion tags (#face-emotions): cues arrive the same way, and are resolved
+  // against the same cursor. The resolved expression goes BACK to the store
+  // because the face renders in the visualizer modal — a sibling subtree, not a
+  // child of the chat.
+  const lastEmotionCues = useStore(s => s.lastEmotionCues)
+  const setFaceExpression = useStore(s => s.setFaceExpression)
+  const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const {
     spokenChar,
     spokenTranscriptId,
     frozenSpoken,
     applyProgress,
     noteAgentText,
+    noteEmotionCues,
+    faceExpression,
+    faceGesture,
   } = useTeleprompter()
   const processingMessages = useStore(s => s.processingMessages)
   const participantEvents = useStore(s => s.participantEvents)
@@ -461,6 +471,23 @@ export default function ChatView({
       }
     }
   }, [turns, noteAgentText])
+
+  // Emotion tags (#face-emotions): feed cues in, publish what the cursor
+  // resolves back out to the face.
+  useEffect(() => {
+    if (lastEmotionCues) {
+      const { transcript_id, cues } = lastEmotionCues.data
+      noteEmotionCues(transcript_id || '', cues || [])
+    }
+  }, [lastEmotionCues, noteEmotionCues])
+
+  useEffect(() => {
+    setFaceExpression(faceExpression)
+  }, [faceExpression, setFaceExpression])
+
+  useEffect(() => {
+    if (faceGesture) triggerFaceGesture(faceGesture.tag)
+  }, [faceGesture, triggerFaceGesture])
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">

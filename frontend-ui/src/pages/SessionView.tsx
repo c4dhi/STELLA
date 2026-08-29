@@ -99,6 +99,7 @@ export default function SessionView() {
   // Handlers from ConnectPanel - now consolidated here
   const upsertChunk = useStore(s => s.upsertChunk)
   const setSpeechProgress = useStore(s => s.setSpeechProgress)
+  const setEmotionCues = useStore(s => s.setEmotionCues)
   const addProcessingMessage = useStore(s => s.addProcessingMessage)
   const addParticipantEvent = useStore(s => s.addParticipantEvent)
   const setTTSPlaying = useStore(s => s.setTTSPlaying)
@@ -252,6 +253,8 @@ export default function SessionView() {
     // Teleprompter (#241): bridge speech-progress to the store; ChatView's
     // useTeleprompter consumes it to drive the word-by-word highlight.
     transport.onSpeechProgress = (data) => setSpeechProgress(data)
+    // Emotion tags (#face-emotions): same bridge, same consumer.
+    transport.onEmotionCues = (data) => setEmotionCues(data)
     transport.onProcessingMessage = (m: ProcessingMessage) => addProcessingMessage(m)
 
     // === TTS handlers (from ConnectPanel) ===
@@ -482,6 +485,7 @@ export default function SessionView() {
       transport.onError = () => { }
       transport.onTranscript = () => { }
       transport.onSpeechProgress = () => { }
+      transport.onEmotionCues = () => { }
       transport.onProcessingMessage = () => { }
       transport.onTTSStart = () => { }
       transport.onTTSStop = () => { }
