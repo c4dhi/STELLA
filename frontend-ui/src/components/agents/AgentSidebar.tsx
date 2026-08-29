@@ -564,12 +564,35 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
                     </div>
                   </div>
 
-                  {/* Agent Config */}
-                  {agent.agentConfig && Object.keys(agent.agentConfig).length > 0 && (
-                    <div className={`text-xs font-light mb-3 font-mono truncate ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
-                      {JSON.stringify(agent.agentConfig)}
-                    </div>
-                  )}
+                  {/* What this agent was deployed WITH — its identity and its plan.
+                      This used to be JSON.stringify(agent.agentConfig) in a truncate
+                      div, which rendered as a bare "..." because the config is many
+                      thousands of characters (pipeline config, prompts, and now the
+                      persona snapshot). It read as a menu and carried no information. */}
+                  {(() => {
+                    const cfg = (agent.agentConfig || {}) as {
+                      persona?: { name?: string; icon?: string }
+                      plan?: { title?: string }
+                    }
+                    const personaName = cfg.persona?.name
+                    const planTitle = cfg.plan?.title
+                    if (!personaName && !planTitle) return null
+                    return (
+                      <div className={`text-xs font-light mb-3 flex items-center gap-1.5 min-w-0 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
+                        {personaName && (
+                          <span className="truncate" title={`Persona: ${personaName}`}>
+                            {cfg.persona?.icon || '🎭'} {personaName}
+                          </span>
+                        )}
+                        {personaName && planTitle && <span className="opacity-40">·</span>}
+                        {planTitle && (
+                          <span className="truncate" title={`Plan: ${planTitle}`}>
+                            {planTitle}
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })()}
 
                   {/* Created Date */}
                   <div className={`text-[10px] font-light tracking-wider uppercase mb-3 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>

@@ -127,3 +127,58 @@ def test_plan_text_with_no_persona_empties_the_tokens():
 @pytest.mark.parametrize("text", ["", None, "no tokens here"])
 def test_plan_text_passthrough(text):
     assert resolve_persona_tokens(text, PERSONA) == text
+
+
+# ---------------------------------------------------------------------------
+# Path 4 — the progress payload the UI renders
+# ---------------------------------------------------------------------------
+
+def test_progress_payload_text_is_persona_resolved():
+    """Plan text shown in the progress panel must not leak raw tokens.
+
+    Prompts were resolved from the first version of this feature, but the progress
+    payload is built from a separate copy of the plan state, so the user saw
+    "Introduce yourself as {{persona.name}}" in the UI while the LLM saw the
+    resolved text. Same walker, applied to both.
+    """
+    from stella_v2_agent.agent import StellaV2Agent
+
+    agent = StellaV2Agent.__new__(StellaV2Agent)
+    agent._persona_config = PERSONA
+
+    full_state = {
+        "states": [
+            {
+                "title": "Intro by {{persona.name}}",
+                "tasks": [
+                    {
+                        "description": "Introduce yourself as {{persona.name}}",
+                        "instruction": "You are a {{persona.role}}",
+                        "deliverables": [
+                            {"acceptance_criteria": "Named {{persona.name}}"}
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    agent._resolve_persona_in_plan_text(full_state)
+
+    state = full_state["states"][0]
+    task = state["tasks"][0]
+    assert state["title"] == "Intro by Grace"
+    assert task["description"] == "Introduce yourself as Grace"
+    assert task["instruction"] == "You are a wellbeing companion"
+    assert task["deliverables"][0]["acceptance_criteria"] == "Named Grace"
+
+
+def test_progress_walker_leaves_structural_fields_alone():
+    # Ids and statuses are not prose and must never be rewritten.
+    from stella_v2_agent.agent import StellaV2Agent
+
+    agent = StellaV2Agent.__new__(StellaV2Agent)
+    agent._persona_config = PERSONA
+
+    node = {"id": "{{persona.name}}", "status": "{{persona.role}}"}
+    agent._resolve_persona_in_plan_text(node)
+    assert node == {"id": "{{persona.name}}", "status": "{{persona.role}}"}

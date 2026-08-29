@@ -779,6 +779,9 @@ class StellaV2Agent(BaseAgent):
             )
             self._last_known_state_id = current_state_id
 
+            # The progress panel renders this text to the user, so it must show
+            # the resolved persona rather than the author's {{persona.*}} tokens.
+            self._resolve_persona_in_plan_text(full_state)
             progress_state = progress_from_full_state(
                 full_state,
                 plan=self._plan_config,
@@ -893,6 +896,13 @@ class StellaV2Agent(BaseAgent):
             )
         self._apply_pipeline_config(pipeline_config)
 
+        # Plan text is persona-resolved once for the session. _fetch_sm_context
+        # resolves the per-turn copy it builds for prompts, but _plan_config is
+        # also read directly (progress payloads, farewell), and those readers were
+        # showing raw {{persona.name}} tokens in the UI.
+        if self._plan_config:
+            self._resolve_persona_in_plan_text(self._plan_config)
+
         # Persona is applied AFTER the pipeline config on purpose: the Configurator's
         # persona slot is part of pipeline_config, and an operator-selected Persona
         # outranks it (#467). Applying in the other order would let the pipeline
@@ -911,6 +921,7 @@ class StellaV2Agent(BaseAgent):
             full_state = await self.sm_client.get_full_state()
             if full_state:
                 self._last_known_state_id = full_state.get("current_state_id")
+                self._resolve_persona_in_plan_text(full_state)
                 progress_state = progress_from_full_state(
                     full_state,
                     plan=self._plan_config,

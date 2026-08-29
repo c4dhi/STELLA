@@ -43,6 +43,8 @@ export class PeerTransport implements Transport {
 
   // Track if audio playback is enabled (requires user interaction due to browser autoplay policy)
   private audioEnabled: boolean = false
+  // Guards against stacking one listener pair per blocked track.
+  private audioGestureListenerArmed: boolean = false
 
   // Web Audio API for accurate speech detection
   private audioContext?: AudioContext
@@ -250,11 +252,17 @@ export class PeerTransport implements Transport {
             srcObject: audioEl.srcObject ? 'MediaStream' : 'null',
           })
 
-          // Explicitly try to play
+          // Explicitly try to play. A rejection here is usually the browser's
+          // autoplay policy rather than a real failure — the track is subscribed
+          // AFTER connect, so the element is created outside the user gesture that
+          // unlocked audio, and Safari in particular re-blocks it. Reporting and
+          // giving up is what made this present as "the teleprompter runs but I
+          // hear nothing": data messages arrive, the media element never plays.
           audioEl.play().then(() => {
             console.log('🔊 [AUDIO] play() succeeded')
           }).catch((err) => {
-            console.error('🔊 [AUDIO] play() failed:', err.message)
+            console.warn('🔊 [AUDIO] play() blocked, will retry on interaction:', err.message)
+            this.enableAudioOnNextGesture()
           })
         }
       })
@@ -477,20 +485,10 @@ export class PeerTransport implements Transport {
         console.warn('[PeerTransport] startAudio() failed (no user interaction yet):', (audioErr as Error).message)
         console.log('[PeerTransport] Audio will be enabled on first user interaction')
         this.audioEnabled = false
-        // Set up a one-time click handler to enable audio
-        const enableAudio = async () => {
-          try {
-            await room.startAudio()
-            this.audioEnabled = true
-            console.log('[PeerTransport] Audio enabled after user interaction')
-          } catch (e) {
-            console.warn('[PeerTransport] Failed to enable audio:', e)
-          }
-          document.removeEventListener('click', enableAudio)
-          document.removeEventListener('keydown', enableAudio)
-        }
-        document.addEventListener('click', enableAudio, { once: true })
-        document.addEventListener('keydown', enableAudio, { once: true })
+        // Shared with the TrackSubscribed path: one retry that unlocks BOTH the
+        // room and the audio element. Previously each had its own handler and
+        // only this one existed, so a blocked element was never retried.
+        this.enableAudioOnNextGesture()
       }
 
       console.log(`👤 [USER] Connected as: ${room.localParticipant.identity}`)
@@ -1089,6 +1087,42 @@ export class PeerTransport implements Transport {
   // Start monitoring audio levels for face animation with RMS analysis.
   // The rAF loop is throttled to ~30 Hz and only emits the level when it changes
   // meaningfully, so silence produces no store writes (and no subscriber re-renders).
+  /**
+   * Unlock audio on the next user gesture.
+   *
+   * Both audio paths can be blocked by the autoplay policy — LiveKit's
+   * room.startAudio() at connect time, and the per-track <audio> element created
+   * on TrackSubscribed. Only the first had a retry, so a blocked element stayed
+   * silent for the whole session with nothing but a console error.
+   *
+   * Idempotent: repeated failures (one per subscribed track) share a single pair
+   * of listeners rather than stacking one per call.
+   */
+  private enableAudioOnNextGesture(): void {
+    if (this.audioGestureListenerArmed) return
+    this.audioGestureListenerArmed = true
+
+    const unlock = async () => {
+      document.removeEventListener('click', unlock)
+      document.removeEventListener('keydown', unlock)
+      this.audioGestureListenerArmed = false
+      try {
+        // Unlock at the LiveKit level first, then the element: startAudio() is
+        // what clears the room-wide block, and without it the element retry can
+        // fail again for the same reason.
+        await this.room?.startAudio()
+        this.audioEnabled = true
+        await this.remoteAudio?.play()
+        console.log('🔊 [AUDIO] playback enabled after user interaction')
+      } catch (e) {
+        console.warn('🔊 [AUDIO] retry after interaction failed:', (e as Error).message)
+      }
+    }
+
+    document.addEventListener('click', unlock)
+    document.addEventListener('keydown', unlock)
+  }
+
   private startAudioLevelMonitoring() {
     // Idempotent: never run two concurrent loops.
     if (this.audioAnalysisFrame !== undefined) return
