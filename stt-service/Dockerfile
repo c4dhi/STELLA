@@ -222,7 +222,12 @@ ENV VAD_AUDIO_INACTIVITY_TIMEOUT_MS=1500
 # ============================================================================
 ENV SHERPA_SILENCE_THRESHOLD=1.5
 ENV SHERPA_SPEECH_TIMEOUT=10.0
-ENV SHERPA_RMS_THRESHOLD=0.001
+# 0.008 = ~-42dB. Was 0.001 (-60dB), which on this provider meant ANY audible
+# sound counted as speech — and sherpa has no Silero pass behind it, so that
+# energy gate is the only thing separating a voice from traffic outside. Every
+# false positive ducked the agent mid-sentence. Matches VAD_RMS_THRESHOLD, which
+# does the same job for the whisper provider.
+ENV SHERPA_RMS_THRESHOLD=0.008
 ENV SHERPA_PRE_BUFFER_SAMPLES=8000
 ENV SHERPA_MIN_TRANSCRIPT_CHARS=3
 

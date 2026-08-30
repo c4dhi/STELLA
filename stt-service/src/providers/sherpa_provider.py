@@ -46,7 +46,14 @@ class SherpaSession(STTSession):
         # Configurable thresholds (from config or defaults)
         self.silence_threshold = self.config.get('silence_threshold', 1.5)  # seconds
         self.speech_timeout = self.config.get('speech_timeout', 10.0)  # force endpoint after 10s
-        self.rms_threshold = self.config.get('rms_threshold', 0.001)  # Audio energy threshold
+        # Energy gate, and on this provider the ONLY thing separating speech
+        # from noise — there is no Silero pass here the way there is in the
+        # whisper provider. At the old 0.001 (-60 dB) that made any audible
+        # sound "speech": traffic through a window, a fan, a TV in the next
+        # room. Every one of those emitted speech_started, which ducks the
+        # agent mid-sentence. 0.008 is the level the whisper provider already
+        # uses for the same job (-42 dB, ambient noise below, speech above).
+        self.rms_threshold = self.config.get('rms_threshold', 0.008)
 
         # Pre-buffer for initial speech (same as Whisper)
         self.pre_buffer = []
@@ -281,7 +288,7 @@ class SherpaProvider(STTProvider):
         # Sherpa-specific VAD configuration (from environment)
         self.silence_threshold = float(os.getenv("SHERPA_SILENCE_THRESHOLD", "1.5"))
         self.speech_timeout = float(os.getenv("SHERPA_SPEECH_TIMEOUT", "10.0"))
-        self.rms_threshold = float(os.getenv("SHERPA_RMS_THRESHOLD", "0.001"))
+        self.rms_threshold = float(os.getenv("SHERPA_RMS_THRESHOLD", "0.008"))
         self.pre_buffer_samples = int(os.getenv("SHERPA_PRE_BUFFER_SAMPLES", "8000"))
         self.min_transcript_chars = int(os.getenv("SHERPA_MIN_TRANSCRIPT_CHARS", "3"))
 

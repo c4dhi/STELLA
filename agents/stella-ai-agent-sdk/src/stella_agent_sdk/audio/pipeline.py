@@ -658,6 +658,25 @@ class AudioPipeline:
             os.getenv("BARGE_IN_DUCK_GAIN", "0.25")
         )))
         self._ducked = False
+        self._ducked_at = 0.0
+        # How long a duck may last WITHOUT the interruption being confirmed.
+        #
+        # The duck is a reflex fired on the VAD's first frame, and the comment
+        # above is only true — "it costs nothing to be wrong" — if being wrong
+        # is self-correcting. It was not. Every path that lifts the duck waits
+        # on something arriving: `speech_ended`, or a final transcript, or the
+        # agent running out of things to say. A provider that never sends the
+        # first two (the sherpa CPU provider emits `speech_started` and nothing
+        # else) leaves the agent ducked for the REST OF THE UTTERANCE on one
+        # frame of background noise, which is exactly how it was reported.
+        #
+        # Derived from the barge-in threshold rather than picked: if the user
+        # had really taken the floor, `speech_confirmed` would have arrived
+        # after barge_in_min_speech_ms of voiced audio. Once that much time has
+        # passed with no confirmation, whatever ducked us was not a turn — by
+        # the system's own definition — so come back up. The margin covers the
+        # round trip from the STT service.
+        self._duck_timeout_s = _env_float("BARGE_IN_DUCK_TIMEOUT_MS", 1200.0) / 1000.0
         # transcript_id of an utterance we have committed a voice barge-in for,
         # while waiting for its final to deliver as the interrupting turn.
         # Keyed on the id, not a bare flag, so the state cannot outlive its
@@ -2349,6 +2368,7 @@ class AudioPipeline:
         if self._ducked or self._barge_in_duck_gain >= 1.0:
             return
         self._ducked = True
+        self._ducked_at = time.monotonic()
         logger.info(f"[BARGE-IN] Ducking to {self._barge_in_duck_gain:.0%} — user is speaking")
 
     def unduck_speech(self) -> None:
@@ -2356,7 +2376,19 @@ class AudioPipeline:
         if not self._ducked:
             return
         self._ducked = False
+        self._ducked_at = 0.0
         logger.info("[BARGE-IN] Restored volume — user stopped without interrupting")
+
+    def _duck_expired(self) -> bool:
+        """Has the duck outlived the interruption it was waiting to confirm?
+
+        Checked where the gain is applied rather than on a timer, so it costs
+        one comparison per frame and cannot itself be the thing that fails to
+        fire.
+        """
+        if not self._ducked or self._duck_timeout_s <= 0:
+            return False
+        return time.monotonic() - self._ducked_at >= self._duck_timeout_s
 
     def suspend_speech(self) -> None:
         """Suspend playback reversibly (barge-in reflex).
@@ -3418,6 +3450,12 @@ class AudioPipeline:
 
                 # The agent is now audibly talking — a barge-in may start.
                 self._audio_active = True
+                if self._duck_expired():
+                    logger.info(
+                        f"[BARGE-IN] Duck expired after {self._duck_timeout_s:.1f}s with no "
+                        "confirmed speech — restoring volume (noise, not a turn)"
+                    )
+                    self.unduck_speech()
                 if self._ducked:
                     frame = _apply_gain(frame, self._barge_in_duck_gain)
                 await self._room.publish_audio(frame)
