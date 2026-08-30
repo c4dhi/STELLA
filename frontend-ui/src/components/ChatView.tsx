@@ -49,6 +49,7 @@ export default function ChatView({
   const lastEmotionCues = useStore(s => s.lastEmotionCues)
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
+  const triggerFaceState = useStore(s => s.triggerFaceState)
   const {
     spokenChar,
     spokenTranscriptId,
@@ -58,6 +59,8 @@ export default function ChatView({
     noteEmotionCues,
     faceExpression,
     faceGesture,
+    cuesByTranscript,
+    faceState,
   } = useTeleprompter()
   const processingMessages = useStore(s => s.processingMessages)
   const participantEvents = useStore(s => s.participantEvents)
@@ -488,6 +491,9 @@ export default function ChatView({
   useEffect(() => {
     if (faceGesture) triggerFaceGesture(faceGesture.tag)
   }, [faceGesture, triggerFaceGesture])
+  useEffect(() => {
+    if (faceState) triggerFaceState(faceState.tag)
+  }, [faceState, triggerFaceState])
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -651,6 +657,11 @@ export default function ChatView({
                       spokenChar={spokenChar}
                       spokenTranscriptId={spokenTranscriptId}
                       frozenSpoken={frozenSpoken}
+                      // Admin board only: show what the model actually tagged.
+                      // Without this there is no way to tell a reply the model
+                      // tagged from one it did not, which is the single thing
+                      // you want to know while tuning the face.
+                      cues={cuesByTranscript[message.id]}
                     />
                   )
               ) : message.messageType === 'participant' ? (

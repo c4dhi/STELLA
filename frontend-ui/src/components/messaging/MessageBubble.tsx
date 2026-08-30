@@ -15,6 +15,15 @@ interface MessageBubbleProps {
   spokenChar?: number
   spokenTranscriptId?: string
   frozenSpoken?: Record<string, number>
+  /**
+   * Emotion cues for this message (#face-emotions).
+   *
+   * Supplying them renders the `[tags]` inline. ONLY the admin board does —
+   * participant-facing chat leaves it undefined, because the tags are stage
+   * directions for the face and showing one to a participant is the same
+   * failure as speaking it aloud.
+   */
+  cues?: { char: number; tag: string }[]
 }
 
 /**
@@ -32,6 +41,7 @@ export default function MessageBubble({
   spokenChar,
   spokenTranscriptId,
   frozenSpoken,
+  cues,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const isOtherUser = message.role === 'other_user'
@@ -52,6 +62,7 @@ export default function MessageBubble({
       spokenChar={spokenChar}
       spokenTranscriptId={spokenTranscriptId}
       frozenSpoken={frozenSpoken}
+      cues={cues}
     />
   )
 
