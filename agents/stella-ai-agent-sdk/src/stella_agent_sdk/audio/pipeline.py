@@ -1432,8 +1432,27 @@ class AudioPipeline:
                         transcript=text,
                     )
 
-                # Keep the on-screen transcript live either way.
-                await self._publish_user_transcript(event)
+                # Keep the on-screen transcript live either way — but say what
+                # happened to it. Every FINAL that reaches this line is one the
+                # pipeline is about to drop: the carry-over branch above has
+                # already taken anything that started on an open gate or that
+                # cleared the interruption threshold, and this branch ends in
+                # `continue`, so nothing here ever becomes a turn.
+                #
+                # Reported as "I said mhm, it marked it as a turn, and kept
+                # speaking". The barge-in decision was right — the utterance
+                # never confirmed, so the agent correctly carried on. What was
+                # wrong was that the transcript went out unmarked and rendered
+                # as an ordinary delivered turn, which reads as the agent
+                # hearing you and ignoring you. The sibling case (the same
+                # backchannel decoded AFTER playback stops) has always been
+                # marked; the only thing separating them is whether the decode
+                # landed before or after the agent finished its sentence, which
+                # is not something the user can see or should have to.
+                #
+                # Partials stay unmarked: they are still live, and the final
+                # replaces them by transcript_id.
+                await self._publish_user_transcript(event, discarded=event.is_final)
                 continue
 
             # 1. Partials go out immediately so the bubble stays live. A FINAL
