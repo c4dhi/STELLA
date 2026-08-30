@@ -30,9 +30,12 @@ import type { BlinkTarget } from './useFaceAnimation';
 import {
   DEFAULT_EXPRESSION,
   resolveGesture,
+  SLEEP_POSE,
+  WAKE_ANIMATION,
   type ExpressionSpec,
   type GestureFrame,
 } from '../animations/emotionRegistry';
+import type { SleepPhase } from './useSleepState';
 
 /** Quiet for this long, with nobody to look at, and the eyes start to wander. */
 const IDLE_AFTER_MS = 2500;
@@ -122,6 +125,34 @@ const THINKING_OFFSET_X = -0.15;
 const THINKING_OFFSET_Y = -0.2;
 const THINKING_BROW = -4;
 const MICRO_BROW = -5;
+
+/** Lid multiplier by which the drawn sleeping lid has fully faded out. Wide
+ *  enough that the eye is genuinely open behind it before it disappears. */
+const SLEEP_LID_FADE = 0.25;
+
+/**
+ * How long one backchannel nod takes, and how far it travels.
+ *
+ * Small, and getting smaller each time it is looked at, because the sum of what
+ * the face does while someone is TALKING is much easier to overdo than any one
+ * movement suggests: this nod rides on top of the head already following the
+ * speaker's face, plus a constant listening bob, plus the eyes widening. Each
+ * is defensible alone; together they read as fidgeting.
+ */
+const LISTEN_NOD_MS = 1150;
+const LISTEN_NOD_PX = 4.5;
+
+/** Gap before the FIRST backchannel nod of a turn, and between later ones. A
+ *  listener who nods every two seconds is agreeing with the sound of a voice,
+ *  not with anything being said. */
+const LISTEN_NOD_FIRST_MIN_MS = 3200;
+const LISTEN_NOD_FIRST_MAX_MS = 6500;
+const LISTEN_NOD_GAP_MIN_MS = 5200;
+const LISTEN_NOD_GAP_MAX_MS = 11_000;
+
+/** The constant sway while the user talks, in degrees. Under a degree of roll:
+ *  it is there to stop the head being carved out of stone, nothing more. */
+const LISTEN_SWAY_DEG = 0.9;
 
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
@@ -242,6 +273,8 @@ interface UseFaceBehaviorOptions {
   expression?: ExpressionSpec;
   /** One-shot gesture. A new `seq` starts it, even for a repeated tag. */
   gesture?: { tag: string; seq: number } | null;
+  /** Awake, out cold, or coming round (#face-sleep). */
+  sleepPhase?: SleepPhase;
 }
 
 export interface FaceBehavior {
@@ -259,6 +292,14 @@ export interface FaceBehavior {
   /** Per-eye lid multipliers, so a gesture can close one eye (wink). */
   lidLeft: MotionValue<number>;
   lidRight: MotionValue<number>;
+  /**
+   * How much the SLEEPING lid should be drawn, 0..1 (#face-sleep).
+   *
+   * Separate from `lidLeft`/`lidRight` because those carry blinks and winks
+   * too, and a blink must not put a sleeping face on screen for 100ms. This
+   * one rises only when sleep is closing the eyes.
+   */
+  sleepClosed: MotionValue<number>;
   /** Eyebrow offset in px. Discrete — Framer smooths it in the renderer. */
   eyebrowOffset: number;
 }
@@ -271,7 +312,8 @@ export const useFaceBehavior = ({
   trackedY,
   onBlink,
   expression = DEFAULT_EXPRESSION,
-  gesture = null
+  gesture = null,
+  sleepPhase = 'awake'
 }: UseFaceBehaviorOptions): FaceBehavior => {
   const gazeX = useMotionValue(0);
   const gazeY = useMotionValue(0);
@@ -281,6 +323,7 @@ export const useFaceBehavior = ({
   const anticipation = useMotionValue(1);
   const lidLeft = useMotionValue(1);
   const lidRight = useMotionValue(1);
+  const sleepClosed = useMotionValue(0);
   const [eyebrowOffset, setEyebrowOffset] = useState(0);
 
   // Snapshot refs — the loop reads live values without being torn down and
@@ -299,6 +342,8 @@ export const useFaceBehavior = ({
   onBlinkRef.current = onBlink;
   expressionRef.current = expression;
   gestureRef.current = gesture;
+  const sleepPhaseRef = useRef(sleepPhase);
+  sleepPhaseRef.current = sleepPhase;
 
   const isTTSPlaying = useStore((s) => s.isTTSPlaying);
   const isTTSPlayingRef = useRef(isTTSPlaying);
@@ -363,16 +408,45 @@ export const useFaceBehavior = ({
     // Expression layer — lerped, so a cue change eases in rather than snapping.
     let exprGazeX = 0;
     let exprGazeY = 0;
+    // Which way a `gazeAside` expression is looking, and which pose it was
+    // rolled for. Re-rolled on every adoption so the same expression twice does
+    // not land on the same side — the tell that nothing is behind it.
+    let asideSign = 1;
+    let asidePose: ExpressionSpec | null = null;
     let exprRoll = 0;
     let exprBrow = 0;
+
+    // Sustained-motion layer. Some expressions are a MOVEMENT, not a pose:
+    // thought is eyes drifting away and not settling, laughter is a bounce.
+    // Held still, both read as something else entirely — a glare and a smirk.
+    // Backchannel nods. A listener who never moves reads as a recording; a
+    // nod every few seconds while someone talks is what says "still with you".
+    // Irregular on purpose — a nod on a fixed beat is worse than none.
+    let listenNodStart = 0;
+    let listenNodDouble = false;
+    let nextListenNodAt = 0;
+
+    let bounceGate = 0;
+    let lastBounce: { amplitude: number; periodMs: number } | null = null;
+    let nextSqueezeAt = 0;
 
     // Gesture layer — sampled over its own duration and additive on top. It
     // ends by returning to rest of its own accord (see GestureSpec), so nothing
     // outside has to fade it out.
     let gestureSeq = -1;
     let gestureStart = 0;
+    let gestureVariant = 0;
     let gestureSpec: ReturnType<typeof resolveGesture> = null;
     const REST: GestureFrame = {};
+
+    // Sleep layer (#face-sleep). `sleepGate` fades the droop in and out so
+    // nodding off and coming round are both movements rather than cuts;
+    // `sleepLid` is the eyelid, handed to the wake animation for the duration
+    // of the wake and lerped the rest of the time.
+    let sleepGate = 0;
+    let sleepLid = 1;
+    let wakeStart = 0;
+    let prevSleepPhase: SleepPhase = 'awake';
 
     let moveEase: (t: number) => number = smoothstep;
 
@@ -426,7 +500,56 @@ export const useFaceBehavior = ({
       lastBusyAt = busy.lastBusyAt;
       const quietMs = now - lastBusyAt;
       const quiet = quietMs > IDLE_AFTER_MS;
-      const mode = resolveGazeMode({ isGazeLocked: locked, quietMs, reducedMotion });
+
+      // === Sleep (#face-sleep) ===
+      // `dormant` covers asleep AND waking: every voluntary layer below —
+      // wandering, flourishes, backchannel nods — has to stay out of the way,
+      // or the idle behavior carries on underneath the closed lids and the
+      // head drifts around while she is supposed to be out.
+      const phase = sleepPhaseRef.current;
+      if (phase !== prevSleepPhase) {
+        if (phase === 'waking') wakeStart = now;
+        prevSleepPhase = phase;
+      }
+      const asleep = phase === 'asleep';
+      const dormant = phase !== 'awake';
+      // Asymmetric: she goes under slowly and comes round faster, so the droop
+      // has unwound by the time the wake animation gets to the stretch.
+      sleepGate += ((asleep ? 1 : 0) - sleepGate) * (asleep ? 0.03 : 0.08);
+
+      // Under reduced motion the phase still runs its full length — it is
+      // covering the camera restart, which is not a preference — but the stir
+      // and the stretch are dropped and the lids simply open.
+      const performingWake = phase === 'waking' && !reducedMotion;
+      let wakeFrame: GestureFrame = REST;
+      if (performingWake) {
+        const wt = clamp((now - wakeStart) / WAKE_ANIMATION.durationMs, 0, 1);
+        wakeFrame = WAKE_ANIMATION.frame(wt);
+      }
+      // The wake animation owns the lids outright while it plays — it starts at
+      // exactly SLEEP_POSE.lid, so the handover is invisible — and the lerp
+      // takes them back afterwards.
+      sleepLid = performingWake
+        ? (wakeFrame.lidLeft ?? 1)
+        : sleepLid + ((asleep ? SLEEP_POSE.lid : 1) - sleepLid) * 0.06;
+
+      const breath =
+        sleepGate > 0.001 && !reducedMotion
+          ? Math.sin((now / SLEEP_POSE.breath.periodMs) * Math.PI * 2)
+          : 0;
+      const sleepPitch = sleepGate * (SLEEP_POSE.droop + breath * SLEEP_POSE.breath.amplitude);
+      const sleepRoll = sleepGate * SLEEP_POSE.roll;
+      const sleepBrow = sleepGate * SLEEP_POSE.brow;
+      const sleepScale = 1 + sleepGate * breath * SLEEP_POSE.breathScale;
+      // Looking away IS the expression, so it outranks the gaze lock — the one
+      // thing allowed to. Forced to 'straight' rather than left to wander, so
+      // the drift below owns the movement instead of fighting saccades.
+      const averting = (expressionRef.current ?? DEFAULT_EXPRESSION).avertsGaze === true;
+      const mode: GazeMode = dormant
+        ? 'straight'
+        : averting
+          ? 'straight'
+          : resolveGazeMode({ isGazeLocked: locked, quietMs, reducedMotion });
       const wandering = mode === 'wander';
 
       // === Handing the eyes between layers ===
@@ -508,7 +631,7 @@ export const useFaceBehavior = ({
       }
 
       // === Idle flourishes ===
-      if (quiet && !reducedMotion) {
+      if (quiet && !reducedMotion && !dormant) {
         if (nextMicroAt === 0) nextMicroAt = now + rand(MICRO_GAP_MIN_MS, MICRO_GAP_MAX_MS);
         if (now >= nextMicroAt) {
           nextMicroAt = now + rand(MICRO_GAP_MIN_MS, MICRO_GAP_MAX_MS);
@@ -570,8 +693,36 @@ export const useFaceBehavior = ({
 
       // === Head ===
       const elapsed = now / 1000;
-      const nodTarget = speaking ? Math.sin(elapsed * Math.PI * 0.8) * 2 : 0;
+      const nodTarget = speaking ? Math.sin(elapsed * Math.PI * 0.8) * LISTEN_SWAY_DEG : 0;
       nod += (nodTarget - nod) * 0.1;
+
+      // === Listening nods ===
+      if (speaking && !reducedMotion && !dormant) {
+        if (nextListenNodAt === 0)
+          nextListenNodAt = now + rand(LISTEN_NOD_FIRST_MIN_MS, LISTEN_NOD_FIRST_MAX_MS);
+        if (listenNodStart === 0 && now >= nextListenNodAt) {
+          listenNodStart = now;
+          listenNodDouble = Math.random() >= 0.5;
+          nextListenNodAt = now + rand(LISTEN_NOD_GAP_MIN_MS, LISTEN_NOD_GAP_MAX_MS);
+        }
+      } else {
+        nextListenNodAt = 0; // an in-flight nod is allowed to finish
+      }
+      let listenNod = 0;
+      if (listenNodStart !== 0) {
+        const t = (now - listenNodStart) / LISTEN_NOD_MS;
+        if (t >= 1) listenNodStart = 0;
+        // Same shape as the [nod] gesture — one beat or two, chosen per nod —
+        // just far quieter. This one fires unprompted every few seconds while
+        // someone talks, so it has to sit under conscious notice: a deliberate
+        // nod agrees with you, a backchannel nod only says "still here".
+        else {
+          const first = t < 0.5 ? Math.sin(Math.PI * (t / 0.5)) : 0;
+          const second =
+            listenNodDouble && t >= 0.52 ? Math.sin(Math.PI * ((t - 0.52) / 0.48)) * 0.6 : 0;
+          listenNod = (first + second) * LISTEN_NOD_PX;
+        }
+      }
       tilt += (tiltTarget - tilt) * 0.06;
 
       // === Expression ===
@@ -580,8 +731,32 @@ export const useFaceBehavior = ({
       // onto the person, instead of leaving them.
       const pose = expressionRef.current ?? DEFAULT_EXPRESSION;
       const exprLerp = 0.08;
-      exprGazeX += ((pose.gazeX ?? 0) - exprGazeX) * exprLerp;
-      exprGazeY += ((pose.gazeY ?? 0) - exprGazeY) * exprLerp;
+      // Sustained drift, if this expression has one. Two incommensurate
+      // frequencies so the eyes never retrace the same path — a single sine
+      // reads as a metronome, which is the opposite of thinking.
+      let driftX = 0;
+      let driftY = 0;
+      if (pose.gazeDrift && !reducedMotion) {
+        const phase = (now / pose.gazeDrift.periodMs) * Math.PI * 2;
+        driftX = Math.sin(phase) * pose.gazeDrift.x;
+        driftY = pose.gazeDrift.y + Math.cos(phase * 1.7) * 0.06;
+      }
+      // Look aside and HOLD. The lerp below carries the eyes there over about a
+      // second, so this is a destination rather than a jump.
+      if (pose.gazeAside && !reducedMotion) {
+        if (pose !== asidePose) {
+          asidePose = pose;
+          asideSign = Math.random() < 0.5 ? -1 : 1;
+        }
+        const jitter = pose.gazeAside.jitter ?? 0;
+        const secs = now / 1000;
+        driftX = asideSign * pose.gazeAside.x + Math.sin(secs * 0.51) * jitter;
+        driftY = pose.gazeAside.y + Math.cos(secs * 0.37) * jitter * 0.6;
+      } else if (!pose.gazeAside) {
+        asidePose = null;
+      }
+      exprGazeX += ((pose.gazeX ?? 0) + driftX - exprGazeX) * exprLerp;
+      exprGazeY += ((pose.gazeY ?? 0) + driftY - exprGazeY) * exprLerp;
       exprRoll += ((pose.roll ?? 0) - exprRoll) * exprLerp;
       exprBrow += ((pose.brow ?? 0) - exprBrow) * exprLerp;
 
@@ -591,40 +766,89 @@ export const useFaceBehavior = ({
         gestureSeq = pending.seq;
         gestureSpec = reducedMotion ? null : resolveGesture(pending.tag);
         gestureStart = now;
+        // Rolled once per play, not per frame.
+        gestureVariant = Math.random();
       }
+      // Bounce. The gate fades the shake in and out so an expression change is
+      // not a jump-cut; the spec is remembered while it fades so the motion has
+      // something to fade OUT of.
+      if (pose.bounce) lastBounce = pose.bounce;
+      bounceGate += ((pose.bounce && !reducedMotion && !dormant ? 1 : 0) - bounceGate) * 0.08;
+      const bounceY =
+        lastBounce && bounceGate > 0.001
+          ? Math.sin((now / lastBounce.periodMs) * Math.PI * 2) *
+            lastBounce.amplitude *
+            bounceGate
+          : 0;
+
+      // Irregular eye-scrunches. Randomised gap, because laughter that blinks
+      // on a fixed beat reads as a warning light.
+      if (pose.eyeSqueeze && !reducedMotion && !dormant) {
+        const squeeze = pose.eyeSqueeze;
+        const gap = () => rand(squeeze.minGapMs, squeeze.maxGapMs);
+        if (nextSqueezeAt === 0) nextSqueezeAt = now + gap();
+        if (now >= nextSqueezeAt) {
+          onBlinkRef.current?.('both', squeeze.holdMs);
+          nextSqueezeAt = now + gap();
+        }
+      } else {
+        nextSqueezeAt = 0;
+      }
+
       let frame: GestureFrame = REST;
       if (gestureSpec) {
         const t = (now - gestureStart) / gestureSpec.durationMs;
         if (t >= 1) {
           gestureSpec = null;
         } else {
-          frame = gestureSpec.frame(t);
+          frame = gestureSpec.frame(t, gestureVariant);
         }
       }
 
       // === Compose ===
-      const finalX = clamp(baseX + wanderX + thinkX + exprGazeX + (frame.gazeX ?? 0), -1, 1);
-      const finalY = clamp(baseY + wanderY + thinkY + exprGazeY + (frame.gazeY ?? 0), -1, 1);
+      const finalX = clamp(
+        baseX + wanderX + thinkX + exprGazeX + (frame.gazeX ?? 0) + (wakeFrame.gazeX ?? 0),
+        -1,
+        1
+      );
+      const finalY = clamp(
+        baseY + wanderY + thinkY + exprGazeY + (frame.gazeY ?? 0) + (wakeFrame.gazeY ?? 0),
+        -1,
+        1
+      );
       // Head follow-through. The eyes lead and the head trails them slightly —
       // without it only the pupils move and the face reads as a mask with
       // something sliding behind it. Lagged well behind the gaze (0.04) so the
       // head drifts after the eyes rather than moving in lockstep with them.
-      idlePitch += (finalY * 6 - idlePitch) * 0.04;
+      idlePitch += (finalY * 14 - idlePitch) * 0.04;
 
       gazeX.set(finalX);
       gazeY.set(finalY);
-      headRotation.set(finalX * 8 + nod + tilt + exprRoll + (frame.roll ?? 0));
-      headPitch.set(idlePitch + (frame.pitch ?? 0));
-      faceScale.set(frame.scale ?? 1);
-      lidLeft.set(frame.lidLeft ?? 1);
-      lidRight.set(frame.lidRight ?? 1);
+      // The head commits to where the eyes go. This used to be a token 8deg,
+      // which left the face reading as a mask with pupils sliding behind it.
+      headRotation.set(
+        finalX * 15 + nod + tilt + exprRoll + (frame.roll ?? 0) + sleepRoll + (wakeFrame.roll ?? 0)
+      );
+      headPitch.set(
+        idlePitch + bounceY + listenNod + (frame.pitch ?? 0) + sleepPitch + (wakeFrame.pitch ?? 0)
+      );
+      faceScale.set((frame.scale ?? 1) * sleepScale * (wakeFrame.scale ?? 1));
+      // The sleep lid multiplies rather than replaces, so a gesture that closes
+      // one eye still works on a face that is only half awake.
+      lidLeft.set((frame.lidLeft ?? 1) * sleepLid);
+      lidRight.set((frame.lidRight ?? 1) * sleepLid);
+      // The drawn lid fades out as the eye opens, so the two never both show.
+      // It is gone by the time the wake's first bleary peek gets underway.
+      sleepClosed.set(clamp(1 - sleepLid / SLEEP_LID_FADE, 0, 1));
       anticipation.set(flash);
 
       // Eyebrows are a discrete channel — publish only on a real change, so the
       // renderer re-renders a few times a turn rather than every frame.
       // Rounded to whole pixels: this is the one channel that still crosses the
       // React boundary, and an unrounded gesture would re-render every frame.
-      const brow = Math.round(thinkBrow + microBrow + exprBrow + (frame.brow ?? 0));
+      const brow = Math.round(
+        thinkBrow + microBrow + exprBrow + (frame.brow ?? 0) + sleepBrow + (wakeFrame.brow ?? 0)
+      );
       if (brow !== emittedBrow) {
         emittedBrow = brow;
         setEyebrowOffset(brow);
@@ -642,6 +866,7 @@ export const useFaceBehavior = ({
         busy: { speaking, remoteSpeaking, ttsPlaying, confirmed: busySince !== null },
         reducedMotion,
         expression: pose === DEFAULT_EXPRESSION ? 'neutral' : 'cue',
+        sleep: phase,
       };
 
       rafId = requestAnimationFrame(tick);
@@ -651,7 +876,17 @@ export const useFaceBehavior = ({
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [gazeX, gazeY, headRotation, headPitch, faceScale, anticipation, lidLeft, lidRight]);
+  }, [
+    gazeX,
+    gazeY,
+    headRotation,
+    headPitch,
+    faceScale,
+    anticipation,
+    lidLeft,
+    lidRight,
+    sleepClosed
+  ]);
 
   return {
     gazeX,
@@ -662,6 +897,7 @@ export const useFaceBehavior = ({
     anticipation,
     lidLeft,
     lidRight,
+    sleepClosed,
     eyebrowOffset
   };
 };

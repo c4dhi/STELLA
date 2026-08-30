@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from stella_agent_sdk.emotion.tags import EXPRESSION_TAGS, GESTURE_TAGS
+from stella_agent_sdk.emotion.tags import EXPRESSION_TAGS, GESTURE_TAGS, STATE_TAGS
 
 _REGISTRY = (
     Path(__file__).resolve().parents[3]
@@ -46,3 +46,16 @@ def test_expressions_match_the_frontend_registry(registry_source):
 
 def test_gestures_match_the_frontend_registry(registry_source):
     assert _tags(registry_source, "GESTURES") == set(GESTURE_TAGS)
+
+
+def test_states_match_the_frontend_registry(registry_source):
+    """`[sleep]` is the one tag whose drift the user cannot work around.
+
+    An expression the client has never heard of is a face that does not react,
+    which is invisible. A state tag that goes missing means the agent is asked
+    to go to sleep, says goodnight, and simply stays awake — and there is no
+    second way to ask.
+    """
+    match = re.search(r"export const STATES = \[(.*?)\] as const;", registry_source, re.DOTALL)
+    assert match, "STATES not found in the frontend registry"
+    assert set(re.findall(r"'([a-z_]+)'", match.group(1))) == set(STATE_TAGS)

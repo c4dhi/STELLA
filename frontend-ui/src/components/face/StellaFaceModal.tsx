@@ -9,6 +9,7 @@ import { X, LayoutGrid, Maximize2, Minimize2, Subtitles } from 'lucide-react';
 import TranscriptOverlay from './TranscriptOverlay';
 import VisualizerGallery from './VisualizerGallery';
 import VisualizerRenderer from './VisualizerRenderer';
+import { useSleepMicrophone } from './hooks/useSleepMicrophone';
 import { VisualizerType } from './types';
 import { useStore } from '../../store';
 import { startMicWithVu } from '../../services/audio/capture';
@@ -226,6 +227,9 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
       useStore.getState().setVu(0); // Reset VU meter
     }
   }, [isMuted, transport, status, setIsMuted, setIsRecording]);
+
+  // Sleeping mutes the mic; waking gives it back if sleep is what took it.
+  useSleepMicrophone({ isMuted, toggleMute, enabled: status === 'connected' });
 
   // Handle spacebar to toggle mute
   useEffect(() => {

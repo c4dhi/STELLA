@@ -7,6 +7,12 @@
  * detection, so the eyes tracked the pointer and the idle behavior could never
  * run. With no face detected the gaze re-centers and looks straight ahead, and
  * `useFaceBehavior` takes over with the idle look-around.
+ *
+ * `enableWebcam` is a live switch, not just a startup option (#face-sleep):
+ * dropping it releases the camera outright — tracks stopped, indicator light
+ * off — and raising it acquires a fresh stream. That is the whole point of the
+ * sleep state, so the teardown has to be real rather than merely pausing
+ * detection on a stream that is still open.
  */
 
 import { useState, useEffect, useRef } from 'react';
@@ -88,15 +94,31 @@ export const useFaceTracking = ({
     initWebcam();
 
     return () => {
-      // Cleanup webcam stream
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
+      if (videoRef.current) videoRef.current.srcObject = null;
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
       }
+      // Without this the detection loop below — which is keyed on readiness,
+      // not on the switch — keeps polling a video element whose stream has been
+      // stopped, and every consumer goes on believing the camera is live.
+      setIsWebcamReady(false);
     };
   }, [enableWebcam, modelsLoaded]);
+
+  // Releasing the camera must also retract the last detection. Otherwise the
+  // final frame before shutdown stands as the answer to "is anyone there" for
+  // as long as the camera stays off, and the face would decide someone is
+  // present the entire time it is asleep.
+  useEffect(() => {
+    if (enableWebcam) return;
+    smoothPositionRef.current = { x: 0.5, y: 0.5 };
+    setTrackingData({ position: { x: 0.5, y: 0.5 }, hasDetection: false, method: 'none' });
+  }, [enableWebcam]);
 
   // Face detection loop
   useEffect(() => {
@@ -154,10 +176,13 @@ export const useFaceTracking = ({
     };
   }, [isWebcamReady, smoothingFactor]);
 
-  // Create hidden video element for webcam
+  // Create the hidden video element ONCE, for the lifetime of the hook.
+  //
+  // It deliberately does not depend on `enableWebcam`. React runs effects in
+  // declaration order, so tearing the element down and rebuilding it on the
+  // switch would have `initWebcam` above run first and attach the new stream to
+  // the element that was just removed from the document.
   useEffect(() => {
-    if (!enableWebcam) return;
-
     const video = document.createElement('video');
     video.width = 640;
     video.height = 480;
@@ -175,9 +200,10 @@ export const useFaceTracking = ({
     videoRef.current = video;
 
     return () => {
+      videoRef.current = null;
       document.body.removeChild(video);
     };
-  }, [enableWebcam]);
+  }, []);
 
   return {
     trackingData,

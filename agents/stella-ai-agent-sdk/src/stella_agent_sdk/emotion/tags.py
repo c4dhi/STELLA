@@ -65,6 +65,16 @@ GESTURE_TAGS: Tuple[str, ...] = (
     "lean_in",
 )
 
+#: State changes. Neither a pose nor a movement: a COMMAND to the face, which
+#: acts on it once and stays changed long after the reply is over.
+#:
+#: These are the only tags with an effect the user has to undo by hand — going
+#: to sleep releases the camera, and the way back is a tap on the face — so the
+#: prompt is deliberately strict about when the model may write one. An
+#: expression written by mistake is over in a sentence; a `[sleep]` written by
+#: mistake ends the conversation.
+STATE_TAGS: Tuple[str, ...] = ("sleep",)
+
 #: tag name -> kind. THE wire contract with the frontend. The frontend keeps its
 #: own registry of how each tag is drawn (eyebrow curve, mouth shape, duration)
 #: — data this side has no business knowing — and is required to ignore a tag it
@@ -72,6 +82,7 @@ GESTURE_TAGS: Tuple[str, ...] = (
 EMOTION_TAGS: Dict[str, str] = {
     **{tag: "expression" for tag in EXPRESSION_TAGS},
     **{tag: "gesture" for tag in GESTURE_TAGS},
+    **{tag: "state" for tag in STATE_TAGS},
 }
 
 #: Longest tag body we will consider. Also bounds how much text may be withheld

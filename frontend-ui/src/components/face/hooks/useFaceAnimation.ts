@@ -31,13 +31,16 @@ interface UseFaceAnimationOptions {
   /** A face is being tracked (debounced) — pupils dilate, as they do on a
    *  person you are actually looking at. */
   isGazeLocked?: boolean;
+  /** Out cold (#face-sleep). Shut eyes do not blink. */
+  isAsleep?: boolean;
 }
 
 export type BlinkTarget = 'both' | 'left' | 'right';
 
 export const useFaceAnimation = ({
   isUserSpeaking = false,
-  isGazeLocked = false
+  isGazeLocked = false,
+  isAsleep = false
 }: UseFaceAnimationOptions) => {
   const leftBlink = useMotionValue(1);
   const rightBlink = useMotionValue(1);
@@ -45,12 +48,22 @@ export const useFaceAnimation = ({
   const pupilDilation = useMotionValue(1);
   const blinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const doubleBlinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // While a HELD close is in progress (a laugh scrunch), the spontaneous blink
+  // must stay out of the way: re-closing an already-closed eye restarts the
+  // reopen timer and cuts the hold short, so a long scrunch would randomly
+  // collapse back into an ordinary blink.
+  const heldUntilRef = useRef(0);
+  // Read inside the timer rather than closed over, so changing it does not
+  // restart the schedule and reset the countdown to the next blink.
+  const isAsleepRef = useRef(isAsleep);
+  isAsleepRef.current = isAsleep;
 
   const blink = useCallback(
     (target: BlinkTarget = 'both', holdMs = 0) => {
       const lids = [];
       if (target !== 'right') lids.push(leftBlink);
       if (target !== 'left') lids.push(rightBlink);
+      if (holdMs > 0) heldUntilRef.current = Date.now() + holdMs + 250;
       for (const lid of lids) {
         animate(lid, LID_CLOSED, { duration: 0.1, ease: 'easeIn' }).then(() => {
           const reopen = () => animate(lid, 1, { duration: 0.15, ease: 'easeOut' });
@@ -68,6 +81,13 @@ export const useFaceAnimation = ({
       const interval =
         BLINK_INTERVAL_MIN + Math.random() * (BLINK_INTERVAL_MAX - BLINK_INTERVAL_MIN);
       blinkTimerRef.current = setTimeout(() => {
+        // Asleep, or mid-scrunch: the eyes are deliberately shut. Blinking now
+        // would animate the lid back OPEN on the way out of the blink and
+        // briefly un-close them.
+        if (isAsleepRef.current || Date.now() < heldUntilRef.current) {
+          scheduleBlink();
+          return;
+        }
         blink();
         if (Math.random() < DOUBLE_BLINK_CHANCE) {
           doubleBlinkTimerRef.current = setTimeout(() => blink(), DOUBLE_BLINK_DELAY);
@@ -85,7 +105,10 @@ export const useFaceAnimation = ({
 
   // --- Attention cues ---
   useEffect(() => {
-    animate(eyeWiden, isUserSpeaking ? 1.08 : 1.0, { duration: 0.25, ease: 'easeOut' });
+    // 1.08 was an 8% jump in eye height every time the user started talking,
+    // and scaleY grows about the centre, so it moved the whole eye as well as
+    // resizing it. Attention, not a flinch.
+    animate(eyeWiden, isUserSpeaking ? 1.03 : 1.0, { duration: 0.25, ease: 'easeOut' });
   }, [isUserSpeaking, eyeWiden]);
 
   useEffect(() => {

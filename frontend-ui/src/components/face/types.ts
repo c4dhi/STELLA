@@ -4,6 +4,7 @@
  */
 
 import type { MotionValue } from 'framer-motion';
+import type { EyeShape } from './eyeGeometry';
 
 export type EyeEmotion =
   | 'neutral'
@@ -59,6 +60,19 @@ export interface StellaFaceProps {
   eyeEmotion?: EyeEmotion;
   mouthEmotion?: MouthEmotion;
   size?: number; // Face size in pixels (default: responsive)
+  /**
+   * Preview only (#face-sleep). Production never passes this.
+   *
+   * Waiting out a real 30 seconds of being invisible to the camera — while
+   * sitting in front of it, to click the result — is not a workable way to look
+   * at the sleep and wake animations, which is the only reason this exists.
+   */
+  sleep?: {
+    /** Override the 30s countdown. */
+    afterMs?: number;
+    /** Run the countdown regardless of who is visible or whether the camera works. */
+    force?: boolean;
+  };
   className?: string;
 }
 
@@ -101,6 +115,30 @@ export interface FaceRendererProps {
   mouthEmotion: MouthEmotion;
   eyeEmotion: EyeEmotion;
   eyebrowHeight: number; // -5 to 5 pixels
+  /** Lid position, tilt and eye height — where most of the expression lives. */
+  eyeShape: EyeShape;
+  /** Brow tilt in degrees; positive drops the inner ends (cross), negative lifts them (sad). */
+  browAngle?: number;
+  /** Raise one brow relative to the other, in px — the "hmm" signal. */
+  browAsymmetry?: number;
+  /**
+   * How much the drawn sleeping lid shows, 0..1 (#face-sleep).
+   *
+   * Sleep shuts the eye all the way, which makes it disappear rather than look
+   * closed, so a lid is drawn in its place and cross-faded against it.
+   */
+  sleepClosed?: MotionValue<number>;
+  /** Float the "z"s. Discrete — it changes twice a sleep, not per frame. */
+  showZzz?: boolean;
+  /**
+   * Push the brows down the face, in px (#face-sleep).
+   *
+   * Separate from `eyebrowHeight` because that one is baked into the brow's own
+   * path and then HALVED, so it runs out of room and starts clipping against
+   * the edge of the brow viewBox long before the brow is anywhere near the
+   * eye. This translates the whole brow instead, which has no such ceiling.
+   */
+  browDrop?: number;
 }
 
 export interface UseFaceTrackingOptions {

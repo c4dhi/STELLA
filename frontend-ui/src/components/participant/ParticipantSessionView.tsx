@@ -18,6 +18,7 @@ import TranscriptOverlay from '../face/TranscriptOverlay'
 import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
 import VisualizerRenderer from '../face/VisualizerRenderer'
+import { useSleepMicrophone } from '../face/hooks/useSleepMicrophone'
 import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
@@ -177,6 +178,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     noteEmotionCues,
     faceExpression,
     faceGesture,
+    faceState,
     clearSpoken: clearTeleprompterText,
   } = useTeleprompter()
   const [messages, setMessages] = useState<ParticipantMessage[]>([])
@@ -186,12 +188,16 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   // organizer takes, so one face implementation serves both surfaces.
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
+  const triggerFaceState = useStore(s => s.triggerFaceState)
   useEffect(() => {
     setFaceExpression(faceExpression)
   }, [faceExpression, setFaceExpression])
   useEffect(() => {
     if (faceGesture) triggerFaceGesture(faceGesture.tag)
   }, [faceGesture, triggerFaceGesture])
+  useEffect(() => {
+    if (faceState) triggerFaceState(faceState.tag)
+  }, [faceState, triggerFaceState])
 
   // Close the transcript-settings menu (#343) on outside click or Escape.
   useEffect(() => {
@@ -1069,6 +1075,13 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       console.error('[Participant] ✗ Error toggling microphone:', error)
     }
   }, [room, isMuted, enableAudio])
+
+  // Sleeping mutes the mic; waking gives it back if sleep is what took it.
+  useSleepMicrophone({
+    isMuted,
+    toggleMute: toggleMicrophone,
+    enabled: room?.state === 'connected'
+  })
 
   // Cleanup audio resources
   const cleanupAudio = () => {

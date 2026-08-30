@@ -52,6 +52,24 @@ type MediaState = {
   faceExpression: string | null
   /** One-shot gesture. The seq is what makes a repeat of the same tag fire again. */
   faceGesture: { tag: string; seq: number } | null
+  /**
+   * State command from the agent, e.g. `[sleep]` (#face-sleep).
+   *
+   * Carried as a seq for the same reason a gesture is: the tag alone cannot say
+   * "again". Unlike an expression it is never cleared at the end of a turn —
+   * outliving the reply is what makes it a state.
+   */
+  faceState: { tag: string; seq: number } | null
+  /**
+   * Whether the face is awake, asleep, or coming round (#face-sleep).
+   *
+   * Published because sleep is not only a drawing: it releases the camera and
+   * mutes the microphone, and the microphone belongs to whichever view owns the
+   * session, not to the face. Reset to 'awake' when the face unmounts, so a
+   * view closed on a sleeping face cannot leave a stale 'asleep' behind holding
+   * somebody's mic shut.
+   */
+  faceSleepPhase: 'awake' | 'asleep' | 'waking'
   // Agent readiness state - controls audio processing
   agentReady: boolean
 }
@@ -69,6 +87,8 @@ type MediaActions = {
   setFaceModalOpen: (v: boolean) => void
   setFaceExpression: (tag: string | null) => void
   triggerFaceGesture: (tag: string) => void
+  triggerFaceState: (tag: string) => void
+  setFaceSleepPhase: (phase: 'awake' | 'asleep' | 'waking') => void
   setAudioLevel: (v: number) => void
   setIsRemoteSpeaking: (v: boolean) => void
   // Agent readiness action
@@ -277,6 +297,8 @@ export const useStore = create<
   isRemoteSpeaking: false,
   faceExpression: null,
   faceGesture: null,
+  faceState: null,
+  faceSleepPhase: 'awake',
   agentReady: false, // Audio disabled until agent is ready
   setMicGranted: (v) => set({ micGranted: v }),
   setVu: (v) => set({ vu: v }),
@@ -292,6 +314,11 @@ export const useStore = create<
   triggerFaceGesture: (tag) => set(s => ({
     faceGesture: { tag, seq: (s.faceGesture?.seq ?? 0) + 1 },
   })),
+  triggerFaceState: (tag) => set(s => ({
+    faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 },
+  })),
+  setFaceSleepPhase: (phase) =>
+    set(s => (s.faceSleepPhase === phase ? s : { faceSleepPhase: phase })),
   setAudioLevel: (v) => set({ audioLevel: v }),
   setIsRemoteSpeaking: (v) => set({ isRemoteSpeaking: v }),
   setAgentReady: (v) => set({ agentReady: v }),

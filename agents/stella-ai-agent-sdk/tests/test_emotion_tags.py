@@ -12,6 +12,7 @@ from stella_agent_sdk.emotion.tags import (
     EMOTION_TAGS,
     EXPRESSION_TAGS,
     GESTURE_TAGS,
+    STATE_TAGS,
     strip_emotion_tags,
 )
 
@@ -23,9 +24,20 @@ def cues(text, **kw):
 
 class TestVocabulary:
     def test_every_tag_has_exactly_one_kind(self):
-        assert set(EXPRESSION_TAGS).isdisjoint(GESTURE_TAGS)
-        assert set(EMOTION_TAGS) == set(EXPRESSION_TAGS) | set(GESTURE_TAGS)
-        assert set(EMOTION_TAGS.values()) == {"expression", "gesture"}
+        groups = (EXPRESSION_TAGS, GESTURE_TAGS, STATE_TAGS)
+        for i, group in enumerate(groups):
+            for other in groups[i + 1 :]:
+                assert set(group).isdisjoint(other)
+        assert set(EMOTION_TAGS) == set().union(*(set(g) for g in groups))
+        assert set(EMOTION_TAGS.values()) == {"expression", "gesture", "state"}
+
+    def test_sleep_is_a_state_rather_than_an_expression(self):
+        # The kinds are not decoration: the frontend routes on them. Filed as an
+        # expression, `[sleep]` would be adopted as a POSE — held for the rest of
+        # the reply and then dropped when the turn ended, so she would wake up on
+        # her own a sentence later. As a gesture it would play for a moment and
+        # hand the face straight back. Only 'state' outlives the message.
+        assert EMOTION_TAGS["sleep"] == "state"
 
     def test_tag_names_are_wire_safe(self):
         # The frontend keys its render registry off these verbatim.

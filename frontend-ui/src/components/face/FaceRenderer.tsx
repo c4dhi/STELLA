@@ -5,7 +5,8 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { motion, useTransform } from 'framer-motion';
+import { AnimatePresence, motion, useTransform } from 'framer-motion';
+import { aperturePolygon } from './eyeGeometry';
 import type { FaceRendererProps, MouthEmotion, EyeEmotion } from './types';
 
 // Constants (matching mobile client)
@@ -13,7 +14,12 @@ const EYE_SIZE = 220;
 const IRIS_SIZE = EYE_SIZE * 0.8;
 const PUPIL_SIZE_BASE = IRIS_SIZE * 0.35;
 const MAX_PUPIL_OFFSET_X = ((IRIS_SIZE - PUPIL_SIZE_BASE) / 2) * 0.8;
-const MAX_PUPIL_OFFSET_Y = MAX_PUPIL_OFFSET_X / 2;
+// Vertical travel used to be HALF the horizontal, which flattened every
+// circular gaze path into a 2:1 ellipse — an eye roll physically could not look
+// round. There is room for it: the pupil can move (IRIS - PUPIL)/2 in any
+// direction, and this stays inside that. Still slightly less than horizontal,
+// which is true of real eyes.
+const MAX_PUPIL_OFFSET_Y = MAX_PUPIL_OFFSET_X * 0.72;
 
 const IRIS_COLOR = '#FFFFFF';
 const PUPIL_COLOR = '#000000';
@@ -24,20 +30,50 @@ const EYEBROW_WIDTH = 180;
 const EYEBROW_THICKNESS = 12;
 const MOUTH_HEIGHT_BASE = 70;  // Increased from 50 for larger mouth
 
+// The lid drawn across a sleeping eye (#face-sleep).
+//
+// It bows upward, because that is the line a lash follows over the curve of the
+// eye — but only JUST. How far it bows is the entire difference between a
+// resting eye and a shut one: squeezing your eyes closed is exactly what pulls
+// that line into a pronounced arch, so drawing a deep one reads as an awake
+// face forcing its eyes shut rather than a sleeping face letting them fall.
+// At this depth it is nearly a straight line, which is what a relaxed lid is.
+//
+// It also has to stay clearly shallower than the eyebrow above it. Two arcs of
+// the same curvature stacked on top of each other read as one scrunching
+// gesture, whatever either of them is doing on its own.
+const SLEEP_LID_SPAN = 168;      // how far across the eye the lid runs
+const SLEEP_LID_ARC = 9;         // how far the middle rises above the ends
+const SLEEP_LID_THICKNESS = 14;
+
+/** One "z" every ZZZ_CYCLE_S / 3 seconds, each taking the full cycle to rise.
+ *  Slow on purpose — the drift has to read as slower than breathing. */
+const ZZZ_CYCLE_S = 6.4;
+const ZZZ_DELAYS = [0, ZZZ_CYCLE_S / 3, (ZZZ_CYCLE_S * 2) / 3];
+
 // Mouth expression shapes
-const MOUTH_EXPRESSIONS: Record<MouthEmotion, { curvature: number; width: number; height: number }> = {
+// `rest` is how open the mouth is with NO audio driving it, 0..1.
+//
+// It exists because the resting mouth was a flat line by construction: every
+// opening term in calculateMouthPath was multiplied by how loudly the agent was
+// talking, so `open` could only ever render as an oval mid-syllable. A silent
+// surprised face had the same thin dash as a neutral one.
+const MOUTH_EXPRESSIONS: Record<
+  MouthEmotion,
+  { curvature: number; width: number; height: number; rest?: number }
+> = {
   neutral: { curvature: 0, width: 0.5, height: 1 },
   smile: { curvature: 1, width: 0.6, height: 0.8 },
   'big-smile': { curvature: 1.8, width: 0.9, height: 0.9 },
   frown: { curvature: -1.0, width: 0.5, height: 0.7 },
   sad: { curvature: -0.8, width: 0.4, height: 0.6 },
-  open: { curvature: 0, width: 0.5, height: 1.8 },
+  open: { curvature: 0, width: 0.55, height: 1.8, rest: 0.85 },
   speaking: { curvature: 0, width: 0.6, height: 1.2 },
   'happy-speaking': { curvature: 0.6, width: 0.7, height: 1.2 },
   'sad-speaking': { curvature: -0.4, width: 0.5, height: 1.1 },
   'excited-speaking': { curvature: 1.0, width: 0.8, height: 1.3 },
   whistling: { curvature: 0, width: 0.3, height: 0.6 },
-  snoring: { curvature: 0, width: 0.6, height: 1.8 },
+  snoring: { curvature: 0, width: 0.6, height: 1.8, rest: 0.7 },
   smirk: { curvature: 0.6, width: 0.4, height: 0.7 },
   pout: { curvature: -0.4, width: 0.3, height: 0.9 },
   grin: { curvature: 3.0, width: 0.6, height: 0.3 },
@@ -126,6 +162,10 @@ const calculateMouthPath = (
 
   // Blend between speaking and non-speaking
   const talkingAmount = isSpeaking ? Math.min(mouthOpenness * 5, 1) : 0;
+  // How open the mouth is overall — whichever is greater, the voice or the
+  // expression's own resting aperture.
+  const restOpen = shape.rest ?? 0;
+  const openAmount = Math.max(talkingAmount, restOpen);
 
   const finalWidth = smileWidth + (speakingWidth - smileWidth) * talkingAmount;
   const radiusX = Math.max(finalWidth / 2, 18);
@@ -133,32 +173,36 @@ const calculateMouthPath = (
   // Vertical radii: top lip (small movement) vs bottom lip (big jaw drop)
   const speakingRadiusY = Math.max(speakingHeight / 2, 18);
   const smileRadiusY = 2;
-  const totalRadiusY = smileRadiusY + (speakingRadiusY - smileRadiusY) * talkingAmount;
+  const restRadiusY = smileRadiusY + restOpen * 26;
+  const totalRadiusY = Math.max(
+    restRadiusY,
+    smileRadiusY + (speakingRadiusY - smileRadiusY) * talkingAmount
+  );
 
   // Asymmetric split: upper lip 40%, lower jaw 60%
   const topRadiusY = totalRadiusY * 0.4;
   const bottomRadiusY = totalRadiusY * 0.6;
 
   // Smile curvature (only when not talking)
-  const smileCurveAmount = shape.curvature * 22 * (1 - talkingAmount);
+  const smileCurveAmount = shape.curvature * 22 * (1 - openAmount);
 
   // Bezier factor: 0.552 approximates a circle, but for a wide-open mouth
   // we need higher values so the curve actually reaches the full radius height.
   // Blend from 0.552 (idle) toward 0.85 (speaking) for a rounder, fuller opening.
-  const k = 0.552 + talkingAmount * 0.3;
+  const k = 0.552 + openAmount * 0.3;
 
   const startX = centerX - radiusX;
   const endX = centerX + radiusX;
 
   // --- Top curve (upper lip) ---
-  const topCurveOffset = -topRadiusY * k * talkingAmount + smileCurveAmount;
+  const topCurveOffset = -topRadiusY * k * openAmount + smileCurveAmount;
 
   // --- Bottom curve (lower jaw) ---
-  const bottomCurveOffset = bottomRadiusY * k * talkingAmount + smileCurveAmount;
+  const bottomCurveOffset = bottomRadiusY * k * openAmount + smileCurveAmount;
 
   // Corner tension: when mouth is open wide, pull corners slightly inward
   // This prevents the "balloon" look and creates a more organic shape
-  const cornerTension = talkingAmount * openness * 0.06;
+  const cornerTension = openAmount * openness * 0.06;
   const topCpSpread = 0.3 + cornerTension; // control points move toward center
   const botCpSpread = 0.3 - cornerTension * 0.3; // bottom stays wider
 
@@ -211,18 +255,26 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
   mouthSpread,
   mouthEmotion,
   eyeEmotion,
-  eyebrowHeight
+  eyebrowHeight,
+  eyeShape,
+  browAngle = 0,
+  browAsymmetry = 0,
+  sleepClosed,
+  showZzz = false,
+  browDrop = 0
 }) => {
   const scale = size / 600; // Base size is 600px
 
   // Normalized gaze (-1..1) -> pixel offset within the iris. Both eyes share
   // one pair of transforms: they always look at the same thing, and deriving
   // them per eye would mean calling hooks inside the render helper.
+  // In viewBox units: the eye SVG scales itself, so these must NOT be
+  // multiplied by `scale` the way the old absolutely-positioned pupil was.
   const pupilOffsetX = useTransform(gazeX, (v) =>
-    clamp(v * MAX_PUPIL_OFFSET_X, -MAX_PUPIL_OFFSET_X, MAX_PUPIL_OFFSET_X) * scale
+    clamp(v * MAX_PUPIL_OFFSET_X, -MAX_PUPIL_OFFSET_X, MAX_PUPIL_OFFSET_X)
   );
   const pupilOffsetY = useTransform(gazeY, (v) =>
-    clamp(v * MAX_PUPIL_OFFSET_Y, -MAX_PUPIL_OFFSET_Y, MAX_PUPIL_OFFSET_Y) * scale
+    clamp(v * MAX_PUPIL_OFFSET_Y, -MAX_PUPIL_OFFSET_Y, MAX_PUPIL_OFFSET_Y)
   );
 
   // The mouth is written straight to the DOM from its MotionValues, never
@@ -257,9 +309,11 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
   }, [mouthOpenness, mouthSpread, mouthEmotion]);
 
   const eyebrowShape = EYEBROW_EXPRESSIONS[eyeEmotion] || EYEBROW_EXPRESSIONS.neutral;
+  // Asymmetry lifts ONE brow. Two level brows read as neutral no matter what
+  // the eyes are doing, which is why a symmetric "hmm" never lands.
   const leftEyebrowPath = calculateEyebrowPath(
     eyebrowShape.leftCurvature,
-    eyebrowShape.leftHeight + eyebrowHeight,
+    eyebrowShape.leftHeight + eyebrowHeight - browAsymmetry,
     true
   );
   const rightEyebrowPath = calculateEyebrowPath(
@@ -270,8 +324,16 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
 
   const renderEye = (index: number) => {
     const eyeMotionValue = index === 0 ? leftEyeScaleY : rightEyeScaleY;
-    const basePupilSize = PUPIL_SIZE_BASE * scale;
-    const baseReflectionSize = PUPIL_SIZE_BASE * 0.3 * scale;
+    const mirrored = index === 1;
+    // The aperture carries the expression; the wrapper's scaleY carries the
+    // blink. Keeping them separate is what lets a blink happen DURING an
+    // expression without either one having to know about the other.
+    const aperture = aperturePolygon(eyeShape, EYE_SIZE, mirrored);
+    const irisRadius = (IRIS_SIZE / 2) * eyeShape.height;
+    const half = EYE_SIZE / 2;
+    // Inner ends down = angry, up = sad. Mirrored so the pair reads as one
+    // expression rather than as two eyes leaning the same way.
+    const browRotation = (mirrored ? -1 : 1) * browAngle;
 
     return (
       <div
@@ -279,8 +341,13 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
         className="flex flex-col items-center"
         style={{ marginLeft: index === 0 ? 0 : EYE_SIZE * 0.08 * scale }}
       >
-        {/* Eyebrow */}
-        <div style={{ width: EYEBROW_WIDTH * scale, height: 60 * scale, marginBottom: 0 }}>
+        {/* Eyebrow — rotated on the wrapper, because the ANGLE of a brow is
+            most of what separates cross from sad on an otherwise round face. */}
+        <motion.div
+          style={{ width: EYEBROW_WIDTH * scale, height: 60 * scale, marginBottom: 0 }}
+          animate={{ rotate: browRotation, y: browDrop * scale }}
+          transition={{ duration: 0.35, ease: 'easeInOut' }}
+        >
           <svg width="100%" height="100%" viewBox="0 0 100 60">
             <motion.path
               d={index === 0 ? leftEyebrowPath : rightEyebrowPath}
@@ -293,69 +360,157 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
               transition={{ duration: 0.3, ease: 'easeInOut' }}
             />
           </svg>
-        </div>
+        </motion.div>
 
-        {/* Eye — MotionValue style binding for 60fps smooth blinks */}
-        <motion.div
-          className="relative flex items-center justify-center overflow-hidden rounded-full"
+        {/* Eye. The wrapper below carries the 60fps blink; the closed sleeping
+            lid is a SIBLING of it, because anything inside gets flattened by
+            the same scaleY that shuts the eye. */}
+        <div
           style={{
+            position: 'relative',
             width: EYE_SIZE * scale,
-            height: EYE_SIZE * scale,
-            backgroundColor: 'transparent',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-            scaleY: eyeMotionValue
+            height: EYE_SIZE * scale
           }}
         >
-          {/* Iris */}
-          <div
-            className="relative flex items-center justify-center rounded-full"
+          <motion.div
             style={{
-              width: IRIS_SIZE * scale,
-              height: IRIS_SIZE * scale,
-              backgroundColor: IRIS_COLOR
+              width: '100%',
+              height: '100%',
+              scaleY: eyeMotionValue
             }}
           >
-            {/* Pupil Container — dilation applied as CSS scale for smooth animation */}
-            <motion.div
-              className="relative flex items-center justify-center"
+            <svg
+              width="100%"
+              height="100%"
+              viewBox={`0 0 ${EYE_SIZE} ${EYE_SIZE}`}
+              style={{ overflow: 'visible' }}
+            >
+              <defs>
+                <clipPath id={`stella-eye-aperture-${index}`}>
+                  {/* Animating the points string tweens the lids between
+                      expressions — the same trick the mouth and brows already use
+                      for `d`, so no morphing library is involved. */}
+                  <motion.polygon
+                    points={aperture}
+                    initial={false}
+                    animate={{ points: aperture }}
+                    transition={{ duration: 0.35, ease: 'easeInOut' }}
+                  />
+                </clipPath>
+              </defs>
+
+              <g clipPath={`url(#stella-eye-aperture-${index})`}>
+                <motion.ellipse
+                  cx={half}
+                  cy={half}
+                  rx={IRIS_SIZE / 2}
+                  /* Static value as well as the animated one: without it the very
+                     first paint has no `ry` at all, SVG falls back to `auto` (a
+                     circle), and the eye pops from round to its real height. */
+                  ry={irisRadius}
+                  fill={IRIS_COLOR}
+                  initial={false}
+                  animate={{ ry: irisRadius }}
+                  transition={{ duration: 0.35, ease: 'easeInOut' }}
+                />
+                <motion.g style={{ x: pupilOffsetX, y: pupilOffsetY, scale: pupilDilation }}>
+                  <circle cx={half} cy={half} r={PUPIL_SIZE_BASE / 2} fill={PUPIL_COLOR} />
+                  <circle
+                    cx={half - PUPIL_SIZE_BASE * 0.22}
+                    cy={half - PUPIL_SIZE_BASE * 0.24}
+                    r={PUPIL_SIZE_BASE * 0.15}
+                    fill={REFLECTION_COLOR}
+                    opacity={0.9}
+                  />
+                </motion.g>
+              </g>
+            </svg>
+          </motion.div>
+
+          {sleepClosed && (
+            <motion.svg
+              width="100%"
+              height="100%"
+              viewBox={`0 0 ${EYE_SIZE} ${EYE_SIZE}`}
               style={{
-                width: basePupilSize,
-                height: basePupilSize,
-                x: pupilOffsetX,
-                y: pupilOffsetY,
-                scale: pupilDilation
+                position: 'absolute',
+                inset: 0,
+                opacity: sleepClosed,
+                pointerEvents: 'none',
+                overflow: 'visible'
               }}
             >
-              {/* Pupil */}
-              <div
-                className="absolute rounded-full"
-                style={{
-                  width: basePupilSize,
-                  height: basePupilSize,
-                  backgroundColor: PUPIL_COLOR
-                }}
+              <path
+                d={`M ${half - SLEEP_LID_SPAN / 2} ${half} Q ${half} ${half - SLEEP_LID_ARC} ${half + SLEEP_LID_SPAN / 2} ${half}`}
+                stroke={IRIS_COLOR}
+                strokeWidth={SLEEP_LID_THICKNESS}
+                strokeLinecap="round"
+                fill="none"
               />
-
-              {/* Reflection */}
-              <div
-                className="absolute rounded-full"
-                style={{
-                  width: baseReflectionSize,
-                  height: baseReflectionSize,
-                  backgroundColor: REFLECTION_COLOR,
-                  top: `15%`,
-                  left: `20%`,
-                  opacity: 0.9
-                }}
-              />
-            </motion.div>
-          </div>
-        </motion.div>
+            </motion.svg>
+          )}
+        </div>
       </div>
     );
   };
 
   return (
+    <div className="relative flex flex-col items-center justify-center">
+      {/* Floating "z"s (#face-sleep). Outside the head transform on purpose:
+          they are drifting away from her, so tilting and bobbing with the head
+          would glue them to it and break the illusion that they have left. */}
+      <AnimatePresence>
+        {showZzz && (
+          <motion.div
+            className="absolute"
+            // Clear of the head, off the upper right. There is not much room to
+            // play with: any lower and the first z fades in on top of the
+            // eyebrow, which reads as a glitch in the face rather than as
+            // something drifting off it. What buys the space is the brows
+            // dropping while she sleeps — see SLEEP_POSE.browDrop.
+            style={{ left: '82%', top: '3%', pointerEvents: 'none' }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, transition: { duration: 0.4 } }}
+          >
+            {ZZZ_DELAYS.map((delay, i) => (
+              <motion.span
+                key={i}
+                className="absolute select-none"
+                style={{
+                  color: MOUTH_COLOR,
+                  fontSize: 44 * scale,
+                  fontWeight: 300,
+                  lineHeight: 1
+                }}
+                initial={{ opacity: 0, x: 0, y: 0, scale: 0.5 }}
+                animate={{
+                  // Rising, drifting aside and swelling as it goes, then gone.
+                  // The fade has to finish BEFORE the top of the travel, or the
+                  // z appears to stop dead rather than to dissipate.
+                  opacity: [0, 0.85, 0.85, 0],
+                  x: [0, 18 * scale, 40 * scale],
+                  y: [0, -120 * scale],
+                  scale: [0.5, 1.25]
+                }}
+                transition={{
+                  duration: ZZZ_CYCLE_S,
+                  // Staggered rather than randomised: three z's on one timer
+                  // read as a repeating asset, and randomising each cycle makes
+                  // the spacing lurch. A fixed offset is what "drifting" is.
+                  delay,
+                  repeat: Infinity,
+                  repeatDelay: 0,
+                  ease: 'easeOut'
+                }}
+              >
+                z
+              </motion.span>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
     <motion.div
       className="flex flex-col items-center justify-center"
       style={{ rotate: headRotation, y: headPitch, scale: faceScale }}
@@ -386,6 +541,7 @@ const FaceRenderer: React.FC<FaceRendererProps> = ({
         </svg>
       </div>
     </motion.div>
+    </div>
   );
 };
 
