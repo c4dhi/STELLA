@@ -228,6 +228,11 @@ ENV SHERPA_SPEECH_TIMEOUT=10.0
 # handled by the duck watchdog in the SDK instead. Note this ENV overrides the
 # Python default, so this line is the one that actually takes effect.
 ENV SHERPA_RMS_THRESHOLD=0.001
+# Silence before speech_ended fires (the agent stops ducking). The remaining
+# wait before the transcript is finalised is derived from
+# SHERPA_SILENCE_THRESHOLD, so endpointing timing is unchanged — this only
+# splits "they stopped" from "they are done", which used to be one event.
+ENV SHERPA_SILENCE_DURATION_MS=500
 ENV SHERPA_PRE_BUFFER_SAMPLES=8000
 ENV SHERPA_MIN_TRANSCRIPT_CHARS=3
 
