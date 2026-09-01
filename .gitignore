@@ -94,3 +94,6 @@ prisma/seed.js
 # Backup bundles (#378) — contain the full deployment incl. all secrets; never commit
 stella-backup-*.zip
 stella-backup-*.zip.enc
+
+# Compiled output of the prisma seed script (npm run db:seed)
+.seed-dist/
