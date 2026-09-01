@@ -6,5 +6,5 @@ sherpa-onnx>=1.12.0
 # outright with "No matching distribution found". Lift this bound only together
 # with the interpreter, never on its own. See .github/dependabot.yml.
 numpy>=2.0.0,<2.5
-scipy>=1.11.0
+scipy>=1.18.1
 python-dotenv>=1.2.2
