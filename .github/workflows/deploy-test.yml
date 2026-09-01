@@ -1,0 +1,57 @@
+name: Deploy to Test
+
+# Push-triggered on development (plus a scratch branch while this is being
+# brought up). Deliberately NOT pull_request: STELLA is public, and a fork PR
+# must never execute on a self-hosted runner.
+on:
+  push:
+    branches: [development, ci/deploy-test-bringup]
+    paths-ignore:
+      - '**.md'
+      - 'docs-site/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time on this cluster, and never cancel one mid-rollout.
+concurrency:
+  group: deploy-test
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'c4dhi/STELLA'
+    runs-on: [self-hosted, stella-test]
+    environment: test
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp the build identity
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          echo "IMAGE_TAG=${VER}-${{ github.run_number }}-g$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Link deploy config
+        # The env file is gitignored and lives on the box, never in the repo.
+        # Symlink, don't copy — the secret stays in exactly one place.
+        run: |
+          ln -sfn /mnt/grace_ai_backend/.env.production .env.production
+          echo "linked $(readlink -f .env.production) ($(wc -l < .env.production) lines)"
+
+      - name: Deploy
+        # -d exits after the deploy instead of blocking on the Ctrl+C wait loop.
+        # </dev/null so the setup wizard can never prompt on a non-TTY.
+        run: ./scripts/start-k8s.sh --production --daemon </dev/null
+
+      - name: Wait for rollout
+        run: |
+          for d in session-management-server frontend-ui message-recorder stt-service tts-service; do
+            echo "--- $d"
+            sudo k3s kubectl rollout status "deployment/$d" -n ai-agents --timeout=600s
+          done
+
+      - name: Report what landed
+        if: always()
+        run: sudo k3s kubectl get pods -n ai-agents -o wide
