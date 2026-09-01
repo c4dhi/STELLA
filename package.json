@@ -2,7 +2,7 @@
   "name": "session-management-server",
   "version": "0.3.0",
   "description": "",
-  "author": "Universität St. Gallen (HSG) & University of Zurich (UZH)",
+  "author": "Universit\u00e4t St. Gallen (HSG) & University of Zurich (UZH)",
   "private": true,
   "license": "MIT",
   "scripts": {
@@ -86,7 +86,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
-    "@eslint/js": "^9.18.0",
+    "@eslint/js": "^10.0.0",
     "@nestjs/cli": "^11.0.16",
     "@nestjs/schematics": "^11.0.9",
     "@nestjs/testing": "^11.0.1",
@@ -113,7 +113,7 @@
     "ts-jest": "^29.2.5",
     "ts-loader": "^9.5.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript-eslint": "^8.20.0"
+    "typescript-eslint": "^8.69.0"
   },
   "jest": {
     "moduleFileExtensions": [
