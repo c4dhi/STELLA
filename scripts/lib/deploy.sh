@@ -180,6 +180,7 @@ generate_session_server_manifest() {
     # Replace placeholder with actual project directory path
     # This makes it work regardless of where the project is cloned
     sed -e "s|__PROJECT_DIR_PLACEHOLDER__|${PROJECT_DIR}|g" \
+        -e "s|__IMAGE_TAG_PLACEHOLDER__|${IMAGE_TAG}|g" \
         -e "s|namespace: ai-agents|namespace: ${KUBERNETES_NAMESPACE}|g" \
         -e "s|:latest|:${IMAGE_TAG}|g" \
         k8s/06-session-management-server.yaml > "$output_file"
