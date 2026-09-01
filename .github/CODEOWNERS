@@ -7,7 +7,7 @@
 #
 # @DatMoser is the acting maintainer and the sole owner. @tkowatsch remains a
 # repository admin and can step in if needed, but is deliberately NOT listed
-# here: being a code owner would auto-request his review on everything.
+# here — a CODEOWNERS entry auto-requests review on everything it matches.
 #
 # Because GitHub does not allow approving your own pull request, @DatMoser's
 # own PRs to main are merged using his ruleset bypass rather than a second
