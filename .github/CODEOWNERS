@@ -1,16 +1,18 @@
 # Code owners for STELLA.
 #
 # An owner listed here is automatically requested for review on every pull
-# request touching a matching path — on any branch, regardless of branch
-# protection. So this file lists only people who should actually be pinged by
-# routine work.
+# request touching a matching path, on any branch, regardless of branch
+# protection. So this file lists only people who should be pinged by routine
+# work.
 #
-# @DatMoser is the acting maintainer and the sole owner. @tkowatsch remains a
-# repository admin and can step in if needed, but is deliberately NOT listed
-# here — a CODEOWNERS entry auto-requests review on everything it matches.
+# @DatMoser is the acting maintainer and the sole code owner.
 #
-# Because GitHub does not allow approving your own pull request, @DatMoser's
-# own PRs to main are merged using his ruleset bypass rather than a second
+# tkowatsch is deliberately NOT an owner, and is named here without an @ on
+# purpose. He remains a repository admin and can step in when needed, but a
+# CODEOWNERS entry would auto-request his review on everything it matches.
+#
+# GitHub does not allow approving your own pull request, so @DatMoser's own
+# PRs to main are merged using his ruleset bypass rather than a second
 # approval. See the `main` ruleset.
 
 *                       @DatMoser
