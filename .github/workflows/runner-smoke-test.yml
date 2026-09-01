@@ -1,0 +1,47 @@
+name: Runner Smoke Test
+
+# Push-triggered on this branch only. Deliberately NOT pull_request:
+# STELLA is public, and a fork PR must never execute on a self-hosted runner.
+on:
+  push:
+    branches: [chore/runner-smoke-test]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.repository == 'c4dhi/STELLA'
+    runs-on: [self-hosted, stella-test]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Where am I
+        run: |
+          echo "host=$(hostname) user=$(whoami)"
+          echo "workspace=$PWD"
+
+      - name: Docker reachable
+        run: docker version --format 'server={{.Server.Version}}'
+
+      - name: Passwordless sudo (needed for k3s ctr images import)
+        run: sudo -n true && echo "sudo OK"
+
+      - name: k3s reachable
+        run: sudo k3s kubectl get nodes
+
+      - name: Deploy script present and parses
+        run: bash -n scripts/start-k8s.sh && echo "start-k8s.sh syntax OK"
+
+      - name: Deploy config staged
+        run: |
+          if [ -f /etc/stella/.env.production ]; then
+            echo "env staged: yes ($(wc -l < /etc/stella/.env.production) lines)"
+          else
+            echo "env staged: NO — deploys will fail until this exists"
+          fi
+
+      - name: Disk headroom
+        run: df -h / /mnt | tail -3
