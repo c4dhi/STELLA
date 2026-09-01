@@ -16,6 +16,7 @@ version: 2
 updates:
   # ---------------------------------------------------------------- npm ----
   - package-ecosystem: "npm"
+    target-branch: "development"
     directories:
       - "/" # NestJS backend
       - "/frontend-ui" # React SPA
@@ -37,6 +38,7 @@ updates:
 
   # ---------------------------------------------------------------- pip ----
   - package-ecosystem: "pip"
+    target-branch: "development"
     directories:
       - "/message-recorder-python"
       - "/stt-service"
@@ -47,6 +49,15 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    ignore:
+      # numpy 2.5 raised its floor to Python >=3.12. stt-service's GPU image is
+      # nvidia/cuda on ubuntu22.04 with python3.11, so `numpy>=2.5.1` made
+      # `pip install -r requirements.txt` fail outright — and stayed invisible
+      # until the next rebuild weeks later. requirements.txt carries the
+      # matching <2.5 bound. Lift both together with the interpreter.
+      - dependency-name: "numpy"
+        versions:
+          - ">=2.5"
     groups:
       pip-minor-and-patch:
         applies-to: version-updates
@@ -60,6 +71,7 @@ updates:
 
   # ---------------------------------------------------- github-actions ----
   - package-ecosystem: "github-actions"
+    target-branch: "development"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -72,6 +84,7 @@ updates:
   # ------------------------------------------------------------- docker ----
   # Base-image updates for the services we build and ship.
   - package-ecosystem: "docker"
+    target-branch: "development"
     directories:
       - "/"
       - "/frontend-ui"
@@ -81,6 +94,14 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 5
+    ignore:
+      # NOT SAFELY BUMPABLE. The CUDA version must be supported by the GPU
+      # node's *driver*. A bump to 13.3.1 merged 2026-07-30 made every GPU pod
+      # fail in the NVIDIA prestart hook ("unsatisfied condition: cuda>=13.3"),
+      # and surfaced only on the next rebuild, 2026-08-25, as an outage.
+      # Bump this only together with the node driver, and only after actually
+      # starting the image on a GPU host. See stt-service/Dockerfile.
+      - dependency-name: "nvidia/cuda"
     groups:
       docker-base-images:
         patterns:
