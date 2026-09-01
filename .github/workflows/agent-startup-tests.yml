@@ -31,16 +31,21 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
 
+      # --system is load-bearing. setup-uv installs the uv binary but creates no
+      # environment, and `uv pip install` with neither an active venv nor --system
+      # aborts with "No virtual environment found" before it resolves anything.
+      # Installing into the setup-python interpreter keeps one environment on the
+      # runner, which is what the pytest step below then runs under.
       - name: Install test dependencies
         run: |
-          uv pip install -U pytest pytest-asyncio
-          uv pip install -e agents/stella-ai-agent-sdk
-          uv pip install -e agents/stella-light-agent -e agents/stella-v2-agent
+          uv pip install --system -U pytest pytest-asyncio
+          uv pip install --system -e agents/stella-ai-agent-sdk
+          uv pip install --system -e agents/stella-light-agent -e agents/stella-v2-agent
 
       - name: Run agent startup smoke tests
         run: |
           find agents -type d -name __pycache__ -prune -exec rm -rf {} +
-          uv run pytest --import-mode=importlib -q \
+          python -m pytest --import-mode=importlib -q \
             agents/stella-ai-agent-sdk/tests/test_version.py \
             agents/stella-light-agent/tests/test_startup_config.py \
             agents/stella-v2-agent/tests/test_startup_config.py
