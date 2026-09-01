@@ -78,6 +78,21 @@ setup_buildkit() {
 # Checksum Calculation (with .env support)
 # =============================================================================
 
+# Env vars that actually reach a service's build as --build-arg. Only these
+# belong in that service's rebuild checksum. See calculate_service_checksum.
+#
+# Derived from build_images(): stt/tts take ENABLE_GPU (and tts also
+# TTS_PROVIDER). Everything else takes no env-derived build arg at all --
+# session-management-server's only arg is PRISMA_SCHEMA_CHECKSUM (hashed from
+# the schema file) and frontend-ui's APP_VERSION comes from package.json.
+service_build_env_keys() {
+    case "$1" in
+        stt-service)               echo "ENABLE_GPU" ;;
+        tts-service)               echo "ENABLE_GPU TTS_PROVIDER" ;;
+        *)                         echo "" ;;
+    esac
+}
+
 calculate_service_checksum() {
     local service_name="$1"
     local service_dir="$2"
@@ -117,14 +132,25 @@ calculate_service_checksum() {
         checksum="${checksum}${df_hash}"
     fi
 
-    # Add .env files to checksum (with error handling)
-    for env_file in "$PROJECT_DIR/.env.local" "$PROJECT_DIR/.env.production"; do
-        if [[ -f "$env_file" ]]; then
-            local env_hash
-            env_hash=$(hash_file "$env_file" 2>/dev/null || echo "env")
-            checksum="${checksum}${env_hash}"
-        fi
-    done
+    # Add ONLY the env vars this service actually builds with.
+    #
+    # This used to hash the whole of .env.local and .env.production into every
+    # service's checksum. That made rotating any unrelated key -- an API token,
+    # a webhook URL, a mail setting -- invalidate every service at once, forcing
+    # a cold rebuild of the 15-16GB CUDA images, which read none of it. Scoping
+    # to the real build args keeps the invalidation honest: change ENABLE_GPU
+    # and stt/tts rebuild; change an OpenAI key and nothing rebuilds.
+    local env_keys
+    env_keys=$(service_build_env_keys "$service_name")
+    if [[ -n "$env_keys" ]]; then
+        local env_material="" k
+        for k in $env_keys; do
+            env_material+="${k}=${!k-}"$'\n'
+        done
+        local env_hash
+        env_hash=$(printf '%s' "$env_material" | hash_string 2>/dev/null || echo "env")
+        checksum="${checksum}${env_hash}"
+    fi
 
     # Final combined hash (with fallback)
     echo "$checksum" | hash_string 2>/dev/null || echo "$checksum" | md5sum 2>/dev/null | cut -d' ' -f1 || echo "checksum-error"
@@ -187,6 +213,42 @@ update_service_checksum() {
     local current_checksum
     current_checksum=$(calculate_service_checksum "$service_name" "$service_dir" "$dockerfile")
     echo "$current_checksum" > "${CHECKSUM_DIR}/${service_name}.checksum"
+}
+
+# Record which image tag a service was last successfully built under, next to
+# its checksum. Needed because IMAGE_TAG now varies per build (semver-run-sha)
+# rather than being the constant "latest".
+record_service_tag() {
+    mkdir -p "$CHECKSUM_DIR" 2>/dev/null || true
+    echo "${IMAGE_TAG}" > "${CHECKSUM_DIR}/${1}.tag" 2>/dev/null || true
+}
+
+# A service whose sources are unchanged is not rebuilt -- but the deploy still
+# rewrites the manifests to ${IMAGE_TAG}, and sync_images_to_k3s only syncs
+# images that exist under that exact tag. With a constant "latest" tag this was
+# invisible; with per-build tags a skipped service would leave the cluster
+# pointing at an image nobody ever built (ImagePullBackOff).
+#
+# So on skip, re-tag the image the previous build produced. Returns non-zero if
+# that image is gone (pruned), in which case the caller must build after all.
+reuse_service_image() {
+    local service="$1"
+    local tag_file="${CHECKSUM_DIR}/${service}.tag"
+    local previous
+    previous=$(cat "$tag_file" 2>/dev/null || echo "")
+
+    [[ -z "$previous" ]] && return 1
+    [[ "$previous" == "${IMAGE_TAG}" ]] && return 0
+
+    if ! docker image inspect "${service}:${previous}" >/dev/null 2>&1; then
+        verbose "reuse_service_image: ${service}:${previous} is gone, rebuilding"
+        return 1
+    fi
+
+    docker tag "${service}:${previous}" "${service}:${IMAGE_TAG}" 2>/dev/null || return 1
+    record_service_tag "$service"
+    verbose "reuse_service_image: re-tagged ${service} ${previous} -> ${IMAGE_TAG}"
+    return 0
 }
 
 clear_all_checksums() {
@@ -543,6 +605,7 @@ smart_build() {
         [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] smart_build: build_with_progress returned successfully"
         set +e
         update_service_checksum "$image_name" "$service_dir" "$dockerfile_path" 2>/dev/null
+        record_service_tag "$image_name"
         set -e
         REBUILT_SERVICES+=("$image_name")
         return 0
@@ -559,12 +622,16 @@ smart_build() {
         # If we get here, build succeeded (build_with_progress exits on failure)
         set +e
         update_service_checksum "$image_name" "$service_dir" "$dockerfile_path" 2>/dev/null
+        record_service_tag "$image_name"
         set -e
         REBUILT_SERVICES+=("$image_name")
         return 0
     else
-        echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
-        return 0  # Not an error, just unchanged
+        if reuse_service_image "$image_name"; then
+            echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
+            return 0  # Not an error, just unchanged
+        fi
+        verbose "smart_build: ${image_name} unchanged but image missing, building"
     fi
 }
 
@@ -614,8 +681,11 @@ start_parallel_build() {
         set -e
 
         if [[ $needs_rebuild -ne 0 ]]; then
-            echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
-            return 0
+            if reuse_service_image "$image_name"; then
+                echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
+                return 0
+            fi
+            verbose "start_parallel_build: ${image_name} unchanged but image missing, building"
         fi
     fi
 
@@ -795,6 +865,7 @@ wait_for_parallel_builds() {
                     local service_dir="${checksum_info%%:*}"
                     local dockerfile_path="${checksum_info#*:}"
                     update_service_checksum "$name" "$service_dir" "$dockerfile_path" 2>/dev/null || true
+                    record_service_tag "$name"
                 else
                     all_status[$i]="${CROSS} FAILED"
                     ((failed++))
@@ -952,8 +1023,12 @@ build_images() {
     # Prepare build arguments
     local prisma_checksum
     prisma_checksum=$(hash_file "./prisma/schema.prisma" 2>/dev/null || echo "none")
-    local db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public"
-    local session_args="--build-arg PRISMA_SCHEMA_CHECKSUM=${prisma_checksum} --build-arg DATABASE_URL=${db_url}"
+    # No DATABASE_URL build arg: the Dockerfile never declares `ARG DATABASE_URL`
+    # and `prisma generate` does not need a reachable database, so Docker
+    # discarded it as an unconsumed arg. All it achieved was putting the
+    # postgres password in the build host's process list and in CI logs. The
+    # real value is supplied at runtime from the k8s secret.
+    local session_args="--build-arg PRISMA_SCHEMA_CHECKSUM=${prisma_checksum}"
 
     local gpu_args=""
     if [[ "$ENABLE_GPU" == "true" ]]; then
@@ -1021,8 +1096,11 @@ build_images() {
     # Prune build cache after rebuild to reclaim disk space
     # Only on --rebuild since incremental builds benefit from the cache
     if [[ "$REBUILD_MODE" == "true" && ${#REBUILT_SERVICES[@]} -gt 0 ]]; then
-        docker builder prune -af >/dev/null 2>&1 || true
-        verbose "build_images: post-build cache pruned"
+        # Bound the cache, do not delete it. A full prune meant the next
+        # build recompiled the entire CUDA/torch stack from nothing; the
+        # disk it was protecting has hundreds of GB free.
+        docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
+        verbose "build_images: build cache trimmed to 50GB"
     fi
 }
 
@@ -1167,8 +1245,9 @@ cleanup_for_rebuild() {
         [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: k3s images removed"
     fi
 
-    # Prune Docker build cache
-    docker builder prune -f 2>/dev/null || true
+    # Trim, don't wipe: --rebuild should force fresh *images*, not throw away
+    # the layer cache that makes the rebuild survivable.
+    docker builder prune -f --max-used-space 50GB 2>/dev/null || true
     [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: build cache pruned"
 
     # Clear checksums
