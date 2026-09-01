@@ -22,6 +22,7 @@ env/
 *.egg-info/
 dist/
 build/
+.seed-build/
 eggs/
 .eggs/
 

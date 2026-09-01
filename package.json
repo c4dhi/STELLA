@@ -28,7 +28,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "fix-room-urls": "ts-node scripts/fix-room-urls.ts",
     "bootstrap:admin": "ts-node scripts/bootstrap-initial-admin.ts",
-    "db:seed": "npx tsc prisma/seed.ts --outDir prisma --esModuleInterop --resolveJsonModule --module nodenext --moduleResolution nodenext --target ES2023 --skipLibCheck && node prisma/seed.js",
+    "db:seed": "npx tsc prisma/seed.ts --outDir .seed-build --rootDir . --esModuleInterop --resolveJsonModule --module nodenext --moduleResolution nodenext --target ES2023 --skipLibCheck && node .seed-build/prisma/seed.js",
     "db:seed:run": "node prisma/seed.js"
   },
   "prisma": {
