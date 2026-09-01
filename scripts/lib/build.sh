@@ -78,6 +78,22 @@ setup_buildkit() {
 # Checksum Calculation (with .env support)
 # =============================================================================
 
+# Env vars that actually reach a service's build as --build-arg. Only these
+# belong in that service's rebuild checksum. See calculate_service_checksum.
+#
+# Derived from build_images(): session-management-server's DATABASE_URL is
+# assembled from the POSTGRES_* trio; stt/tts take ENABLE_GPU (and tts also
+# TTS_PROVIDER); frontend-ui's APP_VERSION comes from package.json, not the
+# env; message-recorder and the agents take no env-derived args at all.
+service_build_env_keys() {
+    case "$1" in
+        session-management-server) echo "POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB" ;;
+        stt-service)               echo "ENABLE_GPU" ;;
+        tts-service)               echo "ENABLE_GPU TTS_PROVIDER" ;;
+        *)                         echo "" ;;
+    esac
+}
+
 calculate_service_checksum() {
     local service_name="$1"
     local service_dir="$2"
@@ -117,14 +133,25 @@ calculate_service_checksum() {
         checksum="${checksum}${df_hash}"
     fi
 
-    # Add .env files to checksum (with error handling)
-    for env_file in "$PROJECT_DIR/.env.local" "$PROJECT_DIR/.env.production"; do
-        if [[ -f "$env_file" ]]; then
-            local env_hash
-            env_hash=$(hash_file "$env_file" 2>/dev/null || echo "env")
-            checksum="${checksum}${env_hash}"
-        fi
-    done
+    # Add ONLY the env vars this service actually builds with.
+    #
+    # This used to hash the whole of .env.local and .env.production into every
+    # service's checksum. That made rotating any unrelated key -- an API token,
+    # a webhook URL, a mail setting -- invalidate every service at once, forcing
+    # a cold rebuild of the 15-16GB CUDA images, which read none of it. Scoping
+    # to the real build args keeps the invalidation honest: change ENABLE_GPU
+    # and stt/tts rebuild; change an OpenAI key and nothing rebuilds.
+    local env_keys
+    env_keys=$(service_build_env_keys "$service_name")
+    if [[ -n "$env_keys" ]]; then
+        local env_material="" k
+        for k in $env_keys; do
+            env_material+="${k}=${!k-}"$'\n'
+        done
+        local env_hash
+        env_hash=$(printf '%s' "$env_material" | hash_string 2>/dev/null || echo "env")
+        checksum="${checksum}${env_hash}"
+    fi
 
     # Final combined hash (with fallback)
     echo "$checksum" | hash_string 2>/dev/null || echo "$checksum" | md5sum 2>/dev/null | cut -d' ' -f1 || echo "checksum-error"
@@ -1021,8 +1048,11 @@ build_images() {
     # Prune build cache after rebuild to reclaim disk space
     # Only on --rebuild since incremental builds benefit from the cache
     if [[ "$REBUILD_MODE" == "true" && ${#REBUILT_SERVICES[@]} -gt 0 ]]; then
-        docker builder prune -af >/dev/null 2>&1 || true
-        verbose "build_images: post-build cache pruned"
+        # Bound the cache, do not delete it. A full prune meant the next
+        # build recompiled the entire CUDA/torch stack from nothing; the
+        # disk it was protecting has hundreds of GB free.
+        docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
+        verbose "build_images: build cache trimmed to 50GB"
     fi
 }
 
@@ -1167,8 +1197,9 @@ cleanup_for_rebuild() {
         [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: k3s images removed"
     fi
 
-    # Prune Docker build cache
-    docker builder prune -f 2>/dev/null || true
+    # Trim, don't wipe: --rebuild should force fresh *images*, not throw away
+    # the layer cache that makes the rebuild survivable.
+    docker builder prune -f --max-used-space 50GB 2>/dev/null || true
     [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: build cache pruned"
 
     # Clear checksums
