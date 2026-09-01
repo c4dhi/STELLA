@@ -81,13 +81,12 @@ setup_buildkit() {
 # Env vars that actually reach a service's build as --build-arg. Only these
 # belong in that service's rebuild checksum. See calculate_service_checksum.
 #
-# Derived from build_images(): session-management-server's DATABASE_URL is
-# assembled from the POSTGRES_* trio; stt/tts take ENABLE_GPU (and tts also
-# TTS_PROVIDER); frontend-ui's APP_VERSION comes from package.json, not the
-# env; message-recorder and the agents take no env-derived args at all.
+# Derived from build_images(): stt/tts take ENABLE_GPU (and tts also
+# TTS_PROVIDER). Everything else takes no env-derived build arg at all --
+# session-management-server's only arg is PRISMA_SCHEMA_CHECKSUM (hashed from
+# the schema file) and frontend-ui's APP_VERSION comes from package.json.
 service_build_env_keys() {
     case "$1" in
-        session-management-server) echo "POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB" ;;
         stt-service)               echo "ENABLE_GPU" ;;
         tts-service)               echo "ENABLE_GPU TTS_PROVIDER" ;;
         *)                         echo "" ;;
@@ -979,8 +978,12 @@ build_images() {
     # Prepare build arguments
     local prisma_checksum
     prisma_checksum=$(hash_file "./prisma/schema.prisma" 2>/dev/null || echo "none")
-    local db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public"
-    local session_args="--build-arg PRISMA_SCHEMA_CHECKSUM=${prisma_checksum} --build-arg DATABASE_URL=${db_url}"
+    # No DATABASE_URL build arg: the Dockerfile never declares `ARG DATABASE_URL`
+    # and `prisma generate` does not need a reachable database, so Docker
+    # discarded it as an unconsumed arg. All it achieved was putting the
+    # postgres password in the build host's process list and in CI logs. The
+    # real value is supplied at runtime from the k8s secret.
+    local session_args="--build-arg PRISMA_SCHEMA_CHECKSUM=${prisma_checksum}"
 
     local gpu_args=""
     if [[ "$ENABLE_GPU" == "true" ]]; then
