@@ -215,6 +215,42 @@ update_service_checksum() {
     echo "$current_checksum" > "${CHECKSUM_DIR}/${service_name}.checksum"
 }
 
+# Record which image tag a service was last successfully built under, next to
+# its checksum. Needed because IMAGE_TAG now varies per build (semver-run-sha)
+# rather than being the constant "latest".
+record_service_tag() {
+    mkdir -p "$CHECKSUM_DIR" 2>/dev/null || true
+    echo "${IMAGE_TAG}" > "${CHECKSUM_DIR}/${1}.tag" 2>/dev/null || true
+}
+
+# A service whose sources are unchanged is not rebuilt -- but the deploy still
+# rewrites the manifests to ${IMAGE_TAG}, and sync_images_to_k3s only syncs
+# images that exist under that exact tag. With a constant "latest" tag this was
+# invisible; with per-build tags a skipped service would leave the cluster
+# pointing at an image nobody ever built (ImagePullBackOff).
+#
+# So on skip, re-tag the image the previous build produced. Returns non-zero if
+# that image is gone (pruned), in which case the caller must build after all.
+reuse_service_image() {
+    local service="$1"
+    local tag_file="${CHECKSUM_DIR}/${service}.tag"
+    local previous
+    previous=$(cat "$tag_file" 2>/dev/null || echo "")
+
+    [[ -z "$previous" ]] && return 1
+    [[ "$previous" == "${IMAGE_TAG}" ]] && return 0
+
+    if ! docker image inspect "${service}:${previous}" >/dev/null 2>&1; then
+        verbose "reuse_service_image: ${service}:${previous} is gone, rebuilding"
+        return 1
+    fi
+
+    docker tag "${service}:${previous}" "${service}:${IMAGE_TAG}" 2>/dev/null || return 1
+    record_service_tag "$service"
+    verbose "reuse_service_image: re-tagged ${service} ${previous} -> ${IMAGE_TAG}"
+    return 0
+}
+
 clear_all_checksums() {
     rm -f "${CHECKSUM_DIR}"/*.checksum 2>/dev/null || true
 }
@@ -569,6 +605,7 @@ smart_build() {
         [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] smart_build: build_with_progress returned successfully"
         set +e
         update_service_checksum "$image_name" "$service_dir" "$dockerfile_path" 2>/dev/null
+        record_service_tag "$image_name"
         set -e
         REBUILT_SERVICES+=("$image_name")
         return 0
@@ -585,12 +622,16 @@ smart_build() {
         # If we get here, build succeeded (build_with_progress exits on failure)
         set +e
         update_service_checksum "$image_name" "$service_dir" "$dockerfile_path" 2>/dev/null
+        record_service_tag "$image_name"
         set -e
         REBUILT_SERVICES+=("$image_name")
         return 0
     else
-        echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
-        return 0  # Not an error, just unchanged
+        if reuse_service_image "$image_name"; then
+            echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
+            return 0  # Not an error, just unchanged
+        fi
+        verbose "smart_build: ${image_name} unchanged but image missing, building"
     fi
 }
 
@@ -640,8 +681,11 @@ start_parallel_build() {
         set -e
 
         if [[ $needs_rebuild -ne 0 ]]; then
-            echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
-            return 0
+            if reuse_service_image "$image_name"; then
+                echo -e "   ${ARROW} ${image_name}... ${DIM}unchanged${NC}"
+                return 0
+            fi
+            verbose "start_parallel_build: ${image_name} unchanged but image missing, building"
         fi
     fi
 
@@ -821,6 +865,7 @@ wait_for_parallel_builds() {
                     local service_dir="${checksum_info%%:*}"
                     local dockerfile_path="${checksum_info#*:}"
                     update_service_checksum "$name" "$service_dir" "$dockerfile_path" 2>/dev/null || true
+                    record_service_tag "$name"
                 else
                     all_status[$i]="${CROSS} FAILED"
                     ((failed++))
