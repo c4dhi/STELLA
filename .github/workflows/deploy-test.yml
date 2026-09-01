@@ -40,6 +40,11 @@ jobs:
           ln -sfn /mnt/grace_ai_backend/.env.production .env.production
           echo "linked $(readlink -f .env.production) ($(wc -l < .env.production) lines)"
 
+      - name: Install Node dependencies
+        # Fresh runner workspace has no node_modules; the deploy script's
+        # validation and the Prisma migrate step both need them.
+        run: npm ci --no-audit --no-fund
+
       - name: Deploy
         # -d exits after the deploy instead of blocking on the Ctrl+C wait loop.
         # </dev/null so the setup wizard can never prompt on a non-TTY.
