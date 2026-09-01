@@ -1,21 +1,16 @@
 # Code owners for STELLA.
 #
-# An owner listed here is automatically requested for review on any pull
-# request touching a matching path. The `main` ruleset requires code owner
-# approval before merge, so these lines decide who can accept a change into
-# the release branch.
+# An owner listed here is automatically requested for review on every pull
+# request touching a matching path — on any branch, regardless of branch
+# protection. So this file lists only people who should actually be pinged by
+# routine work.
 #
-# Two owners on every rule is deliberate: GitHub does not let anyone approve
-# their own pull request, so a single owner would make their own PRs
-# unmergeable without bypassing the ruleset.
+# @DatMoser is the acting maintainer and the sole owner. @tkowatsch remains a
+# repository admin and can step in if needed, but is deliberately NOT listed
+# here: being a code owner would auto-request his review on everything.
 #
-# Later patterns win over earlier ones.
+# Because GitHub does not allow approving your own pull request, @DatMoser's
+# own PRs to main are merged using his ruleset bypass rather than a second
+# approval. See the `main` ruleset.
 
-# Default owner for the repository.
-*                       @DatMoser @tkowatsch
-
-# Anything that can reach the UZH test or production servers.
-/.github/workflows/     @DatMoser @tkowatsch
-/scripts/               @DatMoser @tkowatsch
-/k8s/                   @DatMoser @tkowatsch
-/prisma/migrations/     @DatMoser @tkowatsch
+*                       @DatMoser
