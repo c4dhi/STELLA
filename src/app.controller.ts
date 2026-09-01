@@ -30,6 +30,17 @@ export class AppController {
   }
 
   @Public()
+  @Get('version')
+  version() {
+    return {
+      // Set from the deployment manifest by deploy.sh: <semver>-<run>-g<sha>.
+      // 'dev' means the service is running outside a scripted deploy.
+      version: process.env.STELLA_VERSION || 'dev',
+      service: 'session-management-server',
+    };
+  }
+
+  @Public()
   @Get('health/ready')
   async ready() {
     const containerd = await this.agentImage.checkContainerdHealth();
