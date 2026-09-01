@@ -1,0 +1,102 @@
+name: Deploy to Production
+
+# main deploys to production. Deliberately NOT pull_request: STELLA is public,
+# and a fork PR must never execute on a self-hosted runner. Reaching main
+# already requires a reviewed PR with code-owner approval.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs-site/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to push the deployment tag
+
+# One deploy at a time on this cluster, and never cancel one mid-rollout.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'c4dhi/STELLA'
+    runs-on: [self-hosted, stella-prod]
+    environment: production
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # tags
+
+      - name: Stamp the build identity
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          echo "IMAGE_TAG=${VER}-${{ github.run_number }}-g$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Link deploy config
+        # Gitignored, lives on the box, never in the repo. Symlink rather than
+        # copy so the secret exists in exactly one place. /etc/stella is the
+        # intended home; the legacy checkout is accepted as a fallback so this
+        # works before the file has been relocated.
+        run: |
+          for candidate in /etc/stella/.env.production "$HOME/STELLA/.env.production"; do
+            if [ -f "$candidate" ]; then
+              ln -sfn "$candidate" .env.production
+              echo "linked $candidate ($(wc -l < .env.production) lines)"
+              exit 0
+            fi
+          done
+          echo "::error::No .env.production found. Stage it at /etc/stella/.env.production (chmod 600, owned by the runner user)."
+          exit 1
+
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Deploy
+        # -d exits after the deploy instead of blocking on the Ctrl+C wait loop.
+        # </dev/null so the setup wizard can never prompt on a non-TTY.
+        run: ./scripts/start-k8s.sh --production --daemon </dev/null
+
+      - name: Wait for rollout
+        run: |
+          for d in session-management-server frontend-ui message-recorder stt-service tts-service; do
+            echo "--- $d"
+            sudo k3s kubectl rollout status "deployment/$d" -n ai-agents --timeout=600s
+          done
+
+      - name: Verify the running version is the one we just built
+        # Asks the service itself rather than trusting the rollout. Uses node
+        # (always in the image) so this needs no curl and no port-forward.
+        run: |
+          for i in $(seq 1 30); do
+            RUNNING=$(sudo k3s kubectl exec -n ai-agents deploy/session-management-server -- \
+              node -e "fetch('http://localhost:3000/version').then(r=>r.json()).then(v=>console.log(v.version)).catch(()=>process.exit(1))" 2>/dev/null) && break
+            sleep 5
+          done
+          echo "running=$RUNNING expected=$IMAGE_TAG"
+          if [ "$RUNNING" != "$IMAGE_TAG" ]; then
+            echo "::error::Deployed version mismatch - rollout did not take effect"
+            exit 1
+          fi
+
+      - name: Tag this deployment
+        # Marks exactly which commit is live in production. Namespaced under
+        # prod/ rather than v*, which the release-tags ruleset reserves for
+        # human releases and blocks Actions from creating.
+        run: |
+          TAG="prod/${IMAGE_TAG}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "tag ${TAG} already exists, leaving it alone"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Deployed to production by run ${{ github.run_number }}" "${{ github.sha }}"
+          git push origin "$TAG"
+          echo "tagged $TAG -> ${{ github.sha }}"
+
+      - name: Report what landed
+        if: always()
+        run: sudo k3s kubectl get pods -n ai-agents -o wide
