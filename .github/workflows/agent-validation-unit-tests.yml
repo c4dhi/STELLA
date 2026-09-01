@@ -7,6 +7,8 @@ on:
       - 'src/agent-package/**'
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/agent-validation-unit-tests.yml'
   pull_request:
     branches: [main]
@@ -14,6 +16,8 @@ on:
       - 'src/agent-package/**'
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/agent-validation-unit-tests.yml'
   workflow_dispatch:
 

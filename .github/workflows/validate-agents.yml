@@ -8,6 +8,8 @@ on:
       - 'agents/**/Dockerfile'
       - 'scripts/validate-agents.ts'
       - 'src/agent-package/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/validate-agents.yml'
   pull_request:
     branches: [main]
@@ -16,6 +18,8 @@ on:
       - 'agents/**/Dockerfile'
       - 'scripts/validate-agents.ts'
       - 'src/agent-package/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/validate-agents.yml'
   workflow_dispatch:
 

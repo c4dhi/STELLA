@@ -9,6 +9,8 @@ on:
       - 'agents/**/Dockerfile'
       - 'src/agent-package/**'
       - 'src/agent-registry/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/seed-roundtrip-check.yml'
   pull_request:
     branches: [main]
@@ -18,6 +20,8 @@ on:
       - 'agents/**/Dockerfile'
       - 'src/agent-package/**'
       - 'src/agent-registry/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/seed-roundtrip-check.yml'
   workflow_dispatch:
 
