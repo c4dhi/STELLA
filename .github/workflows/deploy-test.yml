@@ -42,8 +42,14 @@ jobs:
 
       - name: Install Node dependencies
         # Fresh runner workspace has no node_modules; the deploy script's
-        # validation and the Prisma migrate step both need them.
-        run: npm ci --no-audit --no-fund
+        # validation checks for node_modules and for Prisma specifically.
+        #
+        # --legacy-peer-deps is a workaround, not a preference: main currently
+        # pins eslint ^10.8.0 while typescript-eslint@8.45.0 only supports
+        # ^8.57.0 || ^9.0.0, so a plain `npm ci` fails with ERESOLVE for
+        # everyone, not just CI. Drop this flag once that pairing is fixed.
+        # Prisma is a devDependency, so --omit=dev is not an option here.
+        run: npm ci --legacy-peer-deps --no-audit --no-fund
 
       - name: Deploy
         # -d exits after the deploy instead of blocking on the Ctrl+C wait loop.
