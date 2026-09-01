@@ -5,13 +5,17 @@
 # approval before merge, so these lines decide who can accept a change into
 # the release branch.
 #
+# Two owners on every rule is deliberate: GitHub does not let anyone approve
+# their own pull request, so a single owner would make their own PRs
+# unmergeable without bypassing the ruleset.
+#
 # Later patterns win over earlier ones.
 
 # Default owner for the repository.
-*                           @DatMoser
+*                       @DatMoser @tkowatsch
 
 # Anything that can reach the UZH test or production servers.
-/.github/workflows/         @DatMoser
-/scripts/                   @DatMoser
-/k8s/                       @DatMoser
-/prisma/migrations/         @DatMoser
+/.github/workflows/     @DatMoser @tkowatsch
+/scripts/               @DatMoser @tkowatsch
+/k8s/                   @DatMoser @tkowatsch
+/prisma/migrations/     @DatMoser @tkowatsch
