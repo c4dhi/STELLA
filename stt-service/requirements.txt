@@ -1,6 +1,6 @@
 grpcio>=1.83.0
 grpcio-tools>=1.60.0
-sherpa-onnx>=1.12.0
+sherpa-onnx>=1.13.6
 # numpy 2.5 raised its floor to Python >=3.12, but the GPU stage below installs
 # python3.11, so `numpy>=2.5.1` makes `pip install -r requirements.txt` fail
 # outright with "No matching distribution found". Lift this bound only together
