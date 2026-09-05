@@ -1,0 +1,30 @@
+name: Release Please
+
+# Keeps a release PR open against main. Merging it bumps package.json,
+# CITATION.cff and the README badge, writes CHANGELOG.md, and creates the
+# v<version> tag and GitHub Release.
+#
+# Only main is wired up for now. development would need its own manifest and
+# an always-bump-patch config, plus a sync back from main after each release,
+# or the two branches hold different versions in the same files and every
+# promotion conflicts on them.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    if: github.repository == 'c4dhi/STELLA'
+    # GitHub-hosted: this only touches the repo, never a server, and hosted
+    # runners are free for public repositories.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
