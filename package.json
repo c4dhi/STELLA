@@ -1,8 +1,8 @@
 {
   "name": "session-management-server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "",
-  "author": "Universit\u00e4t St. Gallen (HSG) & University of Zurich (UZH)",
+  "author": "Universität St. Gallen (HSG) & University of Zurich (UZH)",
   "private": true,
   "license": "MIT",
   "scripts": {
