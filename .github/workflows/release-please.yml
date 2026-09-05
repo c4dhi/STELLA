@@ -26,5 +26,21 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
+          # The org policy on c4dhi blocks "Allow GitHub Actions to create and
+          # approve pull requests", and it is greyed out at repository level,
+          # so GITHUB_TOKEN cannot open the release PR:
+          #
+          #   release-please failed: GitHub Actions is not permitted to create
+          #   or approve pull requests
+          #
+          # release-please still does everything else with the default token --
+          # it computes the bump and pushes its branch -- and only the final
+          # "open a PR" call is refused. RELEASE_PLEASE_TOKEN, a fine-grained
+          # PAT with Contents and Pull requests read/write, lets it finish.
+          #
+          # Falls back to the default token when the secret is absent, so the
+          # workflow still runs (and still fails at the PR step) rather than
+          # breaking outright.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
