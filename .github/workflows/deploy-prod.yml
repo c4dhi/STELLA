@@ -87,7 +87,13 @@ jobs:
         # human releases and blocks Actions from creating.
         run: |
           TAG="prod/${IMAGE_TAG}"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+          # show-ref, NOT rev-parse: IMAGE_TAG is <version>-<count>-g<sha>,
+          # which is exactly git-describe format. `git rev-parse` parses
+          # describe output as a revision, so it resolved the -g<sha> suffix
+          # to a real commit and reported every tag as already existing --
+          # meaning this step silently skipped tagging on every deploy.
+          # show-ref only consults real refs.
+          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
             echo "tag ${TAG} already exists, leaving it alone"
             exit 0
           fi
