@@ -9,7 +9,7 @@ type: software
 license: MIT
 repository-code: "https://github.com/c4dhi/STELLA"
 url: "https://c4dhi.github.io/STELLA/"
-version: "0.3.0"
+version: "0.3.0" # x-release-please-version
 authors:
   - name: "Universität St. Gallen (HSG)"
   - name: "University of Zurich (UZH)"
