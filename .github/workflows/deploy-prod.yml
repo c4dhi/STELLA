@@ -133,6 +133,44 @@ jobs:
           git push origin "$TAG"
           echo "tagged $TAG -> ${{ github.sha }}"
 
+      - name: Publish a GitHub Release for this deployment
+        # Runs only after the deploy is verified reachable and tagged, so a
+        # release always corresponds to something actually serving traffic.
+        #
+        # make_latest is deliberately "false": the repository's Latest release
+        # is v1.0.0-prolific, the CUI '26 paper / study cut that people cite.
+        # Deployment records must never displace it on the repo front page.
+        #
+        # Uses the REST API rather than `gh`, which is not installed on the
+        # production runner.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="prod/${IMAGE_TAG}"
+          API="https://api.github.com/repos/${REPO}"
+
+          if curl -fsS -H "Authorization: Bearer $GH_TOKEN" \
+               "$API/releases/tags/$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists, leaving it alone"
+            exit 0
+          fi
+
+          BODY=$(jq -nc \
+            --arg tag  "$TAG" \
+            --arg name "Production $IMAGE_TAG" \
+            --arg sha  "${{ github.sha }}" \
+            '{tag_name:$tag, target_commitish:$sha, name:$name,
+              generate_release_notes:true, draft:false, prerelease:false,
+              make_latest:"false"}')
+
+          URL=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$API/releases" -d "$BODY" | jq -r '.html_url')
+
+          echo "published release $TAG -> $URL"
+
       - name: Report what landed
         if: always()
         run: sudo k3s kubectl get pods -n ai-agents -o wide
