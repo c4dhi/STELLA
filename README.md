@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/c4dhi/STELLA/stargazers"><img src="https://img.shields.io/github/stars/c4dhi/STELLA?style=flat-square" alt="GitHub Stars"></a>
   <a href="https://github.com/c4dhi/STELLA/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-a855f7?style=flat-square" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/version-0.3.0-blue?style=flat-square" alt="Version 0.3.0">
+  <img src="https://img.shields.io/badge/version-0.3.0-blue?style=flat-square" alt="Version 0.3.0"> <!-- x-release-please-version -->
   <a href="https://c4dhi.github.io/STELLA/"><img src="https://img.shields.io/badge/docs-live-green?style=flat-square" alt="Documentation"></a>
   <a href="https://github.com/c4dhi/STELLA/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome"></a>
 </p>
