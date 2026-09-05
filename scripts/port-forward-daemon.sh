@@ -130,7 +130,17 @@ start_all() {
             start_port_forward_loop "$service" "$local_port" "$remote_port" &
             pid=$!
         else
-            setsid nohup "$0" _forward-loop "$service" "$local_port" "$remote_port" \
+            # env -u RUNNER_TRACKING_ID is load-bearing, not tidiness.
+            #
+            # setsid alone is not enough under GitHub Actions. At job end the
+            # runner sweeps /proc and kills every process whose environment
+            # still carries the job's RUNNER_TRACKING_ID, regardless of session
+            # or parent. Children inherit it, so a setsid'd forward was still
+            # matched and killed -- observed on the first production deploy,
+            # which shipped the setsid fix and still lost its forwards.
+            # Dropping the variable makes the loop invisible to that sweep.
+            setsid env -u RUNNER_TRACKING_ID \
+                nohup "$0" _forward-loop "$service" "$local_port" "$remote_port" \
                 >/dev/null 2>&1 < /dev/null &
             pid=$!
         fi
