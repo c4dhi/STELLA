@@ -2,12 +2,12 @@ name: Agent Startup Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'agents/**'
       - '.github/workflows/agent-startup-tests.yml'
   pull_request:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'agents/**'
       - '.github/workflows/agent-startup-tests.yml'
