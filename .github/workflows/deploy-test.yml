@@ -80,6 +80,36 @@ jobs:
           fi
 
 
+      - name: Verify the deployment is publicly reachable
+        # The check above asks the pod directly, so it passes even when nothing
+        # is routing traffic in -- which is exactly how production sat
+        # unreachable from 1 to 5 Sept behind four consecutive green runs.
+        # This one goes through the real path: DNS, Caddy, TLS, the
+        # port-forward, then the pod. Retries because the forwards take a
+        # moment to come up after a rollout.
+        env:
+          PUBLIC_FRONTEND: https://frontend.c4dhi.moserfelix.com
+          PUBLIC_BACKEND: https://backend.c4dhi.moserfelix.com
+        run: |
+          PUB=""
+          for i in $(seq 1 12); do
+            PUB=$(curl -fsS --max-time 10 "$PUBLIC_BACKEND/version" 2>/dev/null \
+                  | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+            [ -n "$PUB" ] && break
+            sleep 5
+          done
+          echo "public=$PUB expected=$IMAGE_TAG"
+          if [ "$PUB" != "$IMAGE_TAG" ]; then
+            echo "::error::$PUBLIC_BACKEND reports '"'"'$PUB'"'"', expected '"'"'$IMAGE_TAG'"'"' - deployed but not reachable through Caddy/port-forwards"
+            exit 1
+          fi
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$PUBLIC_FRONTEND")
+          if [ "$CODE" != "200" ]; then
+            echo "::error::$PUBLIC_FRONTEND returned $CODE"
+            exit 1
+          fi
+          echo "public endpoints OK: $PUBLIC_FRONTEND and $PUBLIC_BACKEND"
+
       - name: Report what landed
         if: always()
         run: sudo k3s kubectl get pods -n ai-agents -o wide
