@@ -181,10 +181,14 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 
 ## Examples
 
-See the `examples/` directory:
+Both examples are runnable as-is once the environment variables below are set.
+They are not shipped inside the installed package, so read them on GitHub:
 
-- `echo_agent.py` - Simplest possible agent (echoes input)
-- `openai_agent.py` - Integration with OpenAI GPT models
+- [`echo_agent.py`](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/examples/echo_agent.py)
+  — the smallest possible agent (echoes input back)
+- [`openai_agent.py`](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/examples/openai_agent.py)
+  — an LLM-backed agent that streams its reply token by token, and stops
+  generating when the user barges in
 
 ## Development
 
