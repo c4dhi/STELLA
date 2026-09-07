@@ -5,12 +5,11 @@ import json
 import logging
 import os
 import time
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 import jwt
 import numpy as np
 
-from stella_agent_sdk.env import env_bool
 
 logger = logging.getLogger(__name__)
 
@@ -18,19 +17,9 @@ logger = logging.getLogger(__name__)
 try:
     from livekit import rtc
     LIVEKIT_AVAILABLE = True
-    # Try to import AudioProcessingModule for AEC
-    try:
-        from livekit.rtc import AudioProcessingModule
-        AEC_AVAILABLE = True
-    except ImportError:
-        AudioProcessingModule = None
-        AEC_AVAILABLE = False
-        logger.warning("AudioProcessingModule not available. Echo cancellation disabled.")
 except ImportError:
     rtc = None
     LIVEKIT_AVAILABLE = False
-    AEC_AVAILABLE = False
-    AudioProcessingModule = None
     logger.warning("livekit-rtc not installed. Direct room connections unavailable.")
 
 
@@ -99,42 +88,6 @@ class RoomManager:
         self._on_participant_left: Optional[Callable[[str], None]] = None
         self._on_data_received: Optional[Callable[[str, bytes], None]] = None
 
-        # Acoustic Echo Cancellation (AEC)
-        # Can be disabled via environment variable for debugging
-        aec_disabled_by_env = env_bool("DISABLE_AEC", False)
-        if aec_disabled_by_env:
-            logger.info("[AEC] Disabled via DISABLE_AEC environment variable")
-            print("[AEC] Disabled via DISABLE_AEC environment variable")
-            self._aec_enabled = False
-        else:
-            self._aec_enabled = AEC_AVAILABLE
-        self._apm: Optional["AudioProcessingModule"] = None
-        if self._aec_enabled and AudioProcessingModule:
-            try:
-                self._apm = AudioProcessingModule(
-                    echo_cancellation=True,
-                    noise_suppression=True,
-                    high_pass_filter=True,
-                    auto_gain_control=True,
-                )
-                # Set stream delay (estimated round-trip through speakers/mic)
-                # Typical values: 50-150ms depending on hardware
-                self._apm.set_stream_delay_ms(100)
-                logger.info("[AEC] AudioProcessingModule initialized with echo cancellation")
-                print("[AEC] AudioProcessingModule initialized with echo cancellation")
-            except Exception as e:
-                logger.error(f"[AEC] Failed to initialize AudioProcessingModule: {e}")
-                print(f"[AEC] Failed to initialize: {e}")
-                self._aec_enabled = False
-                self._apm = None
-
-        # AEC frame buffers (APM requires 10ms frames)
-        # At 48kHz (input), 10ms = 480 samples
-        # At 24kHz (TTS), 10ms = 240 samples
-        self._aec_input_buffer: List[np.ndarray] = []
-        self._aec_tts_buffer: List[np.ndarray] = []
-        self._aec_10ms_samples_48k = 480  # 10ms at 48kHz
-        self._aec_10ms_samples_24k = 240  # 10ms at 24kHz
 
     @property
     def is_connected(self) -> bool:
@@ -374,7 +327,6 @@ class RoomManager:
     async def _read_audio_stream(self, identity: str, stream: rtc.AudioStream) -> None:
         """Read audio frames from a stream and put them in the queue."""
         frame_count = 0
-        aec_frame_count = 0
         try:
             print(f"[ROOM] Starting audio stream reader for {identity}")
             logger.info(f"Starting audio stream reader for {identity}")
@@ -393,21 +345,12 @@ class RoomManager:
                     # Track sample rate from first frame received
                     self._audio_sample_rate = frame.sample_rate
                     print(f"[ROOM] FIRST audio frame from {identity}: {len(frame.data.tobytes())} bytes, {frame.sample_rate}Hz")
-                    print(f"[ROOM] AEC enabled: {self._aec_enabled}")
                     logger.info(f"First audio frame from {identity}: sample_rate={frame.sample_rate}Hz, channels={frame.num_channels}")
                     logger.info(f"Audio sample rate set to {self._audio_sample_rate}Hz")
                 elif frame_count % 500 == 0:
-                    print(f"[ROOM] Received {frame_count} audio frames from {identity} (AEC processed: {aec_frame_count})")
+                    print(f"[ROOM] Received {frame_count} audio frames from {identity}")
 
-                # Apply AEC to remove TTS echo from microphone input
-                if self._aec_enabled and self._apm:
-                    processed_frames = self._process_stream_aec(frame)
-                    aec_frame_count += len(processed_frames)
-                    for processed_frame in processed_frames:
-                        await self._audio_queue.put(processed_frame.data.tobytes())
-                else:
-                    # No AEC - pass through directly
-                    await self._audio_queue.put(frame.data.tobytes())
+                await self._audio_queue.put(frame.data.tobytes())
 
         except asyncio.CancelledError:
             print(f"[ROOM] Audio stream task cancelled for {identity}")
@@ -418,68 +361,6 @@ class RoomManager:
         finally:
             print(f"[ROOM] Audio stream reader ended for {identity} after {frame_count} frames")
             logger.info(f"Audio stream reader ended for {identity} after {frame_count} frames")
-
-    def _process_stream_aec(self, frame: "rtc.AudioFrame") -> List["rtc.AudioFrame"]:
-        """
-        Process incoming microphone audio through AEC to remove TTS echo.
-        Buffers audio and processes in 10ms chunks as required by APM.
-
-        Args:
-            frame: Incoming audio frame from microphone (typically 48kHz)
-
-        Returns:
-            List of processed 10ms AudioFrames with echo removed
-        """
-        if not self._apm:
-            return [frame]
-
-        processed_frames = []
-        try:
-            # Get audio data as numpy array
-            audio_int16 = np.frombuffer(frame.data, dtype=np.int16)
-            sample_rate = frame.sample_rate
-
-            # Calculate 10ms chunk size for this sample rate
-            samples_10ms = sample_rate // 100  # 10ms = 1/100 second
-
-            # Add to buffer
-            self._aec_input_buffer.append(audio_int16)
-            total_samples = sum(len(chunk) for chunk in self._aec_input_buffer)
-
-            # Process in 10ms chunks
-            while total_samples >= samples_10ms:
-                # Concatenate and extract 10ms chunk
-                combined = np.concatenate(self._aec_input_buffer)
-                chunk_10ms = combined[:samples_10ms].copy()  # Copy to ensure contiguous
-                remainder = combined[samples_10ms:]
-
-                # Create AudioFrame for APM processing (10ms)
-                aec_frame = rtc.AudioFrame(
-                    data=chunk_10ms.tobytes(),
-                    sample_rate=sample_rate,
-                    num_channels=1,
-                    samples_per_channel=samples_10ms,
-                )
-
-                # Process stream - removes echo based on reverse stream reference
-                # Frame is modified in-place
-                self._apm.process_stream(aec_frame)
-
-                processed_frames.append(aec_frame)
-
-                # Update buffer with remainder
-                if len(remainder) > 0:
-                    self._aec_input_buffer = [remainder]
-                else:
-                    self._aec_input_buffer = []
-                total_samples = len(remainder)
-
-        except Exception as e:
-            logger.error(f"[AEC] Error processing stream: {e}")
-            # On error, return original frame
-            return [frame]
-
-        return processed_frames
 
     def _on_track_unsubscribed(
         self,
@@ -625,11 +506,6 @@ class RoomManager:
             # Convert bytes to numpy array
             audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
 
-            # Feed TTS audio to AEC as reverse stream (far-end reference)
-            # This allows AEC to learn what echo to cancel from microphone input
-            if self._aec_enabled and self._apm:
-                self._process_reverse_stream_24k(audio_int16)
-
             # Create AudioFrame (LiveKit requires bytes, not numpy array)
             frame = rtc.AudioFrame(
                 data=audio_int16.tobytes(),
@@ -643,50 +519,6 @@ class RoomManager:
 
         except Exception as e:
             logger.error(f"Error publishing audio: {e}")
-
-    def _process_reverse_stream_24k(self, audio_int16: np.ndarray) -> None:
-        """
-        Process TTS audio through AEC reverse stream (far-end reference).
-        Buffers audio and processes in 10ms chunks as required by APM.
-
-        Args:
-            audio_int16: TTS audio samples at 24kHz
-        """
-        if not self._apm:
-            return
-
-        try:
-            # Add to buffer
-            self._aec_tts_buffer.append(audio_int16)
-            total_samples = sum(len(chunk) for chunk in self._aec_tts_buffer)
-
-            # Process in 10ms chunks (240 samples at 24kHz)
-            while total_samples >= self._aec_10ms_samples_24k:
-                # Concatenate and extract 10ms chunk
-                combined = np.concatenate(self._aec_tts_buffer)
-                chunk_10ms = combined[:self._aec_10ms_samples_24k]
-                remainder = combined[self._aec_10ms_samples_24k:]
-
-                # Create AudioFrame for APM (10ms at 24kHz)
-                frame = rtc.AudioFrame(
-                    data=chunk_10ms.tobytes(),
-                    sample_rate=24000,
-                    num_channels=1,
-                    samples_per_channel=self._aec_10ms_samples_24k,
-                )
-
-                # Process reverse stream (far-end TTS audio)
-                self._apm.process_reverse_stream(frame)
-
-                # Update buffer with remainder
-                if len(remainder) > 0:
-                    self._aec_tts_buffer = [remainder]
-                else:
-                    self._aec_tts_buffer = []
-                total_samples = len(remainder)
-
-        except Exception as e:
-            logger.error(f"[AEC] Error processing reverse stream: {e}")
 
     async def publish_data(
         self,
