@@ -1,0 +1,107 @@
+name: Publish SDK to PyPI
+
+# Releases are cut by pushing a tag of the form `sdk-v<version>`, e.g. `sdk-v0.5.0`.
+# The `sdk-` prefix keeps SDK releases distinct from the repo-wide `v*` / `prod/*` tags.
+# Running this workflow manually builds and verifies the package without publishing.
+on:
+  push:
+    tags:
+      - 'sdk-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SDK_DIR: agents/stella-ai-agent-sdk
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check tag matches pyproject version
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        run: |
+          tag_version="${GITHUB_REF_NAME#sdk-v}"
+          pyproject_version=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('$SDK_DIR/pyproject.toml').read_text())['project']['version'])")
+          if [ "$tag_version" != "$pyproject_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME implies version $tag_version but $SDK_DIR/pyproject.toml declares $pyproject_version. Bump the version and retag."
+            exit 1
+          fi
+          echo "Releasing stella-ai-agent-sdk $pyproject_version"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build --outdir dist "$SDK_DIR"
+          twine check dist/*
+
+      - name: Verify the built wheel installs and passes its tests
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install --upgrade pip
+          /tmp/verify/bin/pip install dist/*.whl pytest pytest-asyncio
+          /tmp/verify/bin/python -c "from stella_agent_sdk import BaseAgent, AgentInput, AgentOutput, run_agent_from_env"
+          cd "$SDK_DIR" && /tmp/verify/bin/python -m pytest --import-mode=importlib -q
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/stella-ai-agent-sdk
+    permissions:
+      # Required for PyPI trusted publishing (OIDC). No API token is stored.
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    name: Create GitHub release
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create release with the built distributions attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#sdk-v}"
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "STELLA Agent SDK $version" \
+            --notes "Install with \`pip install stella-ai-agent-sdk==$version\`.
+
+          See https://pypi.org/project/stella-ai-agent-sdk/$version/"

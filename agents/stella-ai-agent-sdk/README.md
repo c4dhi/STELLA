@@ -14,15 +14,23 @@ The SDK defines the communication protocol - agents implement whatever logic the
 
 ## Installation
 
+Requires Python 3.10 or newer.
+
 ```bash
 pip install stella-ai-agent-sdk
 ```
 
-Or install from source:
+To work against unreleased changes, install from source:
 
 ```bash
-cd stella-ai-agent-sdk
-pip install -e .
+git clone https://github.com/c4dhi/STELLA.git
+pip install -e STELLA/agents/stella-ai-agent-sdk
+```
+
+Or pin directly to a tag without cloning:
+
+```bash
+pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.5.0#subdirectory=agents/stella-ai-agent-sdk"
 ```
 
 ## Quick Start
@@ -168,7 +176,7 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `AGENT_ID` | *(falls back to AGENT_IDENTITY)* | Unique agent identifier |
 | `AGENT_ICON` | `🤖` | Display icon for the agent |
 | `AGENT_CONFIG` | | JSON string with agent-specific configuration |
-| `TRANSCRIPT_DEBOUNCE_MS` | `300` | Aggregate rapid successive transcripts within this window (ms) |
+| `TRANSCRIPT_DEBOUNCE_MS` | `0` | Aggregate rapid successive finals within this window (ms). Off by default: STT endpointing already guarantees a &gt;1s gap between finals, so any window this size is unreachable. Set it only for an STT provider that can fragment faster than that. |
 | `INTERRUPT_MODE` | `none` | Barge-in behavior: `none` (strict gating) or `smart` |
 
 ## Examples
@@ -194,6 +202,26 @@ python -m grpc_tools.protoc \
     --grpc_python_out=src/stella_agent_sdk/_grpc/generated \
     proto/agent.proto
 ```
+
+## Releasing
+
+Releases are published to [PyPI](https://pypi.org/project/stella-ai-agent-sdk/) by
+[`.github/workflows/publish-sdk.yml`](../../.github/workflows/publish-sdk.yml), which is
+triggered by pushing a `sdk-v<version>` tag:
+
+```bash
+# 1. Bump `version` in agents/stella-ai-agent-sdk/pyproject.toml, then commit it to main.
+# 2. Tag the commit. The tag version must match pyproject.toml or the workflow fails.
+git tag sdk-v0.6.0
+git push origin sdk-v0.6.0
+```
+
+The workflow builds the sdist and wheel, installs the wheel into a clean environment and runs
+the test suite against it, publishes to PyPI via trusted publishing (OIDC — no API token is
+stored in the repo), and creates a GitHub release with the distributions attached.
+
+Run the workflow manually (`workflow_dispatch`) to build and verify without publishing.
+Note that a version number can never be reused on PyPI, even after a release is deleted.
 
 ## License
 
