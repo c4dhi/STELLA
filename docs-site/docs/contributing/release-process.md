@@ -1,276 +1,129 @@
 ---
 sidebar_position: 5
-title: Release Process
-description: How STELLA versions and releases work
+title: How Changes Reach Users
+description: What happens to your contribution after it is merged
 ---
 
-# Release Process
+# How Changes Reach Users
 
-This document describes how we version, release, and distribute STELLA.
+The short version: **merging is releasing.** Once your pull request is approved
+and merged, it goes live on its own. You don't cut a release, tag anything, bump
+a version, or ask anyone to deploy.
 
-## Versioning
+This page explains what happens after you hit merge, so you know what to expect
+and what your change needs from you before it gets there.
 
-We use [Semantic Versioning](https://semver.org/) (SemVer):
+## The journey of a change
 
-```
-MAJOR.MINOR.PATCH
+1. **You open a pull request** against `main`.
 
-Examples:
-1.0.0  - First stable release
-1.1.0  - New features, backward compatible
-1.1.1  - Bug fixes
-2.0.0  - Breaking changes
-```
+2. **Automated checks run.** Which ones depends on what you touched — agent
+   validation, unit tests, agent startup, a database seed round-trip, a docs
+   build. They need to pass.
 
-### Version Meaning
+3. **A maintainer reviews it.** Every pull request needs approval from a code
+   owner before it can merge.
 
-| Version Change | When to Use | Example |
-|---------------|-------------|---------|
-| MAJOR | Breaking API changes | Renamed endpoints |
-| MINOR | New features (backward compatible) | New agent type |
-| PATCH | Bug fixes | Fix crash on disconnect |
+4. **It merges — and it ships.** Production rebuilds and redeploys itself
+   automatically, within minutes.
 
-### Pre-release Versions
+There is no staging step between step 3 and step 4, and no release train to catch.
+The review *is* the gate.
 
-```
-1.0.0-alpha.1  - Early testing
-1.0.0-beta.1   - Feature complete, testing
-1.0.0-rc.1     - Release candidate
-```
+:::tip Want a trial run first?
+If your change is risky, or you'd just like to watch it run before real
+participants do, say so in your pull request. A maintainer can route it through
+the test environment first.
+:::
 
-## Release Schedule
+## The two branches
 
-| Type | Frequency | Contents |
-|------|-----------|----------|
-| Major | As needed | Breaking changes |
-| Minor | Monthly | New features |
-| Patch | As needed | Bug fixes, security |
+| Branch | What it is |
+|--------|------------|
+| `main` | Production. What study participants are using right now. |
+| `development` | The test environment, for work that needs a trial run first. |
 
-## Release Checklist
+Both deploy themselves when something lands on them. As a contributor you'll
+normally only ever target `main`.
 
-### 1. Prepare Release
+Documentation-only changes are the one exception to the automatic deploy — a pull
+request that touches only Markdown or the docs site won't trigger a rebuild of the
+platform. The documentation site publishes itself separately from `main`.
 
-```bash
-# Ensure on main branch
-git checkout main
-git pull upstream main
+## What you don't need to do
 
-# Create release branch
-git checkout -b release/v1.2.0
-```
+Three things that other projects ask for, which this one handles on your behalf:
 
-### 2. Update Version Numbers
+- **Don't bump any version numbers.** Not in `package.json`, not in a
+  `pyproject.toml`. Maintainers handle versioning.
+- **Don't write changelog entries.** Release notes are generated from merged pull
+  requests, which is why the next point matters.
+- **Don't build or push any images.** Everything is built from source at deploy
+  time, including agents — any directory under `agents/` with a `Dockerfile` is
+  picked up automatically.
 
-```bash
-# Root package.json
-npm version minor
+## What your pull request does need
 
-# Frontend
-cd frontend-ui && npm version minor && cd ..
+- **A clear description.** It becomes the public record of why the change exists,
+  and it feeds the generated release notes. Someone reading it in a year should
+  understand the motivation without opening the diff.
+- **A flag on anything that needs coordination** — a database migration, a config
+  or secret change, an order-dependent rollout. Because merging deploys straight
+  to production, there's no window to catch these afterwards.
+- **Green checks.** A red check will not be merged around.
 
-# Agents (pyproject.toml or setup.py)
-# Update version manually
-```
+## Two things release on their own schedule
 
-### 3. Update Changelog
+Almost everything ships the moment it merges. Two exceptions are worth knowing
+about.
 
-Add entry to `CHANGELOG.md`:
+### The Agent SDK
 
-```markdown
-## [1.2.0] - 2024-01-15
+The Python SDK (`stella-ai-agent-sdk`) is published separately to
+[PyPI](https://pypi.org/project/stella-ai-agent-sdk/), because a version number
+there is **permanent** — once `0.5.0` is published it can never be reused, even if
+the release is deleted. That makes publishing worth a deliberate decision rather
+than an automatic consequence of merging.
 
-### Added
-- New feature X (#123)
-- Support for Y (#124)
+For you, nothing changes: your SDK change merges to `main` like any other, and a
+maintainer publishes it as a release when it's ready. Just mention in your pull
+request if your change should go out promptly rather than waiting for the next
+release.
 
-### Changed
-- Improved performance of Z (#125)
-
-### Fixed
-- Bug in session cleanup (#126)
-
-### Security
-- Updated dependency A to fix CVE-XXXX (#127)
-```
-
-### 4. Run Full Test Suite
+If you're **building an agent** rather than changing the SDK, you don't need this
+repository at all — install the published package and work in your own project:
 
 ```bash
-# Backend
-npm test
-npm run test:e2e
-
-# Frontend
-cd frontend-ui && npm test
-
-# Agents
-cd agents/stella-agent && pytest
-cd agents/stella-light && pytest
+pip install stella-ai-agent-sdk
 ```
 
-### 5. Create Release PR
+### The STELLA version number
 
-```bash
-git add .
-git commit -m "chore: prepare release v1.2.0"
-git push origin release/v1.2.0
-```
+The version on the README badge and in `CITATION.cff` is bumped by maintainers
+when a batch of work is worth marking. It's a label for humans and for citation,
+not a deployment trigger — production is already running the latest `main`
+regardless of what that number says.
 
-Create PR: `release/v1.2.0` → `main`
+The same mechanism produces **study cuts**: frozen, citeable versions tagged with
+a study name, so the exact software behind a published paper stays reproducible
+and referenceable. If your work is part of a study, ask a maintainer whether a cut
+is needed.
 
-### 6. After PR Merge
+## Reading the tags
 
-```bash
-# Create and push tag
-git checkout main
-git pull
-git tag -a v1.2.0 -m "Release v1.2.0"
-git push upstream v1.2.0
-```
+If you go looking through the repository's tags, you'll find three kinds. They
+answer different questions:
 
-### 7. Create GitHub Release
+| Tag | Means |
+|-----|-------|
+| `v0.3.0` | A marked version of STELLA, for citation and reference |
+| `prod/0.3.0-9-g5912175` | One specific deploy that reached production |
+| `sdk-v0.5.0` | A release of the Agent SDK published to PyPI |
 
-1. Go to GitHub Releases
-2. Click "Create a new release"
-3. Select tag `v1.2.0`
-4. Title: "v1.2.0"
-5. Description: Copy from CHANGELOG
-6. Publish release
-
-### 8. Build and Push Images
-
-```bash
-# Backend
-docker build -t ghcr.io/c4dhi/stella-backend:1.2.0 .
-docker push ghcr.io/c4dhi/stella-backend:1.2.0
-
-# Agents
-cd agents/stella-agent
-docker build -t ghcr.io/c4dhi/stella-agent:1.2.0 .
-docker push ghcr.io/c4dhi/stella-agent:1.2.0
-
-# Tag as latest
-docker tag ghcr.io/c4dhi/stella-backend:1.2.0 ghcr.io/c4dhi/stella-backend:latest
-docker push ghcr.io/c4dhi/stella-backend:latest
-```
-
-## Hotfix Process
-
-For urgent bug fixes:
-
-```bash
-# Create hotfix branch from tag
-git checkout -b hotfix/v1.2.1 v1.2.0
-
-# Make fix
-git add .
-git commit -m "fix: critical bug in X"
-
-# Update version
-npm version patch
-
-# Create PR to main
-git push origin hotfix/v1.2.1
-```
-
-After merge:
-1. Tag as `v1.2.1`
-2. Create GitHub release
-3. Build and push images
-
-## Docker Image Tags
-
-| Tag | Description |
-|-----|-------------|
-| `latest` | Most recent stable release |
-| `1.2.0` | Specific version |
-| `1.2` | Latest patch of 1.2.x |
-| `1` | Latest minor of 1.x.x |
-| `main` | Latest from main branch |
-
-## Documentation Releases
-
-Documentation is deployed automatically:
-
-- **main branch** → https://c4dhi.github.io/STELLA/
-- **Pull requests** → Preview builds (if configured)
-
-## Changelog Format
-
-We follow [Keep a Changelog](https://keepachangelog.com/):
-
-```markdown
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-## [Unreleased]
-
-### Added
-- New features not yet released
-
-## [1.2.0] - 2024-01-15
-
-### Added
-- Feature description (#PR)
-
-### Changed
-- Change description (#PR)
-
-### Deprecated
-- Deprecated feature (#PR)
-
-### Removed
-- Removed feature (#PR)
-
-### Fixed
-- Bug fix description (#PR)
-
-### Security
-- Security fix description (#PR)
-```
-
-## Breaking Changes
-
-When introducing breaking changes:
-
-1. **Document clearly** in CHANGELOG
-2. **Provide migration guide**
-3. **Deprecate first** when possible
-4. **Major version bump**
-
-Example migration guide:
-
-```markdown
-## Migration Guide: v1.x to v2.0
-
-### Session API Changes
-
-**Before (v1.x):**
-```json
-POST /api/sessions
-{
-  "projectId": "..."
-}
-```
-
-**After (v2.0):**
-```json
-POST /api/v2/sessions
-{
-  "project_id": "...",
-  "agent_config": {}
-}
-```
-
-### Required Changes
-
-1. Update API endpoints to use `/api/v2/`
-2. Change `projectId` to `project_id`
-3. Add required `agent_config` field
-```
+The `prod/` tags accumulate quickly — one per merge to `main` — and exist as an
+audit trail of what production has actually run, not as releases to read.
 
 ## Next Steps
 
-- [Pull Request Process](./pull-request-process.md) - Submit changes
-- [Coding Standards](./coding-standards/index.md) - Style guide
+- [Pull Request Process](./pull-request-process.md) — submitting changes
+- [Coding Standards](./coding-standards/index.md) — style guide
