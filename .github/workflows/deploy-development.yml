@@ -1,6 +1,6 @@
-name: Deploy to Test
+name: Deploy to Development
 
-# development deploys to the test server. Deliberately NOT pull_request: STELLA
+# development deploys to the development server. Deliberately NOT pull_request: STELLA
 # is public, and a fork PR must never execute on a self-hosted runner.
 
 on:
@@ -16,14 +16,14 @@ permissions:
 
 # One deploy at a time on this cluster, and never cancel one mid-rollout.
 concurrency:
-  group: deploy-test
+  group: deploy-development
   cancel-in-progress: false
 
 jobs:
   deploy:
     if: github.repository == 'c4dhi/STELLA'
-    runs-on: [self-hosted, stella-test]
-    environment: test
+    runs-on: [self-hosted, stella-development]
+    environment: development
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
