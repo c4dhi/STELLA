@@ -16,14 +16,20 @@ STELLA requires an external LiveKit server for WebRTC communication. You need to
 - **LiveKit Cloud** (recommended): [livekit.io/cloud](https://livekit.io/cloud) - Managed service, easiest setup
 - **Self-hosted**: [LiveKit Server Documentation](https://docs.livekit.io/home/self-hosting/local/) - Run your own server
 
-Once LiveKit is set up, configure the following in your `.env`:
+Once LiveKit is set up, the setup wizard collects these values for you — you do
+not edit them by hand:
 
-```bash
-LIVEKIT_URL=wss://your-livekit-server.com        # Internal URL for agents
-PUBLIC_LIVEKIT_URL=wss://your-livekit-server.com # Public URL for browsers
-LIVEKIT_API_KEY=your-api-key
-LIVEKIT_API_SECRET=your-api-secret
-```
+| Variable | Meaning |
+|----------|---------|
+| `LIVEKIT_URL` | Internal URL the STELLA pods connect to (must **not** be `localhost`) |
+| `PUBLIC_LIVEKIT_URL` | Public URL browsers connect to |
+| `LIVEKIT_API_KEY` | LiveKit API key |
+| `LIVEKIT_API_SECRET` | LiveKit API secret |
+
+Run `./scripts/start-k8s.sh --setup` and fill them in when the LiveKit chapter
+appears. For local development the wizard's defaults
+(`ws://host.docker.internal:7880` / `ws://localhost:7880` with development
+credentials) already work.
 
 ## Platform-Specific Setup
 
@@ -51,29 +57,31 @@ STELLA supports Windows through WSL2 (Windows Subsystem for Linux). Follow the L
 
 ## Environment Configuration
 
-Create a `.env` file from the example:
+Configuration is handled by the setup wizard, which writes `.env.local` (or
+`.env.production`). Do not create or edit these files by hand.
 
 ```bash
-cp .env.example .env
+# Runs automatically on first launch, or invoke it explicitly:
+./scripts/start-k8s.sh --setup
+
+# Full configuration wizard (every variable)
+./scripts/start-k8s.sh --config
 ```
 
 ### Essential Variables
 
-Configure the minimum required variables to get started:
+The wizard collects the minimum required set for you:
 
-```bash
-# Database
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/stella?schema=public"
+| Variable | Source |
+|----------|--------|
+| `OPENAI_API_KEY` | You provide it |
+| `POSTGRES_PASSWORD` | Auto-generated |
+| `JWT_SECRET` | Auto-generated |
+| `ENV_VAR_ENCRYPTION_KEY` | Auto-generated |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | Development defaults locally; required in production |
 
-# LiveKit
-LIVEKIT_URL=ws://localhost:7880
-PUBLIC_LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=devkey
-LIVEKIT_API_SECRET=secret
-
-# AI
-OPENAI_API_KEY=sk-your-openai-key
-```
+In production mode the wizard additionally requires `PRODUCTION_DOMAIN`,
+`LIVEKIT_URL` and `PUBLIC_LIVEKIT_URL`.
 
 <EnvVarReference
   text="Complete Environment Variables Reference"
@@ -134,7 +142,7 @@ curl http://localhost:5173
 
 **"Connection to database failed"**
 - Ensure PostgreSQL pod is running: `kubectl get pods -n ai-agents`
-- Check DATABASE_URL in your `.env`
+- Re-check your database settings with `./scripts/start-k8s.sh --config`
 - Run migrations: `npx prisma migrate deploy`
 
 **"Failed to create pod: Forbidden"**
