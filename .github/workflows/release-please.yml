@@ -8,21 +8,38 @@ name: Release Please
 # an always-bump-patch config, plus a sync back from main after each release,
 # or the two branches hold different versions in the same files and every
 # promotion conflicts on them.
-# PARKED. The automatic push trigger is disabled on purpose.
+# PARKED, pending an org setting. The automatic push trigger is disabled on
+# purpose -- see below for how to turn it on.
 #
-# release-please works -- it computes the bump, updates the version files,
-# writes the changelog and pushes its branch. The only thing it cannot do is
-# open the pull request:
+# release-please works. With the default token it computes the bump, updates the
+# version files, writes the changelog and pushes its branch. The only thing it
+# cannot do is open the pull request:
 #
 #   release-please failed: GitHub Actions is not permitted to create or
 #   approve pull requests
 #
-# That is an organisation-level policy on c4dhi. The control is greyed out at
-# repository level, so no repo admin can change it.
+# That is an organisation-level policy on c4dhi ("Allow GitHub Actions to create
+# and approve pull requests"). The control is greyed out at repository level, so
+# no repo admin can change it -- an org owner has to.
 #
 # Left running on every push to main it would fail every time, and a workflow
-# that is always red teaches people to ignore red. So it only runs on demand
-# until the blocker is resolved. See the tracking issue.
+# that is always red teaches people to ignore red. So it stays on demand until
+# the setting is on.
+#
+# TO TURN ON, once an org owner has enabled that setting:
+#   1. Dispatch this workflow once by hand and confirm it opens a release PR.
+#   2. Replace the `on:` block below with:
+#          on:
+#            push:
+#              branches: [main]
+#            workflow_dispatch:
+#      From then on a release PR is kept open automatically, and merging it
+#      bumps the version, writes the changelog, and cuts the v* tag.
+#
+# A fallback exists if the org route stalls: PR #511 passes a scoped personal
+# access token instead, which sidesteps the policy. Prefer the org setting --
+# no token to create, rotate, or tie to one person.
+
 on:
   workflow_dispatch:
 
