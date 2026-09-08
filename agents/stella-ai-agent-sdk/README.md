@@ -207,6 +207,11 @@ python -m grpc_tools.protoc \
     proto/agent.proto
 ```
 
+## Changelog
+
+See [CHANGELOG.md](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md).
+The SDK versions independently of the STELLA platform.
+
 ## Releasing
 
 Releases are published to [PyPI](https://pypi.org/project/stella-ai-agent-sdk/) by
