@@ -30,7 +30,7 @@ npm test
 cd frontend-ui && npm test
 
 # Agent tests
-cd agents/stella-agent && pytest
+cd agents/stella-ai-agent-sdk && python -m pytest
 ```
 
 ### 3. Check Formatting

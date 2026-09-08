@@ -2,28 +2,37 @@
 """
 OpenAI Agent Example
 
-This example shows how to integrate an LLM (OpenAI) with the STELLA Agent SDK.
-It demonstrates streaming responses from the LLM back through the SDK.
+Shows how to drive an agent with an LLM and stream the reply back token by
+token, which is what you want for voice: TTS starts speaking the first sentence
+while the model is still writing the rest.
 
-NOTE: This is an EXAMPLE of how to implement an agent, NOT part of the SDK itself.
-      The SDK only provides communication interfaces - LLM integration is your choice.
+NOTE: This is an EXAMPLE of how to implement an agent, NOT part of the SDK.
+      The SDK provides the communication layer only — which LLM you use, and how,
+      is entirely your choice.
 
-Requirements:
-    pip install openai
+Running it:
+    pip install "stella-ai-agent-sdk[examples]"      # or: pip install openai
 
-Usage:
-    export OPENAI_API_KEY=your-key-here
-    python openai_agent.py --server localhost:50051
+    export OPENAI_API_KEY=sk-...
+    # Plus the five connection variables run_agent_from_env() requires:
+    export LIVEKIT_URL=ws://localhost:7880
+    export ROOM_NAME=my-room
+    export AGENT_IDENTITY=agent-openai
+    export LIVEKIT_API_KEY=devkey
+    export LIVEKIT_API_SECRET=devsecret
+    python openai_agent.py
+
+    In production the session-management-server sets all of those on the agent
+    pod. See the README for the full list, including the optional ones.
 """
 
-import argparse
 import asyncio
 import logging
 import os
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from stella_agent_sdk import BaseAgent, AgentInput, AgentOutput, connect
+from stella_agent_sdk import BaseAgent, AgentInput, AgentOutput, run_agent_from_env
 from stella_agent_sdk.messages.types import StatusSubtype
 
 # Try to import OpenAI - it's optional for the SDK
@@ -73,7 +82,11 @@ class OpenAIAgent(BaseAgent):
         self._cancelled = False
 
     async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
-        """Initialize the OpenAI client with session configuration."""
+        """Initialize the OpenAI client with session configuration.
+
+        `config` is the parsed AGENT_CONFIG environment variable, so a deployment
+        can change the model or the system prompt without a code change.
+        """
         logger.info(f"Session started: {session_id}")
 
         # Initialize OpenAI client
@@ -112,7 +125,8 @@ class OpenAIAgent(BaseAgent):
             *self.conversation_history,
         ]
 
-        # Generate a transcript ID for streaming
+        # All chunks of one reply share a transcript_id so the client can
+        # assemble them into a single message.
         transcript_id = str(uuid.uuid4())
         full_response = ""
 
@@ -126,7 +140,7 @@ class OpenAIAgent(BaseAgent):
             )
 
             async for chunk in stream:
-                # Check for cancellation
+                # Stop as soon as the user barges in - see on_interrupt below.
                 if self._cancelled:
                     logger.info("Generation cancelled")
                     break
@@ -143,7 +157,7 @@ class OpenAIAgent(BaseAgent):
                         transcript_id=transcript_id,
                     )
 
-            # Send final marker if not cancelled
+            # An empty chunk with is_final=True closes the stream.
             if not self._cancelled and full_response:
                 yield AgentOutput.text_chunk(
                     input.session_id,
@@ -167,7 +181,11 @@ class OpenAIAgent(BaseAgent):
             )
 
     async def on_interrupt(self, session_id: str) -> None:
-        """Handle interrupt - cancel ongoing generation."""
+        """Handle interrupt - cancel ongoing generation.
+
+        `process()` checks this flag on every streamed token, so generation stops
+        within a token or two of the user starting to speak.
+        """
         logger.info(f"Interrupt received for session {session_id}")
         self._cancelled = True
 
@@ -180,29 +198,5 @@ class OpenAIAgent(BaseAgent):
         }
 
 
-async def main(server_address: str) -> None:
-    """Run the OpenAI agent."""
-    agent = OpenAIAgent()
-
-    logger.info(f"Starting OpenAI Agent, connecting to {server_address}...")
-
-    async with connect(
-        server_address,
-        agent,
-        agent_type="openai-agent",
-        agent_version="1.0.0",
-    ) as session:
-        logger.info("Connected! Running agent...")
-        await session.run()
-
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="OpenAI Agent Example")
-    parser.add_argument(
-        "--server",
-        default="localhost:50051",
-        help="Session management server address (default: localhost:50051)",
-    )
-    args = parser.parse_args()
-
-    asyncio.run(main(args.server))
+    asyncio.run(run_agent_from_env(OpenAIAgent()))
