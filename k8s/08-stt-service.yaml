@@ -265,6 +265,18 @@ spec:
             memory: "8Gi"
             cpu: "2000m"
             # GPU: nvidia.com/gpu: "1"
+        startupProbe:
+          # Same reasoning as tts-service: a GPU model load has no fixed
+          # duration, so gate liveness on the service actually answering rather
+          # than on a guessed initialDelay. stt-service has not been killed yet,
+          # but nothing prevents it -- only a faster model.
+          exec:
+            command:
+            - python
+            - -c
+            - "import grpc; print('ready')"
+          periodSeconds: 10
+          failureThreshold: 60
         readinessProbe:
           exec:
             command:
