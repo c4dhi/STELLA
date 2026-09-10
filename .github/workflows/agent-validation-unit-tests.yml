@@ -2,7 +2,7 @@ name: Agent Validation Unit Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'src/agent-package/**'
       - 'src/kubernetes/utils/**'
@@ -11,7 +11,7 @@ on:
       - 'package-lock.json'
       - '.github/workflows/agent-validation-unit-tests.yml'
   pull_request:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'src/agent-package/**'
       - 'src/kubernetes/utils/**'
