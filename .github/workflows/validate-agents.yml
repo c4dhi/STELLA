@@ -2,7 +2,7 @@ name: Validate Agents
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'agents/**/agent.yaml'
       - 'agents/**/Dockerfile'
@@ -12,7 +12,7 @@ on:
       - 'package-lock.json'
       - '.github/workflows/validate-agents.yml'
   pull_request:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'agents/**/agent.yaml'
       - 'agents/**/Dockerfile'
