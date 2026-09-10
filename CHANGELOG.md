@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-These landed on production in August from a deployment branch, but were not part
-of the v1.1.0 code; they were listed under 1.1.0 by mistake.
+---
+
+## [1.2.0] - 2026-09-10
+
+Restores the voice-latency work that production ran in August from a deployment
+branch. It was listed under 1.1.0 by mistake; that code was not part of v1.1.0.
 
 ### Added
 
