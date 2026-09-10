@@ -292,7 +292,6 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `TTS_ENABLED` | No | `true` | Enable text-to-speech audio output. Set to `false` for text-only mode (skips TTS connection entirely) |
 | `INTERRUPT_MODE` | No | `none` | Transcript interrupt behavior. `none` = strict turn-based gating (user speech suppressed while agent processes/narrates). `smart` = reserved for future barge-in with re-prompting |
 | `TRANSCRIPT_DEBOUNCE_MS` | No | `300` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Set to `0` to disable debouncing |
-| `DISABLE_AEC` | No | `false` | Disable Acoustic Echo Cancellation (AEC) for debugging audio feedback issues |
 | `STT_WARMUP_ENABLED` | No | `true` | Warm up the STT model on agent start and when participants join. Set to `false` to skip warmup |
 
 ### Turn Management

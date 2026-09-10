@@ -62,9 +62,6 @@ configSchema:
     - name: TRANSCRIPT_DEBOUNCE_MS
       description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
       default: "300"
-    - name: DISABLE_AEC
-      description: "Disable Acoustic Echo Cancellation (AEC) for debugging audio issues"
-      default: "false"
 
 defaultConfig: {}
 

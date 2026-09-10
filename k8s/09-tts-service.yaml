@@ -304,6 +304,23 @@ spec:
             # QWEN3: memory: "12Gi"
             cpu: "2000m"
             # GPU: nvidia.com/gpu: "1"
+        startupProbe:
+          # Cold start loads the model and captures CUDA graphs, which on the
+          # production L4 took over 150s -- past liveness's 90s initialDelay, so
+          # the container was SIGKILLed (exit 137) on every cold deploy. The warm
+          # restart then took 8s, because the model was in page cache. A single
+          # initialDelay cannot express a startup time that varies 20x.
+          #
+          # A startupProbe holds liveness and readiness off until the service
+          # actually answers, then hands over. 10s x 60 = up to 10 minutes to
+          # start; after that liveness still catches a genuine hang.
+          exec:
+            command:
+            - python
+            - -c
+            - "import grpc; channel = grpc.insecure_channel('localhost:50052'); grpc.channel_ready_future(channel).result(timeout=5)"
+          periodSeconds: 10
+          failureThreshold: 60
         readinessProbe:
           exec:
             command:

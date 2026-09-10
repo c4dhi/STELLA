@@ -81,13 +81,49 @@ jobs:
             exit 1
           fi
 
+      - name: Verify the deployment is publicly reachable
+        # The check above asks the pod directly, so it passes even when nothing
+        # is routing traffic in -- which is exactly how production sat
+        # unreachable from 1 to 5 Sept behind four consecutive green runs.
+        # This one goes through the real path: DNS, Caddy, TLS, the
+        # port-forward, then the pod. Retries because the forwards take a
+        # moment to come up after a rollout.
+        env:
+          PUBLIC_FRONTEND: https://stella.c4dhi.org
+          PUBLIC_BACKEND: https://backend.stella.c4dhi.org
+        run: |
+          PUB=""
+          for i in $(seq 1 12); do
+            PUB=$(curl -fsS --max-time 10 "$PUBLIC_BACKEND/version" 2>/dev/null \
+                  | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+            [ -n "$PUB" ] && break
+            sleep 5
+          done
+          echo "public=$PUB expected=$IMAGE_TAG"
+          if [ "$PUB" != "$IMAGE_TAG" ]; then
+            echo "::error::$PUBLIC_BACKEND reports '"'"'$PUB'"'"', expected '"'"'$IMAGE_TAG'"'"' - deployed but not reachable through Caddy/port-forwards"
+            exit 1
+          fi
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$PUBLIC_FRONTEND")
+          if [ "$CODE" != "200" ]; then
+            echo "::error::$PUBLIC_FRONTEND returned $CODE"
+            exit 1
+          fi
+          echo "public endpoints OK: $PUBLIC_FRONTEND and $PUBLIC_BACKEND"
+
       - name: Tag this deployment
         # Marks exactly which commit is live in production. Namespaced under
         # prod/ rather than v*, which the release-tags ruleset reserves for
         # human releases and blocks Actions from creating.
         run: |
           TAG="prod/${IMAGE_TAG}"
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+          # show-ref, NOT rev-parse: IMAGE_TAG is <version>-<count>-g<sha>,
+          # which is exactly git-describe format. `git rev-parse` parses
+          # describe output as a revision, so it resolved the -g<sha> suffix
+          # to a real commit and reported every tag as already existing --
+          # meaning this step silently skipped tagging on every deploy.
+          # show-ref only consults real refs.
+          if git show-ref --verify --quiet "refs/tags/${TAG}"; then
             echo "tag ${TAG} already exists, leaving it alone"
             exit 0
           fi
@@ -96,6 +132,44 @@ jobs:
           git tag -a "$TAG" -m "Deployed to production by run ${{ github.run_number }}" "${{ github.sha }}"
           git push origin "$TAG"
           echo "tagged $TAG -> ${{ github.sha }}"
+
+      - name: Publish a GitHub Release for this deployment
+        # Runs only after the deploy is verified reachable and tagged, so a
+        # release always corresponds to something actually serving traffic.
+        #
+        # make_latest is deliberately "false": the repository's Latest release
+        # is v1.0.0-prolific, the CUI '26 paper / study cut that people cite.
+        # Deployment records must never displace it on the repo front page.
+        #
+        # Uses the REST API rather than `gh`, which is not installed on the
+        # production runner.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="prod/${IMAGE_TAG}"
+          API="https://api.github.com/repos/${REPO}"
+
+          if curl -fsS -H "Authorization: Bearer $GH_TOKEN" \
+               "$API/releases/tags/$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists, leaving it alone"
+            exit 0
+          fi
+
+          BODY=$(jq -nc \
+            --arg tag  "$TAG" \
+            --arg name "Production $IMAGE_TAG" \
+            --arg sha  "${{ github.sha }}" \
+            '{tag_name:$tag, target_commitish:$sha, name:$name,
+              generate_release_notes:true, draft:false, prerelease:false,
+              make_latest:"false"}')
+
+          URL=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$API/releases" -d "$BODY" | jq -r '.html_url')
+
+          echo "published release $TAG -> $URL"
 
       - name: Report what landed
         if: always()

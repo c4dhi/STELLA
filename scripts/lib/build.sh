@@ -152,6 +152,19 @@ calculate_service_checksum() {
         checksum="${checksum}${env_hash}"
     fi
 
+    # frontend-ui bakes the app version in at build time, from the root
+    # package.json, via --build-arg APP_VERSION. That file lives outside
+    # frontend-ui/, so a version bump alone left this checksum unchanged, the
+    # rebuild was skipped, and the UI kept showing the previous version
+    # indefinitely -- production served "STELLA v0.3.0" for a while after main
+    # was already 1.1.0. release-please bumps package.json and nothing else, so
+    # without this every future release would have hit it.
+    if [[ "$service_name" == "frontend-ui" && -f "$PROJECT_DIR/package.json" ]]; then
+        local app_version
+        app_version=$(grep '"version"' "$PROJECT_DIR/package.json" | head -1 | sed 's/.*"version": *"\([^"]*\)".*/\1/')
+        checksum="${checksum}appver=${app_version}"
+    fi
+
     # Final combined hash (with fallback)
     echo "$checksum" | hash_string 2>/dev/null || echo "$checksum" | md5sum 2>/dev/null | cut -d' ' -f1 || echo "checksum-error"
 }

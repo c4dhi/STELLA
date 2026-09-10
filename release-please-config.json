@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "changelog-path": "CHANGELOG.md",
+      "include-component-in-tag": false,
+      "extra-files": [
+        "CITATION.cff",
+        "README.md"
+      ]
+    }
+  },
+  "$comment": "The version is computed from Conventional Commit types, which is release-please's default: fix -> patch, feat -> minor, feat! or BREAKING CHANGE -> major. This replaces always-bump-minor, under which every release was a minor and a patch release could not be expressed at all. CONTRIBUTING.md already requires Conventional Commits, so the history supports this. The agents' pyproject.toml files are deliberately NOT listed here: they carry independent versions and are not the project version -- the SDK in particular releases separately to PyPI via publish-sdk.yml and its sdk-v* tags."
+}
