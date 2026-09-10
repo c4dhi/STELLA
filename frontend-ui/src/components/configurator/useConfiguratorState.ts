@@ -295,8 +295,14 @@ export const BUILT_IN_EXPERTS: Omit<
   },
 ]
 
-const DEFAULT_ALWAYS_RUN = new Set(['task_extraction'])
-const DEFAULT_BACKGROUND = new Set(['task_extraction'])
+// Structural experts: not part of the arbitration pool, not reordered, not
+// opted into. Each IS the mechanism of a mode — task_extraction executes plans,
+// companion_router executes companion mode — so both always run within their
+// mode and neither competes for arbitration priority.
+const STRUCTURAL_EXPERTS = new Set(['task_extraction', 'companion_router'])
+
+const DEFAULT_ALWAYS_RUN = new Set(STRUCTURAL_EXPERTS)
+const DEFAULT_BACKGROUND = new Set(STRUCTURAL_EXPERTS)
 
 // Unified "built-in default" shape the expert list is derived from — whether the
 // defaults come from the agent's published config/experts (preferred) or, as a
@@ -525,18 +531,26 @@ export function useConfiguratorState(
   // publishes them on AgentType.expertDefaults. Fall back to the hardcoded constants
   // only until the backend has been re-seeded.
   const publishedExperts = useConfiguratorStore((s) => s.expertDefaults)
-  // Capability gating: task_extraction rides on `plans`, the assessment pool on
-  // `experts`. When capabilities aren't provided (older flow), show everything.
+  // Capability gating: task_extraction rides on `plans`, companion_router on
+  // `companion`, the assessment pool on `experts`. When capabilities aren't
+  // provided (older flow), show everything.
   const capabilities = useConfiguratorStore((s) => s.capabilities)
   const hasPlans = !capabilities || capabilities.includes('plans')
   const hasExperts = !capabilities || capabilities.includes('experts')
+  const hasCompanion = !capabilities || capabilities.includes('companion')
   const builtInDefaults = useMemo(() => {
     const source =
       publishedExperts && publishedExperts.length
         ? builtInsFromPublished(publishedExperts)
         : builtInsFallback()
-    return source.filter((e) => (e.name === 'task_extraction' ? hasPlans : hasExperts))
-  }, [publishedExperts, hasPlans, hasExperts])
+    return source.filter((e) =>
+      e.name === 'task_extraction'
+        ? hasPlans
+        : e.name === 'companion_router'
+          ? hasCompanion
+          : hasExperts,
+    )
+  }, [publishedExperts, hasPlans, hasExperts, hasCompanion])
   const builtInNames = useMemo(() => new Set(builtInDefaults.map((e) => e.name)), [builtInDefaults])
 
   // ----- Raw reads from configuration -----
@@ -654,6 +668,17 @@ export function useConfiguratorState(
   /** Task extraction enabled state */
   const taskExtractionEnabled = useMemo(
     () => experts.find((e) => e.name === 'task_extraction')?.enabled ?? true,
+    [experts],
+  )
+
+  /** The companion router, when this agent supports companion mode.
+   *
+   * Deliberately has NO enabled state here. The agent forces it on in companion
+   * mode and off otherwise, AFTER applying this configuration, so any toggle the
+   * Configurator offered would be a lie: the deploy mode decides. What IS worth
+   * editing is how it decides — its model and its prompt. */
+  const companionRouter = useMemo(
+    () => experts.find((e) => e.name === 'companion_router'),
     [experts],
   )
 
@@ -908,6 +933,7 @@ export function useConfiguratorState(
     inputGateRules,
     arbitrationOrder,
     taskExtractionEnabled,
+    companionRouter,
     alwaysRunSet,
 
     // Mutations

@@ -100,11 +100,34 @@ export interface SafetyCheckData {
   stream_id: string
 }
 
+/** A routing decision the agent made, worth showing the user as a tag.
+ *
+ * Decisions travel on the debug channel — same envelope, same persistence — and
+ * this block is the only thing that separates them from a diagnostic line. Its
+ * presence is what makes the chat render a tag instead of a debug card. */
+export interface AgentDecisionData {
+  kind: string
+  label: string
+  detail?: string
+  options?: string[]
+}
+
 export interface DebugData {
   component: string
   level: 'info' | 'debug' | 'warn' | 'error'
   message: string
+  decision?: AgentDecisionData
   metadata?: Record<string, any>
+}
+
+/** Companion-mode state carried on every progress update.
+ *
+ * The panel cannot infer this from the deploy snapshot: a companion starts with
+ * no plan and picks one up (or drops it) mid-session, so "what is running right
+ * now" is only knowable from the live stream. */
+export interface CompanionState {
+  active_activity: string | null
+  activities: Array<{ id?: string; title?: string; description?: string }>
 }
 
 // Processing message types that will be displayed in chat
@@ -160,6 +183,31 @@ export interface AgentSpeechProgress {
 }
 
 /**
+ * Emotion tags (#face-emotions): one cue parsed out of the agent's reply.
+ *
+ * `char` indexes the published `agent_text` — the same coordinate space
+ * `AgentSpeechProgress` reports the playhead in — so the client fires a cue
+ * when the teleprompter cursor reaches it, i.e. as its word is spoken.
+ */
+export interface AgentEmotionCue {
+  char: number
+  tag: string
+  /** 'expression' holds until the next cue; 'gesture' plays once. */
+  kind: 'expression' | 'gesture'
+}
+
+/**
+ * An `agent_emotion_cues` envelope. Carries the FULL cue list for the
+ * transcript every time, not a delta — replace by `transcript_id`, so a dropped
+ * packet heals on the next one rather than stranding the face on a stale
+ * expression.
+ */
+export interface AgentEmotionCues {
+  transcript_id?: string
+  cues?: AgentEmotionCue[]
+}
+
+/**
  * Barge-in (#15): an `agent_playback` envelope. A teleprompter-independent
  * signal emitted by the SDK whenever agent playback is interrupted/resumed, so
  * the client can silence the agent track on barge-in even when the teleprompter
@@ -178,6 +226,8 @@ export interface TransportEvents {
   onTranscript: (chunk: TranscriptChunk) => void
   /** Teleprompter (#241): word-by-word speech-progress for the agent's reply. */
   onSpeechProgress: (data: AgentSpeechProgress) => void
+  /** Emotion tags (#face-emotions): face cues keyed to offsets in agent_text. */
+  onEmotionCues: (data: AgentEmotionCues) => void
   onProcessingMessage: (message: ProcessingMessage) => void
   onServerMessage: (msg: unknown) => void
   onTTSStart: () => void
@@ -222,6 +272,7 @@ export type EnvelopeType =
   | 'transcript_chunk'
   | 'agent_text'
   | 'agent_speech_progress'
+  | 'agent_emotion_cues'
   | 'agent_playback'
   | 'system'
   | 'audio_data'
@@ -453,6 +504,8 @@ export interface TodoList {
   }
   conversation_age_minutes: number
   last_updated: string
+  /** Present only for companion-mode agents. */
+  companion?: CompanionState
   last_transition?: {
     from_state_id?: string
     to_state_id?: string

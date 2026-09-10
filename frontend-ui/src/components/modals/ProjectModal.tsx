@@ -15,6 +15,7 @@ import type {
   Project,
   AgentConfiguration,
   TtsCapabilities,
+  Persona,
 } from '../../lib/api-types'
 import { parseAgentRequirements } from '../../lib/api-types'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
@@ -22,6 +23,7 @@ import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib
 import {
   AgentGalleryStep,
   ConfigurationSelectionStep,
+  PersonaSelectionStep,
   PlanSelectionStep,
   VisualizerSelectionStep,
   ExpirationSelectionStep,
@@ -38,7 +40,7 @@ interface ProjectModalProps {
   onProjectUpdated?: (project: Project) => void
 }
 
-type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'voice' | 'plan' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
+type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
 type ProjectType = 'private' | 'public'
 type EnvVarsView = 'select' | 'edit'
 
@@ -56,12 +58,13 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'agent', number: 1, label: 'Select Agent' },
   { id: 'configure', number: 2, label: 'Configure' },
   { id: 'configuration', number: 3, label: 'Configuration' },
-  { id: 'plan', number: 4, label: 'Plan' },
-  { id: 'voice', number: 5, label: 'Voice & Language' },
-  { id: 'envvars', number: 6, label: 'Env Vars' },
-  { id: 'visualizer', number: 7, label: 'Visualizer' },
-  { id: 'duration', number: 8, label: 'Session Duration' },
-  { id: 'expiration', number: 9, label: 'Expiration' },
+  { id: 'persona', number: 4, label: 'Persona' },
+  { id: 'plan', number: 5, label: 'Plan' },
+  { id: 'voice', number: 6, label: 'Voice & Language' },
+  { id: 'envvars', number: 7, label: 'Env Vars' },
+  { id: 'visualizer', number: 8, label: 'Visualizer' },
+  { id: 'duration', number: 9, label: 'Session Duration' },
+  { id: 'expiration', number: 10, label: 'Expiration' },
 ]
 
 export default function ProjectModal({
@@ -101,6 +104,9 @@ export default function ProjectModal({
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([])
   const [selectedPlan, setSelectedPlan] = useState<PlanTemplate | null>(null)
   const [selectedConfiguration, setSelectedConfiguration] = useState<AgentConfiguration | null>(null)
+  // Persona (agent identity). Null = the system default, resolved server-side.
+  const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null)
+  const [personas, setPersonas] = useState<Persona[]>([])
 
   // Env var state (EnvVarsSelectionStep handles fetching templates)
   const [selectedEnvVarTemplate, setSelectedEnvVarTemplate] = useState<EnvVarTemplate | null>(null)
@@ -155,6 +161,10 @@ export default function ProjectModal({
     if (agentRequirements.supportsConfigurator && selectedAgentType?.pipelineSchema) {
       s.push('configuration')
     }
+    // Persona BEFORE plan: identity is the thing an operator picks first, and a
+    // public visitor never gets to choose it — whatever is set here is what
+    // every session on this link runs with.
+    s.push('persona')
     // Plan BEFORE voice: the plan may declare the language, and the voice step
     // needs to know that to skip the picker.
     if (agentRequirements.requiresPlan) {
@@ -232,6 +242,9 @@ export default function ProjectModal({
         setAgentIcon('🤖')
         setSelectedPlan(null)
         setSelectedConfiguration(null)
+        // Not reset when the agent type changes, unlike the configuration: a
+        // persona is deliberately agent-type independent (#467).
+        setSelectedPersona(null)
         setSelectedEnvVarTemplate(null)
         setEnvVars({})
         setEnvVarsView('select')
@@ -323,6 +336,10 @@ export default function ProjectModal({
         return selectedPlan !== null
       case 'configuration':
         return selectedConfiguration !== null
+      case 'persona':
+        // Optional: skipping means the system default, which is what every
+        // public project got before this step existed.
+        return true
       case 'envvars':
         // If a template is selected, we can proceed (template has the values stored securely on server)
         if (selectedEnvVarTemplate !== null) {
@@ -398,6 +415,10 @@ export default function ProjectModal({
             // defaults-merged config. Keep the inline snapshot as a fallback.
             agentConfig.agentConfigurationId = selectedConfiguration.id
             agentConfig.pipelineConfig = selectedConfiguration.configuration as unknown as Record<string, unknown>
+          }
+
+          if (selectedPersona) {
+            agentConfig.personaId = selectedPersona.id
           }
 
           if (selectedEnvVarTemplate) {
@@ -988,6 +1009,25 @@ export default function ProjectModal({
                     capabilities={selectedAgentType.capabilities}
                     selectedConfiguration={selectedConfiguration}
                     onSelectConfiguration={setSelectedConfiguration}
+                  />
+                </motion.div>
+              )}
+
+              {/* Persona Step */}
+              {step === 'persona' && (
+                <motion.div
+                  key="persona"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <PersonaSelectionStep
+                    selectedPersona={selectedPersona}
+                    onSelectPersona={setSelectedPersona}
+                    personas={personas}
+                    onPersonasChange={setPersonas}
                   />
                 </motion.div>
               )}

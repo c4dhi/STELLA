@@ -21,6 +21,7 @@ import { AgentBuildModule } from './agent-build/agent-build.module';
 import { AgentImageModule } from './agent-image/agent-image.module';
 import { AgentUploadModule } from './agent-upload/agent-upload.module';
 import { PlanTemplatesModule } from './plan-templates/plan-templates.module';
+import { PersonasModule } from './personas/personas.module';
 import { EnvVarTemplatesModule } from './env-var-templates/env-var-templates.module';
 import { PublicProjectsModule } from './public-projects/public-projects.module';
 import { MetricsModule } from './metrics/metrics.module';
@@ -59,6 +60,7 @@ const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : 
     AgentImageModule,
     AgentUploadModule,
     PlanTemplatesModule,
+    PersonasModule,
     EnvVarTemplatesModule,
     PublicProjectsModule,
     MetricsModule,

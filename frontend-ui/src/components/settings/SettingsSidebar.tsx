@@ -3,7 +3,7 @@ import { useThemeStore } from '../../store/themeStore'
 import { useNotificationStore } from '../../store/notificationStore'
 import { useAuthStore } from '../../store/authStore'
 
-export type SettingsSection = 'profile' | 'preferences' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin'
+export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin'
 
 interface SettingsSidebarProps {
   activeSection: SettingsSection
@@ -74,6 +74,17 @@ const sections: SectionItem[] = [
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+      </svg>
+    ),
+  },
+  {
+    id: 'personas',
+    label: 'Personas',
+    description: 'Who your agents are',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M12 2a5 5 0 0 1 5 5v1a5 5 0 0 1-10 0V7a5 5 0 0 1 5-5z" />
+        <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
       </svg>
     ),
   },

@@ -41,6 +41,16 @@ class StateMachineServiceStub:
                 request_serializer=state__machine__pb2.InitializeRequest.SerializeToString,
                 response_deserializer=state__machine__pb2.InitializeResponse.FromString,
                 _registered_method=True)
+        self.LoadPlan = channel.unary_unary(
+                '/stella.statemachine.v1.StateMachineService/LoadPlan',
+                request_serializer=state__machine__pb2.LoadPlanRequest.SerializeToString,
+                response_deserializer=state__machine__pb2.LoadPlanResponse.FromString,
+                _registered_method=True)
+        self.ClearPlan = channel.unary_unary(
+                '/stella.statemachine.v1.StateMachineService/ClearPlan',
+                request_serializer=state__machine__pb2.ClearPlanRequest.SerializeToString,
+                response_deserializer=state__machine__pb2.ClearPlanResponse.FromString,
+                _registered_method=True)
         self.CompleteTask = channel.unary_unary(
                 '/stella.statemachine.v1.StateMachineService/CompleteTask',
                 request_serializer=state__machine__pb2.CompleteTaskRequest.SerializeToString,
@@ -100,6 +110,25 @@ class StateMachineServiceServicer:
 
     def Initialize(self, request, context):
         """Initialize state machine for a session
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def LoadPlan(self, request, context):
+        """Replace the session's plan, discarding any progress (companion mode #467).
+        Distinct from Initialize, which RESUMES an existing state so a paused agent
+        can be restarted without losing progress. Starting an activity is the
+        opposite intent: a fresh run of a plan the user just picked.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ClearPlan(self, request, context):
+        """Drop the session's plan entirely and return to free-flow companion mode.
+        Used when the user abandons an activity mid-way, or when a plan reaches its
+        end and the companion takes the floor back instead of the session ending.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -185,6 +214,16 @@ def add_StateMachineServiceServicer_to_server(servicer, server):
                     request_deserializer=state__machine__pb2.InitializeRequest.FromString,
                     response_serializer=state__machine__pb2.InitializeResponse.SerializeToString,
             ),
+            'LoadPlan': grpc.unary_unary_rpc_method_handler(
+                    servicer.LoadPlan,
+                    request_deserializer=state__machine__pb2.LoadPlanRequest.FromString,
+                    response_serializer=state__machine__pb2.LoadPlanResponse.SerializeToString,
+            ),
+            'ClearPlan': grpc.unary_unary_rpc_method_handler(
+                    servicer.ClearPlan,
+                    request_deserializer=state__machine__pb2.ClearPlanRequest.FromString,
+                    response_serializer=state__machine__pb2.ClearPlanResponse.SerializeToString,
+            ),
             'CompleteTask': grpc.unary_unary_rpc_method_handler(
                     servicer.CompleteTask,
                     request_deserializer=state__machine__pb2.CompleteTaskRequest.FromString,
@@ -265,6 +304,60 @@ class StateMachineService:
             '/stella.statemachine.v1.StateMachineService/Initialize',
             state__machine__pb2.InitializeRequest.SerializeToString,
             state__machine__pb2.InitializeResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def LoadPlan(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/stella.statemachine.v1.StateMachineService/LoadPlan',
+            state__machine__pb2.LoadPlanRequest.SerializeToString,
+            state__machine__pb2.LoadPlanResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ClearPlan(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/stella.statemachine.v1.StateMachineService/ClearPlan',
+            state__machine__pb2.ClearPlanRequest.SerializeToString,
+            state__machine__pb2.ClearPlanResponse.FromString,
             options,
             channel_credentials,
             insecure,

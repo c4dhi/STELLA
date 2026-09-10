@@ -19,6 +19,8 @@ upgrade can never silently change how an agent's prompts resolve.
 
 from stella_agent_sdk.prompts.base import PromptCompiler
 from stella_agent_sdk.prompts.placeholder_compiler import (
+    PersonaAwarePlaceholderCompiler,
+    resolve_persona_tokens,
     PlaceholderPromptCompiler,
     has_user_message_placeholder,
     validate_template,
@@ -55,6 +57,8 @@ __all__ = [
     "KNOWN_PLACEHOLDERS",
     "get_compiler",
     "register_compiler",
+    "PersonaAwarePlaceholderCompiler",
+    "resolve_persona_tokens",
     "available_versions",
     "latest_version",
     "render_prompt",

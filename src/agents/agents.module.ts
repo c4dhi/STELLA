@@ -7,6 +7,7 @@ import { AgentImageModule } from '../agent-image/agent-image.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module';
 import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module';
+import { PersonasModule } from '../personas/personas.module';
 
 /**
  * AgentsModule - Manages agent lifecycle.
@@ -24,6 +25,8 @@ import { AgentConfigurationsModule } from '../agent-configurations/agent-configu
     EnvVarTemplatesModule,
     // Resolve + validate stored pipeline configurations at deploy time.
     AgentConfigurationsModule,
+    // Resolve the persona (agent identity) snapshot at deploy time.
+    PersonasModule,
     forwardRef(() => AgentServerModule),
     forwardRef(() => SessionsModule),
   ],

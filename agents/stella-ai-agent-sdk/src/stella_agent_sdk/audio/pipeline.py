@@ -46,6 +46,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Deque, List, Optional
 
+from stella_agent_sdk.emotion.tags import EmotionCue
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
 from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
@@ -657,6 +658,25 @@ class AudioPipeline:
             os.getenv("BARGE_IN_DUCK_GAIN", "0.25")
         )))
         self._ducked = False
+        self._ducked_at = 0.0
+        # How long a duck may last WITHOUT the interruption being confirmed.
+        #
+        # The duck is a reflex fired on the VAD's first frame, and the comment
+        # above is only true — "it costs nothing to be wrong" — if being wrong
+        # is self-correcting. It was not. Every path that lifts the duck waits
+        # on something arriving: `speech_ended`, or a final transcript, or the
+        # agent running out of things to say. A provider that never sends the
+        # first two (the sherpa CPU provider emits `speech_started` and nothing
+        # else) leaves the agent ducked for the REST OF THE UTTERANCE on one
+        # frame of background noise, which is exactly how it was reported.
+        #
+        # Derived from the barge-in threshold rather than picked: if the user
+        # had really taken the floor, `speech_confirmed` would have arrived
+        # after barge_in_min_speech_ms of voiced audio. Once that much time has
+        # passed with no confirmation, whatever ducked us was not a turn — by
+        # the system's own definition — so come back up. The margin covers the
+        # round trip from the STT service.
+        self._duck_timeout_s = _env_float("BARGE_IN_DUCK_TIMEOUT_MS", 1200.0) / 1000.0
         # transcript_id of an utterance we have committed a voice barge-in for,
         # while waiting for its final to deliver as the interrupting turn.
         # Keyed on the id, not a bare flag, so the state cannot outlive its
@@ -745,6 +765,17 @@ class AudioPipeline:
         else:
             self._teleprompter_enabled = _tp_env.lower() in ("true", "1", "yes")
             self._teleprompter_env_locked = True
+        # Emotion tags (#face-emotions): the agent strips [tags] out of the
+        # reply and publishes them as cues keyed to offsets in the stripped
+        # text. Same default-on / env-locked contract as the teleprompter,
+        # which the cues share a coordinate space with.
+        _et_env = os.getenv("STELLA_EMOTION_TAGS_ENABLED")
+        if _et_env is None:
+            self._emotion_tags_enabled = True  # default on
+            self._emotion_tags_env_locked = False
+        else:
+            self._emotion_tags_enabled = _et_env.lower() in ("true", "1", "yes")
+            self._emotion_tags_env_locked = True
         # Character span of the sentence currently held in _cur_audio, used to
         # translate the byte-accurate playhead into a character offset in the
         # published agent_text. None when the held audio carries no offsets.
@@ -1401,8 +1432,27 @@ class AudioPipeline:
                         transcript=text,
                     )
 
-                # Keep the on-screen transcript live either way.
-                await self._publish_user_transcript(event)
+                # Keep the on-screen transcript live either way — but say what
+                # happened to it. Every FINAL that reaches this line is one the
+                # pipeline is about to drop: the carry-over branch above has
+                # already taken anything that started on an open gate or that
+                # cleared the interruption threshold, and this branch ends in
+                # `continue`, so nothing here ever becomes a turn.
+                #
+                # Reported as "I said mhm, it marked it as a turn, and kept
+                # speaking". The barge-in decision was right — the utterance
+                # never confirmed, so the agent correctly carried on. What was
+                # wrong was that the transcript went out unmarked and rendered
+                # as an ordinary delivered turn, which reads as the agent
+                # hearing you and ignoring you. The sibling case (the same
+                # backchannel decoded AFTER playback stops) has always been
+                # marked; the only thing separating them is whether the decode
+                # landed before or after the agent finished its sentence, which
+                # is not something the user can see or should have to.
+                #
+                # Partials stay unmarked: they are still live, and the final
+                # replaces them by transcript_id.
+                await self._publish_user_transcript(event, discarded=event.is_final)
                 continue
 
             # 1. Partials go out immediately so the bubble stays live. A FINAL
@@ -2099,6 +2149,39 @@ class AudioPipeline:
             },
         })
 
+    async def publish_emotion_cues(
+        self,
+        cues: List[EmotionCue],
+        transcript_id: str,
+    ) -> None:
+        """Publish the emotion cues parsed out of a reply (#face-emotions).
+
+        Carries the FULL cue list for the transcript every time, not a delta.
+        Same accumulated-snapshot contract as ``agent_text``: the client
+        replaces by ``transcript_id``, so a dropped packet heals on the next
+        one instead of leaving the face stuck on a stale expression.
+
+        Offsets index the STRIPPED text — the same text ``agent_text`` carries
+        and the same coordinate space ``agent_speech_progress`` reports its
+        playhead in — so the client fires each cue when its word is heard.
+
+        Unlike the teleprompter's ``target_char``, this needs no coupled
+        deploy: an older client ignores the unknown envelope type, and a newer
+        client against an older agent simply receives no cues.
+        """
+        logger.info(
+            "[EMOTION-TAGS] Publishing %d cue(s) for %s: %s",
+            len(cues), transcript_id, ", ".join(f"{c.tag}@{c.char}" for c in cues),
+        )
+        await self._room.publish_data({
+            "type": "agent_emotion_cues",
+            "data": {
+                "transcript_id": transcript_id,
+                "agent_id": self._agent_id,
+                "cues": [cue.to_payload() for cue in cues],
+            },
+        })
+
     async def speak(
         self,
         text: str,
@@ -2304,6 +2387,7 @@ class AudioPipeline:
         if self._ducked or self._barge_in_duck_gain >= 1.0:
             return
         self._ducked = True
+        self._ducked_at = time.monotonic()
         logger.info(f"[BARGE-IN] Ducking to {self._barge_in_duck_gain:.0%} — user is speaking")
 
     def unduck_speech(self) -> None:
@@ -2311,7 +2395,19 @@ class AudioPipeline:
         if not self._ducked:
             return
         self._ducked = False
+        self._ducked_at = 0.0
         logger.info("[BARGE-IN] Restored volume — user stopped without interrupting")
+
+    def _duck_expired(self) -> bool:
+        """Has the duck outlived the interruption it was waiting to confirm?
+
+        Checked where the gain is applied rather than on a timer, so it costs
+        one comparison per frame and cannot itself be the thing that fails to
+        fire.
+        """
+        if not self._ducked or self._duck_timeout_s <= 0:
+            return False
+        return time.monotonic() - self._ducked_at >= self._duck_timeout_s
 
     def suspend_speech(self) -> None:
         """Suspend playback reversibly (barge-in reflex).
@@ -2503,6 +2599,26 @@ class AudioPipeline:
             return
         self._teleprompter_enabled = True
         logger.info("[TELEPROMPTER] Enabled from agent declaration")
+
+    def enable_emotion_tags(self) -> None:
+        """Enable emotion-tag parsing because the agent declares support.
+
+        Same override contract as :meth:`enable_teleprompter`: an explicit
+        STELLA_EMOTION_TAGS_ENABLED wins either way.
+        """
+        if self._emotion_tags_env_locked:
+            logger.info(
+                f"[EMOTION-TAGS] Agent declares support; env override in effect "
+                f"(enabled={self._emotion_tags_enabled})"
+            )
+            return
+        self._emotion_tags_enabled = True
+        logger.info("[EMOTION-TAGS] Enabled from agent declaration")
+
+    @property
+    def emotion_tags_enabled(self) -> bool:
+        """Whether the agent should strip [tags] and publish cues for them."""
+        return self._emotion_tags_enabled
 
     def set_barge_in_decider(
         self, decider: Callable[[str], Awaitable["BargeInDecision"]]
@@ -3353,6 +3469,12 @@ class AudioPipeline:
 
                 # The agent is now audibly talking — a barge-in may start.
                 self._audio_active = True
+                if self._duck_expired():
+                    logger.info(
+                        f"[BARGE-IN] Duck expired after {self._duck_timeout_s:.1f}s with no "
+                        "confirmed speech — restoring volume (noise, not a turn)"
+                    )
+                    self.unduck_speech()
                 if self._ducked:
                     frame = _apply_gain(frame, self._barge_in_duck_gain)
                 await self._room.publish_audio(frame)

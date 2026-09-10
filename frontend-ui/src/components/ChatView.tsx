@@ -12,6 +12,13 @@ import ParticipantNotification from './ParticipantNotification'
 import { MessageBubble, useMessaging } from './messaging'
 import { determineMessageRole, extractSpeakerInfo } from '../lib/messageUtils'
 import type { ListenerStatus } from '../lib/api-types'
+import type { DebugData } from '../lib/types'
+
+/** Decisions ride the debug channel but are not diagnostics — see the filter
+ *  below. One predicate so the live and replayed paths cannot disagree. */
+function isDecisionMessage(msg: { type?: string; data?: unknown }): boolean {
+  return msg.type === 'debug' && !!(msg.data as DebugData | undefined)?.decision
+}
 
 interface ChatViewProps {
   listenerStatus?: ListenerStatus | null
@@ -35,12 +42,25 @@ export default function ChatView({
   // discrete progress events arrive via the store (bridged from PeerTransport);
   // the 60fps word cursor lives here, local to the chat subtree.
   const lastSpeechProgress = useStore(s => s.lastSpeechProgress)
+  // Emotion tags (#face-emotions): cues arrive the same way, and are resolved
+  // against the same cursor. The resolved expression goes BACK to the store
+  // because the face renders in the visualizer modal — a sibling subtree, not a
+  // child of the chat.
+  const lastEmotionCues = useStore(s => s.lastEmotionCues)
+  const setFaceExpression = useStore(s => s.setFaceExpression)
+  const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
+  const triggerFaceState = useStore(s => s.triggerFaceState)
   const {
     spokenChar,
     spokenTranscriptId,
     frozenSpoken,
     applyProgress,
     noteAgentText,
+    noteEmotionCues,
+    faceExpression,
+    faceGesture,
+    cuesByTranscript,
+    faceState,
   } = useTeleprompter()
   const processingMessages = useStore(s => s.processingMessages)
   const participantEvents = useStore(s => s.participantEvents)
@@ -275,6 +295,7 @@ export default function ChatView({
             component: messageData.component || 'agent',
             level: messageData.level || 'info',
             message: messageData.content || messageData.message || '',
+            decision: messageData.metadata?.decision,
             metadata: messageData.metadata || messageData
           },
           messageType: 'processing' as const,
@@ -350,16 +371,20 @@ export default function ChatView({
     }).filter((msg): msg is NonNullable<typeof msg> => msg !== null) // Remove nulls with type guard
 
     // Filter historical messages based on showProcessingMessages toggle
-    // When processing/debug is disabled, hide those messages from DB as well
+    // When processing/debug is disabled, hide those messages from DB as well —
+    // EXCEPT decisions. Those ride the debug channel for transport, but they are
+    // narrative, not diagnostics: "she started the memory game" is part of
+    // reading the conversation back, so the debug toggle must not swallow it.
     const filteredHistorical = showProcessingMessages
       ? historical
-      : historical.filter(msg => msg.messageType !== 'processing')
+      : historical.filter(msg => msg.messageType !== 'processing' || isDecisionMessage(msg))
 
     // Combine with live messages
     const liveTranscripts = turns.map(t => ({ ...t, messageType: 'transcript' as const, dataSource: 'live' as const }))
-    const processing = showProcessingMessages
-      ? processingMessages.map(p => ({ ...p, messageType: 'processing' as const, dataSource: 'live' as const }))
-      : []
+    const processing = (showProcessingMessages
+      ? processingMessages
+      : processingMessages.filter(isDecisionMessage)
+    ).map(p => ({ ...p, messageType: 'processing' as const, dataSource: 'live' as const }))
     const events = participantEvents.map(e => ({ ...e, messageType: 'participant' as const, dataSource: 'live' as const }))
 
     const combined = [...filteredHistorical, ...liveTranscripts, ...processing, ...events]
@@ -449,6 +474,26 @@ export default function ChatView({
       }
     }
   }, [turns, noteAgentText])
+
+  // Emotion tags (#face-emotions): feed cues in, publish what the cursor
+  // resolves back out to the face.
+  useEffect(() => {
+    if (lastEmotionCues) {
+      const { transcript_id, cues } = lastEmotionCues.data
+      noteEmotionCues(transcript_id || '', cues || [])
+    }
+  }, [lastEmotionCues, noteEmotionCues])
+
+  useEffect(() => {
+    setFaceExpression(faceExpression)
+  }, [faceExpression, setFaceExpression])
+
+  useEffect(() => {
+    if (faceGesture) triggerFaceGesture(faceGesture.tag)
+  }, [faceGesture, triggerFaceGesture])
+  useEffect(() => {
+    if (faceState) triggerFaceState(faceState.tag)
+  }, [faceState, triggerFaceState])
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -612,6 +657,11 @@ export default function ChatView({
                       spokenChar={spokenChar}
                       spokenTranscriptId={spokenTranscriptId}
                       frozenSpoken={frozenSpoken}
+                      // Admin board only: show what the model actually tagged.
+                      // Without this there is no way to tell a reply the model
+                      // tagged from one it did not, which is the single thing
+                      // you want to know while tuning the face.
+                      cues={cuesByTranscript[message.id]}
                     />
                   )
               ) : message.messageType === 'participant' ? (

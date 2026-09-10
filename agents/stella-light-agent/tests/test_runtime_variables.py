@@ -8,7 +8,7 @@ import re
 
 import yaml
 
-from stella_agent_sdk.prompts import KNOWN_PLACEHOLDERS
+from stella_agent_sdk.prompts import KNOWN_PLACEHOLDERS, get_compiler
 
 AGENT_DIR = os.path.dirname(os.path.dirname(__file__))
 MANIFEST_PATH = os.path.join(AGENT_DIR, "agent.yaml")
@@ -29,9 +29,18 @@ def _manifest():
 
 def _declared_tokens(runtime_vars):
     # Parametric vars (e.g. history) resolve as {{name_N}} → sentinel "name_N".
+    # Namespaced vars (persona) are excluded: they resolve as {{name.<key>}} by
+    # pattern, against per-deployment data, so there is no fixed token for
+    # KNOWN_PLACEHOLDERS to contain. They get their own guard below.
     return {
-        f"{v['name']}_N" if v.get("parametric") else v["name"] for v in runtime_vars
+        f"{v['name']}_N" if v.get("parametric") else v["name"]
+        for v in runtime_vars
+        if not v.get("namespaced")
     }
+
+
+def _namespaced(runtime_vars):
+    return {v["name"] for v in runtime_vars if v.get("namespaced")}
 
 
 def test_declared_runtime_variables_are_resolvable_by_the_compiler():
@@ -56,6 +65,26 @@ def test_every_resolvable_placeholder_is_declared_or_intentionally_omitted():
         f"SDK resolves placeholders the manifest neither declares nor intentionally "
         f"omits: {sorted(missing)}. Add them to runtimeVariables, or to "
         f"INTENTIONALLY_OMITTED with a reason."
+    )
+
+
+def test_namespaced_variables_are_supported_by_the_pinned_compiler():
+    """A namespace resolves by pattern, so KNOWN_PLACEHOLDERS cannot vouch for it.
+
+    The check that matters is the pinned COMPILER: {{persona.*}} only resolves
+    from 1.1.0 on. Declaring the palette entry while pinning 1.0.0 would put a
+    token in the UI that renders literally — and plan prose is spoken aloud, so
+    the user would hear the token read out.
+    """
+    manifest = _manifest()
+    namespaced = _namespaced(manifest.get("runtimeVariables") or [])
+    if not namespaced:
+        return
+    assert namespaced == {"persona"}, f"unknown namespace declared: {namespaced}"
+    version = (manifest.get("promptCompiler") or {}).get("version")
+    assert getattr(get_compiler(version), "RESOLVES_PERSONA", False), (
+        f"manifest declares the persona namespace but pins compiler {version}, "
+        "which does not resolve it"
     )
 
 

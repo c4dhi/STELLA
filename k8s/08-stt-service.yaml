@@ -77,20 +77,28 @@ spec:
               echo "$WHISPER_MODEL" > "$WHISPER_VERSION_FILE"
               echo "[STT Init] Whisper model download complete"
             fi
+          fi
 
-            # Silero VAD (needed for Whisper)
-            VAD_VERSION_FILE="/models/silero-vad/.version"
-            VAD_VERSION="v5"
+          # ================================================================
+          # Silero VAD (ALWAYS — both providers use it)
+          # ================================================================
+          # This used to sit inside the whisper branch, which is why sherpa
+          # deployments had no voice detection at all: the energy gate was the
+          # only thing standing between a passing truck and the agent ducking
+          # mid-sentence. Whisper loads this through torch; sherpa loads the
+          # same .onnx through sherpa-onnx's own binding. One model, one
+          # download, two consumers.
+          VAD_VERSION_FILE="/models/silero-vad/.version"
+          VAD_VERSION="v5"
 
-            if [ -f "$VAD_VERSION_FILE" ] && [ "$(cat $VAD_VERSION_FILE)" = "$VAD_VERSION" ]; then
-              echo "[STT Init] Silero VAD already downloaded (version: $VAD_VERSION)"
-            else
-              echo "[STT Init] Downloading Silero VAD..."
-              mkdir -p /models/silero-vad
-              SILERO_VAD_CACHE_DIR=/models/silero-vad python download_silero_vad.py
-              echo "$VAD_VERSION" > "$VAD_VERSION_FILE"
-              echo "[STT Init] Silero VAD download complete"
-            fi
+          if [ -f "$VAD_VERSION_FILE" ] && [ "$(cat $VAD_VERSION_FILE)" = "$VAD_VERSION" ]; then
+            echo "[STT Init] Silero VAD already downloaded (version: $VAD_VERSION)"
+          else
+            echo "[STT Init] Downloading Silero VAD..."
+            mkdir -p /models/silero-vad
+            SILERO_VAD_CACHE_DIR=/models/silero-vad python download_silero_vad.py
+            echo "$VAD_VERSION" > "$VAD_VERSION_FILE"
+            echo "[STT Init] Silero VAD download complete"
           fi
 
           echo "[STT Init] Model initialization complete!"

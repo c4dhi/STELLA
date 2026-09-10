@@ -36,6 +36,10 @@ interface PublicAgentConfig {
   // Preferred: resolved by ID at spawn (type/version-checked). pipelineConfig is a
   // backward-compatible inline snapshot for public projects saved before this field.
   agentConfigurationId?: string;
+  // Resolved by ID at spawn, like the pipeline configuration. Absent = the
+  // system default persona, which is what every public project got before the
+  // setup wizard could pick one.
+  personaId?: string;
   envVarTemplateId?: string;
   envVars?: Record<string, string>;
 }
@@ -220,9 +224,10 @@ export class PublicProjectsService {
       {
         name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
         icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-        agentType: project.publicAgentType?.slug || 'stella-light-agent',
+        agentType: project.publicAgentType?.slug || 'stella-v2-agent',
         config: this.buildRuntimeAgentConfig(agentConfig),
         agentConfigurationId: agentConfig?.agentConfigurationId,
+        personaId: agentConfig?.personaId,
         envVarTemplateId: agentConfig?.envVarTemplateId,
         envVars: agentConfig?.envVars,
       },
@@ -285,9 +290,10 @@ export class PublicProjectsService {
     const lastAgentConfig = {
       name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
       icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-      agentType: project.publicAgentType?.slug || 'stella-light-agent',
+      agentType: project.publicAgentType?.slug || 'stella-v2-agent',
       agentConfig: this.buildRuntimeAgentConfig(agentConfig),
       agentConfigurationId: agentConfig?.agentConfigurationId || null,
+      personaId: agentConfig?.personaId || null,
       envVarTemplateId: agentConfig?.envVarTemplateId || null,
       envVars: agentConfig?.envVars || {},
     };
@@ -410,9 +416,10 @@ export class PublicProjectsService {
           {
             name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
             icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-            agentType: project.publicAgentType?.slug || 'stella-light-agent',
+            agentType: project.publicAgentType?.slug || 'stella-v2-agent',
             config: this.buildRuntimeAgentConfig(agentConfig),
             agentConfigurationId: agentConfig?.agentConfigurationId,
+            personaId: agentConfig?.personaId,
             envVarTemplateId: agentConfig?.envVarTemplateId,
             envVars: agentConfig?.envVars,
           },

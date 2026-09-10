@@ -28,10 +28,16 @@ describe('stella-light-agent manifest', () => {
     const response = schema!.nodes.find((n) => n.id === 'response');
     expect(response).toBeDefined();
     const slotIds = response!.slots.map((s) => s.id);
-    // Persona + conversation guidelines are merged into a single combined system_prompt.
     expect(slotIds).toEqual(
-      expect.arrayContaining(['system_prompt', 'model', 'temperature', 'max_tokens']),
+      expect.arrayContaining(['conversation_style', 'model', 'temperature', 'max_tokens']),
     );
+
+    // The response node governs HOW the agent speaks, never WHO it is (#467).
+    // Both of these once carried identity; either one back on this node is a
+    // second source competing with the persona chosen at deploy, and it would
+    // win, because a saved configuration is applied after the persona resolves.
+    expect(slotIds).not.toContain('system_prompt');
+    expect(slotIds).not.toContain('persona');
 
     expect(schema!.thresholds.map((t) => t.id)).toContain('history_limit');
   });

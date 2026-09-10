@@ -22,6 +22,7 @@ import { sanitizeAgentConfig } from '../common/utils/sanitize-config';
 import { EncryptionService } from '../env-var-templates/encryption.service';
 import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service';
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service';
+import { PersonasService } from '../personas/personas.service';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -45,6 +46,8 @@ export class AgentsService {
     private readonly envVarTemplatesService: EnvVarTemplatesService,
     // Used to resolve + validate a stored pipeline configuration at deploy time.
     private readonly agentConfigurationsService: AgentConfigurationsService,
+    // Resolves the deploy-time persona snapshot (identity), independent of agent type.
+    private readonly personasService: PersonasService,
     private readonly eventEmitter: EventEmitter2,
     @Optional() private agentServerService?: AgentServerService,
     @Optional() @Inject(forwardRef(() => SessionsService)) private sessionsService?: SessionsService,
@@ -266,8 +269,10 @@ export class AgentsService {
       throw new NotFoundException('Session does not have an associated room');
     }
 
-    // Determine agent type (default to stella-light-agent)
-    const agentType = createAgentDto.agentType || 'stella-light-agent';
+    // Determine agent type. Defaults to stella-v2: an omitted agentType used
+    // to land silently on stella-light, which is deprecated — the least
+    // maintained agent was the one you got by not choosing.
+    const agentType = createAgentDto.agentType || 'stella-v2-agent';
 
     // Security: Validate agent type against allowed list
     const allowedAgentTypes = ['stella-v2-agent', 'stella-light-agent'];
@@ -472,7 +477,38 @@ export class AgentsService {
       | null,
     agentConfig: Record<string, unknown>,
   ): Promise<void> {
-    const { envVarTemplateId, agentConfigurationId } = createAgentDto;
+    const { envVarTemplateId, agentConfigurationId, personaId } = createAgentDto;
+
+    // Persona resolves even when nothing else is scoped: omitting personaId means
+    // "the system default", not "no persona", so this runs before the early return.
+    //
+    // Unless the config ALREADY carries a persona snapshot. That means this is a
+    // restart or an auto-pause wake replaying a previous deployment, not a fresh
+    // one — and agentConfig is defined to reproduce the original deployment
+    // rather than today's defaults. Resolving here regardless is how a paused
+    // Grace came back as STELLA: the wake path has no personaId to pass, so the
+    // system default silently overwrote the snapshot.
+    if (!agentConfig.persona) {
+      const persona = await this.personasService.resolveForDeploy(
+        personaId,
+        userId,
+      );
+      if (persona) {
+        agentConfig.persona = persona;
+      }
+    }
+
+    // Companion mode: snapshot the allow-listed plans into the config, the same
+    // way persona and pipeline_config are snapshotted. The activity set is then
+    // fixed for this deployment — editing a plan afterwards cannot change what a
+    // running session offers, and a restart reproduces the original set.
+    if (createAgentDto.mode === 'companion') {
+      agentConfig.mode = 'companion';
+      agentConfig.available_plans = await this.resolveAvailablePlans(
+        createAgentDto.availablePlanIds ?? [],
+        userId,
+      );
+    }
 
     if (!envVarTemplateId && !agentConfigurationId) return;
 
@@ -503,6 +539,57 @@ export class AgentsService {
   }
 
   /**
+   * Resolve the plans a companion may offer into self-contained activities.
+   *
+   * Each carries its FULL plan rather than an id: the agent loads one mid-turn,
+   * and a fetch at that moment would put a network round trip inside a
+   * conversational pause. Plans are a few KB each and capped at 20, which is
+   * well inside what the pod's config Secret holds.
+   *
+   * Ownership is enforced per plan through PlanTemplatesService, so a companion
+   * cannot be pointed at someone else's plan by id.
+   */
+  private async resolveAvailablePlans(
+    planIds: string[],
+    userId: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const activities: Array<Record<string, unknown>> = [];
+
+    for (const id of planIds) {
+      const template = await this.prisma.planTemplate.findUnique({
+        where: { id },
+      });
+      if (!template || template.userId !== userId) {
+        throw new BadRequestException(
+          `Plan ${id} is not available to this user`,
+        );
+      }
+
+      const content = (template.content ?? {}) as Record<string, unknown>;
+      activities.push({
+        id: template.id,
+        title: template.name,
+        description: template.description ?? '',
+        // Mapped to the canonical SDK plan shape, matching what the deploy modal
+        // builds for plan-following mode so both paths hand the agent one shape.
+        plan: {
+          id: template.id,
+          title: template.name,
+          description: template.description ?? '',
+          ...content,
+        },
+      });
+    }
+
+    if (activities.length === 0) {
+      this.logger.warn(
+        'Companion deployed with no available plans — it can converse but has nothing to offer',
+      );
+    }
+    return activities;
+  }
+
+  /**
    * Create an agent that runs as a standalone gRPC service.
    * The agent pod connects back to session-management via gRPC.
    * @param sessionId - The session ID
@@ -523,8 +610,10 @@ export class AgentsService {
       throw new Error('Session does not have an associated room');
     }
 
-    // Determine agent type (default to stella-light-agent)
-    const agentType = createAgentDto.agentType || 'stella-light-agent';
+    // Determine agent type. Defaults to stella-v2: an omitted agentType used
+    // to land silently on stella-light, which is deprecated — the least
+    // maintained agent was the one you got by not choosing.
+    const agentType = createAgentDto.agentType || 'stella-v2-agent';
     // Encrypt manual env vars so standalone agents have the same restart behavior as regular agents.
     const manualEnvVarsEncrypted = this.encryptManualEnvVarsForStorage(createAgentDto.envVars);
 
@@ -927,7 +1016,7 @@ export class AgentsService {
 
     // Emit SSE event so frontend updates in real-time
     if (this.sessionsService) {
-      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agent.agentType || 'stella-light-agent');
+      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agent.agentType || 'stella-v2-agent');
     }
 
     // Get environment variables
@@ -961,7 +1050,7 @@ export class AgentsService {
     }
 
     // Register pending session so gRPC agent registration can match
-    const agentType = agent.agentType || 'stella-light-agent';
+    const agentType = agent.agentType || 'stella-v2-agent';
     if (this.agentServerService) {
       const config: Record<string, string> = {
         sessionId: agent.sessionId,

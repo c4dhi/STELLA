@@ -37,6 +37,7 @@ from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.tools import ToolRegistry
 from stella_agent_sdk.tools.state_machine import create_state_machine_tools
+from stella_agent_sdk.tools.companion import create_companion_tools
 
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
@@ -53,6 +54,7 @@ from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 from stella_agent_sdk.language import LanguageResolver
 from stella_agent_sdk.agent import BargeInEvaluator
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
+from stella_agent_sdk.prompts import resolve_persona_tokens
 from stella_v2_agent.utils import normalize_transition_priority
 import logging
 
@@ -92,7 +94,7 @@ logger = logging.getLogger(__name__)
 # purpose (not the SDK's latest) so an SDK upgrade can't silently change how this
 # agent's expert prompts compile. Bump deliberately when adopting a new compiler
 # version. Can be overridden per deployment via config["compiler_version"].
-PROMPT_COMPILER_VERSION = "1.0.0"
+PROMPT_COMPILER_VERSION = "1.1.0"
 
 
 class StellaV2Agent(BaseAgent):
@@ -182,8 +184,17 @@ class StellaV2Agent(BaseAgent):
         # Session state
         self.config: Dict[str, Any] = {}
         self._session_started_at: Optional[str] = None
-        self._plan_system_prompt: Optional[str] = None
         self._plan_config: Optional[Dict[str, Any]] = None  # stored for context building
+        # Deployed Persona (#467): identity, resolved and snapshotted backend-side
+        # at deploy time. Independent of the plan and of the pipeline config.
+        self._persona_config: Optional[Dict[str, Any]] = None
+        # Companion mode: the agent converses freely and loads one of the
+        # allow-listed activities when the user picks it, instead of running a
+        # single plan from the start. Absent config = plan-following, unchanged.
+        self._companion_mode: bool = False
+        self._available_plans: List[Dict[str, Any]] = []
+        # Title of the activity currently running, for logs and the reply's context.
+        self._active_activity: Optional[str] = None
         self._custom_history_limit: int = 20  # overridable via pipeline_config thresholds
         self._last_known_state_id: Optional[str] = None
         self._last_state_id: Optional[str] = None  # for detecting state transitions between turns
@@ -252,8 +263,6 @@ class StellaV2Agent(BaseAgent):
             sm_context = {}
             if self.sm_client:
                 sm_context = await self._fetch_sm_context()
-            if self._plan_system_prompt:
-                sm_context["plan_system_prompt"] = self._plan_system_prompt
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
@@ -263,7 +272,7 @@ class StellaV2Agent(BaseAgent):
             # a very short window and, guessing wrong, translates rather than
             # mis-hears — which is how a fully-German plan ran its whole session
             # in English. A declaration removes the guess entirely.
-            plan_language = (self._plan_config or {}).get("language")
+            plan_language = self._resolved_pin_language(self._plan_config)
             self.language_resolver.set_plan_language(plan_language)
             if self.has_audio:
                 self.audio.set_stt_language(self.language_resolver.forced)
@@ -290,7 +299,10 @@ class StellaV2Agent(BaseAgent):
             # on every chunk so bridge and response are spoken in one coherent
             # voice. Providers that support voice selection honor it; others
             # disregard it. None → provider/env default.
-            resolved_voice = (self._plan_config or {}).get("voice") or None
+            # Persona owns voice identity (#467). plan.voice is gone: nothing ever
+            # wrote it, and keeping a second source would reintroduce the ambiguity
+            # the persona split removed.
+            resolved_voice = (self._persona_config or {}).get("voice") or None
             self._session_voice = resolved_voice
 
             yield AgentOutput.status(
@@ -411,6 +423,20 @@ class StellaV2Agent(BaseAgent):
                     component=f"expert:{v.expert_name}",
                     **v.to_debug_dict(),
                 )
+                # A verdict says what an expert concluded, not what it DID. Tool
+                # calls are the actual side effects of the turn — setting a
+                # deliverable, advancing the plan, starting an activity — and
+                # they were previously visible only in pod logs.
+                for call in (v.raw_output or {}).get("tool_results", []) or []:
+                    yield AgentOutput.tool_call(
+                        input.session_id,
+                        call.get("name", "unknown"),
+                        caller=v.expert_name,
+                        arguments=call.get("arguments"),
+                        success=bool(call.get("success")),
+                        data=call.get("data"),
+                        error=call.get("error"),
+                    )
 
             # Determine which deliverables were just collected by task_extraction
             # by comparing state machine before/after. This is more reliable than
@@ -444,6 +470,26 @@ class StellaV2Agent(BaseAgent):
                 user_input=input.text,
             )
 
+            # Companion routing (#467): the router's tools have already acted on the
+            # state machine; this reconciles the agent's own view and tells the
+            # reply what just happened. Folded in BEFORE the arbitration debug is
+            # published so that debug line reports the directive the response is
+            # actually written from, not a pre-companion draft of it.
+            companion = (
+                self._apply_companion_tool_results(all_verdicts)
+                if self._companion_mode
+                else {}
+            )
+            directive = arb_result.directive
+            if companion:
+                sm_context["companion"] = companion
+                # Its OWN field, not primary_action: primary_action loses to any
+                # expert follow-up question, and probing reliably produces one on
+                # exactly the turns the router fires — "what can we do?" is a
+                # probing cue too. Grace then spoke probing's question and invented
+                # household chores while the real activity list sat unread.
+                directive.routing_directive = self._companion_directive(companion)
+
             yield AgentOutput.debug(
                 input.session_id,
                 f"Arbitration: tone={arb_result.directive.tone}, favored={arb_result.favored_expert}",
@@ -459,9 +505,12 @@ class StellaV2Agent(BaseAgent):
                 turn_id=turn_id,
             )
 
+            if companion:
+                for decision in self._companion_decisions(input.session_id, companion):
+                    yield decision
+
             # Deterministic verdict directive: a flagging expert can replace the
             # generated response with a literature-informed template.
-            directive = arb_result.directive
             deterministic_response = (
                 directive.resolved_response
                 or directive.redirect_message
@@ -529,11 +578,19 @@ class StellaV2Agent(BaseAgent):
                     ),
                     {},
                 )
+                # Starting an activity is the SAME class of event as a mid-turn
+                # phase advance: the state machine changed after `sm_context` was
+                # read, so the turn-start snapshot no longer describes reality.
+                # Here it describes a session with no plan at all, and the reply
+                # would be improvised — the agent opened the fitness check-in by
+                # inventing a frequency question while the plan sat waiting on
+                # "greet and ask for name".
+                started_state_id = companion.get("started_state_id")
                 response_sm_context = await self._resolve_response_context(
                     sm_context,
                     resolved_language,
-                    transitioned=bool(te_raw.get("transitioned")),
-                    new_state_id=te_raw.get("new_state_id"),
+                    transitioned=bool(te_raw.get("transitioned")) or bool(started_state_id),
+                    new_state_id=te_raw.get("new_state_id") or started_state_id,
                     session_completed=bool(te_raw.get("session_completed")),
                 )
                 response_sm_context["_collected_keys"] = collected_keys
@@ -547,7 +604,6 @@ class StellaV2Agent(BaseAgent):
                     directive=arb_result.directive,
                     conversation_history=history,
                     sm_context=response_sm_context,
-                    plan_system_prompt=self._plan_system_prompt,
                     bridge=bridge,
                     prepend=prepend_text,
                     transcript_id=transcript_id,
@@ -705,10 +761,26 @@ class StellaV2Agent(BaseAgent):
                 farewell = self._plan_farewell_message()
             if farewell:
                 yield AgentOutput.text_final(session_id, farewell)
-            self._session_completed = True
-            logger.info(
-                f"Session {session_id} reached __end__ — fallback completion applied"
-            )
+
+            if self._companion_mode:
+                # A finished activity is not a finished conversation. The companion
+                # takes the floor back and keeps talking, so __end__ means "pop",
+                # not "hang up" — the plan's own farewell still plays as the
+                # hand-back line.
+                finished = self._active_activity
+                await self._return_to_companion(reason="activity reached its end")
+                yield AgentOutput.decision(
+                    session_id,
+                    "activity_completed",
+                    f"Finished “{finished}”" if finished else "Finished the activity",
+                    detail="Back to free conversation",
+                    component="companion_router",
+                )
+            else:
+                self._session_completed = True
+                logger.info(
+                    f"Session {session_id} reached __end__ — fallback completion applied"
+                )
 
         # Increment turn counter only when no progress was made and session is still active.
         if not deliverables_found and not tasks_completed and not reached_end_state:
@@ -729,7 +801,23 @@ class StellaV2Agent(BaseAgent):
                 farewell = self._plan_farewell_message()
                 if farewell:
                     yield AgentOutput.text_final(session_id, farewell)
-                self._session_completed = True
+                if self._companion_mode:
+                    # Same "pop, don't hang up" rule as the path above. An authored
+                    # turn_count_exceeded -> __end__ route reaches the end HERE, so
+                    # without this a stalled activity would end the whole session.
+                    finished = self._active_activity
+                    await self._return_to_companion(
+                        reason="activity reached its end via turn increment"
+                    )
+                    yield AgentOutput.decision(
+                        session_id,
+                        "activity_completed",
+                        f"Finished “{finished}”" if finished else "Finished the activity",
+                        detail="Back to free conversation",
+                        component="companion_router",
+                    )
+                else:
+                    self._session_completed = True
                 logger.info(
                     f"Session {session_id} reached __end__ via turn increment — "
                     "fallback completion applied"
@@ -760,7 +848,15 @@ class StellaV2Agent(BaseAgent):
             )
 
         # Emit final progress for this turn.
-        if full_state:
+        companion_meta = self._companion_progress_metadata()
+        full_state = full_state or {}
+        if self._companion_mode and not self._plan_config:
+            # The activity can have been dropped mid-turn — stopped by the user,
+            # or reached its end — AFTER full_state was fetched. Trust the agent's
+            # own view over that stale snapshot: publishing it would leave a
+            # finished plan on the panel with nothing left to advance it.
+            full_state = {}
+        if full_state or companion_meta:
             current_state_id = full_state.get("current_state_id")
             last_transition = self._build_last_transition_metadata(
                 from_state_id=self._last_known_state_id,
@@ -768,6 +864,10 @@ class StellaV2Agent(BaseAgent):
             )
             self._last_known_state_id = current_state_id
 
+            # The progress panel renders this text to the user, so it must show
+            # the resolved persona rather than the author's {{persona.*}} tokens.
+            if full_state:
+                self._resolve_persona_in_plan_text(full_state)
             progress_state = progress_from_full_state(
                 full_state,
                 plan=self._plan_config,
@@ -775,6 +875,7 @@ class StellaV2Agent(BaseAgent):
                 extra_metadata={
                     "architecture": "stella_v2_pipeline",
                     "last_transition": last_transition,
+                    **({"companion": companion_meta} if companion_meta else {}),
                 },
             )
             yield AgentOutput.progress_update(
@@ -795,8 +896,8 @@ class StellaV2Agent(BaseAgent):
 
         self._session_started_at = datetime.utcnow().isoformat() + "Z"
         self.config = config
-        self._plan_system_prompt = None
         self._plan_config = None
+        self._persona_config = self._load_persona_config(config)
         # Clear any resolved language from a previous session on this instance.
         self.language_resolver.reset()
         self._session_language = None
@@ -811,14 +912,27 @@ class StellaV2Agent(BaseAgent):
         # on the first turn is too late: the opening utterance is exactly the one
         # that gets misdetected (it is short, and often starts with a name), and
         # it is what confirms the lock for the rest of the session.
-        self.language_resolver.set_plan_language((plan or {}).get("language"))
+        self.language_resolver.set_plan_language(self._resolved_pin_language(plan))
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
             # Seed TTS too. The opening greeting is synthesised before any turn
             # resolves, so without this the agent's FIRST words come out in the
             # provider default while everything after them follows the plan.
             self.audio.set_tts_language(self.language_resolver.forced)
-        if plan:
+        # Companion mode is declared by the deploy config. A companion starts with
+        # NO plan — it converses until the user picks an activity — so the state
+        # machine connection cannot be gated on having one up front.
+        self._companion_mode = config.get("mode") == "companion"
+        self._available_plans = config.get("available_plans") or []
+        self._active_activity = None
+        if self._companion_mode:
+            logger.info(
+                "Companion mode: %d activit%s available",
+                len(self._available_plans),
+                "y" if len(self._available_plans) == 1 else "ies",
+            )
+
+        if plan or self._companion_mode:
             self._plan_config = plan
 
             # Connect to gRPC state machine service
@@ -827,24 +941,30 @@ class StellaV2Agent(BaseAgent):
                 address=self._state_machine_address,
             )
             await self.sm_client.connect()
-            result = await self.sm_client.initialize(plan)
 
-            if result and result.get("success"):
-                logger.info(f"State machine initialized via gRPC: {plan.get('title', 'Unknown')}")
-            else:
-                error = result.get("error", "unknown") if result else "no response"
-                logger.error(f"Failed to initialize state machine: {error}")
+            if plan:
+                result = await self.sm_client.initialize(plan)
+                if result and result.get("success"):
+                    logger.info(f"State machine initialized via gRPC: {plan.get('title', 'Unknown')}")
+                else:
+                    error = result.get("error", "unknown") if result else "no response"
+                    logger.error(f"Failed to initialize state machine: {error}")
 
             # Create tool registry with SDK state machine tools
             self.tool_registry = ToolRegistry()
             for tool in create_state_machine_tools(self.sm_client):
                 self.tool_registry.register(tool)
 
+            if self._companion_mode:
+                for tool in create_companion_tools(self._available_plans, self.sm_client):
+                    self.tool_registry.register(tool)
+
             # Wire tool registry into expert pool
             self.expert_pool.set_tool_registry(self.tool_registry)
 
-            if "system_prompt" in plan:
-                self._plan_system_prompt = plan["system_prompt"]
+            # A plan's system_prompt is deliberately NOT read (#467 phase 2).
+            # Identity comes from the deployed Persona alone; a hand-authored plan
+            # JSON cannot reintroduce a second source by carrying the old field.
 
         # Apply per-session expert overrides from config
         expert_overrides = config.get("expert_overrides", {})
@@ -880,15 +1000,56 @@ class StellaV2Agent(BaseAgent):
                 "configuration before deploying the agent."
             )
         self._apply_pipeline_config(pipeline_config)
+        # AFTER the saved configuration, and deliberately so. The router is not an
+        # assessment expert an operator opts into — it is the mechanism companion
+        # mode is made of, in the same way task_extraction is the mechanism plans
+        # are made of. Its enablement is therefore a function of the deploy MODE,
+        # not of the expert list, and a saved configuration must not be able to
+        # countermand it in either direction:
+        #   * enabled in companion mode — otherwise a config that happens to carry
+        #     `companion_router: {enabled: false}` (which is what the Configurator
+        #     saves today, since it ships disabled) degrades the session into a
+        #     companion that can never offer, start or stop anything, silently.
+        #   * disabled in plan mode — otherwise an operator who switched it on to
+        #     look at it pays for an LLM call every turn, for a router whose tools
+        #     are not even registered.
+        self.expert_registry.apply_config(
+            {"experts": {"companion_router": {"enabled": self._companion_mode}}}
+        )
+
+        # Plan text is persona-resolved once for the session. _fetch_sm_context
+        # resolves the per-turn copy it builds for prompts, but _plan_config is
+        # also read directly (progress payloads, farewell), and those readers were
+        # showing raw {{persona.name}} tokens in the UI.
+        if self._plan_config:
+            self._resolve_persona_in_plan_text(self._plan_config)
+
+        # The Configurator's persona slot is gone (#467), so there is no ordering
+        # hazard left here — identity has one source and this is simply where it
+        # is handed to the stage that speaks it.
+        if self._persona_config:
+            self.response_generator.persona = self._persona_config.get("system_prompt")
 
         logger.info(f"Session started: {session_id}")
 
     async def on_ready(self, session_id: str) -> AsyncIterator[AgentOutput]:
         """Send initial progress state when agent joins the room."""
         if self.sm_client:
-            full_state = await self.sm_client.get_full_state()
-            if full_state:
+            # ``or {}`` so the companion branch below can read it uninitialised:
+            # get_full_state() returns None when no plan row exists, which is the
+            # normal state for a companion that has not started an activity.
+            full_state = await self.sm_client.get_full_state() or {}
+            # Before anything reads companion state: the session may already be in
+            # an activity this pod knows nothing about.
+            self._rehydrate_active_activity(full_state)
+            # A companion joins with no plan at all, so gating on full_state alone
+            # would publish nothing and the panel would have no way to learn what
+            # this session can offer until the user happened to ask.
+            companion_meta = self._companion_progress_metadata()
+            if full_state or companion_meta:
                 self._last_known_state_id = full_state.get("current_state_id")
+                if full_state:
+                    self._resolve_persona_in_plan_text(full_state)
                 progress_state = progress_from_full_state(
                     full_state,
                     plan=self._plan_config,
@@ -896,6 +1057,7 @@ class StellaV2Agent(BaseAgent):
                     extra_metadata={
                         "architecture": "stella_v2_pipeline",
                         "last_transition": None,
+                        **({"companion": companion_meta} if companion_meta else {}),
                     },
                 )
                 yield AgentOutput.progress_update(
@@ -929,6 +1091,35 @@ class StellaV2Agent(BaseAgent):
             if stage and isinstance(node_config, dict) and hasattr(stage, "apply_config"):
                 stage.apply_config(node_config)
                 logger.info(f"Applied config to {node_id}")
+
+        # Emotion tags (#face-emotions). MUST come after apply_config: the
+        # guidelines this inspects are populated by it, so running earlier
+        # inspected an empty generator and the warning below could never fire —
+        # which is exactly how "the face never reacts" stayed undiagnosed.
+        #
+        # The flag only goes on while the pipeline is stripping tags. Asking the
+        # model for markup nothing removes would have TTS read "playful" aloud.
+        self.response_generator.emotion_tags = bool(
+            getattr(self, "supports_emotion_tags", False)
+            and getattr(self._audio_pipeline, "emotion_tags_enabled", False)
+        )
+        guidelines = getattr(self.response_generator, "custom_guidelines", None)
+        logger.info(
+            "[EMOTION-TAGS] enabled=%s, custom_guidelines=%s, carries_directive=%s",
+            self.response_generator.emotion_tags,
+            "yes" if guidelines else "no (SDK default)",
+            "{{emotionTags}}" in guidelines if guidelines else "n/a",
+        )
+        if self.response_generator.emotion_tags and guidelines and "{{emotionTags}}" not in guidelines:
+            # Nothing is appended in code — the guidelines own their layout — so
+            # a configured template without the variable simply never asks for
+            # tags, and the face never reacts with nothing to explain why.
+            logger.warning(
+                "[EMOTION-TAGS] Enabled, but the configured conversation "
+                "guidelines do not reference {{emotionTags}} — the model will "
+                "not be told the vocabulary and the face will not react. Add "
+                "{{emotionTags}} to the guidelines."
+            )
 
         # Apply expert registry config (experts and custom_experts are in expert_pool node)
         expert_pool_config = nodes.get("expert_pool", {})
@@ -981,6 +1172,7 @@ class StellaV2Agent(BaseAgent):
 
         self.config = {}
         self._plan_config = None
+        self._persona_config = None
         self._last_known_state_id = None
         logger.info(f"Session ended: {session_id}")
         return summary
@@ -1033,6 +1225,196 @@ class StellaV2Agent(BaseAgent):
     # Helper methods
     # ─────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _companion_directive(companion: Dict[str, Any]) -> str:
+        """Turn what the router did into one instruction for the reply.
+
+        Naming the options explicitly matters: without them the model happily
+        invents plausible-sounding activities that do not exist, which reads as a
+        broken promise the moment the user picks one.
+        """
+        if companion.get("activities") is not None:
+            activities = companion["activities"]
+            if not activities:
+                return (
+                    "The user asked what you can do together, but no activities are "
+                    "available. Say so plainly and keep the conversation going."
+                )
+            listed = "; ".join(
+                f"{a.get('title')}" + (f" ({a.get('description')})" if a.get("description") else "")
+                for a in activities
+            )
+            return (
+                "The user asked what you can do together. Offer exactly these, in "
+                f"your own words, and invite them to pick one: {listed}. "
+                "Do not invent any others."
+            )
+        if companion.get("started"):
+            return (
+                f"The user just chose '{companion['started']}' and it is now starting. "
+                "Acknowledge briefly, then do exactly what the current step below "
+                "instructs — do not re-ask which activity they want, and do not "
+                "invent an opening question of your own."
+            )
+        if companion.get("ended"):
+            return (
+                "The activity has just been stopped at the user's request. Close it "
+                "warmly, do not try to resume it, and return to open conversation."
+            )
+        return ""
+
+    @staticmethod
+    def _companion_decisions(
+        session_id: str, companion: Dict[str, Any]
+    ) -> List[AgentOutput]:
+        """Turn this turn's routing outcome into user-visible decision tags.
+
+        One outcome can only be one of these — the router calls a single tool
+        per turn — but returning a list keeps the caller a plain loop rather
+        than a chain of conditionals it would have to keep in sync.
+        """
+        decisions: List[AgentOutput] = []
+        activities = companion.get("activities")
+        if activities is not None:
+            titles = [a.get("title", "") for a in activities if a.get("title")]
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activities_offered",
+                f"Offered {len(titles)} activit{'y' if len(titles) == 1 else 'ies'}"
+                if titles else "No activities available",
+                options=titles,
+                component="companion_router",
+            ))
+        if companion.get("started"):
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activity_started",
+                f"Started “{companion['started']}”",
+                component="companion_router",
+            ))
+        if companion.get("ended"):
+            title = companion.get("ended_title")
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activity_ended",
+                f"Left “{title}”" if title else "Left the activity",
+                detail="Back to free conversation",
+                component="companion_router",
+            ))
+        return decisions
+
+    def _rehydrate_active_activity(self, full_state: Dict[str, Any]) -> None:
+        """A companion that restarts mid-activity must remember it.
+
+        on_session_start builds companion state from the DEPLOY config, which by
+        definition carries no plan — but the state-machine row outlives the pod,
+        so after a crash, a restart, or an auto-pause wake the session IS still
+        in an activity while the agent believes it is not. Left unfixed the agent
+        blanks the live plan off the panel on its first turn and authors replies
+        with no plan context at all — the same failure as starting an activity
+        without re-anchoring, arrived at from the other direction.
+        """
+        if not self._companion_mode or self._plan_config:
+            return
+        plan_id = full_state.get("plan_id")
+        if not plan_id:
+            return
+        for activity in self._available_plans:
+            if activity.get("id") == plan_id:
+                self._plan_config = activity.get("plan")
+                self._active_activity = activity.get("title")
+                self._resolve_persona_in_plan_text(self._plan_config)
+                logger.info(
+                    "Resumed mid-activity after restart: %s", self._active_activity
+                )
+                return
+        # The allow-list changed under a running activity (redeploy with a
+        # different selection). Nothing to resume onto, so drop back to free
+        # flow rather than running a plan the deployment no longer offers.
+        logger.warning(
+            "Session is in activity %s, which this deployment no longer offers — "
+            "returning to free conversation",
+            plan_id,
+        )
+
+    def _companion_progress_metadata(self) -> Optional[Dict[str, Any]]:
+        """What the progress panel needs to know about companion state.
+
+        Rides on every progress update so the panel can answer "is an activity
+        running right now, and if not what can I pick?" from one payload,
+        instead of the UI inferring it from a deploy-time snapshot that cannot
+        know what happened mid-session.
+        """
+        if not self._companion_mode:
+            return None
+        return {
+            "active_activity": self._active_activity,
+            "activities": [
+                {
+                    "id": a.get("id"),
+                    "title": a.get("title"),
+                    "description": a.get("description"),
+                }
+                for a in self._available_plans
+            ],
+        }
+
+    async def _return_to_companion(self, reason: str) -> None:
+        """Drop the running activity and go back to free-flow conversation.
+
+        Clears the state machine so every "no plan" path — prompts, progress,
+        experts — applies unchanged, which is exactly the state a companion turn
+        should be in. Leaves the session open: in companion mode the conversation
+        outlives any single activity.
+        """
+        if self.sm_client:
+            await self.sm_client.clear_plan()
+        self._plan_config = None
+        self._active_activity = None
+        self._last_known_state_id = None
+        logger.info("Back to companion mode (%s)", reason)
+
+    def _apply_companion_tool_results(self, verdicts: List[Any]) -> Dict[str, Any]:
+        """Read what the router did this turn, and reconcile the agent to it.
+
+        The tools already performed their side effects against the state machine;
+        this only syncs the agent's own view and returns what the reply needs to
+        know. Returns a dict that is empty on the common turn where the router
+        abstained.
+        """
+        outcome: Dict[str, Any] = {}
+        for verdict in verdicts or []:
+            if getattr(verdict, "expert_name", "") != "companion_router":
+                continue
+            for result in (verdict.raw_output or {}).get("tool_results", []) or []:
+                data = result.get("data") or {}
+                if data.get("offer_activities"):
+                    outcome["activities"] = data.get("activities", [])
+                if data.get("activity_started"):
+                    self._active_activity = data.get("activity_title")
+                    # The plan was loaded backend-side by the tool; adopt it locally
+                    # so farewell/voice/language lookups resolve against it.
+                    for activity in self._available_plans:
+                        if activity.get("id") == data.get("activity_id"):
+                            self._plan_config = activity.get("plan")
+                            break
+                    outcome["started"] = self._active_activity
+                    # Where LoadPlan left the state machine. The response for THIS
+                    # turn must be authored against it — see _resolve_response_context.
+                    outcome["started_state_id"] = data.get("current_state_id")
+                if data.get("activity_ended"):
+                    # Capture the title BEFORE clearing it — the decision tag and
+                    # the sidebar both need to name what was just left, and by the
+                    # next line there is nothing left to name it with.
+                    outcome["ended"] = True
+                    outcome["ended_title"] = (
+                        self._active_activity or data.get("activity_title")
+                    )
+                    self._plan_config = None
+                    self._active_activity = None
+                    self._last_known_state_id = None
+        return outcome
+
     def _plan_farewell_message(self) -> Optional[str]:
         """Resolve the configured farewell from plan metadata, if any.
 
@@ -1049,6 +1431,70 @@ class StellaV2Agent(BaseAgent):
             .get("end_node_config", {})
             .get("farewell_message")
         )
+
+    # Plan-authored fields that a plan author writes prose into, and which may
+    # therefore want to name the agent. Structural fields (ids, types, statuses)
+    # are deliberately excluded.
+    _PLAN_TEXT_FIELDS = (
+        "title", "description", "instruction", "acceptance_criteria",
+        "goal_objective", "goal_context", "goal_depth_guidance",
+        "goal_boundaries", "goal_success_description",
+    )
+
+    def _resolve_persona_in_plan_text(self, node: Any) -> None:
+        """Resolve {{persona.*}} in plan-authored prose, in place.
+
+        Walks the assembled plan structures rather than the raw plan config,
+        because that is the form the prompt placeholders are rendered from.
+        No-ops when no persona is deployed.
+        """
+        persona = self._persona_config
+        if not persona:
+            return
+
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in self._PLAN_TEXT_FIELDS and isinstance(value, str):
+                    node[key] = resolve_persona_tokens(value, persona)
+                else:
+                    self._resolve_persona_in_plan_text(value)
+        elif isinstance(node, list):
+            for item in node:
+                self._resolve_persona_in_plan_text(item)
+
+    def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
+        """The declared language for the session, or None to detect per turn.
+
+        A plan's declaration always wins: a plan whose prompts and acceptance
+        criteria are written in German is German wherever it is deployed, so the
+        language belongs to that content. The persona's language is only a FALLBACK,
+        for deployments that have no plan at all (companion mode) — it must never
+        override a plan, or a stale persona setting could silently contradict the
+        language the plan is actually written in.
+        """
+        return (plan or {}).get("language") or (self._persona_config or {}).get("language")
+
+    def _load_persona_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Read the persona snapshot the backend resolved at deploy time (#467).
+
+        By value, never by reference: the backend writes the resolved fields into
+        the deploy config, so editing or deleting a Persona reaches the NEXT
+        deployment and can never restyle a session that is already running — the
+        same rule pipeline_config follows on restart. It is also what makes a study
+        session reproducible from its own config snapshot.
+
+        Absent for agents deployed before personas existed, which is why every
+        reader below treats it as optional.
+        """
+        persona = config.get("persona")
+        if not isinstance(persona, dict) or not persona.get("system_prompt"):
+            return None
+        logger.info(
+            "Loaded persona '%s' (%s)",
+            persona.get("name", "unnamed"),
+            "system default" if persona.get("is_system_default") else "operator-selected",
+        )
+        return persona
 
     def _load_plan_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Load plan configuration from config or disk."""
@@ -1157,8 +1603,6 @@ class StellaV2Agent(BaseAgent):
         if not (refreshed and refreshed.get("state")):
             return sm_context
 
-        if self._plan_system_prompt:
-            refreshed["plan_system_prompt"] = self._plan_system_prompt
         refreshed["language"] = resolved_language
         # _fetch_sm_context already detects the change vs the turn-start state;
         # set it explicitly so the response eases into the new phase.
@@ -1237,6 +1681,13 @@ class StellaV2Agent(BaseAgent):
                 state_entry["tasks"].append(task_entry)
             full_plan.append(state_entry)
 
+        # Plan-authored text is written by a plan author who cannot know which
+        # persona will run it, so {{persona.*}} is resolved here — once, centrally,
+        # before any of it is formatted into a prompt. Nothing else is substituted:
+        # this text becomes {{plan}} and {{current_focus}}, so resolving the wider
+        # palette here would be recursive.
+        self._resolve_persona_in_plan_text(full_plan)
+
         # Build deliverables list (pending with full detail + completed summary)
         deliverables_list: List[Dict[str, Any]] = [
             {
@@ -1271,6 +1722,9 @@ class StellaV2Agent(BaseAgent):
         self._last_state_id = current_state_id
 
         return {
+            # Persona reaches the prompt compiler through here, which is what makes
+            # {{persona.*}} resolvable in expert prompts and verdict templates.
+            "persona": self._persona_config or {},
             "full_plan": full_plan,
             "state": {
                 "id": current_state.get("state_id"),

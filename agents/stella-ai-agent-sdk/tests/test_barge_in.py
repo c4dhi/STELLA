@@ -296,6 +296,64 @@ async def test_text_alone_never_interrupts():
 
 
 @pytest.mark.asyncio
+async def test_a_dismissed_backchannel_is_published_as_dismissed():
+    """It is not enough to be right — the transcript has to say so.
+
+    Reported from a live session: the user said "mhm" while the agent was
+    talking, sherpa decoded it as "Is it", and the UI rendered that as an
+    ordinary delivered turn while the agent kept speaking. The barge-in
+    decision was correct (the utterance never confirmed, so the floor was
+    never yielded) but an unmarked bubble reads as the agent hearing you and
+    carrying on regardless.
+
+    The sibling case — the same backchannel whose decode lands AFTER playback
+    stops — has always been marked. The only thing separating them is whether
+    the decode beat the end of the agent's sentence, which is invisible to the
+    person who spoke.
+    """
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _event("Is", is_final=False),
+        _event("Is it", is_final=True),
+    ])
+
+    transcripts = [c for c in room.captured if c.get("type") == "transcript"]
+    assert transcripts, "the words were said — they still belong in the record"
+
+    final = transcripts[-1]["data"]
+    assert final["text"] == "Is it"
+    assert final["is_final"] is True
+    assert final["discarded"] is True, (
+        "a final the pipeline drops must be marked as dropped"
+    )
+
+    # Partials are still live text, not a verdict, so they stay unmarked.
+    for partial in transcripts[:-1]:
+        assert partial["data"]["discarded"] is False
+
+    # And the decision itself is unchanged: this was never a turn.
+    assert pipe._pending_barge_in is None
+    assert pipe._transcript_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_a_real_interruption_is_not_marked_dismissed():
+    """The guard on the fix: a confirmed interruption IS a turn and must not
+    be labelled as something the agent heard and moved past."""
+    pipe, room = make_pipeline()
+    await _run_detection(pipe, [
+        _event("wait", is_final=False),
+        _vad_barge_in(),
+        _event("wait stop", is_final=True),
+    ])
+    finals = [
+        c["data"] for c in room.captured
+        if c.get("type") == "transcript" and c["data"]["is_final"]
+    ]
+    assert finals and all(f["discarded"] is False for f in finals), finals
+
+
+@pytest.mark.asyncio
 async def test_no_barge_in_when_agent_not_audibly_talking():
     """Worker active (gate closed) but no frames flowing yet — e.g. still
     synthesizing. There is nothing to interrupt, so the signal is ignored."""

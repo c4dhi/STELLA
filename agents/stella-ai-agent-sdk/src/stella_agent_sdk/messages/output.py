@@ -336,6 +336,94 @@ class AgentOutput:
             },
         )
 
+    @classmethod
+    def tool_call(
+        cls,
+        session_id: str,
+        tool: str,
+        *,
+        caller: str = "agent",
+        arguments: Optional[Dict[str, Any]] = None,
+        success: bool = True,
+        data: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> "AgentOutput":
+        """Report one executed function call on the debug channel.
+
+        Tool calls are the actions an agent actually took, and until now they
+        were visible only in pod logs — an expert's debug line reports its
+        verdict, not what it did. Shaping them here keeps the envelope
+        identical across agents so the UI has one thing to render.
+
+        Args:
+            session_id: The session ID.
+            tool: Name of the function that was called.
+            caller: What invoked it (usually the expert name).
+            arguments: Arguments the model passed.
+            success: Whether the call succeeded.
+            data: The tool's returned data payload.
+            error: Failure reason, when ``success`` is False.
+        """
+        arg_preview = ", ".join(f"{k}={v!r}" for k, v in (arguments or {}).items())
+        if len(arg_preview) > 200:
+            arg_preview = arg_preview[:197] + "..."
+        return cls.debug(
+            session_id,
+            f"{caller} called {tool}({arg_preview})"
+            + ("" if success else f" — failed: {error}"),
+            component=f"tool:{tool}",
+            level="info" if success else "warn",
+            tool=tool,
+            caller=caller,
+            arguments=arguments or {},
+            success=success,
+            data=data or {},
+            **({"error": error} if error else {}),
+        )
+
+    @classmethod
+    def decision(
+        cls,
+        session_id: str,
+        kind: str,
+        label: str,
+        *,
+        detail: Optional[str] = None,
+        options: Optional[list] = None,
+        component: str = "agent",
+        **extra_metadata: Any,
+    ) -> "AgentOutput":
+        """Report a routing decision the user should be able to see.
+
+        Decisions ride the DEBUG channel deliberately: they persist, replay and
+        transport exactly like every other debug output, so this needs no new
+        envelope type and no backend change. The ``decision`` block is the only
+        thing that distinguishes them — the frontend renders a tag when it is
+        present and a diagnostic line when it is not. Keep it display-ready;
+        anything diagnostic belongs in ``**extra_metadata``.
+
+        Args:
+            session_id: The session ID.
+            kind: Machine-readable decision type (e.g. "activity_started").
+            label: Short human-readable summary of what was decided.
+            detail: Optional secondary line (e.g. the activity's description).
+            options: Choices offered to the user, when the decision was an offer.
+            component: Which component decided (e.g. "companion_router").
+            **extra_metadata: Additional debug data.
+        """
+        return cls.debug(
+            session_id,
+            f"{label} — {detail}" if detail else label,
+            component=component,
+            decision={
+                "kind": kind,
+                "label": label,
+                **({"detail": detail} if detail else {}),
+                **({"options": options} if options is not None else {}),
+            },
+            **extra_metadata,
+        )
+
     # --- Factory methods for ANALYTICS outputs ---
 
     @classmethod

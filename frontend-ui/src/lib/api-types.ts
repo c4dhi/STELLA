@@ -248,6 +248,16 @@ export interface CreateAgentDto {
   // verifies it matches this agent's type and is not outdated, and uses its
   // (defaults-merged) overrides as pipeline_config — ignoring any client pipeline_config.
   agentConfigurationId?: string
+  // Persona (agent identity) to deploy with. Resolved server-side and snapshotted
+  // into config.persona, so a later edit reaches the next deployment rather than
+  // this one. Omitted = the system default persona.
+  personaId?: string
+  // 'companion' = free-flow conversation the user can start activities from.
+  // Omitted / 'plan' = today's behaviour: one plan, loaded up front.
+  mode?: 'plan' | 'companion'
+  // Plans a companion may offer. Resolved and snapshotted server-side, so the
+  // activity set is fixed for the deployment.
+  availablePlanIds?: string[]
   envVarTemplateId?: string // environment variable template to use
   envVars?: Record<string, string> // additional env vars to merge with template (overrides template values)
 }
@@ -260,6 +270,10 @@ export interface AgentType {
   icon: string | null
   version: string
   isBuiltIn: boolean
+  /** Superseded but still deployable — existing deployments keep working. */
+  deprecated?: boolean
+  /** What to use instead. Shown next to the badge. */
+  deprecationNote?: string | null
   capabilities: string[]
   defaultConfig: Record<string, unknown>  // Default config for this agent type
   validationStatus?: AgentValidationStatus
@@ -854,7 +868,7 @@ export interface PlanMetadata {
  * When passed to the agent, these should be populated from PlanTemplate fields.
  *
  * Execution-focused fields:
- * - `states`, `initial_state_id`, `system_prompt`, `session_context`
+ * - `states`, `initial_state_id`, `session_context`
  *
  * Builder metadata:
  * - `metadata.plan_builder.start` for start-node behavior
@@ -868,7 +882,7 @@ export interface PlanContent {
   states: PlanState[]
   metadata?: PlanMetadata
   // Initial prompt configuration
-  system_prompt?: string           // Agent persona (snake_case for SDK consistency)
+  // system_prompt removed in #467 — identity lives on a Persona, not a plan.
   session_context?: SessionContext
   /**
    * ISO 639-1 code the conversation is conducted in (e.g. "de"). Absent or
@@ -903,6 +917,64 @@ export interface UpdatePlanTemplateDto {
   name?: string
   description?: string
   content?: PlanContent
+}
+
+// ============================================================================
+// Persona Types (agent identity — see docs/rfcs/2026-08-29_persona-separation.md)
+// ============================================================================
+
+/**
+ * Who the agent IS, separate from what it does (PlanTemplate) and how it runs
+ * (AgentConfiguration).
+ *
+ * Unlike an AgentConfiguration, a persona is NOT bound to an agent type and
+ * carries no version pinning — its prompt is injected verbatim by the agent
+ * rather than rendered through a per-agent-type variable palette, so it can
+ * never be invalidated by an agent version bump.
+ */
+export interface Persona {
+  id: string
+  /** Null for the system-owned default persona. */
+  userId?: string | null
+  name: string
+  description?: string
+  icon?: string
+  /** Injected verbatim — any {{placeholder}} here is passed through, not resolved. */
+  systemPrompt: string
+  /** TTS voice identity (a voice id, not a language). Empty = provider default. */
+  voice?: string
+  /** Fallback language for plan-less deployments. A plan's declared language wins. */
+  language?: string
+  /**
+   * Author-defined values, referenced from plans and agent configurations as
+   * {{persona.<key>}} so a fact about the agent is written down once.
+   * Keys must match /^[A-Za-z_][A-Za-z0-9_]*$/ to be addressable in a prompt.
+   */
+  variables?: Record<string, string>
+  /** The built-in fallback. Readable and duplicable by anyone; editable by nobody. */
+  isSystemDefault: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreatePersonaDto {
+  name: string
+  description?: string
+  icon?: string
+  systemPrompt: string
+  voice?: string
+  language?: string
+  variables?: Record<string, string>
+}
+
+export interface UpdatePersonaDto {
+  name?: string
+  description?: string
+  icon?: string
+  systemPrompt?: string
+  voice?: string
+  language?: string
+  variables?: Record<string, string>
 }
 
 // ============================================================================
@@ -1039,6 +1111,8 @@ export interface PublicAgentConfig {
   // ID (type/version-checked, defaults-merged). pipelineConfig is kept only as a
   // backward-compatible snapshot for public projects saved before this field.
   agentConfigurationId?: string
+  /** Persona (agent identity), resolved by ID at spawn. Absent = system default. */
+  personaId?: string
   envVarTemplateId?: string
   envVars?: Record<string, string>
 }

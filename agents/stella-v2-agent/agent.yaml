@@ -3,7 +3,7 @@ version: "1.0"
 metadata:
   name: "STELLA V2"
   slug: "stella-v2-agent"
-  version: "1.0.0"
+  version: "1.1.0"
   description: "Streamlined 3-stage pipeline: Expert Pool (self-gating), Deterministic Arbitration, Response Generator."
   icon: "🧠"
   tags:
@@ -17,6 +17,10 @@ capabilities:
   - text
   - plans
   - experts
+  # Free-flow mode that can load, run and drop plans mid-conversation. Gates the
+  # companion_router the same way `plans` gates task_extraction: both are
+  # mechanisms a mode is MADE of, not assessment experts an operator opts into.
+  - companion
 
 image:
   dockerfile: "Dockerfile"
@@ -139,25 +143,10 @@ pipelineSchema:
       icon: "💬"
       position: { row: 0, col: 3 }
       slots:
-        - id: persona
-          label: "Persona"
-          type: text
-          description: "Custom persona description (overrides default STELLA persona)"
-          default: |
-            You are STELLA — a warm, genuinely curious conversation partner with a personality of your own, not a survey with a friendly voice.
-            You have real spoken conversations while working toward collecting specific information and completing tasks. The task is the destination; the conversation is how you get there — so it should feel like talking to a sharp, interested person, never like filling out a form.
-
-            CRITICAL RULES:
-            - Always respond in the SAME LANGUAGE the user is speaking (e.g. German if they speak German, English if they speak English)
-            - Keep responses to 30-50 words (this is a voice conversation, not a text chat)
-            - NEVER mention internal systems, experts, extraction, deliverables, or any technical metadata
-            - NEVER say things like "Extracted X" or "deliverables not provided" — that is internal data, not conversation
-            - React to the specific thing the user said and move forward — never re-ask something they already answered
-            - Ask for missing information naturally, one thing at a time
         - id: conversation_guidelines
           label: "Conversation Guidelines"
           type: text
-          description: "Custom conversation style guidelines (overrides defaults). Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
+          description: "Custom conversation style guidelines (overrides defaults). Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
           default: |
             CONVERSATIONAL STYLE (spoken aloud via TTS — follow strictly):
 
@@ -194,8 +183,13 @@ pipelineSchema:
             - No markdown, bullets, numbered lists, or emojis.
 
             The right feel (match the spirit, never copy):
+            {{#if emotionTags}}
+            - "I like bodyweight stuff and running." -> "[happy] Oh, the no-equipment route — you can train anywhere, no excuses. [curious] Is the running your wind-down or the main event?"
+            - "Like 2 or 3 times." -> "[neutral] Two, three times — [nod] enough to keep the habit going without it taking over your week. [curious] What does a typical session look like?"
+            {{else}}
             - "I like bodyweight stuff and running." -> "Oh, the no-equipment route — you can train anywhere, no excuses. Is the running your wind-down or the main event?"
             - "Like 2 or 3 times." -> "Two, three times — enough to keep the habit going without it taking over your week. What does a typical session look like?"
+            {{/if}}
             {{#if taskJustCollected}}{{#if stateCompleting}}
 
             They just gave everything this phase needed. Don't re-ask any of it — acknowledge what they shared and glide into the next topic so it feels like a conversation, not a checklist.{{#if nextTopicHint}} Next topic: {{nextTopicHint}}{{/if}}{{else}}
@@ -204,15 +198,6 @@ pipelineSchema:
             {{#if stateJustChanged}}
 
             You just moved into a new phase. Ease in — connect it to what you were just talking about rather than announcing a topic change.
-            {{/if}}
-            {{#if bridge}}
-
-            CONTINUE FROM YOUR OPENER (most important — you are mid-sentence):
-            - You have ALREADY said this aloud a moment ago: "{{bridge}}". Your reply is appended to it and spoken as ONE continuous utterance.
-            - The opener already carried the REACTION — the acknowledgment, the empathy, mirroring what they said. Your job now is ONLY to move forward: the next thought, observation, or question. Do NOT re-acknowledge, re-empathize, or reflect their answer back again.
-            - Pick up mid-breath as the same person. Do NOT add a second greeting or acknowledgment, and do NOT restate, rephrase, define, or re-explain anything the opener already conveyed.
-            - Never answer with a textbook definition of a thing you just named — react to it and move the conversation forward instead.
-            - Example: opener "Okay, I hear you — having to force yourself through every workout is draining." -> continue "Let's find something that doesn't feel like a chore. When you do move and it actually feels good, what are you usually doing?" (NOT another round of "That sounds really tough...").
             {{/if}}
             {{#if directive}}
 
@@ -230,6 +215,22 @@ pipelineSchema:
             {{#if language}}
 
             {{language}}
+            {{/if}}
+            {{#if emotionTags}}
+
+            {{emotionTags}}
+            {{/if}}
+            {{#if bridge}}
+
+            CONTINUE FROM YOUR OPENER (most important — you are mid-sentence):
+            - You have ALREADY said this aloud a moment ago: "{{bridge}}". Your reply is appended to it and spoken as ONE continuous utterance.
+            - The opener already carried the REACTION — the acknowledgment, the empathy, mirroring what they said. Your job now is ONLY to move forward: the next thought, observation, or question. Do NOT re-acknowledge, re-empathize, or reflect their answer back again.
+            - You are one person mid-sentence, not two people talking. NEVER react to, agree with, or be pleased about the opener — it came out of your own mouth. "I'm doing well, thanks for asking!" is followed by "And you? What have you been up to?", never by "I'm glad to hear that!". "I can hear you loud and clear!" is followed by "What's on your mind today?", never by "That's great!".
+            - Tagging does not change WHAT you say. The tag goes in front of the forward move — "[curious] What have you been up to?" — never in front of a reaction to your own words.
+            - NEVER repeat or rephrase the opener. You have ALREADY said "{{bridge}}" out loud a moment ago; saying it again, or answering it as though someone else had said it, is the single worst thing you can do here. If the user only greeted you and the opener already covered it, skip straight to your question.
+            - Pick up mid-breath as the same person. Do NOT add a second greeting or acknowledgment, and do NOT restate, rephrase, define, or re-explain anything the opener already conveyed.
+            - Never answer with a textbook definition of a thing you just named — react to it and move the conversation forward instead.
+            - Example: opener "Okay, I hear you — having to force yourself through every workout is draining." -> continue "Let's find something that doesn't feel like a chore. When you do move and it actually feels good, what are you usually doing?" (NOT another round of "That sounds really tough...").
             {{/if}}
         - id: model
           label: "Model"
@@ -446,8 +447,10 @@ pipelineSchema:
       default: 1
 
 # SDK prompt-compiler version this agent resolves {{placeholder}} tokens with.
+# 1.1.0 adds the {{persona.*}} namespace. 1.0.0 stays registered in the SDK, so
+# configurations authored against it keep compiling unchanged.
 promptCompiler:
-  version: "1.0.0"
+  version: "1.1.0"
 
 # {{placeholder}} palette offered in the Agent Configurator. Mirrors the SDK
 # placeholder compiler's resolvable set (stella_agent_sdk.prompts palette()).
@@ -499,6 +502,14 @@ runtimeVariables:
     label: language
     description: "Resolved session language (single source of truth, #214)"
     preview: "German"
+  - name: persona
+    label: persona.key
+    # A NAMESPACE, not a flat token: it resolves as {{persona.<key>}} against the
+    # deployed persona, so the compiler matches it by pattern rather than by name.
+    namespaced: true
+    parametric: true
+    description: "A value defined once on the deployed Persona (e.g. {{persona.name}}). Built-ins: name, voice, language; any other key comes from the persona's own variables. Resolvable here and in a plan's own text, so identity is stated in one place."
+    preview: "Grace"
 
 sdk:
   minVersion: "0.4.0"

@@ -44,8 +44,16 @@ class ResponseGenerator:
         self.response_model = "gpt-4o-mini"
         self.response_max_tokens = 200
         self.response_temperature = 0.7
-        self.custom_persona: Optional[str] = None
         self.custom_guidelines: Optional[str] = None
+        # Identity from the deployed Persona entity (#467). Set by the agent from
+        # the deploy config, not by apply_config: a persona is deliberately NOT a
+        # pipeline slot, which is what keeps it free of agent-type version pinning.
+        self.persona: Optional[str] = None
+        # Emotion tags (#face-emotions): set by the agent from the pipeline's
+        # own flag, so the prompt only asks for tags while something is there to
+        # strip them back out.
+        self.emotion_tags: bool = False
+        self._logged_emotion_prompt: bool = False
         # 0 = use every turn the agent fetched. The agent decides how much
         # history is worth carrying (_custom_history_limit, 20 by default) and
         # hands exactly that much to generate(); this stage must not silently
@@ -62,8 +70,11 @@ class ResponseGenerator:
             self.response_max_tokens = int(config["max_tokens"])
         if "temperature" in config:
             self.response_temperature = float(config["temperature"])
-        if "persona" in config:
-            self.custom_persona = config["persona"]
+        # "persona" was a slot here until #467. Identity is not pipeline config:
+        # binding it to an agent type meant one saved configuration per persona,
+        # when the whole point is that many personas share one configuration.
+        # Configs saved before the slot was removed still carry the key; it is
+        # deliberately ignored rather than pruned, so no stored data is rewritten.
         if "conversation_guidelines" in config:
             self.custom_guidelines = config["conversation_guidelines"]
         if "history_limit" in config:
@@ -76,7 +87,6 @@ class ResponseGenerator:
         directive: ResponseDirective,
         conversation_history: List[Dict[str, str]],
         sm_context: Dict[str, Any],
-        plan_system_prompt: Optional[str] = None,
         bridge: str = "",
         prepend: str = "",
         transcript_id: Optional[str] = None,
@@ -89,7 +99,6 @@ class ResponseGenerator:
             directive: Arbitration directive with expert guidance.
             conversation_history: Recent conversation messages.
             sm_context: State machine context.
-            plan_system_prompt: Optional custom system prompt from the plan.
             bridge: Optional bridge phrase already emitted to TTS. The LLM
                     continues from this prefix so the response is coherent.
             prepend: Optional deterministic, literature-informed line (from a
@@ -101,13 +110,21 @@ class ResponseGenerator:
             AgentOutput.text_chunk() for each token, with is_final=True on the last one.
         """
         system_prompt = build_response_system_prompt(
-            sm_context, directive, plan_system_prompt,
-            custom_persona=self.custom_persona,
+            sm_context, directive,
             custom_guidelines=self.custom_guidelines,
+            persona=self.persona,
+            emotion_tags=self.emotion_tags,
             conversation_history=conversation_history,
             history_limit=self.history_limit or len(conversation_history or []),
             bridge=bridge,
         )
+        if self.emotion_tags and not self._logged_emotion_prompt:
+            self._logged_emotion_prompt = True
+            logger.info(
+                "[EMOTION-TAGS] directive present in system prompt: %s",
+                "EMOTIONAL EXPRESSION" in system_prompt,
+            )
+
         user_message = build_response_user_message(user_input)
 
         messages = [

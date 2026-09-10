@@ -9,6 +9,7 @@ import ParticipantJoinPage from './pages/ParticipantJoinPage'
 import PublicProjectJoinPage from './pages/PublicProjectJoinPage'
 import StatusPage from './pages/StatusPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
+import FacePreviewPage from './pages/FacePreviewPage'
 import { ToastContainer } from './components/Toast'
 import PlanBuilderModal from './components/settings/PlanBuilder/PlanBuilderModal'
 import GlobalConfiguratorModal from './components/configurator/GlobalConfiguratorModal'
@@ -53,6 +54,8 @@ export default function App() {
         <Route path="/join/:token" element={<ParticipantJoinPage />} />
         <Route path="/p/:publicToken" element={<PublicProjectJoinPage />} />
         <Route path="/status" element={<StatusPage />} />
+        {/* Face preview (#face-emotions): compare expressions without a session. */}
+        <Route path="/face-preview" element={<FacePreviewPage />} />
 
         {/* Protected Routes */}
         <Route

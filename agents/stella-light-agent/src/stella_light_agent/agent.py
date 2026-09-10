@@ -21,6 +21,7 @@ from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.tools import ToolRegistry
 from stella_agent_sdk.tools.state_machine import create_state_machine_tools
+from stella_agent_sdk.prompts import resolve_persona_tokens
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
 
@@ -36,7 +37,9 @@ from stella_agent_sdk import prompts as sdk_prompts
 # purpose (not the SDK's latest) so an SDK upgrade can't silently change how this
 # agent's prompts compile. Bump deliberately when adopting a new compiler version.
 # Can be overridden per deployment via config["compiler_version"].
-PROMPT_COMPILER_VERSION = "1.0.0"
+# 1.1.0 resolves the {{persona.*}} namespace. 1.0.0 stays registered in the
+# SDK, so configurations pinned to it keep compiling exactly as before.
+PROMPT_COMPILER_VERSION = "1.1.0"
 
 
 class StellaLightAgent(BaseAgent):
@@ -116,12 +119,11 @@ class StellaLightAgent(BaseAgent):
         # Last state seen on a progress emit, so the next update can describe the
         # "branch chosen" (last_transition) at parity with stella-v2 (#310).
         self._last_known_state_id: Optional[str] = None
-        self._plan_system_prompt: Optional[str] = None
-        # Configurator overrides injected via SDK config (pipeline_config).
-        # Light exposes a single combined System Prompt (identity + conversational style).
-        self._custom_system_prompt: Optional[str] = None
-        # Legacy fields, still honored for configs saved before persona/guidelines were merged.
-        self._custom_persona: Optional[str] = None
+        # The deployed persona — the ONLY source of identity (#467). Snapshotted
+        # into the deploy config server-side, exactly as stella-v2 receives it.
+        self._persona_config: Optional[Dict[str, Any]] = None
+        # Configurator override for DELIVERY only. Identity is the persona's job;
+        # this shapes how the reply is spoken, not who is speaking.
         self._custom_guidelines: Optional[str] = None
         # Operator-editable prose blocks (response.* slots) — default text lives in
         # the prompt builder; these override it so the developer owns them from the
@@ -172,12 +174,12 @@ class StellaLightAgent(BaseAgent):
             self.llm_service.default_config.temperature = float(response["temperature"])
         if "max_tokens" in response:
             self.llm_service.default_config.max_tokens = int(response["max_tokens"])
-        # Combined identity + conversational style (current). Legacy persona/guidelines
-        # are still read so configs saved before the merge keep working.
-        if response.get("system_prompt"):
-            self._custom_system_prompt = response["system_prompt"]
-        if response.get("persona"):
-            self._custom_persona = response["persona"]
+        # Delivery style only. `system_prompt` / `persona` are deliberately NOT
+        # read any more: both carried identity, and identity now comes from the
+        # persona. Honouring them would silently reinstate the second source that
+        # #467 removed, and it would outrank the persona the operator picked.
+        if response.get("conversation_style"):
+            self._custom_guidelines = response["conversation_style"]
         if response.get("conversation_guidelines"):
             self._custom_guidelines = response["conversation_guidelines"]
         if response.get("safety_guidelines"):
@@ -207,7 +209,8 @@ class StellaLightAgent(BaseAgent):
             f"model={self.llm_service.default_config.model}, "
             f"temperature={self.llm_service.default_config.temperature}, "
             f"max_tokens={self.llm_service.default_config.max_tokens}, "
-            f"system_prompt={'custom' if (self._custom_system_prompt or self._custom_persona or self._custom_guidelines) else 'default'}, "
+            f"persona={'set' if self._persona_config else 'default'}, "
+            f"style={'custom' if self._custom_guidelines else 'default'}, "
             f"history_limit={self._history_limit}"
         )
 
@@ -235,19 +238,15 @@ class StellaLightAgent(BaseAgent):
                 user_input=user_input,
             )
 
-        if self._custom_system_prompt:
-            sm_context["custom_system_prompt"] = render(self._custom_system_prompt)
-        if self._custom_persona:
-            sm_context["custom_persona"] = render(self._custom_persona)
         if self._custom_guidelines:
             sm_context["custom_guidelines"] = render(self._custom_guidelines)
         if self._custom_safety_guidelines:
             sm_context["custom_safety_guidelines"] = render(self._custom_safety_guidelines)
         if self._custom_state_transition_note:
             sm_context["custom_state_transition_note"] = render(self._custom_state_transition_note)
-        # The plan system prompt may also contain placeholders.
-        if sm_context.get("plan_system_prompt"):
-            sm_context["plan_system_prompt"] = render(sm_context["plan_system_prompt"])
+        # The persona is injected verbatim, NOT rendered: a {{token}} an author
+        # writes in an identity prompt is part of the character's words, and
+        # stella-v2 makes the same choice — the two must not diverge.
 
     async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
         """
@@ -259,9 +258,7 @@ class StellaLightAgent(BaseAgent):
         """
         self.config = config
         self._session_started_at = datetime.now(timezone.utc).isoformat()
-        self._plan_system_prompt = None
-        self._custom_system_prompt = None
-        self._custom_persona = None
+        self._persona_config = config.get("persona")
         self._custom_guidelines = None
         self._custom_safety_guidelines = None
         self._custom_state_transition_note = None
@@ -279,6 +276,10 @@ class StellaLightAgent(BaseAgent):
 
         # Load plan configuration
         plan_config = self._load_plan_config(config)
+        # {{persona.name}} in plan prose is SPOKEN ALOUD, so it has to be
+        # resolved before the plan reaches a prompt or a progress payload —
+        # a raw token would be read out to the user verbatim.
+        self._resolve_persona_in_plan_text(plan_config)
         # Retain the raw plan so progress updates can expose per-state transitions.
         self._plan_config = plan_config
 
@@ -286,7 +287,7 @@ class StellaLightAgent(BaseAgent):
         # on the first turn is too late: the opening utterance is exactly the one
         # that gets misdetected (it is short, and often starts with a name), and
         # it is what confirms the lock for the rest of the session.
-        self.language_resolver.set_plan_language((plan_config or {}).get("language"))
+        self.language_resolver.set_plan_language(self._resolved_pin_language(plan_config))
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
             # Seed TTS too. The opening greeting is synthesised before any turn
@@ -296,11 +297,6 @@ class StellaLightAgent(BaseAgent):
 
         # Initialize tool-based state management (the only path).
         await self._init_tool_mode(session_id, plan_config)
-
-        # Extract custom system prompt from plan if provided
-        if plan_config and "system_prompt" in plan_config:
-            self._plan_system_prompt = plan_config["system_prompt"]
-            print("[StellaLightAgent] Using custom system prompt from plan")
 
         # Apply LLM config overrides
         llm_overrides = config.get("llm", {})
@@ -316,6 +312,45 @@ class StellaLightAgent(BaseAgent):
         pipeline_config = config.get("pipeline_config")
         if pipeline_config:
             self._apply_pipeline_config(pipeline_config)
+
+    _PLAN_TEXT_FIELDS = (
+        "title", "description", "instruction", "acceptance_criteria",
+        "goal_objective", "goal_context", "goal_depth_guidance",
+        "goal_boundaries", "goal_success_description",
+    )
+
+    def _resolve_persona_in_plan_text(self, node: Any) -> None:
+        """Resolve {{persona.*}} in plan-authored prose, in place.
+
+        Identical to stella-v2's: the two agents run the SAME plans, so a plan
+        that reads correctly under one and prints raw tokens under the other is
+        the worst kind of divergence — and these strings are spoken aloud.
+        No-ops when no persona is deployed.
+        """
+        persona = self._persona_config
+        if not persona:
+            return
+
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in self._PLAN_TEXT_FIELDS and isinstance(value, str):
+                    node[key] = resolve_persona_tokens(value, persona)
+                else:
+                    self._resolve_persona_in_plan_text(value)
+        elif isinstance(node, list):
+            for item in node:
+                self._resolve_persona_in_plan_text(item)
+
+    def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
+        """The declared language for the session, or None to detect per turn.
+
+        A plan's declaration always wins: a plan whose prompts and acceptance
+        criteria are written in German is German wherever it is deployed. The
+        persona's language is only a FALLBACK, for deployments with no plan —
+        it must never override a plan, or a stale persona setting could silently
+        contradict the language the plan is actually written in.
+        """
+        return (plan or {}).get("language") or (self._persona_config or {}).get("language")
 
     def _load_plan_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Load plan configuration from config or disk."""
@@ -410,6 +445,7 @@ class StellaLightAgent(BaseAgent):
                 print(f"[StellaLightAgent] Full state received: {full_state is not None}, keys: {list(full_state.keys()) if full_state else 'None'}")
 
                 if full_state:
+                    self._resolve_persona_in_plan_text(full_state)
                     # Anchor the transition tracker; the initial snapshot has no
                     # prior state, so there is no branch to report yet.
                     self._last_known_state_id = full_state.get("current_state_id")
@@ -556,10 +592,9 @@ class StellaLightAgent(BaseAgent):
         else:
             print("[StellaLightAgent] WARNING: sm_client is None!")
 
-        # Add custom system prompt from plan if available
-        if self._plan_system_prompt:
-            sm_context["plan_system_prompt"] = self._plan_system_prompt
-            print(f"[StellaLightAgent] Using plan system prompt: {self._plan_system_prompt[:100]}...")
+        # Identity for this turn. One source, snapshotted at deploy.
+        if self._persona_config:
+            sm_context["persona"] = self._persona_config.get("system_prompt")
 
         # Resolve the conversation language for this turn (single source of truth,
         # shared SDK logic — identical to stella-v2). A declared plan language
@@ -572,7 +607,7 @@ class StellaLightAgent(BaseAgent):
         # mis-hears — which is how a fully-German plan ran its whole session
         # in English. A declaration removes the guess entirely.
         self.language_resolver.set_plan_language(
-            (self._plan_config or {}).get("language")
+            self._resolved_pin_language(self._plan_config)
         )
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
@@ -675,6 +710,7 @@ class StellaLightAgent(BaseAgent):
             try:
                 full_state = await self.sm_client.get_full_state()
                 if full_state:
+                    self._resolve_persona_in_plan_text(full_state)
                     # Describe the "branch chosen" if the state changed this turn,
                     # then advance the tracker (parity with stella-v2, #310).
                     current_state_id = full_state.get("current_state_id")

@@ -27,6 +27,7 @@ model User {
   planTemplates              PlanTemplate[] // Plan templates created by this user
   envVarTemplates            EnvVarTemplate[] // Environment variable templates created by this user
   agentConfigurations        AgentConfiguration[] // Agent pipeline configurations created by this user
+  personas                   Persona[] // Personas (agent identity) created by this user
   messages                   UserMessage[] // Inbox messages for this user
   sentProjectInvitations     ProjectInvitation[]  @relation("SentInvitations")
   receivedProjectInvitations ProjectInvitation[]  @relation("ReceivedInvitations")
@@ -201,6 +202,13 @@ model AgentType {
 
   // Built-in vs custom
   isBuiltIn Boolean @default(true)
+
+  // Superseded, but still deployable. Distinct from validationStatus REJECTED,
+  // which hides a type entirely: a deprecated type keeps working for the
+  // deployments that already use it, and keeps its saved configurations valid.
+  // It is only demoted in the gallery so nobody picks it for something new.
+  deprecated      Boolean @default(false)
+  deprecationNote String? // What to use instead, shown next to the badge
 
   // Ownership (for custom agents)
   userId String? // Owner of custom agent (null for built-in)
@@ -615,4 +623,55 @@ model AgentConfiguration {
   @@index([agentTypeId])
   @@index([userId, agentTypeId])
   @@index([agentTypeId, compatibility])
+}
+
+// Agent identity — who the agent IS, separate from what it does (PlanTemplate)
+// and how it runs (AgentConfiguration). See docs/rfcs/2026-08-29_persona-separation.md.
+//
+// Deliberately carries NO agentTypeId, NO version pinning and NO pipeline knobs.
+// That is the invariant which keeps a persona from being invalidated by an agent
+// version bump the way an AgentConfiguration can be (ConfigCompatibility.OUTDATED),
+// and it holds because the persona prompt is injected VERBATIM by the agent — it
+// is never rendered through the per-agent-type placeholder palette, so it has no
+// dependency on any agent type.
+model Persona {
+  id          String  @id @default(uuid())
+  // Null = system-owned (the built-in default persona). onDelete: SetNull rather
+  // than Cascade: a persona losing its author must degrade to the default, never
+  // vanish, or offboarding a user could change the voice of a live or resumable
+  // session.
+  userId      String?
+  user        User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name        String // Display name, e.g. "Grace — clinical"
+  description String? @db.Text
+  icon        String?
+
+  // The identity prompt. Injected verbatim into the response prompt, so any
+  // {{placeholder}} written here is passed through untouched rather than resolved.
+  systemPrompt String  @db.Text
+  // TTS voice IDENTITY, not a language. The provider joins (voice, language) at
+  // synthesis and prefers keeping the voice over matching the language, so this
+  // stays stable while the conversation language is resolved per turn.
+  // Null = provider default ("auto").
+  voice    String?
+  // FALLBACK language only, for deployments with no plan. A plan that declares a
+  // language always wins — see frontend-ui/src/lib/sessionLanguage.ts.
+  language String?
+
+  // Author-defined values, referenced elsewhere as {{persona.<key>}} — in an
+  // AgentConfiguration's prompts and in a plan's own text. This is what lets a
+  // fact about the agent be stated ONCE here and inserted wherever it is needed,
+  // instead of being restated (and drifting) in each place.
+  // Shape: { "<key>": "<value>" }, flat, string values.
+  variables Json?
+
+  // Exactly one row has this set; it is the fallback when a deployment names no
+  // persona, or when a persona's owner has been deleted. Not user-deletable.
+  isSystemDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([isSystemDefault])
 }

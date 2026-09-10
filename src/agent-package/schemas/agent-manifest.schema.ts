@@ -331,6 +331,12 @@ export const agentManifestSchema = z
         .optional(),
       icon: z.string().optional(),
       tags: z.array(z.string()).optional(),
+      // Superseded, but still deployable. Unlike removing an agent from the
+      // registry (which retires it outright), this keeps existing deployments
+      // and their saved configurations working — it only demotes the type in
+      // the gallery so nobody picks it for something new.
+      deprecated: z.boolean().optional(),
+      deprecationNote: z.string().min(1).optional(),
     }),
     capabilities: z.array(z.string()).optional(),
     image: z

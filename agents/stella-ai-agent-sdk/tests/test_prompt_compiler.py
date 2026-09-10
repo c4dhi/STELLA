@@ -81,9 +81,22 @@ def test_compile_unknown_version_raises():
 
 def test_registry_has_builtin_version():
     assert COMPILER_VERSION in available_versions()
-    assert latest_version() == COMPILER_VERSION
     assert get_compiler(COMPILER_VERSION) is PlaceholderPromptCompiler
     assert issubclass(PlaceholderPromptCompiler, PromptCompiler)
+
+
+def test_persona_version_ships_alongside_the_base_version():
+    # 1.1.0 added the {{persona.*}} namespace as a SEPARATE registered version.
+    # get_compiler() raises on an unknown version, so replacing 1.0.0 in place
+    # would have broken every prompt and saved configuration pinned to it.
+    from stella_agent_sdk.prompts import PersonaAwarePlaceholderCompiler
+
+    assert COMPILER_VERSION in available_versions()
+    assert PersonaAwarePlaceholderCompiler.VERSION in available_versions()
+    assert latest_version() == PersonaAwarePlaceholderCompiler.VERSION
+    assert get_compiler(COMPILER_VERSION) is PlaceholderPromptCompiler
+    assert not PlaceholderPromptCompiler.RESOLVES_PERSONA
+    assert PersonaAwarePlaceholderCompiler.RESOLVES_PERSONA
 
 
 def test_get_compiler_requires_explicit_version():

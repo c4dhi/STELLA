@@ -20,7 +20,10 @@ authored for. Custom agents can add versions with :func:`register_compiler`.
 from typing import Dict, List, Optional, Type, Any
 
 from stella_agent_sdk.prompts.base import PromptCompiler
-from stella_agent_sdk.prompts.placeholder_compiler import PlaceholderPromptCompiler
+from stella_agent_sdk.prompts.placeholder_compiler import (
+    PlaceholderPromptCompiler,
+    PersonaAwarePlaceholderCompiler,
+)
 
 # version string -> compiler class
 _REGISTRY: Dict[str, Type[PromptCompiler]] = {}
@@ -111,3 +114,4 @@ def compile(
 
 # Register the built-in compiler version(s) shipped with the SDK.
 register_compiler(PlaceholderPromptCompiler)
+register_compiler(PersonaAwarePlaceholderCompiler)

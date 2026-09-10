@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../../store/themeStore'
 import type { PlanState, PlanTask, PlanDeliverable, StateType, StateGoal } from '../../../lib/api-types'
 import PlanTaskEditor from './PlanTaskEditor'
+import { VariableTextArea } from '../../shared/VariableText'
+import type { Persona } from '../../../lib/api-types'
 
 interface PlanStateEditorProps {
   state: PlanState
@@ -10,6 +12,8 @@ interface PlanStateEditorProps {
   onDelete: () => void
   createEmptyTask: () => PlanTask
   createEmptyDeliverable: () => PlanDeliverable
+  /** The author's personas, so {{persona.*}} can be offered and highlighted. */
+  personas?: Persona[]
 }
 
 export default function PlanStateEditor({
@@ -18,6 +22,7 @@ export default function PlanStateEditor({
   onDelete,
   createEmptyTask,
   createEmptyDeliverable,
+  personas = [],
 }: PlanStateEditorProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
@@ -94,12 +99,13 @@ export default function PlanStateEditor({
               </svg>
             </button>
           </div>
-          <textarea
+          <VariableTextArea
             value={state.description || ''}
-            onChange={(e) => onChange({ ...state, description: e.target.value || undefined })}
+            onChange={(v) => onChange({ ...state, description: v || undefined })}
+            personas={personas}
             placeholder="State description (optional)"
             rows={2}
-            className="input-field w-full min-w-0 resize-none"
+            className="min-w-0"
           />
           <div>
             <label className={`text-body-sm font-medium mb-2 block ${
@@ -152,12 +158,12 @@ export default function PlanStateEditor({
                 }`}>
                   Objective *
                 </label>
-                <textarea
+                <VariableTextArea
                   value={state.goal?.objective || ''}
-                  onChange={(e) => onChange({ ...state, goal: { ...state.goal, objective: e.target.value } as StateGoal })}
+                  onChange={(v) => onChange({ ...state, goal: { ...state.goal, objective: v } as StateGoal })}
+                  personas={personas}
                   placeholder="What should the conversation achieve? e.g., Understand the user's current exercise routine in enough detail to recommend a program"
                   rows={2}
-                  className="input-field w-full resize-none"
                 />
               </div>
               <div>
@@ -470,6 +476,7 @@ export default function PlanStateEditor({
                         className={`border-t ${isDark ? 'border-border-dark' : 'border-border'}`}
                       >
                         <PlanTaskEditor
+                            personas={personas}
                           task={task}
                           onChange={(updated) => handleUpdateTask(index, updated)}
                           createEmptyDeliverable={createEmptyDeliverable}
