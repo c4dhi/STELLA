@@ -66,6 +66,21 @@ jobs:
             sudo k3s kubectl rollout status "deployment/$d" -n ai-agents --timeout=600s
           done
 
+      - name: Verify text-to-speech loaded a voice model
+        # tts-service passes its probes even when the model failed to load: it
+        # starts the gRPC server anyway with "Provider: none" and every session
+        # is silent. transformers 5.17.0 did exactly that on the development
+        # server on 2026-09-10, behind a green run. Read the provider it chose.
+        run: |
+          LOGS=$(sudo k3s kubectl logs -n ai-agents deploy/tts-service -c tts-service 2>/dev/null)
+          PROVIDER=$(printf '%s\n' "$LOGS" | sed -n 's/.*\[TTS Service\] Provider: //p' | tail -1)
+          echo "tts provider=${PROVIDER:-<not reported>}"
+          if [ -z "$PROVIDER" ] || [ "$PROVIDER" = "none" ]; then
+            echo "::error::tts-service is running without a voice model (provider '${PROVIDER:-<not reported>}') - sessions would be silent"
+            printf '%s\n' "$LOGS" | grep -E "load failed|Error" | tail -5
+            exit 1
+          fi
+
       - name: Verify the running version is the one we just built
         # Asks the service itself rather than trusting the rollout. Uses node
         # (always in the image) so this needs no curl and no port-forward.

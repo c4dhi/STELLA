@@ -8,3 +8,10 @@
 #   matching CUDA wheel index.
 
 faster-qwen3-tts>=0.1.0
+
+# transformers 5.17.0 breaks model loading. Its Mimi weight init calls
+# qwen-tts's rope compat shim, which reads MimiConfig.rope_theta and raises
+# AttributeError; tts-service then starts anyway with "Provider: none" and
+# every session is silent. Production loads the model on 5.16.1 with the same
+# qwen-tts-hf. Lift this only after loading the model on a GPU host.
+transformers>=5.0,<5.17
