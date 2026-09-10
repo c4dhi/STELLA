@@ -54,6 +54,19 @@ class BatchUpdateTool(BaseTool):
                             "reasoning": {
                                 "type": "string",
                                 "description": "Why this value matches"
+                            },
+                            "unconfirmed": {
+                                "type": "boolean",
+                                "description": (
+                                    "Set true when the user mentioned this in passing "
+                                    "rather than answering a question about it — a "
+                                    "detail volunteered while talking about something "
+                                    "else, or one you inferred rather than were told. "
+                                    "It is recorded either way, but an unconfirmed "
+                                    "value gets checked back with the user in "
+                                    "conversation instead of being treated as settled. "
+                                    "Use false when they answered directly."
+                                ),
                             }
                         },
                         "required": ["key", "value", "reasoning"]
@@ -129,7 +142,8 @@ class BatchUpdateTool(BaseTool):
         for i, d in enumerate(deliverables):
             try:
                 result = await self._client.set_deliverable(
-                    d["key"], d["value"], d.get("reasoning", "")
+                    d["key"], d["value"], d.get("reasoning", ""),
+                    bool(d.get("unconfirmed", False)),
                 )
                 if result.get("success"):
                     results["deliverables_set"].append({

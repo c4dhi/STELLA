@@ -344,15 +344,22 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
         # 6a. Wire barge-in: the agent declares whether it supports barge-in
         # (an intrinsic capability — its config depends on it). If so, enable it
-        # on the pipeline (honoring any explicit BARGE_IN_ENABLED operator
-        # override) and route the decision to the agent's on_barge_in hook.
+        # on the pipeline, honoring any explicit BARGE_IN_ENABLED override.
+        #
+        # on_barge_in serves BOTH channels. Voice reaches it only after the
+        # pipeline's cheap filters have already fired (duck on first sound,
+        # go silent at BARGE_IN_MIN_SPEECH_MS); the hook then judges the final
+        # transcript. Text has no acoustic signal, so it goes straight there.
         if getattr(agent, "supports_barge_in", False):
             audio_pipeline.enable_barge_in()
             if audio_pipeline.barge_in_enabled:
                 audio_pipeline.set_barge_in_decider(
                     lambda transcript: agent.on_barge_in(session_id, transcript)
                 )
-                logger.info("Barge-in enabled: on_barge_in wired to pipeline")
+                logger.info(
+                    "Barge-in enabled: VAD duration yields the floor, on_barge_in "
+                    "judges the transcript"
+                )
             else:
                 logger.info(
                     "Agent supports barge-in but BARGE_IN_ENABLED=false override "
@@ -511,8 +518,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
             if agent._last_progress_payload:
                 logger.info(f"[PARTICIPANT JOINED] {participant_identity} - re-sending progress state")
-                # Schedule the async publish_data call
-                asyncio.create_task(audio_pipeline._room.publish_data(agent._last_progress_payload))
+                # Queue it rather than create_task: ordered publishing keeps
+                # this behind anything already in flight instead of racing it.
+                audio_pipeline._room.publish_data_ordered(agent._last_progress_payload)
             else:
                 logger.warning(f"[PARTICIPANT JOINED] {participant_identity} - no progress payload to send!")
 

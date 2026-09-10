@@ -25,6 +25,12 @@ export interface TranscriptChunk {
   // Delivery tracking for optimistic UI updates
   deliveryStatus?: DeliveryStatus  // 'sending' shows grey checkmarks, 'confirmed' shows solid
   correlationId?: string           // Used to match optimistic message with agent echo
+  // The pipeline heard this, showed it, and then decided it was NOT a turn — a
+  // backchannel, or an interruption the evaluator judged not actionable. The
+  // words were really said so they stay in the transcript; this flag is what
+  // lets a reader tell "the agent answered this" from "the agent heard this and
+  // moved on", which is otherwise invisible after the fact.
+  discarded?: boolean
 }
 
 // New message processing stream types
@@ -140,6 +146,13 @@ export interface AgentSpeechProgress {
   char_start?: number
   char_end?: number
   spoken_char?: number
+  /**
+   * Char offset the highlight should reach by the end of this segment. While a
+   * sentence is still synthesizing it stops short of `char_end` — only the last
+   * tick of a sentence reaches it. Absent on older SDKs, where `char_end` is
+   * the only target available.
+   */
+  target_char?: number
   duration_ms?: number
   delay_ms?: number
   /** 'speaking' | 'spoken' | 'interrupted' */

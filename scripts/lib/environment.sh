@@ -427,6 +427,14 @@ set_defaults() {
     export PARTIAL_INTERVAL_MS="${PARTIAL_INTERVAL_MS:-1000}"
     export WHISPER_INITIAL_PROMPT="${WHISPER_INITIAL_PROMPT:-}"
 
+    # Barge-in sensitivity and the two diagnostic switches. These reach the
+    # configmap and must be exported like everything else in it — an unexported
+    # one leaves its ${PLACEHOLDER} in the rendered YAML, and stt-service parses
+    # BARGE_IN_MIN_SPEECH_MS with int(), so it crashloops on the literal.
+    export BARGE_IN_MIN_SPEECH_MS="${BARGE_IN_MIN_SPEECH_MS:-600}"
+    export STT_DECODE_DIAGNOSTICS="${STT_DECODE_DIAGNOSTICS:-0}"
+    export DISABLE_AEC="${DISABLE_AEC:-false}"
+
     # TTS Configuration (defaults - may be overridden by GPU auto-config)
     export TTS_PROVIDER="${TTS_PROVIDER:-piper}"
     export ELEVENLABS_STABILITY="${ELEVENLABS_STABILITY:-0.5}"

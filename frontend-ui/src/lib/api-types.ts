@@ -870,6 +870,17 @@ export interface PlanContent {
   // Initial prompt configuration
   system_prompt?: string           // Agent persona (snake_case for SDK consistency)
   session_context?: SessionContext
+  /**
+   * ISO 639-1 code the conversation is conducted in (e.g. "de"). Absent or
+   * "auto" = detect per utterance.
+   *
+   * This is a declaration, not a hint: it pins Whisper's transcription for the
+   * whole session. Worth setting whenever you know — auto-detect runs on a very
+   * short window and, guessing wrong, TRANSLATES rather than mis-hears. A German
+   * plan opening with "Hi Grace, kannst du mich hören" was transcribed as "Hi
+   * Grace, can you hear me?" and never recovered.
+   */
+  language?: string
 }
 
 export interface PlanTemplate {
@@ -1327,6 +1338,18 @@ export interface MetricsSummary {
   bridgeGeneration: { totalBridges: number; avgBridgeDuration_ms: number } | null
   bridgeDuration: { count: number; avg_ms: number } | null
   ttfr: { count: number; avg_ms: number } | null
+  /** STT decode diagnostics; null unless STT_DECODE_DIAGNOSTICS is enabled. */
+  sttDecode: {
+    totalTurns: number
+    avgSilenceFraction: number | null
+    avgNoSpeechWorst: number | null
+    avgLogprobWorst: number | null
+    shadowTurns: number
+    shadowAgreementRate: number | null
+    avgShadowEarlier_ms: number | null
+    partialTurns: number
+    partialAgreementRate: number | null
+  } | null
 }
 
 export interface AgentMetricsResponse {

@@ -1,8 +1,11 @@
 """STELLA V2 Agent — streamlined 3-stage pipeline with deterministic arbitration.
 
 Processing Flow (#363: no Input Gate — every enabled expert runs and self-gates):
-1. Expert Pool — parallel structured verdicts (~150-300ms wall-clock). The Bridge
-   Generator runs concurrently with this stage to mask latency.
+1. Bridge Generator + Expert Pool — started together and run CONCURRENTLY (#455).
+   The bridge streams sentence-by-sentence straight to TTS so the user hears a
+   reply within a few hundred ms, while the Expert Pool produces its parallel
+   structured verdicts on the same wall clock. The pool is joined before
+   arbitration, so the turn costs max(bridge, experts), not their sum.
 2. Deterministic Arbitration — priority-based conflict resolution (~1ms, no LLM).
    This is the sole gate: it filters out tapped-out (non-flagging) verdicts.
 3. Response Generator — streaming final answer with arbitration context.
@@ -37,7 +40,13 @@ from stella_agent_sdk.tools.state_machine import create_state_machine_tools
 
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
-from stella_v2_agent.pipeline.bridge_generator import BridgeGenerator
+from stella_agent_sdk.env import env_bool
+from stella_v2_agent.pipeline.bridge_generator import (
+    BridgeGenerator,
+    BRIDGE_MODE_BRIEF,
+    BRIDGE_MODE_FULL,
+    BRIDGE_MODE_THINKING,
+)
 from stella_v2_agent.pipeline.expert_pool import ExpertPool
 from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
@@ -46,6 +55,35 @@ from stella_agent_sdk.agent import BargeInEvaluator
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
 from stella_v2_agent.utils import normalize_transition_priority
 import logging
+
+
+# ── Per-turn speaking rate (#3 prosody) ──────────────────────────────────────
+# The TTS provider synthesises at one fixed rate with one fixed affect, so
+# without this every utterance in a conversation is acoustically identical —
+# sympathy and enthusiasm come out the same. That is a large part of why a
+# well-worded reply can still sound scripted, and it is invisible in a
+# transcript.
+#
+# The turn's bridge mode is already a classifier for the turn's character, so it
+# picks the rate for the WHOLE turn (bridge and reply alike) — a rate change
+# inside one utterance would read as a glitch rather than as expression.
+#
+# Deliberately within a few percent: the Qwen3 provider implements rate by
+# resampling, which shifts pitch along with it. A few percent reads as natural
+# variation; a large factor reads as a different speaker.
+_TURN_SPEED_BY_BRIDGE_MODE = {
+    BRIDGE_MODE_BRIEF: 1.02,     # a quick beat, then straight on
+    BRIDGE_MODE_FULL: 1.00,      # ordinary conversational rate
+    BRIDGE_MODE_THINKING: 0.97,  # a heavier turn, taken slower
+}
+
+
+def _turn_speed(bridge_mode) -> float:
+    """Speaking rate for this turn, or 1.0 when variation is off/unknown."""
+    if not env_bool("STELLA_TTS_RATE_VARIATION", True):
+        return 1.0
+    return _TURN_SPEED_BY_BRIDGE_MODE.get(bridge_mode, 1.0)
+
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +238,11 @@ class StellaV2Agent(BaseAgent):
             "userInput": input.text,
         }
 
+        # Handle on the concurrently-running Expert Pool (#455). Declared out
+        # here so the `finally` below can always reap it, including when the
+        # bridge raises or a barge-in closes this generator mid-stream.
+        expert_task: Optional[asyncio.Task] = None
+
         try:
             # Fetch context
             history_limit = self._custom_history_limit
@@ -214,10 +257,16 @@ class StellaV2Agent(BaseAgent):
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
-            # stay coherent (RFC §8 single source of truth). The plan's declared
-            # language (if any) seeds resolution; confident detection overrides it.
+            # stay coherent (RFC §8 single source of truth).
+            # A plan that declares its language is PINNED to it: detection is
+            # off, and STT is told what to transcribe. Whisper auto-detects from
+            # a very short window and, guessing wrong, translates rather than
+            # mis-hears — which is how a fully-German plan ran its whole session
+            # in English. A declaration removes the guess entirely.
             plan_language = (self._plan_config or {}).get("language")
-            self.language_resolver.set_seed(plan_language)
+            self.language_resolver.set_plan_language(plan_language)
+            if self.has_audio:
+                self.audio.set_stt_language(self.language_resolver.forced)
             # Prefer STT's independent acoustic detection (voice); fall back to
             # the text classifier when absent (typed input / no signal, §8.3).
             meta = input.metadata or {}
@@ -230,6 +279,10 @@ class StellaV2Agent(BaseAgent):
             resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
             self._session_language = resolved_language
             sm_context["language"] = resolved_language
+            # Tell the response prompt whether this is a fixed-language deployment
+            # or a per-turn detection — the two need different wording to stop the
+            # model opening in English on an ambiguous first turn.
+            sm_context["language_pinned"] = bool(self.language_resolver.forced)
             logger.info(f"Resolved language for turn: {resolved_language}")
 
             # Resolve the per-stream TTS voice. Unlike language there is no
@@ -244,12 +297,35 @@ class StellaV2Agent(BaseAgent):
                 input.session_id, "Processing your message...", StatusSubtype.PROCESSING
             )
 
-            # ── Stage 1: Bridge Generator ──
+            # ── Stages 1 + 2 run CONCURRENTLY (#455) ──
             # The Input Gate is gone (#363): every enabled expert runs each turn
             # and decides for itself whether to engage (abstaining with a
             # non-flagging verdict), with arbitration filtering the abstentions.
-            # So Stage 1 is just the bridge, emitted immediately for early TTS
-            # while the experts run.
+            # So nothing selects experts based on the bridge, and the two stages
+            # are independent: the bridge reads only the user's text + history,
+            # the experts read only the state-machine snapshot taken above.
+            #
+            # They used to run back to back — the pool was awaited AFTER the
+            # bridge stream had fully drained — so the user heard the bridge
+            # finish and then sat through the expert latency in silence. Kicking
+            # the pool off HERE puts both on the same wall clock, making the
+            # critical path max(bridge, experts) instead of bridge + experts.
+            #
+            # Contract for anything added between this line and the `await
+            # expert_task` below: do not mutate `sm_context` or `history`, the
+            # pool is reading them concurrently.
+            experts_to_run = self.expert_registry.get_enabled_names()
+            logger.info(f"Stage 2: Expert Pool (started, runs alongside bridge) — {experts_to_run}")
+            expert_task = asyncio.create_task(
+                self.expert_pool.run(experts_to_run, input.text, history, sm_context)
+            )
+            # Emitted next to bridge_start on purpose: the two elapsed_ms values
+            # being equal IS the property this change buys, and drift between
+            # them is how a regression would show up in the analytics timeline.
+            yield AgentOutput.analytics_event(
+                input.session_id, "expert_pool_start", turn_id, self._elapsed_ms(),
+            )
+
             logger.info(f"Stage 1: Bridge for: '{input.text}'")
             yield AgentOutput.analytics_event(
                 input.session_id, "bridge_start", turn_id, self._elapsed_ms(),
@@ -267,6 +343,11 @@ class StellaV2Agent(BaseAgent):
             # stays False: the response continues this same transcript.
             bridge = ""
             bridge_ready_emitted = False
+            # Set once the generator has classified the turn (it does so before
+            # yielding anything, and still does it on a silent turn that yields
+            # nothing at all), then reused for the reply so bridge and reply are
+            # spoken at ONE rate — a rate change mid-utterance reads as a glitch.
+            turn_speed = 1.0
             async for bridge_accum in self.bridge_generator.generate_stream(
                 input.text, history, language=resolved_language, variables=prompt_variables
             ):
@@ -293,24 +374,34 @@ class StellaV2Agent(BaseAgent):
                 bridge_output.metadata["language"] = resolved_language
                 if resolved_voice:
                     bridge_output.metadata["voice"] = resolved_voice
+                turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_mode", None))
+                bridge_output.metadata["speed"] = turn_speed
                 yield bridge_output
 
+            # Covers the silent turn too, where the loop above never ran.
+            turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_mode", None))
+
             if bridge:
-                logger.info(f"Bridge: '{bridge}'")
+                logger.info(
+                    f"Bridge ({getattr(self.bridge_generator, 'last_bridge_mode', None)}, "
+                    f"rate {turn_speed:.2f}): '{bridge}'"
+                )
 
-            # ── Stage 2: Expert Pool (every enabled expert) ──
-            # With no gate, all enabled experts run in parallel and self-gate;
-            # task_extraction still runs every turn and updates the state machine
-            # via tool calls (set_deliverable, etc.), but we keep the ORIGINAL
-            # sm_context for response generation so the agent still performs task
-            # instructions before advancing. noise_detection also runs every turn
-            # and covers the old gate-failure path via its arbitration short-circuit.
-
-            experts_to_run = self.expert_registry.get_enabled_names()
-
-            logger.info(f"Stage 2: Expert Pool — {experts_to_run}")
-            all_verdicts = await self.expert_pool.run(
-                experts_to_run, input.text, history, sm_context
+            # ── Stage 2: Expert Pool — join the run started above ──
+            # All enabled experts ran in parallel and self-gated; task_extraction
+            # updates the state machine via tool calls (set_deliverable, etc.),
+            # but we keep the ORIGINAL sm_context for response generation so the
+            # agent still performs task instructions before advancing.
+            # noise_detection also runs every turn and covers the old
+            # gate-failure path via its arbitration short-circuit.
+            #
+            # By now the pool has had the whole bridge to work in, so this await
+            # often returns immediately. Everything downstream — arbitration, the
+            # collected-deliverables diff, response generation — still sees a
+            # fully-completed pool, so ordering guarantees are unchanged.
+            all_verdicts = await expert_task
+            yield AgentOutput.analytics_event(
+                input.session_id, "expert_pool_done", turn_id, self._elapsed_ms(),
             )
 
             for v in all_verdicts:
@@ -374,7 +465,7 @@ class StellaV2Agent(BaseAgent):
             deterministic_response = (
                 directive.resolved_response
                 or directive.redirect_message
-                or self.arbitration.gate_failure_message
+                or self.arbitration.gate_failure_message_for(resolved_language)
             )
             if directive.action == "short_circuit":
                 # Replace the response AND skip downstream processing entirely
@@ -467,6 +558,8 @@ class StellaV2Agent(BaseAgent):
                         output.metadata["language"] = resolved_language
                         if resolved_voice:
                             output.metadata["voice"] = resolved_voice
+                        # Same rate as the bridge — one turn, one voice setting.
+                        output.metadata["speed"] = turn_speed
                         # Keep the latest accumulated reply so a barge-in mid-stream
                         # can evaluate against the half-committed message.
                         if output.content:
@@ -504,6 +597,18 @@ class StellaV2Agent(BaseAgent):
 
         finally:
             self._is_processing = False
+            if expert_task is not None:
+                # Barge-in or a bridge error can leave the pool in flight.
+                if not expert_task.done():
+                    expert_task.cancel()
+                # Retrieve the result/exception so a pool that failed before we
+                # ever awaited it doesn't surface as asyncio's
+                # "Task exception was never retrieved" at GC time. Not awaited:
+                # this `finally` may run during generator close, where blocking
+                # is not safe.
+                expert_task.add_done_callback(
+                    lambda t: t.cancelled() or t.exception()
+                )
 
     # ─────────────────────────────────────────────────────────────────────
     # Post-response processing
@@ -701,6 +806,18 @@ class StellaV2Agent(BaseAgent):
 
         # Load plan and initialize gRPC state machine
         plan = self._load_plan_config(config)
+
+        # Declare the plan's language to STT BEFORE the first utterance. Doing it
+        # on the first turn is too late: the opening utterance is exactly the one
+        # that gets misdetected (it is short, and often starts with a name), and
+        # it is what confirms the lock for the rest of the session.
+        self.language_resolver.set_plan_language((plan or {}).get("language"))
+        if self.has_audio:
+            self.audio.set_stt_language(self.language_resolver.forced)
+            # Seed TTS too. The opening greeting is synthesised before any turn
+            # resolves, so without this the agent's FIRST words come out in the
+            # provider default while everything after them follows the plan.
+            self.audio.set_tts_language(self.language_resolver.forced)
         if plan:
             self._plan_config = plan
 

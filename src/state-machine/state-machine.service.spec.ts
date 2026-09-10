@@ -2572,3 +2572,70 @@ describe('StateMachineService complete_task deliverable guard (reliability)', ()
     // Skipping is the honest way past it; complete is the one that was blocked.
   });
 });
+
+/**
+ * Mentioned-but-unconfirmed deliverables.
+ *
+ * There used to be only two states — never collected, or settled. So something
+ * the user volunteered ("I usually walk, though not in this heat") was either
+ * re-asked from scratch later, or silently treated as an agreed fact. A real
+ * interviewer does neither: they bring it back and check. `unconfirmed` records
+ * the value while keeping it open, and surfaces as status 'partial'.
+ */
+describe('StateMachineService — unconfirmed deliverables', () => {
+  const sessionId = 'session-unconfirmed';
+  let service: StateMachineService;
+
+  beforeEach(async () => {
+    const { prisma } = createPrismaMock();
+    service = new StateMachineService(prisma);
+    // A plan whose deliverables do NOT drive transitions, so status is not
+    // confounded by the state machine moving on mid-test.
+    await service.initializeForSession(sessionId, buildDeliverableGatePlan());
+  });
+
+  const statusOf = async (key: string) => {
+    const full = await service.getFullState(sessionId);
+    for (const st of full?.states ?? []) {
+      for (const task of st.tasks ?? []) {
+        const d = (task.deliverables ?? []).find(x => x.key === key);
+        if (d) return d.status;
+      }
+    }
+    return undefined;
+  };
+
+  it('defaults to confirmed, so existing callers are unchanged', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'answered directly');
+    expect(await statusOf('user_name')).toBe('completed');
+  });
+
+  it('records an unconfirmed value as partial, not completed', async () => {
+    await service.setDeliverable(
+      sessionId, 'user_name', 'Felix', 'mentioned in passing', true,
+    );
+    // Captured — losing it would be worse than re-asking...
+    const collected = await service.getCollectedDeliverables(sessionId);
+    expect(collected['user_name']).toBe('Felix');
+    // ...but not settled, so the agent checks rather than assumes.
+    expect(await statusOf('user_name')).toBe('partial');
+  });
+
+  it('setting the same key again without the flag confirms it', async () => {
+    await service.setDeliverable(
+      sessionId, 'user_name', 'Felix', 'mentioned in passing', true,
+    );
+    expect(await statusOf('user_name')).toBe('partial');
+
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'user confirmed it');
+    expect(await statusOf('user_name')).toBe('completed');
+  });
+
+  it('an unconfirmed value is still visible to everything that reads deliverables', async () => {
+    // It is open, not hidden — downstream consumers must still see the data.
+    await service.setDeliverable(
+      sessionId, 'user_name', 'Felix', 'mentioned in passing', true,
+    );
+    expect(await service.getCollectedDeliverables(sessionId)).toHaveProperty('user_name');
+  });
+});

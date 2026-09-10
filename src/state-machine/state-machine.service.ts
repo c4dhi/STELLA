@@ -116,6 +116,20 @@ export interface DeliverableValue {
   reasoning: string;
   collectedAt: string;
   discovered?: boolean;
+  /**
+   * Recorded, but the user has not confirmed it.
+   *
+   * Set when the user mentioned something in passing rather than answering a
+   * question about it. Without this there were only two states — never asked,
+   * or settled — so a volunteered answer was either re-asked from scratch (the
+   * user says they walk, and is asked ten turns later whether they walk) or
+   * silently treated as fact. A real interviewer does neither: they come back
+   * and check.
+   *
+   * Surfaces as status 'partial'. Setting the same key again WITHOUT the flag
+   * is what confirms it.
+   */
+  unconfirmed?: boolean;
 }
 
 /**
@@ -584,10 +598,11 @@ export class StateMachineService {
     key: string,
     value: unknown,
     reasoning: string,
+    unconfirmed = false,
   ): Promise<StateMachineResult> {
     // Serialized per session so concurrent writes don't clobber the deliverables JSON.
     return this.withSessionLock(sessionId, () =>
-      this.setDeliverableLocked(sessionId, key, value, reasoning),
+      this.setDeliverableLocked(sessionId, key, value, reasoning, unconfirmed),
     );
   }
 
@@ -596,6 +611,7 @@ export class StateMachineService {
     key: string,
     value: unknown,
     reasoning: string,
+    unconfirmed = false,
   ): Promise<StateMachineResult> {
     const state = await this.getState(sessionId);
     if (!state) {
@@ -698,11 +714,14 @@ export class StateMachineService {
       };
     }
 
-    // Update deliverables
+    // Update deliverables. The flag is written only when true, so confirming a
+    // value (setting it again without the flag) clears it, and rows collected
+    // before this existed stay exactly as they were.
     deliverables[key] = {
       value,
       reasoning,
       collectedAt: new Date().toISOString(),
+      ...(unconfirmed ? { unconfirmed: true } : {}),
     };
 
     // Setting a deliverable ONLY records data — it never auto-completes a task or
@@ -2270,8 +2289,10 @@ export class StateMachineService {
           // sub-items render as 'skipped' rather than a stale 'pending' circle.
           // A collected deliverable keeps 'completed' even if the task was later
           // skipped (the data was genuinely captured).
-          const deliverableStatus: 'pending' | 'completed' | 'skipped' = collected
-            ? 'completed'
+          const deliverableStatus: 'pending' | 'completed' | 'partial' | 'skipped' = collected
+            ? collected.unconfirmed
+              ? 'partial'
+              : 'completed'
             : taskStatus === 'skipped'
               ? 'skipped'
               : 'pending';
@@ -2314,8 +2335,10 @@ export class StateMachineService {
             // deliverable cascades to 'skipped' rather than a stale 'pending'
             // circle; otherwise it is 'pending'. Previously these only ever got
             // 'completed'/'pending', diverging from regular task deliverables.
-            const deliverableStatus: 'pending' | 'completed' | 'skipped' = collected
-              ? 'completed'
+            const deliverableStatus: 'pending' | 'completed' | 'partial' | 'skipped' = collected
+              ? collected.unconfirmed
+                ? 'partial'
+                : 'completed'
               : stateStatus === 'completed'
                 ? 'skipped'
                 : 'pending';
