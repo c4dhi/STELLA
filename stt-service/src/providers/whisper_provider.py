@@ -35,6 +35,22 @@ except ImportError as e:
     TORCH_AVAILABLE = False
 
 
+def _clamp_endpointing_ceiling(max_endpointing_delay_ms: int, continuation_window_ms: int) -> int:
+    """Keep the endpointing ceiling from being shorter than the continuation window.
+
+    Both are measured from entry into MAYBE_ENDING, so a ceiling below the
+    continuation window would fire first on every utterance and silently
+    truncate all of them. A misconfigured value is clamped up (and logged)
+    rather than honoured.
+    """
+    if max_endpointing_delay_ms < continuation_window_ms:
+        print(f"[WhisperProvider] max_endpointing_delay_ms={max_endpointing_delay_ms} is below "
+              f"continuation_window_ms={continuation_window_ms}; clamping ceiling to "
+              f"{continuation_window_ms}ms")
+        return continuation_window_ms
+    return max_endpointing_delay_ms
+
+
 class WhisperSession(STTSession):
     """faster-whisper session with industry-standard VAD-based streaming.
 
@@ -72,7 +88,10 @@ class WhisperSession(STTSession):
         self.vad_threshold = config.get('vad_threshold', 0.5)
         self.silence_duration_ms = config.get('silence_duration_ms', 500)
         self.continuation_window_ms = config.get('continuation_window_ms', 600)
-        self.max_endpointing_delay_ms = config.get('max_endpointing_delay_ms', 2000)
+        self.max_endpointing_delay_ms = _clamp_endpointing_ceiling(
+            config.get('max_endpointing_delay_ms', 2000),
+            self.continuation_window_ms,
+        )
         self.min_speech_samples = config.get('min_speech_samples', 8000)  # 0.5s @ 16kHz
         self.max_speech_duration_ms = config.get('max_speech_duration_ms', 30000)
         self.partial_interval_ms = config.get('partial_interval_ms', 1000)
@@ -180,6 +199,28 @@ class WhisperSession(STTSession):
             overflow = len(self.speech_buffer) - self.max_speech_buffer_samples
             self.speech_buffer = self.speech_buffer[overflow:]
 
+    def _endpointing_hold_expired(self, current_time: float) -> tuple:
+        """Decide whether the MAYBE_ENDING hold is over.
+
+        Two bounds, both measured from entry into MAYBE_ENDING
+        (``pending_final_time``):
+        - continuation_window_ms: the normal wait for speech to resume
+        - max_endpointing_delay_ms: hard ceiling on the hold, so anything that
+          extends the continuation window at runtime cannot keep a turn open
+          indefinitely
+
+        Returns (expired, reason, elapsed_ms).
+        """
+        if not self.pending_final_time:
+            return False, "", 0.0
+
+        elapsed_ms = (current_time - self.pending_final_time) * 1000
+        if elapsed_ms >= self.continuation_window_ms:
+            return True, "Continuation window expired", elapsed_ms
+        if elapsed_ms >= self.max_endpointing_delay_ms:
+            return True, "Max endpointing delay reached", elapsed_ms
+        return False, "", elapsed_ms
+
     def process_audio(self, audio_data: bytes, sample_rate: int = 16000) -> List[stt_pb2.TranscriptEvent]:
         """Process audio chunk through VAD and return transcript events."""
         events = []
@@ -210,10 +251,10 @@ class WhisperSession(STTSession):
 
         # MAYBE_ENDING timeout check (handles case where audio stream ends during MAYBE_ENDING)
         if self.state == "MAYBE_ENDING" and self.pending_final_time:
-            time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
-            if time_in_maybe_ending >= self.continuation_window_ms:
+            expired, reason, time_in_maybe_ending = self._endpointing_hold_expired(current_time)
+            if expired:
                 total_silence = (current_time - self.silence_start_time) * 1000 if self.silence_start_time else time_in_maybe_ending
-                print(f"[WhisperSession] Continuation window expired ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
+                print(f"[WhisperSession] {reason} ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
                 final_event = self._generate_final(current_time)
                 if final_event:
                     events.append(final_event)
@@ -305,7 +346,8 @@ class WhisperSession(STTSession):
         - IDLE -> SPEAKING: speech_prob > threshold
         - SPEAKING -> MAYBE_ENDING: silence >= silence_duration_ms
         - MAYBE_ENDING -> SPEAKING: speech resumes (cancel pending final)
-        - MAYBE_ENDING -> IDLE: continuation_window_ms elapsed OR max_endpointing_delay_ms reached
+        - MAYBE_ENDING -> IDLE: continuation_window_ms elapsed OR max_endpointing_delay_ms
+          reached (both measured from entry into MAYBE_ENDING)
         """
         events = []
 
@@ -336,8 +378,9 @@ class WhisperSession(STTSession):
                         self.pending_final_time = current_time
                 elif self.state == "MAYBE_ENDING":
                     self._accumulate_speech(audio_int16)
-                    time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
-                    if time_in_maybe_ending >= self.continuation_window_ms:
+                    expired, reason, time_in_maybe_ending = self._endpointing_hold_expired(current_time)
+                    if expired:
+                        print(f"[WhisperSession] {reason} ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, below RMS gate)")
                         final_event = self._generate_final(current_time)
                         if final_event:
                             events.append(final_event)
@@ -413,15 +456,15 @@ class WhisperSession(STTSession):
                     # Continue accumulating audio during MAYBE_ENDING (in case speech resumes)
                     self._accumulate_speech(audio_int16)
 
-                    # Check if continuation window expired
+                    # Check if the MAYBE_ENDING hold is over
                     # Only use time_in_maybe_ending - this ensures we always wait the full
                     # continuation window, even if silence accumulated during transcription blocking
-                    time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
+                    expired, reason, time_in_maybe_ending = self._endpointing_hold_expired(current_time)
                     total_silence = (current_time - self.silence_start_time) * 1000
 
-                    if time_in_maybe_ending >= self.continuation_window_ms:
+                    if expired:
                         # Transition: MAYBE_ENDING -> IDLE, emit final
-                        print(f"[WhisperSession] Continuation window expired ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
+                        print(f"[WhisperSession] {reason} ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
                         final_event = self._generate_final(current_time)
                         if final_event:
                             events.append(final_event)
@@ -684,7 +727,10 @@ class WhisperProvider(STTProvider):
         self.vad_threshold = float(os.getenv("VAD_THRESHOLD", "0.5"))
         self.silence_duration_ms = int(os.getenv("VAD_SILENCE_DURATION_MS", "800"))
         self.continuation_window_ms = int(os.getenv("VAD_CONTINUATION_WINDOW_MS", "1000"))
-        self.max_endpointing_delay_ms = int(os.getenv("VAD_MAX_ENDPOINTING_DELAY_MS", "2000"))
+        self.max_endpointing_delay_ms = _clamp_endpointing_ceiling(
+            int(os.getenv("VAD_MAX_ENDPOINTING_DELAY_MS", "2000")),
+            self.continuation_window_ms,
+        )
         self.min_speech_ms = int(os.getenv("VAD_MIN_SPEECH_MS", "500"))
         self.max_speech_duration_ms = int(os.getenv("VAD_MAX_SPEECH_DURATION_MS", "30000"))
         self.partial_interval_ms = int(os.getenv("PARTIAL_INTERVAL_MS", "1000"))

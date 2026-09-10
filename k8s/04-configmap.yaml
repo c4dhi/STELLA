@@ -64,7 +64,7 @@ data:
   VAD_THRESHOLD: "${VAD_THRESHOLD}"                              # Speech detection sensitivity (0-1, default 0.5)
   VAD_SILENCE_DURATION_MS: "${VAD_SILENCE_DURATION_MS}"          # Silence before MAYBE_ENDING state (default 800ms)
   VAD_CONTINUATION_WINDOW_MS: "${VAD_CONTINUATION_WINDOW_MS}"    # Time for speech to resume in MAYBE_ENDING (default 1000ms)
-  VAD_MAX_ENDPOINTING_DELAY_MS: "${VAD_MAX_ENDPOINTING_DELAY_MS}" # Hard cutoff for endpointing (default 2000ms)
+  VAD_MAX_ENDPOINTING_DELAY_MS: "${VAD_MAX_ENDPOINTING_DELAY_MS}" # Ceiling on time in MAYBE_ENDING, >= continuation window (default 2000ms)
   VAD_MIN_SPEECH_MS: "${VAD_MIN_SPEECH_MS}"                      # Minimum speech duration (default 500ms)
   VAD_MAX_SPEECH_DURATION_MS: "${VAD_MAX_SPEECH_DURATION_MS}"    # Force endpoint after this (default 30000ms)
   VAD_AUDIO_INACTIVITY_TIMEOUT_MS: "${VAD_AUDIO_INACTIVITY_TIMEOUT_MS}" # Force endpoint on no audio (default 1500ms)
