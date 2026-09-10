@@ -36,22 +36,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# GPU base image (NVIDIA CUDA 12.4 — compatible with torch 2.5.1+cu124)
+# GPU base image
 # ============================================================================
 # PINNED, AND NOT SAFELY BUMPABLE. The CUDA version here must be supported by
-# the GPU node's *driver*. The torch wheel installed below is unpinned and
-# bundles its own CUDA runtime, so the base only has to satisfy the driver.
-#
-# Dependabot bumped this to 13.3.1 on 2026-07-30. When it was first rebuilt on
-# 2026-08-25 every pod failed in the NVIDIA prestart hook before the container
-# process even started:
+# the GPU node's *driver* and must match the torch wheel installed below
+# (torch 2.5.1+cu124 for Qwen3). Dependabot bumped this to 13.3.1 on
+# 2026-07-30. When it was first rebuilt on 2026-08-25 every pod failed in the
+# NVIDIA prestart hook before the container process even started:
 #
 #   nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.3
 #
 # Measured 2026-09-01: production (L4) runs driver 565.57.01 -> max CUDA 12.7;
 # test (T4) runs 580.173.02 -> max CUDA 13.0. 13.3.1 is unrunnable on BOTH.
-# Bump this only together with the node drivers, and only after actually
-# starting the image on a GPU host. See .github/dependabot.yml.
+# Bump this only together with the node drivers and the torch wheel, and only
+# after actually starting the image on a GPU host. See .github/dependabot.yml.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base-gpu
 
 WORKDIR /app
@@ -59,10 +57,16 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
+# The deadsnakes PPA is fetched with retries: add-apt-repository resolves the
+# signing key through Launchpad's API, which intermittently answers
+# GPGKeyTemporarilyNotFoundError and would otherwise fail the whole build
+# ~20 minutes in (seen 2026-08-25). It still fails loudly after five attempts —
+# that matters, because without the PPA python3.11 resolves to jammy's own
+# 3.11.0~rc1, a release candidate we must never ship.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     tzdata \
-    && add-apt-repository ppa:deadsnakes/ppa \
+    && (for i in 1 2 3 4 5; do add-apt-repository -y ppa:deadsnakes/ppa && exit 0; sleep 10; done; exit 1) \
     && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \

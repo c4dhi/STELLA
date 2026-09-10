@@ -74,7 +74,9 @@ def build_response_system_prompt(
         "conversationHistory": format_history(conversation_history, history_limit),
         "stateContext": _state_machine_section(sm_context),
         "directive": directive.to_prompt_section() if directive else "",
-        "language": _language_directive(sm_context.get("language")) or "",
+        "language": _language_directive(
+            sm_context.get("language"), pinned=bool(sm_context.get("language_pinned"))
+        ) or "",
         "bridge": bridge or "",
         # Runtime flags so the editable guidelines own the "just collected /
         # phase completing / just transitioned" behavioral prose via {{#if ...}}.
@@ -85,17 +87,40 @@ def build_response_system_prompt(
     return "\n\n".join(s for s in sections if s)
 
 
-def _language_directive(language: Optional[str]) -> Optional[str]:
+def _language_directive(language: Optional[str], pinned: bool = False) -> Optional[str]:
     """Build a deterministic 'respond in <language>' instruction.
 
     Returns None for unknown/auto so the existing heuristic language rules stand.
+
+    The FIRST words matter most: the persona and guidelines carry a standing
+    "respond in the same language the user speaks" rule, and on an opening turn
+    — where the user has said nothing yet, or only something short and garbled —
+    that rule has no answer, so the model reaches for an English greeting and
+    only switches afterwards ("Hey there! Ich bin ..."). Both variants below
+    therefore name the greeting explicitly rather than trusting "every word" to
+    cover it.
+
+    ``pinned`` marks a deployment fixed to one language (STELLA_LANGUAGE): there
+    is nothing to detect and nothing to match, so the wording must not invite the
+    model to infer a language from the user at all.
     """
     if not language or language == "auto":
         return None
     name = LANGUAGE_NAMES.get(language, language)
-    return (
-        f"LANGUAGE (highest priority — overrides everything above):\n"
+    head = (
+        f"LANGUAGE (highest priority — overrides every other instruction, "
+        f"including any rule about matching the user's language):\n"
         f"- Respond ENTIRELY in {name}. Every single word, including any examples, must be in {name}.\n"
+        f"- This includes your GREETING and the very first sentence of your reply. "
+        f"Never open in another language and switch afterwards.\n"
+    )
+    if pinned:
+        return head + (
+            f"- This deployment is FIXED to {name}. It is not a guess and not a detection: "
+            f"speak {name} even when the user's input is empty, unclear, garbled, or in "
+            f"another language. Do not switch languages under any circumstance."
+        )
+    return head + (
         f"- This is the language detected for this conversation; do not switch languages on your own."
     )
 
@@ -125,9 +150,11 @@ def _conversation_guidelines() -> str:
     production; this is used only when no configured guidelines are provided."""
     return """CONVERSATIONAL STYLE (spoken aloud via TTS), in the user's language and its natural spoken register:
 - React to the SPECIFIC thing the user said — never praise the mere act of answering ("solid routine!", "helpful to know!"), and never re-ask something they already told you.
+- Appraising their SITUATION is not the same as praising their ANSWER. "That's a solid base to build on" is fine when you mean it and it follows from what they've actually told you; "great answer!" never is. If the directive above asks for a cautious tone, don't appraise at all — they have told you something that deserves care instead.
 - Offer a thought as often as you ask; not every turn needs a question. Don't run "acknowledge + question" every turn — that's what makes you a questionnaire.
 - Natural contractions and the occasional light filler. Reuse the user's own words.
-- 1-3 sentences, ~25-45 words. At most one question per turn. No markdown, bullets, or emojis.
+- 1-3 sentences, ~25-45 words. No markdown, bullets, or emojis.
+- Never more than one question per turn, often none — and if you ask one it is the LAST thing you say. They are listening, not reading: anything after a question is talked over or forgotten.
 {{#if taskJustCollected}}{{#if stateCompleting}}
 
 The user just gave everything this phase needed. Don't re-ask any of it — acknowledge what they shared and glide into the next topic so it feels like a conversation, not a checklist.{{#if nextTopicHint}} Next topic: {{nextTopicHint}}{{/if}}{{else}}
@@ -164,11 +191,49 @@ Conversation so far:
 {{/if}}"""
 
 
+# How many not-yet-known items to name explicitly. ONE.
+#
+# A bulleted list of three open questions is a list of three things to ask, and
+# models follow structure over instruction — the same reason the old labelled
+# checklist beat the "you are not a form" persona. Three visible gaps produced
+# turns that closed two of them at once, which is precisely the multi-question
+# reply the guidelines forbid in prose. Naming the single live gap and counting
+# the rest orients the agent just as well and asks for exactly what it should
+# do next.
+_MAX_VISIBLE_PENDING = 1
+
+
 def _state_machine_section(sm_context: Dict[str, Any]) -> str:
+    """Render the turn's state-machine context as orientation, not as a form.
+
+    This section is the single largest structural pull toward sounding scripted.
+    It used to emit a labelled checklist on EVERY turn — each pending deliverable
+    by snake_case key with its acceptance criteria, the full collected list, and
+    an "Overall progress: 40%" line. Models follow structure over instruction, so
+    handing a checklist to a model whose persona says "you are not a form"
+    reliably produced form-like turns: the structure won.
+
+    What survives is only what changes what the agent SAYS next:
+      * the phase, its goal, and the current task instruction — what to do now;
+      * what is still unknown, in prose, capped at ``_MAX_VISIBLE_PENDING`` and
+        ordered so the current task's items come first;
+      * what the user already told you, so it is never asked twice.
+
+    Deliberately dropped:
+      * the progress percentage — it has no bearing on what to say next, and a
+        running completion meter is the most form-like thing in the window;
+      * the snake_case keys — this stage only writes prose. Key names are the
+        extraction expert's business and it builds its own context, so exposing
+        them here just invited field-shaped turns;
+      * acceptance criteria for items not currently in play.
+    """
     if not sm_context:
         return ""
 
-    parts: List[str] = ["CURRENT CONVERSATION CONTEXT (internal — never mention these labels to the user):"]
+    parts: List[str] = [
+        "WHERE YOU ARE (internal orientation — never say any of this aloud, "
+        "and never use these words):"
+    ]
 
     state = sm_context.get("state", {})
     if state:
@@ -188,7 +253,8 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
 
     # Always show the current task instruction — the agent may need to perform
     # an action (e.g. "introduce yourself") even if deliverables were collected.
-    current_task = sm_context.get("current_task")
+    current_task = sm_context.get("current_task") or {}
+    task_del_keys = set(current_task.get("deliverable_keys", []))
     if current_task:
         parts.append(f"Current task: {current_task.get('description', '')}")
         instruction = current_task.get("instruction", "")
@@ -200,38 +266,72 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
         # longer hardcoded here — it lives in the editable conversation
         # guidelines, gated on the {{taskJustCollected}} / {{stateCompleting}} /
         # {{stateJustChanged}} runtime flags (see _state_conditions).
-        task_del_keys = set(current_task.get("deliverable_keys", []))
-        task_keys_just_collected = task_del_keys & collected_keys
-
-        if not task_keys_just_collected and instruction:
+        if not (task_del_keys & collected_keys) and instruction:
             parts.append(f"Instruction: {instruction}")
 
-    # Filter out just-collected deliverables from the pending list.
     deliverables = sm_context.get("deliverables", [])
-    pending = [d for d in deliverables if d.get("status") == "pending" and d["key"] not in collected_keys]
-    completed = [d for d in deliverables if d.get("status") == "completed"]
-    # Show just-collected keys as completed so the LLM knows they were provided
-    for d in deliverables:
-        if d.get("status") == "pending" and d["key"] in collected_keys:
-            completed.append({"key": d["key"], "value": "(just provided)"})
+    pending = [
+        d for d in deliverables
+        if d.get("status") == "pending" and d["key"] not in collected_keys
+    ]
+    # Mentioned in passing, not yet confirmed. There used to be no such state —
+    # a deliverable was either unknown or settled — so something the user
+    # volunteered came back later as a cold question ("do you go for walks?"
+    # after they had already said they walk most days). These are things to
+    # check, not things to ask.
+    unconfirmed = [d for d in deliverables if d.get("status") == "partial"]
 
     if pending:
-        parts.append("Still need to collect:")
-        for d in pending:
-            line = f"  - {d['key']}: {d['description']}"
-            if d.get("acceptance_criteria"):
-                line += f" (criteria: {d['acceptance_criteria']})"
+        # The current task's own items are what the conversation is actually on;
+        # anything else is backlog and is counted rather than listed.
+        live = [d for d in pending if d["key"] in task_del_keys]
+        rest = [d for d in pending if d["key"] not in task_del_keys]
+        visible = (live + rest)[:_MAX_VISIBLE_PENDING]
+
+        parts.append("The one thing to find out next:")
+        for d in visible:
+            line = f"  - {d.get('description') or d['key']}"
+            # Criteria only for what is in play — for backlog items they are
+            # noise now and read as a spec to satisfy rather than a thing to
+            # become curious about.
+            if d["key"] in task_del_keys and d.get("acceptance_criteria"):
+                line += f" (needs: {d['acceptance_criteria']})"
             parts.append(line)
 
-    if completed:
-        parts.append("Already collected:")
-        for d in completed:
-            parts.append(f"  - {d['key']}: {d.get('value', '?')}")
+        hidden = len(pending) - len(visible)
+        if hidden > 0:
+            parts.append(
+                f"  (plus {hidden} more you'll get to later — not this turn)"
+            )
 
-    progress = sm_context.get("progress", {})
-    pct = progress.get("percentage", 0)
-    if pct > 0:
-        parts.append(f"Overall progress: {pct:.0f}%")
+    if unconfirmed:
+        parts.append(
+            "They MENTIONED these but have not confirmed them. Do not ask as if "
+            "you never heard it — bring back what they said and check it, the way "
+            "an interviewer would ('you said you usually walk — is that still "
+            "happening in this heat?'). One at most per turn, and only when it "
+            "fits what you are already talking about:"
+        )
+        for d in unconfirmed:
+            label = d.get("description") or d["key"]
+            parts.append(f"  - {label}: they said {d.get('value', '?')}")
+
+    # What they already said, so it is never asked twice. Just-collected keys are
+    # shown here too: they are not in the pending list any more, and the agent
+    # must know they landed. Described in words rather than by key, since the key
+    # alone ("workout_freq: 2-3") is the form shape we are removing.
+    known: List[str] = []
+    for d in deliverables:
+        label = d.get("description") or d["key"]
+        if d.get("status") == "completed":
+            known.append(f"  - {label}: {d.get('value', '?')}")
+        elif d.get("status") == "partial":
+            continue  # listed above as unconfirmed — not settled yet
+        elif d["key"] in collected_keys:
+            known.append(f"  - {label}: (they just told you this)")
+    if known:
+        parts.append("They have already told you (never ask any of this again):")
+        parts.extend(known)
 
     return "\n".join(parts)
 

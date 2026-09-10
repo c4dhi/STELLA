@@ -21,11 +21,39 @@ detector is a focused, dependency-free en/de classifier that returns a usable
 confidence. Swapping in a broader detector only changes ``detect_language``.
 """
 
+import logging
+import os
 import re
 from typing import Optional, Tuple
 
+logger = logging.getLogger(__name__)
+
 # Human-readable names for prompt injection.
 LANGUAGE_NAMES = {"en": "English", "de": "German"}
+
+# Deployment-level language PIN, chosen by the operator in the deploy UI.
+# When set to a supported ISO 639-1 code the conversation language is FORCED to
+# it for the whole deployment: detection is ignored, the lock never switches,
+# and STT transcription is pinned to the same language (``audio/pipeline.py``).
+# This is the deliberate opposite of the default auto-detect — it exists because
+# auto-detect needs a long enough utterance to be confident, so a short first
+# turn would otherwise fall back to the generic default (RFC §5 / §10 "force").
+# Empty or ``auto`` = auto-detect, the default.
+FORCE_LANGUAGE_ENV = "STELLA_LANGUAGE"
+
+
+def forced_language() -> Optional[str]:
+    """The deployment-pinned conversation language, or ``None`` for auto-detect.
+
+    Read from the ``STELLA_LANGUAGE`` env var so every consumer (resolver, STT
+    pin, TTS seed) derives the pin from one place rather than each holding its
+    own copy.
+    """
+    value = (os.getenv(FORCE_LANGUAGE_ENV) or "").strip().lower()
+    if not value or value == "auto":
+        return None
+    return value
+
 
 # German function words / strong indicators.
 _GERMAN_WORDS = {
@@ -94,6 +122,31 @@ def detect_language(text: str) -> Tuple[Optional[str], float]:
     return lang, confidence
 
 
+# Below this many word-equivalents a turn carries too little signal to move a
+# confirmed language lock. Structural rather than a word list: it measures how
+# much was said, so it holds in any language. Scripts without spaces are counted
+# by character, since whitespace splitting returns ~1 for a whole sentence.
+_MIN_SWITCH_WORDS = 4
+_DENSE_SCRIPT_RANGES = (
+    (0x3040, 0x30FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF), (0x0E00, 0x0E7F),
+)
+
+
+def _too_short_to_switch(text: Optional[str]) -> bool:
+    """True when this turn is too slight to be evidence of a language change."""
+    if not text:
+        return True
+    words = len(text.split())
+    dense = sum(
+        1 for ch in text
+        if any(lo <= ord(ch) <= hi for lo, hi in _DENSE_SCRIPT_RANGES)
+    )
+    if dense:
+        words = max(words, round(dense / 1.5))
+    return words < _MIN_SWITCH_WORDS
+
+
 class LanguageResolver:
     """Holds the resolved session language and applies confidence-gated switching.
 
@@ -110,22 +163,49 @@ class LanguageResolver:
         seed: Optional[str] = None,
         detect_threshold: float = 0.4,
         switch_threshold: float = 0.6,
-        debounce: int = 1,
+        debounce: int = 3,
+        forced: Optional[str] = None,
     ) -> None:
         self.supported = set(supported)
         self.default = default if default in self.supported else next(iter(self.supported))
         self.detect_threshold = detect_threshold
         self.switch_threshold = switch_threshold
+        # Consecutive confident detections required to move a CONFIRMED lock.
+        # Was 1, i.e. a single turn flipped the conversation's language
+        # mid-sentence. STT is least reliable on exactly the turns that carry
+        # the least language signal — short acknowledgements — so one vote was
+        # far too cheap. Observed in production: German sessions where "Nicht
+        # so." and "Y'all." came back from Whisper as English.
         self.debounce = max(1, debounce)
 
         self.seed = seed if seed in self.supported else None
-        self.locked: Optional[str] = None
+        # Deployment pin. ``_forced_request`` keeps the raw operator choice so a
+        # later ``apply_config`` that widens ``supported`` can honor a pin the
+        # default set had rejected. Falls back to the env var so both agents get
+        # the pin from the shared SDK with no per-agent wiring.
+        self._forced_request = (forced if forced is not None else forced_language())
+        self.forced = self._validate_forced()
+        self.locked: Optional[str] = self.forced
         # True once the lock came from a real detection (not the default/seed).
         # A provisional lock yields to the first genuine detection at
         # detect_threshold; a confirmed lock only changes via switch_threshold.
-        self._confirmed = False
+        # A pin counts as confirmed: it is a decision, not a placeholder.
+        self._confirmed = bool(self.forced)
         self._pending: Optional[str] = None
         self._pending_count = 0
+
+    def _validate_forced(self) -> Optional[str]:
+        """Clamp the requested pin to the supported set (unsupported → no pin)."""
+        want = self._forced_request
+        if not want:
+            return None
+        if want not in self.supported:
+            logger.warning(
+                f"[Language] Ignoring pin '{want}': not in supported set "
+                f"{sorted(self.supported)}. Falling back to auto-detect."
+            )
+            return None
+        return want
 
     def reset(self) -> None:
         """Clear per-session state (lock, confirmation, pending switch).
@@ -134,8 +214,8 @@ class LanguageResolver:
         conversations. Configuration (supported set, default, thresholds, seed)
         is preserved.
         """
-        self.locked = None
-        self._confirmed = False
+        self.locked = self.forced
+        self._confirmed = bool(self.forced)
         self._reset_pending()
 
     def apply_config(self, config: dict) -> None:
@@ -157,11 +237,56 @@ class LanguageResolver:
             self.switch_threshold = float(config["switch_threshold"])
         if "debounce" in config:
             self.debounce = max(1, int(config["debounce"]))
-        # Re-validate any seed against the (possibly new) supported set.
+        if "force" in config:
+            want = (str(config["force"] or "")).strip().lower()
+            self._forced_request = want if want and want != "auto" else None
+        # Re-validate seed and pin against the (possibly new) supported set.
         self.seed = self.seed if self.seed in self.supported else None
+        self.forced = self._validate_forced()
+        if self.forced:
+            self.locked, self._confirmed = self.forced, True
+
+    def set_plan_language(self, lang: Optional[str]) -> None:
+        """Declare the language this plan is written in — a PIN, not a hint.
+
+        A plan whose system prompt, task instructions and acceptance criteria
+        are all in German is not a conversation whose language needs guessing.
+        Declaring it turns detection off for the session: the STT service is
+        told what to transcribe, and every turn resolves to this language.
+
+        That matters far more than it sounds. Whisper auto-detects per
+        utterance from a very short window, and when it guesses wrong it does
+        not merely mis-hear — conditioned on the wrong language token it
+        TRANSLATES. Observed in production on a fully-German plan: the opening
+        "Hi Grace, kannst du mich hören" (2.6s, detected en at 0.69 confidence
+        because it starts with an English-sounding name) came back as "Hi
+        Grace, can you hear me?", and from there a 0.5s "ja" decoded as "down",
+        which the agent read as the user feeling low. The plan never recovered.
+
+        Nothing here is a heuristic: the operator said what language this is.
+
+        The declared language joins ``supported`` — declaring French means the
+        conversation is French, not that it silently falls back to auto-detect
+        because French was not in the default pair.
+
+        ``None`` or ``"auto"`` leaves detection exactly as it was.
+        """
+        want = (str(lang or "")).strip().lower()
+        if not want or want == "auto":
+            return
+        self.supported.add(want)
+        self._forced_request = want
+        self.forced = self._validate_forced()
+        if self.forced:
+            self.locked, self._confirmed = self.forced, True
+            self._reset_pending()
 
     def set_seed(self, seed: Optional[str]) -> None:
-        """Set the plan-declared language seed (``auto``/unsupported → no seed)."""
+        """Set the plan-declared language seed (``auto``/unsupported → no seed).
+
+        No effect while a deployment pin is active — the pin outranks the plan
+        seed, which only ever biases an otherwise-undecided turn.
+        """
         self.seed = seed if seed in self.supported else None
 
     def _reset_pending(self) -> None:
@@ -185,9 +310,18 @@ class LanguageResolver:
                 signal, RFC §8.3). Both signal shapes flow through the same
                 gating below, so the source is interchangeable.
 
-        Fallback chain (RFC §8.3): confident supported signal → session lock →
-        plan seed → default.
+        Fallback chain (RFC §8.3): deployment pin → confident supported signal →
+        session lock → plan seed → default.
         """
+        # Deployment pin outranks everything: the operator asked for a
+        # fixed-language deployment, so detection is not consulted at all and no
+        # short/ambiguous turn can fall back to the default.
+        if self.forced:
+            self.locked = self.forced
+            self._confirmed = True
+            self._reset_pending()
+            return self.locked
+
         if signal is not None:
             lang, confidence = signal
         else:
@@ -209,7 +343,14 @@ class LanguageResolver:
             return self.locked
 
         # Confirmed lock: hold it (the last detected language) unless a
-        # sustained, high-confidence change is seen.
+        # sustained, high-confidence change is seen — and only from turns long
+        # enough to actually carry the evidence. A one- or two-word
+        # acknowledgement is where STT guesses, so it must not get a vote; it
+        # neither advances a pending switch nor cancels one, it is simply not
+        # evidence either way.
+        if _too_short_to_switch(text):
+            return self.locked
+
         if lang and lang != self.locked and confidence >= self.switch_threshold:
             if self._pending == lang:
                 self._pending_count += 1

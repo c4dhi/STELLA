@@ -46,7 +46,13 @@ class ResponseGenerator:
         self.response_temperature = 0.7
         self.custom_persona: Optional[str] = None
         self.custom_guidelines: Optional[str] = None
-        self.history_limit: int = 0  # 0 = default (10)
+        # 0 = use every turn the agent fetched. The agent decides how much
+        # history is worth carrying (_custom_history_limit, 20 by default) and
+        # hands exactly that much to generate(); this stage must not silently
+        # halve it. It used to default to 10, so 20 turns were fetched and the
+        # oldest 10 dropped on the floor — long-range callbacks ('you said
+        # earlier you hate mornings') were structurally impossible past turn 10.
+        self.history_limit: int = 0
 
     def apply_config(self, config: dict) -> None:
         """Apply configuration overrides from Agent Configurator."""
@@ -99,7 +105,7 @@ class ResponseGenerator:
             custom_persona=self.custom_persona,
             custom_guidelines=self.custom_guidelines,
             conversation_history=conversation_history,
-            history_limit=self.history_limit or 10,
+            history_limit=self.history_limit or len(conversation_history or []),
             bridge=bridge,
         )
         user_message = build_response_user_message(user_input)

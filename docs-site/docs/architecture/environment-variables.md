@@ -130,7 +130,7 @@ These settings only apply when `STT_PROVIDER=whisper`:
 | `WHISPER_DEVICE` | No | `cpu` | Compute device: `cpu` or `cuda` |
 | `WHISPER_COMPUTE_TYPE` | No | `int8` | Quantization type: `float16`, `int8`, `int8_float16` |
 | `WHISPER_BEAM_SIZE` | No | `5` | Beam search width. Higher = more accurate but slower |
-| `WHISPER_LANGUAGE` | No | (auto-detect) | Force specific language code (e.g., `en`, `de`, `fr`). Empty for auto-detection |
+| `WHISPER_LANGUAGE` | No | (auto-detect) | Force specific language code (e.g., `en`, `de`, `fr`) for the whole STT service. Empty for auto-detection. To fix a *single* agent's language, set `STELLA_LANGUAGE` on that agent instead — it pins transcription per session without affecting other agents |
 
 </details>
 
@@ -285,7 +285,7 @@ STELLA_AI_TEMP_DIR=/mnt/stella-ai-temp
 
 ## Agent SDK (Pod-Level)
 
-These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. Agents declare them in their `agent.yaml` manifest under `x-stella-optional-env-vars` so the frontend deploy modal can expose them.
+These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. For how the audio pipeline actually works and why the timing constants are what they are, see [TTS & Audio Pipeline](./tts-pipeline.md). Agents declare them in their `agent.yaml` manifest under `x-stella-optional-env-vars` so the frontend deploy modal can expose them.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -293,6 +293,11 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `INTERRUPT_MODE` | No | `none` | Transcript interrupt behavior. `none` = strict turn-based gating (user speech suppressed while agent processes/narrates). `smart` = reserved for future barge-in with re-prompting |
 | `TRANSCRIPT_DEBOUNCE_MS` | No | `300` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Set to `0` to disable debouncing |
 | `STT_WARMUP_ENABLED` | No | `true` | Warm up the STT model on agent start and when participants join. Set to `false` to skip warmup |
+| `STELLA_TTS_PREROLL_MS` | No | `800` | Jitter buffer (ms) held before the first frame of an utterance plays. Calibrated to the reference deployment's hardware, not a universal constant — faster GPUs should lower it. See [tuning guidance](./tts-pipeline.md#tuning-the-pre-roll-for-your-hardware) |
+| `TTS_PROGRESS_TICK_MS` | No | `200` | How often a teleprompter progress envelope is emitted during playback |
+| `TTS_VOICE` | No | provider default | Seed TTS voice, overridable per stream. Honored by voice-selecting providers, ignored by others |
+| `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
+| `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
 
 ### Turn Management
 

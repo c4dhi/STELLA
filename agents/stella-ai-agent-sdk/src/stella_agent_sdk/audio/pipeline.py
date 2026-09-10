@@ -42,9 +42,12 @@ import logging
 import os
 import time
 import uuid
-from typing import AsyncIterator, Awaitable, Callable, List, Optional
+from collections import deque
+from dataclasses import dataclass
+from typing import AsyncIterator, Awaitable, Callable, Deque, List, Optional
 
-from stella_agent_sdk.env import env_int as _env_int
+from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
+from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
 from stella_agent_sdk.services.tts_client import TTSClient
@@ -53,19 +56,70 @@ from stella_agent_sdk.messages.types import BargeInDecision
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _Utterance:
+    """Provenance for one STT utterance, from speech_started to its final.
+
+    Whose floor an utterance began on is settled at its FIRST frame, but the
+    question is only asked at its LAST one — and a whisper decode sits between
+    the two (692ms-1.1s measured on prod). The gate routinely flips inside that
+    window, in both directions:
+
+      * the agent starts its bridge while the user is still mid-sentence, so a
+        final the user was entitled to arrives at a closed gate and is thrown
+        away — a whole sentence lost because they paused for breath 14ms past
+        the endpointer;
+      * a backchannel finishes decoding just after playback stops (26ms after,
+        measured), so an "mhm" arrives at an open gate, is promoted to a turn,
+        and re-closes the gate on the answer the user is actually giving.
+
+    Reading the gate at the final therefore answers a different question than
+    the one that matters. So the answer is recorded when it is true and read
+    when it is needed.
+    """
+
+    tid: str
+    #: Gate state at speech_started — did the user already hold the floor?
+    started_on_open_gate: bool
+    #: The user cleared BARGE_IN_MIN_SPEECH_MS at some point in this utterance.
+    #: Recorded whether or not the barge-in reflex could act on it (that needs
+    #: _audio_active, which is False in the gaps between sentences), because
+    #: this is the signal that separates a real turn from a backchannel.
+    confirmed: bool = False
+    #: speech_ended seen, and the gate state when it landed.
+    ended: bool = False
+    ended_on_open_gate: bool = False
+
+
 # ── First-audible-token latency budget (#304 A1) ─────────────────────────────
 # Targets grounded in turn-taking research. The natural between-turn gap clusters
 # around ~200 ms across languages (Stivers et al. 2009, PNAS); spoken-dialogue
 # systems start to feel unnatural past ~2 s and read as a breakdown past ~4 s
 # (assemblyai low-latency-voice-ai; arXiv 2507.22352 / 2404.16053).
-#   • bridge  — the floor-holding ack must land INSIDE the gap window to do its
-#               job, so its target is tight (~500 ms).
 #   • response — the first audible token of the substantive answer; ≤1 s is
 #               comfortable.
 # Both share warn (>2 s, unnatural) and alarm (>4 s, perceived dead air)
 # ceilings. Targets are visibility-only (log + analytics payload); no behavior
 # changes here. All four are env-tunable.
-_BRIDGE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_BRIDGE_FIRST_BYTE_TARGET_MS", 500)
+#
+# The bridge target is what THIS pipeline can reach, not the ~200ms gap the
+# research describes. An LLM-backed bridge cannot approach that, and a target
+# nothing can hit reports over_target on every single turn, which is the same
+# as reporting nothing. Measured on prod, the floor is roughly:
+#
+#     ~25ms   dispatch (stt_end → bridge_start)
+#   + ~420ms  time to first token from gpt-4o-mini (pooled client)
+#   + ~100ms  tokens to the end of the first sentence
+#   + ~280ms  TTS request → first frame out (~150ms to the first chunk, then
+#             ~130ms to accumulate the 200ms pre-roll at RTF ~0.8)
+#   = ~825ms
+#
+# 900ms therefore means "nothing went wrong". The remaining floor is TTFT, and
+# the sub-second-into-the-gap bridge the research asks for needs a different
+# mechanism rather than a tighter number — the templated bridge, which skips
+# the LLM entirely. This target is tied to _DEFAULT_TTS_PREROLL_MS: move it
+# whenever that moves, or it stops meaning anything again.
+_BRIDGE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_BRIDGE_FIRST_BYTE_TARGET_MS", 900)
 _RESPONSE_FIRST_BYTE_TARGET_MS = _env_int("STELLA_RESPONSE_FIRST_BYTE_TARGET_MS", 1000)
 _FIRST_BYTE_WARN_MS = _env_int("STELLA_FIRST_BYTE_WARN_MS", 2000)
 _FIRST_BYTE_ALARM_MS = _env_int("STELLA_FIRST_BYTE_ALARM_MS", 4000)
@@ -91,6 +145,67 @@ def _latency_status(source: str, elapsed_ms: float) -> str:
     return "ok"
 
 
+def _decode_diagnostic_fields(raw: str) -> dict:
+    """Flatten the STT decode-diagnostics JSON into analytics event fields.
+
+    The STT service ships a nested record; the analytics pipeline aggregates
+    flat keys off ``data.<name>``, so nesting would mean a bespoke aggregator.
+    Unknown or malformed input yields {} — diagnostics must never be able to
+    break a turn, and they are absent entirely unless the STT service has them
+    switched on.
+    """
+    if not raw:
+        return {}
+    try:
+        record = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(record, dict):
+        return {}
+
+    fields: dict = {}
+
+    def _put(key, value, cast=float):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            fields[key] = cast(value)
+
+    def _section(name):
+        # `or {}` is not enough: a truthy non-dict (a string, a list) would sail
+        # through and blow up on .get inside a live turn.
+        value = record.get(name)
+        return value if isinstance(value, dict) else {}
+
+    audio = _section("audio")
+    _put("silence_fraction", audio.get("silence_fraction"))
+    _put("speech_sec", audio.get("speech_sec"))
+    _put("total_sec", audio.get("total_sec"))
+
+    final = _section("final")
+    _put("final_decode_ms", final.get("decode_ms"))
+    _put("final_words", final.get("words"), int)
+    for name in ("avg_logprob", "no_speech_prob", "compression_ratio"):
+        stats = final.get(name)
+        if isinstance(stats, dict):
+            _put(f"{name}_worst", stats.get("worst"))
+            _put(f"{name}_mean", stats.get("mean"))
+
+    # The two comparisons the investigation turns on: could we have shipped the
+    # earlier decode (shadow), and how much does the mid-speech partial miss.
+    for source, prefix in (("shadow", "shadow"), ("last_partial", "partial")):
+        block = record.get(source)
+        if not isinstance(block, dict):
+            continue
+        if isinstance(block.get("identical"), bool):
+            fields[f"{prefix}_identical"] = block["identical"]
+        if isinstance(block.get("is_prefix_of_reference"), bool):
+            fields[f"{prefix}_is_prefix"] = block["is_prefix_of_reference"]
+        _put(f"{prefix}_similarity", block.get("similarity"))
+        _put(f"{prefix}_word_delta", block.get("word_delta"), int)
+        _put(f"{prefix}_available_earlier_ms", block.get("available_earlier_ms"))
+
+    return fields
+
+
 # TTS output format (matches RoomManager's AudioSource and the TTS service).
 _TTS_SAMPLE_RATE = 24000
 _BYTES_PER_SAMPLE = 2  # 16-bit mono PCM
@@ -98,6 +213,232 @@ _BYTES_PER_SAMPLE = 2  # 16-bit mono PCM
 # in fixed frames lets us track a sample-accurate playhead for barge-in.
 _PLAYOUT_FRAME_SAMPLES = 480
 _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
+
+# Jitter buffer held before the first frame of an utterance goes out.
+#
+# LiveKit's AudioSource.capture_frame self-paces at 1x real time, so once
+# playout starts the source drains steadily. TTS does NOT arrive steadily, and
+# on the current deployment it barely arrives fast enough at all.
+#
+# Measured against the prod TTS service (Qwen3-TTS-12Hz-1.7B on an L4), three
+# German sentences of 1.7-4.2s of audio:
+#
+#   real-time factor          0.92 - 1.33   (synthesis is ~as slow as playback,
+#                                             and for short text SLOWER)
+#   first chunk               ~235ms
+#   whole sentence            2235 - 3907ms  <- what buffered playback waited for
+#   max playout deficit       614 - 756ms    <- how far playout falls behind
+#                                              arrival when started with no cushion
+#
+# The deficit is the number that sets this constant: playout must start late
+# enough that it never catches up with synthesis. On those figures 300ms was NOT
+# enough (started at ~434ms, under the 756ms deficit) and underran mid-sentence,
+# so the cushion was set to 800ms.
+#
+# RE-MEASURED 2026-08-28, same service, five German sentences of 0.88-2.72s of
+# audio (the earlier run used three of 1.7-4.2s):
+#
+#   real-time factor          0.75 - 0.82   (synthesis now comfortably OUTRUNS
+#                                             playback, at every length tested)
+#   first chunk               ~150ms        (constant to within 1ms)
+#   max playout deficit       130 - 131ms   <- and that is just the wait for the
+#                                              first chunk; once audio starts
+#                                              arriving, production never falls
+#                                              behind 1x again
+#
+# The premise changed, so the constant has to. 800ms was ~6x the worst case it
+# guards against. 200ms keeps ~1.5x margin over the measured 131ms, and going
+# below ~150ms would buy nothing because the first chunk cannot arrive sooner.
+#
+# What did NOT change is the guard behind it: _bridge_underrun still pushes real
+# silence if the source actually drains, and logs the milliseconds it had to
+# insert. That number is the acceptance test for this constant — if "bridged
+# Xms" is ever non-zero, the cushion is too small for the hardware of the day.
+# Prefer raising it back over adding a rate controller: the only reason a fixed
+# cushion works at all is that RTF < 1, and if that stops holding under GPU
+# contention no amount of prediction saves it either.
+_DEFAULT_TTS_PREROLL_MS = 200
+
+# Wall-clock covered by one playout frame.
+_PLAYOUT_FRAME_MS = _PLAYOUT_FRAME_SAMPLES * 1000 // _TTS_SAMPLE_RATE
+
+# Underrun guard.
+#
+# A LiveKit AudioSource that runs dry does NOT emit silence. The client simply
+# stops receiving packets, and Opus packet-loss concealment fills the hole by
+# extrapolating the last frame it had — a synthetic, warbling continuation of
+# whatever phoneme was in flight. That artifact is the "interference between
+# chunks" people report; it is the client inventing audio, not TTS producing it.
+#
+# So when synthesis falls behind far enough that the source is about to empty,
+# push real silence instead. A synthesis stall then sounds like a short pause,
+# which is honest, rather than a warble, which is not.
+_UNDERRUN_FLOOR_MS = 120.0    # top the source up once it drops below this
+_UNDERRUN_POLL_MS = 10.0      # how often to re-check while starved
+
+# De-click ramp applied on either side of inserted silence. Cutting a speech
+# waveform to zero — or resuming it from zero — is a step discontinuity, and a
+# step is audible as a click. A few ms of linear ramp removes it.
+_DECLICK_MS = 5
+_DECLICK_SAMPLES = _DECLICK_MS * _TTS_SAMPLE_RATE // 1000
+
+# Teleprompter progress cadence (#241).
+#
+# The highlight used to be driven by ONE envelope per sentence, held until
+# synthesis completed so it could carry the sentence's true byte length. That
+# assumed synthesis finishes well before playback does (RTF ~0.3). It does not:
+# the deployed model runs at RTF 0.92-1.33, so "synthesis complete" lands at the
+# END of the sentence and the envelope describes almost nothing left to animate.
+# Measured against the paced harness at a constant 500ms sentence:
+#
+#   RTF 0.3 -> 300ms still to animate (60% of the sentence)
+#   RTF 0.6 -> 160ms (32%)
+#   RTF 1.0 ->  40ms (8%)
+#   RTF 1.3 ->  20ms (4%)   <- the highlight simply appears, fully lit
+#
+# So progress is now STREAMED: a tick every _PROGRESS_TICK_MS describes only the
+# audio actually in hand, and the frontend chains those short segments. Each
+# tick's timing is anchored to bytes really pushed, so it cannot outrun the
+# audio no matter how slow synthesis is.
+_PROGRESS_TICK_MS = float(os.getenv("TTS_PROGRESS_TICK_MS", "200"))
+
+# Seed for the chars-per-millisecond estimate used to place the highlight inside
+# a sentence that is still synthesizing (see _estimated_total_bytes). ~70ms/char
+# is normal conversational TTS pace; it self-calibrates from the first completed sentence,
+# so this only has to be in the right neighbourhood for the very first one.
+_DEFAULT_MS_PER_CHAR = 70.0
+
+
+def _now() -> float:
+    """Monotonic seconds — never the wall clock, which can step."""
+    return time.monotonic()
+
+
+def _tail_sample(frame: bytes) -> int:
+    """Last 16-bit sample of a frame (0 when there is not one)."""
+    if len(frame) < _BYTES_PER_SAMPLE:
+        return 0
+    return int.from_bytes(frame[-_BYTES_PER_SAMPLE:], "little", signed=True)
+
+
+def _fade_in(frame: bytes) -> bytes:
+    """Ramp the first _DECLICK_MS of ``frame`` up from zero."""
+    n = min(len(frame) // _BYTES_PER_SAMPLE, _DECLICK_SAMPLES)
+    if n <= 0:
+        return frame
+    out = bytearray(frame)
+    for i in range(n):
+        off = i * _BYTES_PER_SAMPLE
+        sample = int.from_bytes(out[off:off + _BYTES_PER_SAMPLE], "little", signed=True)
+        scaled = int(sample * (i + 1) / n)
+        out[off:off + _BYTES_PER_SAMPLE] = scaled.to_bytes(
+            _BYTES_PER_SAMPLE, "little", signed=True
+        )
+    return bytes(out)
+
+
+def _apply_gain(frame: bytes, gain: float) -> bytes:
+    """Scale a PCM frame. Used to duck the agent under the user's voice."""
+    if gain >= 1.0:
+        return frame
+    out = bytearray(len(frame))
+    for off in range(0, len(frame) - _BYTES_PER_SAMPLE + 1, _BYTES_PER_SAMPLE):
+        sample = int.from_bytes(frame[off:off + _BYTES_PER_SAMPLE], "little", signed=True)
+        out[off:off + _BYTES_PER_SAMPLE] = int(sample * gain).to_bytes(
+            _BYTES_PER_SAMPLE, "little", signed=True
+        )
+    return bytes(out)
+
+
+def _silence_frame(fade_from: int = 0) -> bytes:
+    """A frame of silence, ramping down from ``fade_from`` so it does not click."""
+    out = bytearray(_PLAYOUT_FRAME_BYTES)
+    if fade_from:
+        n = min(_DECLICK_SAMPLES, _PLAYOUT_FRAME_SAMPLES)
+        for i in range(n):
+            off = i * _BYTES_PER_SAMPLE
+            scaled = int(fade_from * (1.0 - (i + 1) / n))
+            out[off:off + _BYTES_PER_SAMPLE] = scaled.to_bytes(
+                _BYTES_PER_SAMPLE, "little", signed=True
+            )
+    return bytes(out)
+
+
+class _StreamingUtterance:
+    """One sentence's PCM audio, appended to while synthesis streams it in.
+
+    Lets playback start on the first chunk instead of the last. ``data`` is a
+    bytearray the player binds to directly (``self._cur_audio``), so appends are
+    visible to the playhead without copying; ``complete`` says whether more is
+    coming; ``wait_for_data`` parks the player when it catches up with synthesis.
+    """
+
+    __slots__ = ("data", "complete", "error", "task", "_new")
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+        self.complete = False
+        self.error: Optional[Exception] = None
+        self.task: Optional[asyncio.Task] = None
+        self._new = asyncio.Event()
+
+    def append(self, audio: bytes) -> None:
+        self.data += audio
+        self._new.set()
+
+    def finish(self, error: Optional[Exception] = None) -> None:
+        self.error = error
+        self.complete = True
+        self._new.set()
+
+    async def wait_for_data(
+        self,
+        want: int,
+        stop_event: asyncio.Event,
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """Block until the buffer holds ``want`` bytes, synthesis ends, or stop.
+
+        Returns False only when ``stop_event`` fired — the caller must abandon
+        playback. Racing the stop event here is what keeps barge-in responsive
+        while the player is starved: without it a slow synthesis would pin the
+        speech worker with the transcript gate closed and drop user speech.
+
+        With ``timeout`` set the wait also gives up when it expires and returns
+        True WITHOUT the data having arrived, so the caller can top the output
+        source up with silence and come back. Callers must therefore re-check
+        the buffer rather than assume ``want`` bytes are present.
+        """
+        while len(self.data) < want and not self.complete:
+            self._new.clear()
+            # Re-check after clear(): the producer may have appended (and set the
+            # event) between the length check and the clear, which would
+            # otherwise park us on an event nobody will set again.
+            if len(self.data) >= want or self.complete:
+                break
+            waiter = asyncio.ensure_future(self._new.wait())
+            stopper = asyncio.ensure_future(stop_event.wait())
+            try:
+                await asyncio.wait(
+                    {waiter, stopper},
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=timeout,
+                )
+            finally:
+                waiter.cancel()
+                stopper.cancel()
+            if stop_event.is_set():
+                return False
+            if timeout is not None:
+                # One bounded pass only — hand control back so the caller can
+                # decide whether the output source needs bridging.
+                return True
+        return True
+
+    def cancel(self) -> None:
+        """Stop synthesising — the audio is no longer wanted."""
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
 
 
 class AudioPipeline:
@@ -173,8 +514,25 @@ class AudioPipeline:
         self._stt_stream_task: Optional[asyncio.Task] = None
         self._transcript_queue: asyncio.Queue[TranscriptEvent] = asyncio.Queue()
 
-        # Transcript debouncing (secondary defense against rapid successive finals)
-        self._debounce_window_ms = _env_int("TRANSCRIPT_DEBOUNCE_MS", 300)
+        # Transcript debouncing (secondary defense against rapid successive finals).
+        #
+        # Off by default. The window only pays for itself if a second final can
+        # actually land inside it, and with either STT provider in this tree it
+        # cannot: both refuse to emit a final until they have seen a fixed span
+        # of silence, and both reset to IDLE immediately afterwards, so the
+        # floor between two consecutive finals is that span. whisper waits
+        # VAD_SILENCE_DURATION_MS + VAD_CONTINUATION_WINDOW_MS (500 + 600 in
+        # prod), sherpa waits SHERPA_SILENCE_THRESHOLD (1.5s). Both are far
+        # wider than any sane debounce window, and the continuation window is
+        # already the mechanism that stitches a mid-sentence pause back into
+        # one turn — it cancels its own pending final when speech resumes.
+        #
+        # So the sleep was a fixed tax on every turn (300ms straight off
+        # time-to-first-audio, measured from stt_end) guarding against an event
+        # the upstream endpointing makes unreachable. Set TRANSCRIPT_DEBOUNCE_MS
+        # to re-enable it for an STT provider that CAN fragment inside the
+        # window; the aggregation path below is unchanged and still correct.
+        self._debounce_window_ms = _env_int("TRANSCRIPT_DEBOUNCE_MS", 0)
         self._pending_transcript: Optional[TranscriptEvent] = None
         self._pending_transcript_time: float = 0
         self._debounce_task: Optional[asyncio.Task] = None
@@ -188,10 +546,23 @@ class AudioPipeline:
         # TTS enabled flag
         self._tts_enabled = os.getenv("TTS_ENABLED", "true").lower() != "false"
 
-        # TTS language. Seeded from the env var for backward compatibility, but
-        # the agent overrides it per turn via set_tts_language() so the voice
-        # follows the resolved conversation language (RFC §8/§9 #9).
-        self._tts_language = os.getenv("TTS_LANGUAGE", None) or None
+        # Deployment language PIN (STELLA_LANGUAGE). When set, this deployment
+        # is fixed to one language: STT transcription is pinned to it below
+        # instead of auto-detecting, and the resolver forces every turn to it.
+        # None = auto-detect (default).
+        self._language_pin = forced_language()
+        # Language to transcribe in, when the conversation HAS a declared one
+        # (plan-level, via set_stt_language). Only ever set from a declaration,
+        # never from detection: pinning STT to a language we merely guessed
+        # would make a wrong guess permanent and self-confirming.
+        self._stt_language: Optional[str] = None
+
+        # TTS language. Seeded from the env var for backward compatibility, then
+        # from the deployment pin, so the first synthesis of a pinned deployment
+        # is already correct before any turn has been resolved. The agent
+        # overrides it per turn via set_tts_language() so the voice follows the
+        # resolved conversation language (RFC §8/§9 #9).
+        self._tts_language = os.getenv("TTS_LANGUAGE", None) or self._language_pin or None
 
         # TTS voice. Seeded from the env var; the agent can override it per
         # stream via set_tts_voice() so the spoken voice can change per turn.
@@ -199,8 +570,30 @@ class AudioPipeline:
         # voice-selecting providers honor (e.g. Kokoro) and others disregard.
         self._tts_voice = os.getenv("TTS_VOICE", None) or None
 
+        # Speaking rate. Same contract as voice/language: an env seed the agent
+        # overrides per turn via set_tts_speed(). Providers that cannot change
+        # rate ignore it; the Qwen3 provider resamples its own PCM to honour it.
+        # This exists so a whole conversation is not synthesised at one fixed
+        # rate and one fixed affect, which is a large part of sounding scripted.
+        self._tts_speed: float = _env_float("TTS_SPEED", 1.0)
+
         # Sentence-level streaming TTS queue (tuple of sentence text + source label)
         self._speech_queue: asyncio.Queue = asyncio.Queue()
+        # Serializes TTS generation — see the note in _begin_synthesis. The
+        # service does not guard its own model, so concurrent synthesis garbles
+        # audio; this keeps at most one stream in flight per pipeline.
+        self._synthesis_lock: asyncio.Lock = asyncio.Lock()
+        # Jitter buffer before an utterance starts playing (see the constant).
+        # 0 disables it, which is only sane if the provider streams smoothly.
+        try:
+            _preroll_ms = int(
+                os.getenv("STELLA_TTS_PREROLL_MS", str(_DEFAULT_TTS_PREROLL_MS))
+            )
+        except ValueError:
+            _preroll_ms = _DEFAULT_TTS_PREROLL_MS
+        self._preroll_bytes = max(
+            0, int(_preroll_ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE
+        )
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -242,29 +635,78 @@ class AudioPipeline:
         # this is True; `_is_speaking` is too coarse (it's set before the first
         # frame plays and during idle gaps, when the agent isn't really talking).
         self._audio_active = False
-        # Trigger threshold: while the agent is speaking we keep listening the
-        # whole time, but only treat it as an interruption once STT recognizes
-        # at least this many characters of actual speech — so coughs, echo
-        # blips and brief sounds don't pause the agent for everything. Raise it
-        # to require more confident speech before interrupting.
-        self._barge_in_min_chars = int(os.getenv("BARGE_IN_MIN_CHARS", "3"))
+        # Provenance of the utterance currently in flight (see _Utterance).
+        # Retired by its own final, so it is None between utterances.
+        self._utterance: Optional[_Utterance] = None
+        # The agent's interruption decider — the configurable Barge-in
+        # Evaluator. Both channels consult it on the same question: is this
+        # text worth abandoning the current reply for? Voice asks once, on the
+        # FINAL transcript (see _resolve_voice_barge_in); text asks as soon as
+        # the message lands, since it has no acoustic signal to wait for.
         self._barge_in_decider: Optional[
             Callable[[str], Awaitable["BargeInDecision"]]
         ] = None
+        # How far to duck the agent's own voice while the user is speaking.
+        # Ducking is the reflex; stopping is the decision. A human who is
+        # interrupted trails off before they stop, and the listener hears that
+        # instantly — long before anyone has parsed a word. Doing the same makes
+        # the agent feel like it is listening rather than being switched off,
+        # and because it is only a volume change it costs nothing to be wrong:
+        # a cough ducks it for a moment and it carries on mid-sentence.
+        self._barge_in_duck_gain = max(0.0, min(1.0, float(
+            os.getenv("BARGE_IN_DUCK_GAIN", "0.25")
+        )))
+        self._ducked = False
+        # transcript_id of an utterance we have committed a voice barge-in for,
+        # while waiting for its final to deliver as the interrupting turn.
+        # Keyed on the id, not a bare flag, so the state cannot outlive its
+        # utterance — which is exactly how the previous design broke.
+        self._barge_in_committed_tid: Optional[str] = None
+        # ── False-interruption storm guard ────────────────────────────────
+        # A run of interruptions that turned out NOT to be turns means the
+        # environment is producing false triggers — a noisy room, a hot mic,
+        # someone else talking nearby — and every one of them stalls the agent
+        # mid-sentence. After enough within a window, stop honouring voice
+        # interruptions for a cooldown; the session falls back to the
+        # turn-based path that already exists, where the agent finishes its
+        # sentence and what the user said is queued as the next turn.
+        #
+        # ONLY false interruptions count. A user who genuinely cuts in three
+        # times in a minute is having a conversation, and locking them out
+        # would be the very failure this guard exists to prevent.
+        self._barge_in_storm_count = _env_int("BARGE_IN_STORM_COUNT", 3)
+        self._barge_in_storm_window_s = _env_float(
+            "BARGE_IN_STORM_WINDOW_MS", 60000.0
+        ) / 1000
+        self._barge_in_storm_cooldown_s = _env_float(
+            "BARGE_IN_STORM_COOLDOWN_MS", 120000.0
+        ) / 1000
+        self._false_interruptions: Deque[float] = deque()
+        self._barge_in_suppressed_until: float = 0.0
         # Session-end wrap-up handler (issue #198): invoked when the backend signals
         # a graceful close over the data channel ({"type":"session_end"}).
         self._session_end_handler: Optional[
             Callable[[str, int], Awaitable[None]]
         ] = None
-        # Safety net: a suspend only resolves when STT delivers a FINAL transcript
-        # (-> _resolve_barge_in). If STT errors/reconnects mid-barge-in and never
-        # emits a final, the suspend would otherwise persist forever — permanent
-        # dead air, turn never completes. This watchdog auto-resumes a suspend
-        # that goes this long unresolved. Tunable via BARGE_IN_SUSPEND_TIMEOUT_MS.
+        # Safety net for the TEXT path, which is the only caller that suspends
+        # playback reversibly: if its decider hangs, the suspend would otherwise
+        # persist forever — permanent dead air, turn never completes. This
+        # watchdog auto-resumes a suspend that goes this long unresolved.
+        # Tunable via BARGE_IN_SUSPEND_TIMEOUT_MS.
         self._barge_in_suspend_timeout_s: float = float(
             os.getenv("BARGE_IN_SUSPEND_TIMEOUT_MS", "8000")
         ) / 1000
         self._barge_in_watchdog_task: Optional[asyncio.Task] = None
+        # How long a barge-in decision may take. Playback is suspended and the
+        # user hears nothing for all of it, so it is bounded here rather than
+        # left to whatever the agent's hook does — the hook fetches
+        # conversation history BEFORE the evaluator's own budget starts, so the
+        # evaluator's timeout does not cover the whole call. Derived from the
+        # watchdog rather than configured separately: the two bound the same
+        # silence, and a decision allowed to outlast the net that guards the
+        # suspension is a decision that can arrive after something else has
+        # already resolved it.
+        self._barge_in_decision_timeout_s = self._barge_in_suspend_timeout_s / 2
 
         # ── Generation-level interrupt (text barge-in #278) ────────────────
         # Voice barge-in (above) acts at the audio layer: it suspends/commits
@@ -307,6 +749,30 @@ class AudioPipeline:
         # translate the byte-accurate playhead into a character offset in the
         # published agent_text. None when the held audio carries no offsets.
         self._cur_meta: Optional[dict] = None
+        # Whether synthesis of the held utterance has finished. Until it has,
+        # len(_cur_audio) is a PARTIAL total and the byte->char mapping has to
+        # be estimated rather than divided out (see _estimated_total_bytes).
+        self._cur_complete: bool = False
+        # Highest char offset already published for the held sentence, so a
+        # re-estimate can never walk the highlight backwards.
+        self._cur_last_char: int = 0
+        # Bytes of the held sentence already covered by an emitted segment.
+        # Segments must TILE the sentence: the frontend chains them end to end
+        # on the wall clock, so a segment measured from the live playhead rather
+        # than from here would re-describe audio an earlier segment already
+        # covered, and the schedule would outrun the sound.
+        self._cur_promised: int = 0
+        # Session-calibrated speaking pace, used to estimate where inside a
+        # sentence the playhead is while the sentence is still synthesizing.
+        # Re-measured from every sentence that completes, so it tracks the
+        # voice, the language and the model actually in use.
+        self._ms_per_char: float = _DEFAULT_MS_PER_CHAR
+        # False until a real sentence has been measured, so the seed above is
+        # replaced rather than averaged with the first measurement.
+        self._pace_measured: bool = False
+        # Last agent_playback state actually put on the wire. Progress is now
+        # emitted on a tick, and the mute channel must not tick with it.
+        self._last_playback_state: Optional[str] = None
 
         # Per-turn analytics state (raw event model)
         self._turn_stt_start_ts: float = 0
@@ -444,6 +910,43 @@ class AudioPipeline:
         """Timestamp (perf_counter) of the turn's ground zero (stt_end), for analytics."""
         return self._turn_stt_end_ts
 
+    def _begin_turn_analytics(self, turn_id: Optional[str]) -> None:
+        """Establish analytics ground zero for a turn.
+
+        Every stage event is reported as ``elapsed_ms`` relative to this
+        timestamp, and every TTS timing event is gated on it being set, so a
+        turn without an anchor records a full set of zeros rather than nothing
+        — which reads on the dashboard as "the pipeline took 0ms", not as
+        "unmeasured".
+
+        Called from two places, deliberately:
+
+        * the STT final branch, where ground zero is stt_end (the transcript is
+          locked in and the pipeline starts working) — earlier and more
+          accurate than the moment the agent dequeues it; and
+        * ``audio_in()``, the single turn boundary, for any turn that reaches
+          the agent WITHOUT having passed through that branch. Typed turns and
+          committed barge-ins (voice and text alike) both do: the barge-in path
+          ``continue``s before the anchor is set, and the user_text path never
+          touches the STT stream at all.
+        """
+        self._turn_stt_end_ts = time.perf_counter()
+        self._turn_id = turn_id
+        self._turn_bridge_tts_first_byte_emitted = False
+        self._turn_response_tts_first_byte_emitted = False
+
+    def _anchor_turn_if_unanchored(self, event: "TranscriptEvent") -> None:
+        """Anchor a turn that reached the agent without passing the STT branch.
+
+        Only fires when no anchor is standing, so a spoken turn keeps stt_end as
+        its ground zero rather than being re-anchored to the later moment the
+        agent dequeued it. ``_reset_turn_analytics()`` clears the anchor at the
+        end of every turn, so "no anchor standing" reliably means "this turn
+        never got one".
+        """
+        if self._turn_stt_end_ts == 0:
+            self._begin_turn_analytics(getattr(event, "transcript_id", None))
+
     async def _emit_analytics_event(self, stage: str, elapsed_ms: float, **kwargs) -> None:
         """Emit a raw timestamped analytics event relative to stt_end."""
         turn_id = self._turn_id or ""
@@ -458,7 +961,12 @@ class AudioPipeline:
         })
 
     def close_transcript_gate(self) -> None:
-        """Close the transcript gate — suppresses transcripts until reopened."""
+        """Close the transcript gate — suppresses transcripts until reopened.
+
+        If the user is mid-utterance and has already cleared the interruption
+        threshold, the floor is theirs and the agent does not take it: the
+        interruption is committed here rather than left to race the decode.
+        """
         if not self._transcript_gate_closed:
             logger.info("[GATE] Closing transcript gate")
             self._transcript_gate_closed = True
@@ -468,9 +976,40 @@ class AudioPipeline:
                 self._debounce_task = None
             self._pending_transcript = None
 
+            # The user is still talking and has already taken the floor by
+            # duration. Starting to speak over them is the one move to avoid,
+            # and waiting for their final to sort it out means talking over
+            # them for the length of a decode first. Yield now; their final
+            # commits it through the barge-in path above.
+            utt = self._utterance
+            if (
+                self._barge_in_available()
+                and self._barge_in_committed_tid is None
+                and utt is not None
+                and utt.confirmed
+                and not utt.ended
+            ):
+                logger.info(
+                    "[BARGE-IN] User already held the floor when the agent "
+                    "started — yielding without speaking over them"
+                )
+                self._barge_in_committed_tid = utt.tid
+                self.suspend_speech()
+
     def open_transcript_gate(self) -> None:
-        """Re-open the transcript gate. Drains stale items and applies
-        a post-gate settling period to let echo from browser playback clear."""
+        """Re-open the transcript gate, draining transcripts queued behind it.
+
+        Note there is no settling delay here, and deliberately so: a final that
+        decoded late is filtered on its provenance at the point of use (see the
+        backchannel discard in _run_stt_stream_inner), which costs no latency
+        and cannot swallow speech the user was still producing. The queue drain
+        below is why a committed turn goes out through _pending_barge_in rather
+        than the queue.
+        """
+        # The agent has stopped talking, so there is nothing left to duck.
+        # Clearing it here guarantees the next utterance starts at full volume
+        # even if the un-duck signal never arrived (STT hiccup, reconnect).
+        self.unduck_speech()
         if self._transcript_gate_closed:
             drained = 0
             while not self._transcript_queue.empty():
@@ -635,6 +1174,11 @@ class AudioPipeline:
         """
         logger.info("STT stream task started, waiting for audio...")
         chunk_count = 0
+        # A reconnect can strand a record mid-utterance (confirmed, never
+        # finalised). Left standing, the next close_transcript_gate() would
+        # yield the floor to an utterance that ended minutes ago and wait out
+        # the watchdog. The stream is new; nothing is in flight on it.
+        self._utterance = None
 
         async def audio_generator():
             """Generate audio chunks from LiveKit, muting during gate/settling."""
@@ -671,65 +1215,201 @@ class AudioPipeline:
             session_id=self._session_id,
             participant_id=self._participant_id,
             sample_rate=sample_rate,
-            # No language hint by default: STT auto-detects, which yields the
-            # per-utterance detection signal for free (RFC §6). Pinning is an
-            # opt-in (env WHISPER_LANGUAGE or a language_provider) and trades
-            # that free detection away, so we leave it off here.
+            # Tell STT the language whenever the conversation has a declared
+            # one — the deployment pin, or the language the plan declares. This
+            # is the single biggest accuracy lever available on short
+            # utterances: auto-detect runs on a very short window, and a wrong
+            # guess does not just mis-hear, it translates.
+            #
+            # With nothing declared this stays None and STT auto-detects, which
+            # yields the per-utterance detection signal for free (RFC §6). What
+            # it deliberately does NOT do is feed a DETECTED language back:
+            # a pinned session reports that pin as its detection with
+            # confidence 1.0, so an early wrong guess would confirm itself
+            # forever. A declaration is a fact; a detection is not.
+            language_provider=self._resolve_stt_language,
         ):
             logger.debug(f"STT event: text='{event.text[:50] if event.text else ''}...', is_final={event.is_final}, speech_started={event.speech_started}")
+
+            # Record which side of the gate this utterance began on before any
+            # branch below reads it. Must run first: the barge-in block can
+            # consume the final and `continue`, and the record has to be
+            # retired by it either way.
+            utt = self._track_utterance(event)
+
+            # A voice barge-in was committed for this utterance: its final IS
+            # the interrupting turn. Handled before the gate check because
+            # commit_interrupt() opens the gate asynchronously (the speech
+            # worker does it on the way out), so by the time the final lands the
+            # gate may be either side — and the turn must be delivered, and
+            # flagged, either way.
+            # A voice barge-in was suspended for this utterance: its final
+            # decides what happens to the held speech. Handled before the gate
+            # check because the gate may open underneath us.
+            if self._barge_in_committed_tid is not None:
+                if event.transcript_id != self._barge_in_committed_tid:
+                    # A different utterance started first, so the interrupted
+                    # one will never produce a final (STT dropped it or
+                    # reconnected). Resume rather than leave the agent muted.
+                    logger.info("[BARGE-IN] Interrupted utterance ended without a final — resuming")
+                    self._barge_in_committed_tid = None
+                    self._barge_in_active = False
+                    self.unduck_speech()
+                    self.resume_speech()
+                elif event.is_final:
+                    self._barge_in_committed_tid = None
+                    # Published inside _resolve_voice_barge_in, once the verdict
+                    # is known: the backend records every final it sees and has
+                    # no dedupe, so publishing now and again with the verdict
+                    # would put the utterance in the transcript twice.
+                    await self._resolve_voice_barge_in(event)
+                    continue
+                elif self.is_suspended:
+                    # Still hearing from the utterance we yielded to. The user
+                    # is talking, which is not a stall — but the watchdog was
+                    # armed at the suspend, so its budget was being spent on
+                    # the length of the interruption. An answer longer than
+                    # BARGE_IN_SUSPEND_TIMEOUT_MS therefore resumed playback
+                    # ON TOP of the user, which is the one thing yielding the
+                    # floor exists to prevent. Push it out on every sign of
+                    # life so it measures silence FROM STT, which is the
+                    # failure it is actually there to catch.
+                    self._arm_suspend_watchdog()
 
             # While the agent is speaking, the turn gate is closed.
             if self._transcript_gate_closed and self._tts_enabled:
                 if event.speech_started:
                     self._current_utterance_speaker = self._room.current_audio_speaker
 
-                # Turn-based mode (no barge-in): ignore user audio while speaking.
-                if not self._barge_in_enabled:
+                # ── Carry-over ────────────────────────────────────────────
+                # The gate shut underneath this utterance. Either the user
+                # already held the floor when the agent started talking, or
+                # they cleared the interruption threshold and the reflex below
+                # could not act (nothing was audible to suspend). Both are real
+                # turns; the discard further down would delete speech the user
+                # was never signalled to stop.
+                if event.is_final and utt is not None and (
+                    utt.started_on_open_gate or utt.confirmed
+                ):
+                    text = (event.text or "").strip()
+                    if not text:
+                        # Voiced but nothing transcribable. Not a turn, and the
+                        # agent never yielded for it — just come back up.
+                        self.unduck_speech()
+                        continue
+                    if not utt.started_on_open_gate:
+                        # An interruption that cleared the threshold while
+                        # nothing was audible to suspend — so the reflex never
+                        # ran, but the question is identical to the one
+                        # _resolve_voice_barge_in answers: turn, or noise? A
+                        # backchannel dropped into a gap between sentences
+                        # reaches the agent through here, and without this it
+                        # becomes a turn on the strength of being audible.
+                        # Nothing was suspended, so RESUME just drops the text.
+                        if await self._decide_barge_in(text) == BargeInDecision.RESUME:
+                            logger.info(
+                                f"[GATE] RESUME — '{text[:40]}' was not actionable"
+                            )
+                            await self._publish_user_transcript(event, discarded=True)
+                            self._note_false_interruption()
+                            self.unduck_speech()
+                            continue
+                    await self._publish_user_transcript(event)
+                    why = (
+                        "user had the floor first"
+                        if utt.started_on_open_gate
+                        else "interruption confirmed"
+                    )
+                    if self._barge_in_available():
+                        logger.info(
+                            f"[GATE] Gate closed mid-utterance ({why}) — "
+                            f"delivering as interruption: '{text[:40]}'"
+                        )
+                        self.commit_interrupt()
+                        self._deliver_barge_in_turn(text)
+                    else:
+                        # Turn-based mode keeps strict alternation, so the agent
+                        # finishes its sentence — but the turn is handed over
+                        # out-of-band rather than dropped, and answered next.
+                        logger.info(
+                            f"[GATE] Gate closed mid-utterance ({why}) — "
+                            f"queued for the next turn: '{text[:40]}'"
+                        )
+                        self._deliver_barge_in_turn(text, is_barge_in=False)
+                    continue
+
+                # Turn-based mode — either configured that way, or voice
+                # interruptions are in a post-storm cooldown. Ignore user audio
+                # while speaking; anything they said that mattered is carried
+                # over as the next turn by the branch above.
+                if not self._barge_in_available():
                     continue
 
                 text = (event.text or "").strip()
 
-                # A decision is already in flight — keep the on-screen
-                # transcript current, but don't re-trigger.
-                if self._barge_in_resolving:
-                    await self._publish_user_transcript(event)
-                    continue
+                # ── Voice barge-in ────────────────────────────────────────
+                # One rule: the STT service's VAD has heard enough continuous
+                # speech (BARGE_IN_MIN_SPEECH_MS) that this is an interruption
+                # and not a backchannel. Stop talking. That's the whole
+                # decision.
+                #
+                # What this deliberately does NOT do, and why:
+                #
+                #  * It does not wait for a transcript. A partial costs a whole
+                #    decode (~400-550ms measured on prod) before the agent could
+                #    even react, and short utterances are exactly where whisper
+                #    is least reliable — a 0.5s German "ja" came back as "down".
+                #  * It does not ask an LLM whether the interruption was
+                #    "meaningful". That added ~470ms on top of the decode, and
+                #    hiding that latency needed speculative execution, banked
+                #    verdicts and staleness guards — machinery whose leaked
+                #    state then silently swallowed real interruptions.
+                #  * It does not pause-then-maybe-resume. Nothing is suspended
+                #    on a guess, so nothing has to be undone: a backchannel
+                #    never dents playback at all, rather than stopping the agent
+                #    for half a second and starting it again.
+                #
+                # Duration is the signal every voice stack uses for this
+                # (LiveKit's min_interruption_duration, Pipecat's equivalent),
+                # and it is the only one that is language-agnostic: "mhm", "ja"
+                # and "aha" are short everywhere, with no word list to maintain.
+                # 1. The user started making sound: duck immediately. No
+                #    transcript, no decision, nothing to undo later.
+                if event.speech_started and self._audio_active:
+                    self.duck_speech()
 
-                # A barge-in is already in progress (suspended, collecting the
-                # utterance) — keep collecting and resolve on the final.
-                if self._barge_in_active:
-                    await self._publish_user_transcript(event)
-                    if event.is_final and text:
-                        self._barge_in_resolving = True
-                        asyncio.create_task(self._resolve_barge_in(text))
-                    continue
+                # 2. They stopped without ever clearing the threshold — a
+                #    backchannel. Come back up; the agent never lost its turn.
+                if event.speech_ended and self._barge_in_committed_tid is None:
+                    self.unduck_speech()
 
-                # No barge-in yet. Only START one if the agent is ACTUALLY
-                # talking (audio frames flowing) — never on user input while the
-                # agent is silent — and the user cleared the speech threshold so
-                # brief noises don't interrupt for everything.
-                if not self._audio_active:
-                    continue
-                if len(text) < self._barge_in_min_chars:
-                    continue
-                logger.info(
-                    f"[BARGE-IN] Interruption detected while talking ('{text[:40]}') — suspending"
-                )
-                self._barge_in_active = True
-                self.suspend_speech()
-                await self._emit_barge_in_debug(
-                    f"⏸️ Barge-in detected — paused, listening… (\"{text[:60]}\")",
-                    decision="detecting",
-                    transcript=text,
-                )
+                # 3. They kept going past BARGE_IN_MIN_SPEECH_MS: they are
+                #    taking the floor. Go quiet — but SUSPEND rather than
+                #    discard, so the held sentence can still be resumed if the
+                #    utterance turns out to be nothing (see the final above).
+                if event.speech_confirmed and self._audio_active:
+                    logger.info("[BARGE-IN] Interruption confirmed by VAD — yielding the floor")
+                    self._barge_in_committed_tid = event.transcript_id
+                    # Claim the resolution so a typed message arriving now
+                    # queues behind this one instead of racing a second decider
+                    # against it (see _handle_data_message).
+                    self._barge_in_active = True
+                    self.suspend_speech()
+                    await self._emit_barge_in_debug(
+                        "✋ Barge-in — user has the floor, listening",
+                        decision="detecting",
+                        transcript=text,
+                    )
+
+                # Keep the on-screen transcript live either way.
                 await self._publish_user_transcript(event)
-                if event.is_final and text:
-                    self._barge_in_resolving = True
-                    asyncio.create_task(self._resolve_barge_in(text))
                 continue
 
-            # 1. Publish ALL transcripts to LiveKit for frontend display.
-            await self._publish_user_transcript(event)
+            # 1. Partials go out immediately so the bubble stays live. A FINAL
+            #    waits until we know whether it counts as a turn, so it can carry
+            #    that verdict — and so it reaches the recorder exactly once.
+            if not event.is_final:
+                await self._publish_user_transcript(event)
 
             # 2. Handle speech_started for barge-in
             if event.speech_started:
@@ -739,13 +1419,37 @@ class AudioPipeline:
             # When TTS is disabled, gate still discards finals even though
             # partials are allowed through (lighter turn management).
             if event.is_final and event.text.strip():
+                # A backchannel that both began and ended while the agent held
+                # the floor, and whose decode simply landed after playback
+                # stopped. The gate is open now, but this was never a turn: it
+                # never cleared the interruption threshold, and the user had
+                # already stopped before the agent did. Letting it through
+                # promotes an "mhm" into a turn, which re-closes the gate on
+                # the answer the user is in the middle of giving.
+                #
+                # Decided on provenance rather than a settling delay: a timer
+                # wide enough to cover a 400ms decode would also swallow the
+                # start of a real reply, and would cost that delay on every
+                # turn. This costs nothing and cannot fire on speech the user
+                # was still producing when the floor came back to them.
+                if (
+                    utt is not None
+                    and not utt.started_on_open_gate
+                    and utt.ended
+                    and not utt.ended_on_open_gate
+                    and not utt.confirmed
+                ):
+                    logger.info(
+                        f"[GATE] Discarding backchannel decoded after playback: "
+                        f"'{event.text}'"
+                    )
+                    await self._publish_user_transcript(event, discarded=True)
+                    continue
+
                 logger.info(f"Final transcript: '{event.text}'")
 
                 # Capture stt_end and reset per-turn state
-                self._turn_stt_end_ts = time.perf_counter()
-                self._turn_id = getattr(event, 'transcript_id', None)
-                self._turn_bridge_tts_first_byte_emitted = False
-                self._turn_response_tts_first_byte_emitted = False
+                self._begin_turn_analytics(getattr(event, 'transcript_id', None))
 
                 # Ground zero = stt_end (transcript locked in, pipeline processing starts)
                 # vad_trigger is emitted as a negative value showing how long the user spoke
@@ -754,10 +1458,26 @@ class AudioPipeline:
                     vad_elapsed = (self._turn_stt_start_ts - self._turn_stt_end_ts) * 1000  # negative
                     asyncio.create_task(self._emit_analytics_event("vad_trigger", vad_elapsed))
 
+                # Decode diagnostics, when the STT service is running with them
+                # on. Flattened here rather than shipped as nested JSON so the
+                # backend aggregator stays a flat switch like every other stage.
+                decode_fields = _decode_diagnostic_fields(
+                    getattr(event, "decode_diagnostics", "")
+                )
+                if decode_fields:
+                    asyncio.create_task(
+                        self._emit_analytics_event("stt_decode", 0.0, **decode_fields)
+                    )
+
                 # Discard finals while agent is speaking
                 if self._transcript_gate_closed:
                     logger.info(f"[GATE] Discarding final (gate closed): '{event.text}'")
+                    await self._publish_user_transcript(event, discarded=True)
                     continue
+
+                # Nothing can discard it now: it is a turn, and this is the one
+                # publish the recorder will see.
+                await self._publish_user_transcript(event)
 
                 # Apply debouncing to aggregate rapid successive finals
                 if self._debounce_window_ms > 0:
@@ -765,7 +1485,194 @@ class AudioPipeline:
                 else:
                     await self._transcript_queue.put(event)
 
-    async def _publish_user_transcript(self, event: TranscriptEvent) -> None:
+    async def _resolve_voice_barge_in(self, event: TranscriptEvent) -> None:
+        """Decide what a confirmed voice interruption actually was, now that its
+        final transcript is in, and either commit it or give the turn back.
+
+        Three outcomes, cheapest first:
+
+          * Nothing transcribable — a cough, a chair, a door. No decode found
+            words, so no judgement is needed and none is paid for: resume from
+            the playhead immediately.
+          * Words the evaluator judges not actionable ("mhm", "ja genau") —
+            resume, and drop the text. This is the one question duration cannot
+            answer: "mhm" and "nein, warte" are both short, and only meaning
+            separates them.
+          * Anything else — commit: discard the rest of the reply and hand the
+            transcript over as the next turn.
+
+        The judgement runs on the FINAL, inline, exactly once. Not on a partial,
+        which costs a decode before it can be judged and is least reliable on
+        precisely the short utterances at issue; and not speculatively, because
+        hiding that latency is what previously required banked verdicts and
+        staleness guards whose leaked state silently swallowed real
+        interruptions. Here the agent is already silent and the user has already
+        stopped talking, so the wait is dead air either way — the only open
+        question is what ends it.
+        """
+        # The transcript is here, so nothing can stall any more: every path
+        # below ends in a commit or a resume, and the decider is bounded by
+        # _barge_in_decision_timeout_s. Disarm now — exactly as the text path
+        # does — or the net fires mid-decision and resumes playback for the
+        # length of the LLM call before the commit silences it again.
+        self._disarm_suspend_watchdog()
+
+        text = (event.text or "").strip()
+        if not text:
+            # Loud enough and long enough to look like speech, but nothing was
+            # said. Ending the agent's turn over that is the worse error, so
+            # take it back: playback resumes exactly where it paused.
+            logger.info("[BARGE-IN] False interruption (no transcript) — resuming")
+            self._release_voice_barge_in(committed=False)
+            return
+
+        self._barge_in_resolving = True
+        try:
+            decision = await self._decide_barge_in(text)
+        finally:
+            self._barge_in_resolving = False
+
+        if decision == BargeInDecision.RESUME:
+            logger.info(f"[BARGE-IN] RESUME — '{text[:40]}' was not actionable")
+            await self._publish_user_transcript(event, discarded=True)
+            await self._emit_barge_in_debug(
+                f'🔁 Barge-in RESUME — judged not actionable, resuming the '
+                f'previous turn. Heard: "{text[:100]}"',
+                decision="resume",
+                transcript=text,
+                channel="voice",
+            )
+            self._release_voice_barge_in(committed=False)
+            return
+
+        logger.info(f"[BARGE-IN] COMMIT — interrupting for '{text[:40]}'")
+        await self._publish_user_transcript(event)
+        await self._emit_barge_in_debug(
+            f'✋ Barge-in COMMIT — interrupting and processing as a new turn: '
+            f'"{text[:100]}"',
+            decision="commit",
+            transcript=text,
+            channel="voice",
+        )
+        self._release_voice_barge_in(committed=True)
+        self._deliver_barge_in_turn(text)
+
+    def _release_voice_barge_in(self, *, committed: bool) -> None:
+        """End a voice barge-in: take the floor for the user, or hand it back.
+
+        ``committed=False`` also records the false interruption that feeds the
+        storm guard — every path that gives the agent its turn back goes
+        through here, so there is exactly one place that can forget to count.
+        """
+        self._barge_in_active = False
+        if committed:
+            self.commit_interrupt()
+            return
+        self._note_false_interruption()
+        self.unduck_speech()
+        self.resume_speech()
+
+    async def _decide_barge_in(self, transcript: str) -> BargeInDecision:
+        """Ask the agent's Barge-in Evaluator whether ``transcript`` is worth
+        abandoning the current reply for. Shared by both channels.
+
+        Bounded on wall-clock, and defaults to COMMIT when there is no decider
+        or the call fails or times out: never silently swallow a real
+        interruption because the classifier did not answer.
+        """
+        decider = self._barge_in_decider
+        if decider is None:
+            return BargeInDecision.COMMIT
+        try:
+            return await asyncio.wait_for(
+                decider(transcript), timeout=self._barge_in_decision_timeout_s
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[BARGE-IN] Decider did not answer within "
+                f"{self._barge_in_decision_timeout_s:.1f}s — committing"
+            )
+            return BargeInDecision.COMMIT
+        except Exception as e:
+            logger.error(f"[BARGE-IN] Decider failed: {e} — committing")
+            return BargeInDecision.COMMIT
+
+    def _barge_in_available(self) -> bool:
+        """Whether a voice interruption should be honoured right now.
+
+        Barge-in is configured on AND the session is not serving a cooldown
+        after a run of false interruptions.
+        """
+        if not self._barge_in_enabled:
+            return False
+        until = self._barge_in_suppressed_until
+        if not until:
+            return True
+        if time.monotonic() < until:
+            return False
+        self._barge_in_suppressed_until = 0.0
+        logger.info("[BARGE-IN] Cooldown over — interruptions are honoured again")
+        return True
+
+    def _note_false_interruption(self) -> None:
+        """Record an interruption that turned out not to be a turn, and start a
+        cooldown once too many land inside the window.
+
+        Counted only where the agent yielded the floor and then had to take it
+        back. Committed interruptions are deliberately not counted — see the
+        storm-guard note in __init__.
+        """
+        if self._barge_in_storm_count <= 0:
+            return
+        now = time.monotonic()
+        window = self._false_interruptions
+        window.append(now)
+        while window and now - window[0] > self._barge_in_storm_window_s:
+            window.popleft()
+        if len(window) < self._barge_in_storm_count:
+            return
+        window.clear()
+        self._barge_in_suppressed_until = now + self._barge_in_storm_cooldown_s
+        logger.warning(
+            f"[BARGE-IN] {self._barge_in_storm_count} false interruptions within "
+            f"{self._barge_in_storm_window_s:.0f}s — suspending voice barge-in "
+            f"for {self._barge_in_storm_cooldown_s:.0f}s"
+        )
+
+    def _track_utterance(self, event: TranscriptEvent) -> Optional[_Utterance]:
+        """Maintain the provenance record for the utterance ``event`` belongs to.
+
+        Returns the record, and retires it on its final — so the caller holds
+        the last reference and every branch below reads the same one.
+        """
+        tid = getattr(event, "transcript_id", None)
+        if not tid:
+            return None
+
+        if event.speech_started:
+            self._utterance = _Utterance(
+                tid=tid, started_on_open_gate=not self._transcript_gate_closed
+            )
+
+        utt = self._utterance
+        if utt is None or utt.tid != tid:
+            # An utterance whose start this pipeline never saw (STT reconnect,
+            # or a stream restart mid-speech). Nothing can be said about whose
+            # floor it began on, so leave it to the gate-current behaviour.
+            return None
+
+        if event.speech_confirmed:
+            utt.confirmed = True
+        if event.speech_ended:
+            utt.ended = True
+            utt.ended_on_open_gate = not self._transcript_gate_closed
+        if event.is_final:
+            self._utterance = None
+        return utt
+
+    async def _publish_user_transcript(
+        self, event: TranscriptEvent, *, discarded: bool = False
+    ) -> None:
         """Publish a user transcript (partial or final) to LiveKit for frontend
         display, with speaker attribution.
 
@@ -773,7 +1680,18 @@ class AudioPipeline:
         locked utterance speaker, a mid-stream speaker change occurred (no
         silence gap), so update it. event.participant_id from STT is ignored —
         it's the value passed at stream init, not the actual speaker.
+
+        Textless events are dropped. The VAD boundary signals (speech_started /
+        speech_confirmed / speech_ended) ride the same TranscriptEvent as real
+        partials but carry no text, and they are control signals, not
+        transcripts: the frontend upserts by transcript_id and REPLACES, so
+        publishing one blanks the bubble the partials have been filling — for
+        the ~0.6-1.1s between speech_ended and the final, which is exactly when
+        the user is looking at it. An empty FINAL is dropped for the same
+        reason plus one more: it would also record an empty message.
         """
+        if not (event.text or "").strip():
+            return
         current_speaker = self._room.current_audio_speaker
         if current_speaker and current_speaker != self._current_utterance_speaker:
             self._current_utterance_speaker = current_speaker
@@ -789,6 +1707,13 @@ class AudioPipeline:
                 "speaker_id": speaker_id,
                 "speaker_name": speaker_name,
                 "source": "user_speech",
+                # True when the pipeline heard this, showed it, and then decided
+                # it was NOT a turn — a backchannel, or an interruption the
+                # evaluator judged not actionable. The words were really said,
+                # so they stay in the record; this flag is what lets the UI and
+                # a later reader tell "the agent answered this" apart from "the
+                # agent heard this and moved on", which is otherwise invisible.
+                "discarded": discarded,
                 # Backwards compat
                 "participant_id": speaker_id,
             },
@@ -803,9 +1728,10 @@ class AudioPipeline:
         self._current_utterance_speaker = self._room.current_audio_speaker
         logger.debug(f"Speech started detected - locked speaker: {self._current_utterance_speaker}")
 
-        # Barge-in detection happens in _run_stt_stream_inner (threshold-based
-        # on recognized speech), not here — speech_started alone is too noisy to
-        # trigger an interruption.
+        # Barge-in is NOT decided here. speech_started fires on the first VAD
+        # frame over threshold, which a cough or a door clears; the interruption
+        # signal is speech_confirmed (sustained voiced audio), handled in
+        # _run_stt_stream_inner.
 
         # No barge-in while agent is speaking (gate closed)
         if self._interrupt_mode == "none" and self._transcript_gate_closed:
@@ -1079,6 +2005,7 @@ class AudioPipeline:
             if self._pending_barge_in is not None:
                 event = self._pending_barge_in
                 self._pending_barge_in = None
+                self._anchor_turn_if_unanchored(event)
                 yield event
                 continue
             try:
@@ -1089,6 +2016,7 @@ class AudioPipeline:
                 )
 
                 # [GATE DISABLED] AEC handles echo cancellation at audio level
+                self._anchor_turn_if_unanchored(event)
                 yield event
 
             except asyncio.TimeoutError:
@@ -1175,7 +2103,7 @@ class AudioPipeline:
         self,
         text: str,
         voice: Optional[str] = None,
-        speed: float = 1.0,
+        speed: Optional[float] = None,
         language: Optional[str] = None,
     ) -> None:
         """
@@ -1226,6 +2154,9 @@ class AudioPipeline:
         # Resolve voice the same way (per-stream override > env seed > provider default)
         if voice is None:
             voice = self._tts_voice
+        # …and rate, so a direct speak() follows the turn's rate like the queue does.
+        if speed is None:
+            speed = self._tts_speed
 
         logger.info(f"[TTS] speak() called with text: {text[:50]}... lang={language}")
         self._is_speaking = True
@@ -1249,7 +2180,7 @@ class AudioPipeline:
         self,
         sentence: str,
         voice: Optional[str] = None,
-        speed: float = 1.0,
+        speed: Optional[float] = None,
         language: Optional[str] = None,
         source: str = "response",
     ) -> None:
@@ -1277,7 +2208,7 @@ class AudioPipeline:
                     text=sentence,
                     session_id=self._session_id,
                     voice=voice,
-                    speed=speed,
+                    speed=speed if speed is not None else self._tts_speed,
                     language=language,
                 ):
                     if self._stop_speaking_event.is_set():
@@ -1362,6 +2293,26 @@ class AudioPipeline:
     # Barge-in: reversible suspend / resume / commit
     # ─────────────────────────────────────────────────────────────────────
 
+    def duck_speech(self) -> None:
+        """Drop the agent's own volume because the user has started speaking.
+
+        Reversible and instant — it acts on the VAD's first frame, with no
+        transcript and no decision. Being wrong is free: a cough ducks playback
+        for a few hundred milliseconds and the agent carries on mid-sentence,
+        never having lost its turn.
+        """
+        if self._ducked or self._barge_in_duck_gain >= 1.0:
+            return
+        self._ducked = True
+        logger.info(f"[BARGE-IN] Ducking to {self._barge_in_duck_gain:.0%} — user is speaking")
+
+    def unduck_speech(self) -> None:
+        """Restore full volume: the user stopped without taking the floor."""
+        if not self._ducked:
+            return
+        self._ducked = False
+        logger.info("[BARGE-IN] Restored volume — user stopped without interrupting")
+
     def suspend_speech(self) -> None:
         """Suspend playback reversibly (barge-in reflex).
 
@@ -1408,6 +2359,13 @@ class AudioPipeline:
         logger.info("[BARGE-IN] Resuming playback from playhead")
         self.close_transcript_gate()
         self._play_allowed.set()
+        # The agent is audibly talking again. suspend_speech() cleared this, and
+        # waiting for the playout loop to set it on the next frame leaves a
+        # window where a genuine interruption is ignored because a barge-in may
+        # only START while _audio_active is True — precisely the "mhm, aber
+        # warte..." case, where the real interruption arrives right behind a
+        # dismissed backchannel.
+        self._audio_active = True
         # Teleprompter: resume the word cursor from the frozen point over the
         # audio that's still left in this sentence.
         self._emit_speech_progress("speaking")
@@ -1419,6 +2377,7 @@ class AudioPipeline:
         worker observes the stop and exits."""
         logger.info("[BARGE-IN] Committing interruption — discarding remaining speech")
         self._disarm_suspend_watchdog()
+        self.unduck_speech()
         # Teleprompter: freeze the highlight at the playhead before discarding.
         # (After a suspend the cursor is already rewound to what was heard.)
         self._emit_speech_progress("interrupted")
@@ -1594,12 +2553,20 @@ class AudioPipeline:
             return
         if state not in ("speaking", "interrupted"):
             return
+        # Progress ticks call through here several times a second; the client
+        # only cares about TRANSITIONS (mute / un-mute), so collapse repeats.
+        if state == self._last_playback_state:
+            return
+        self._last_playback_state = state
         payload = {
             "type": "agent_playback",
             "data": {"state": state, "agent_id": self._agent_id},
         }
         try:
-            asyncio.create_task(self._room.publish_data(payload))
+            # Ordered, not create_task: this envelope and the speech-progress
+            # one are emitted back to back, and two independent tasks would let
+            # them reach the wire in scheduler order rather than call order.
+            self._room.publish_data_ordered(payload)
         except RuntimeError:
             # No running loop (e.g. sync test context) — skip.
             pass
@@ -1621,13 +2588,12 @@ class AudioPipeline:
             task.cancel()
 
     async def _suspend_watchdog(self) -> None:
-        """Auto-resume a barge-in suspend that no final transcript ever resolves.
+        """Auto-resume a suspend that nothing ever resolves.
 
-        Closes the hang where STT drops the final after the partial that
-        triggered the suspend: without this, ``_resolve_barge_in`` never runs and
-        playback stays suspended indefinitely. RESUME is the safe default here —
-        keep talking and drop the unintelligible interruption rather than discard
-        the agent's turn.
+        Only the text path suspends playback reversibly, and it resolves on its
+        decider — so this fires when that decider hangs or dies. Resuming is the
+        safe default: keep talking and drop the interruption rather than discard
+        the agent's turn and leave the user in silence.
         """
         try:
             await asyncio.sleep(self._barge_in_suspend_timeout_s)
@@ -1647,11 +2613,61 @@ class AudioPipeline:
         self._barge_in_active = False
         self._barge_in_resolving = False
         self._pending_barge_in = None
+        self._barge_in_committed_tid = None
+        self.unduck_speech()
         self.resume_speech()
         await self._emit_barge_in_debug(
             "▶️ Barge-in never resolved (no final transcript) — auto-resumed",
             decision="resume",
         )
+
+    def _estimated_total_bytes(self, span: int) -> int:
+        """Byte length to divide the playhead by when mapping bytes to chars.
+
+        Once synthesis is done this is simply what we hold. While it is still
+        running, ``len(_cur_audio)`` is a partial total — dividing by it would
+        put the playhead at ~100% of the sentence from the very first frame,
+        which is exactly the "highlight jumps to the end" bug. So estimate the
+        finished length from the sentence's character count at the session's
+        measured speaking pace.
+
+        Clamped to never fall BELOW the audio already in hand: underestimating
+        pushes the highlight past the end of the sentence, and a highlight that
+        runs ahead of the voice is far worse to read than one that trails.
+        """
+        known = len(self._cur_audio)
+        if self._cur_complete or span <= 0:
+            return known
+        est = int(
+            span * self._ms_per_char * _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE / 1000
+        )
+        return max(known, est)
+
+    def _calibrate_pace(self, meta: Optional[dict]) -> None:
+        """Re-measure ms-per-character from a sentence that just finished.
+
+        Exponential moving average so one odd sentence (a number, an acronym,
+        a long pause) cannot swing the estimate, but a genuine change of voice
+        or language converges within a few sentences.
+        """
+        if not meta:
+            return
+        span = max(0, meta["char_end"] - meta["char_start"])
+        total = len(self._cur_audio)
+        if span < 8 or total <= 0:
+            return  # too short to measure anything trustworthy
+        ms = total / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+        measured = ms / span
+        if not self._pace_measured:
+            # First real sentence of the session: the seed was only ever a
+            # placeholder, so adopt the measurement outright. Averaging it in
+            # would drag a badly-seeded estimate out over several sentences, and
+            # a wrong estimate is what makes the highlight lag then jump when
+            # the true length lands.
+            self._ms_per_char = measured
+            self._pace_measured = True
+        else:
+            self._ms_per_char = 0.7 * self._ms_per_char + 0.3 * measured
 
     def _emit_speech_progress(self, state: str, meta: Optional[dict] = None) -> None:
         """Publish an ``agent_speech_progress`` envelope for the teleprompter.
@@ -1687,30 +2703,73 @@ class AudioPipeline:
         char_start = meta["char_start"]
         char_end = meta["char_end"]
         span = max(0, char_end - char_start)
-        total = len(self._cur_audio)
-        if total > 0:
-            frac = min(1.0, max(0.0, self._cur_cursor / total))
-        else:
-            frac = 1.0 if state == "spoken" else 0.0
+        known = len(self._cur_audio)
+        total = self._estimated_total_bytes(span)
 
+        def char_at(byte_offset: int) -> int:
+            if total <= 0:
+                return char_end
+            frac = min(1.0, max(0.0, byte_offset / total))
+            return char_start + round(frac * span)
+
+        lead_ms = 0.0
         if state == "spoken":
-            spoken_char = char_end
+            spoken_char = target_char = char_end
             duration_ms = 0
         elif state == "interrupted":
-            spoken_char = char_start + round(frac * span)
+            # Freeze at what was actually heard. Deliberately NOT clamped
+            # monotonically: a barge-in rewinds the playhead on purpose, and
+            # anything already promised past it was never heard.
+            spoken_char = target_char = char_at(self._cur_cursor)
             duration_ms = 0
-        else:  # "speaking" (fresh or resumed) — advance from the playhead
-            spoken_char = char_start + round(frac * span)
-            remaining_bytes = max(0, total - self._cur_cursor)
-            duration_ms = int(
-                remaining_bytes / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+            self._cur_promised = self._cur_cursor
+            self._cur_last_char = spoken_char
+        else:  # "speaking" — the next CONTIGUOUS stretch of this sentence
+            # How far the highlight may be carried: all the audio synthesized so
+            # far, but at least one tick's worth. The floor matters at RTF ~1,
+            # where the player consumes frames as fast as they arrive so `known`
+            # sits barely ahead of the playhead; without it a tick would promise
+            # ~20ms of movement followed by a wait — a visibly stepping cursor.
+            # Extrapolation is capped at the sentence's estimated end and
+            # corrected by the next tick, so the error stays under one tick.
+            horizon = self._cur_cursor + int(
+                _PROGRESS_TICK_MS * _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE / 1000
             )
+            promise = min(max(known, horizon), total) if total > 0 else known
+            # Start where the LAST segment ended, not at the live playhead. The
+            # frontend lays segments end to end on the wall clock, so measuring
+            # from the playhead would re-describe audio an earlier segment
+            # already covered: with a deep jitter buffer every tick re-promised
+            # the whole buffer and the schedule ran 2.3-3.3x longer than the
+            # sound, which reads as the highlight stalling mid-message.
+            start = max(self._cur_promised, self._cur_cursor)
+            if promise <= start:
+                return  # nothing new to schedule yet
+            # _cur_last_char holds the PREVIOUS segment's target, so segments
+            # butt exactly. Without this the re-estimated mapping could place
+            # this segment's start a character or two before the last one's end
+            # and the highlight would flick backwards at every tick boundary.
+            spoken_char = max(char_at(start), self._cur_last_char)
+            target_char = max(char_at(promise), spoken_char)
+            duration_ms = int(
+                (promise - start) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+            )
+            # This segment starts where the previous one ended, which is `start`
+            # bytes into the stream — already-queued audio must drain first, and
+            # so must anything between the playhead and `start`.
+            lead_ms = max(0, start - self._cur_cursor) / (
+                _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE
+            ) * 1000
+            self._cur_promised = promise
+            self._cur_last_char = target_char
 
         # How long until this sentence is actually audible: audio already queued
         # in the output buffer must drain first. Lets the frontend start the word
         # cursor in time with playout rather than with this (earlier) publish.
         try:
-            delay_ms = int(self._room.queued_playout_ms) if state == "speaking" else 0
+            delay_ms = (
+                int(self._room.queued_playout_ms + lead_ms) if state == "speaking" else 0
+            )
         except Exception:
             delay_ms = 0
 
@@ -1721,6 +2780,18 @@ class AudioPipeline:
                 "char_start": char_start,
                 "char_end": char_end,
                 "spoken_char": int(spoken_char),
+                # Where the highlight should reach by the end of this segment.
+                # Equal to char_end only on the tick carrying a sentence's final
+                # audio; earlier ticks stop short, because the rest of the
+                # sentence is not synthesized yet.
+                #
+                # COUPLED DEPLOY: a client that ignores this field animates each
+                # tick to char_end instead, then starts the next tick further
+                # back — i.e. the highlight steps FORWARD then BACK once per
+                # tick. Ship the frontend with the agent image; a new frontend
+                # against an old agent is fine (no ticks, unchanged behaviour),
+                # the reverse is not.
+                "target_char": int(target_char),
                 "duration_ms": duration_ms,
                 "delay_ms": delay_ms,
                 "state": state,
@@ -1728,67 +2799,24 @@ class AudioPipeline:
             },
         }
         try:
-            asyncio.create_task(self._room.publish_data(payload))
+            # Ordered, not create_task — see _emit_playback_state. Consecutive
+            # sentences emit spoken(N) then speaking(N+1) microseconds apart
+            # under streaming playback; reordering those makes the teleprompter
+            # jump backwards.
+            self._room.publish_data_ordered(payload)
         except RuntimeError:
             # No running loop (e.g. called from sync test context) — skip.
             pass
 
-    async def _resolve_barge_in(self, transcript: str) -> None:
-        """Resolve a suspended barge-in given the user's transcript.
-
-        Calls the registered decider. On RESUME, playback continues from the
-        playhead and the transcript is discarded. On COMMIT, the current
-        utterance is discarded and the transcript is injected as a new turn
-        (flagged is_barge_in) for the agent loop to process.
-
-        Clears the barge-in flags in a finally so detection re-arms cleanly for
-        the next interruption regardless of outcome or error.
-        """
-        decider = self._barge_in_decider
-        try:
-            try:
-                if decider is not None:
-                    decision = await decider(transcript)
-                else:
-                    decision = BargeInDecision.COMMIT
-            except Exception as e:
-                logger.error(f"[BARGE-IN] Decider failed: {e} — committing")
-                decision = BargeInDecision.COMMIT
-
-            if decision == BargeInDecision.RESUME:
-                logger.info(f"[BARGE-IN] RESUME — '{transcript[:40]}' was not actionable")
-                await self._emit_barge_in_debug(
-                    f"🔁 Barge-in RESUME — judged not actionable, resuming previous "
-                    f"speech. Heard: \"{transcript[:100]}\"",
-                    decision="resume",
-                    transcript=transcript,
-                )
-                self.resume_speech()
-                return
-
-            logger.info(f"[BARGE-IN] COMMIT — interrupting for '{transcript[:40]}'")
-            await self._emit_barge_in_debug(
-                f"✋ Barge-in COMMIT — interrupting and processing as a new turn: "
-                f"\"{transcript[:100]}\"",
-                decision="commit",
-                transcript=transcript,
-            )
-            self.commit_interrupt()
-            self._deliver_barge_in_turn(transcript)
-        finally:
-            self._barge_in_active = False
-            self._barge_in_resolving = False
-
     async def _handle_text_barge_in(self, event: TranscriptEvent) -> None:
         """Resolve a typed message that arrived mid-turn (#278).
 
-        Text is a deterministic interruption channel — there is no VAD or
-        noise-vs-intent ambiguity and the full utterance is known immediately,
-        so unlike the voice path there is no transcript to wait for, no
-        min-chars gate, and no suspend watchdog. We still run the SAME decider
-        the voice path uses (the agent's on_barge_in / BargeInEvaluator) so the
-        agent decides whether to RESUME its current thought or react — matching
-        the voice-path decision behavior (AC#2).
+        Text is a deterministic interruption channel — the full utterance is
+        known immediately, so unlike voice there is nothing to wait for and no
+        acoustic pre-filter to run first: no VAD duration gate, and no suspend
+        watchdog. It runs the SAME decider voice runs on its final (the agent's
+        on_barge_in / BargeInEvaluator), so both channels answer the same
+        question the same way — only the point at which they can ask differs.
 
         Flow:
           1. Suspend audio (reversible, instant) AND request a generation pause
@@ -1821,15 +2849,7 @@ class AudioPipeline:
             self.request_turn_suspend()
 
             transcript = event.text
-            decider = self._barge_in_decider
-            try:
-                if decider is not None:
-                    decision = await decider(transcript)
-                else:
-                    decision = BargeInDecision.COMMIT
-            except Exception as e:
-                logger.error(f"[TEXT BARGE-IN] Decider failed: {e} — committing")
-                decision = BargeInDecision.COMMIT
+            decision = await self._decide_barge_in(transcript)
 
             if decision == BargeInDecision.RESUME:
                 logger.info(
@@ -1866,14 +2886,23 @@ class AudioPipeline:
             self._barge_in_resolving = False
 
     def _deliver_barge_in_turn(
-        self, transcript: str, speaker: Optional[str] = None
+        self,
+        transcript: str,
+        speaker: Optional[str] = None,
+        is_barge_in: bool = True,
     ) -> None:
         """Deliver a committed interruption as the next user turn, out-of-band.
 
         NOT via _transcript_queue: an interrupted speech worker's exit runs
         open_transcript_gate(), which drains that queue and would silently drop
         this turn. audio_in() picks up _pending_barge_in first. Shared by the
-        voice path (_resolve_barge_in) and the text path (_handle_text_barge_in).
+        voice path (the VAD barge-in block in _run_stt_stream_inner) and the
+        text path (_handle_text_barge_in).
+
+        ``is_barge_in`` reaches the agent as prompt context ("the user just
+        interrupted me"). The carry-over path passes False in turn-based mode,
+        where the same out-of-band delivery is used purely to keep a turn that
+        the queue drain would otherwise lose — the agent was not interrupted.
         """
         self._pending_barge_in = TranscriptEvent(
             text=transcript,
@@ -1883,12 +2912,33 @@ class AudioPipeline:
             confidence=1.0,
             timestamp_ms=int(time.time() * 1000),
             speech_started=False,
-            is_barge_in=True,
+            is_barge_in=is_barge_in,
         )
 
     # ─────────────────────────────────────────────────────────────────────
     # Sentence-level streaming TTS
     # ─────────────────────────────────────────────────────────────────────
+
+    def _resolve_stt_language(self) -> Optional[str]:
+        """The language to transcribe in, or None to let STT auto-detect.
+
+        Read per utterance, so a plan language declared after the stream opened
+        still takes effect on the next one.
+        """
+        return self._language_pin or self._stt_language
+
+    def set_stt_language(self, language: Optional[str]) -> None:
+        """Pin STT transcription to a DECLARED conversation language.
+
+        Only ever called with a declaration (a plan's ``language``, a
+        deployment pin) — never with a detected language. See
+        ``_resolve_stt_language`` at the STT stream for why that distinction is
+        load-bearing. ``None``/``"auto"`` clears the pin back to auto-detect.
+        """
+        want = language if language and language != "auto" else None
+        if want != self._stt_language:
+            logger.info(f"[STT] language pinned to '{want}' (was '{self._stt_language}')")
+            self._stt_language = want
 
     def set_tts_language(self, language: Optional[str]) -> None:
         """Set the language used for subsequent TTS synthesis.
@@ -1915,6 +2965,30 @@ class AudioPipeline:
         if voice and voice not in ("auto", "default") and voice != self._tts_voice:
             logger.info(f"[TTS] voice set to '{voice}' (was '{self._tts_voice}')")
             self._tts_voice = voice
+
+    def set_tts_speed(self, speed) -> None:
+        """Set the speaking rate for subsequent TTS synthesis (per-turn).
+
+        Called by the agent loop from ``metadata["speed"]``. Same contract as
+        voice and language: a hint the provider may honour (Qwen3 resamples its
+        own PCM) or ignore. Out-of-range and non-numeric values are ignored
+        rather than clamped here — the provider owns the valid range, and a
+        silently clamped value would hide a caller bug.
+
+        Kept deliberately small in practice: this shifts pitch along with rate,
+        so a few percent reads as natural variation while a large factor reads
+        as a different speaker.
+        """
+        try:
+            value = float(speed)
+        except (TypeError, ValueError):
+            return
+        if not 0.5 <= value <= 2.0:
+            logger.warning(f"[TTS] ignoring out-of-range speed {value}")
+            return
+        if abs(value - self._tts_speed) > 1e-6:
+            logger.info(f"[TTS] speed set to {value:.3f} (was {self._tts_speed:.3f})")
+            self._tts_speed = value
 
     def enqueue_sentence(
         self,
@@ -2000,25 +3074,64 @@ class AudioPipeline:
         self._turn_response_tts_first_byte_emitted = False
         self._last_response_tts_done_elapsed = 0
 
-    async def _prefetch_sentence(self, sentence: str, voice=None, speed=1.0, language=None):
-        """Pre-synthesize a sentence and return all audio chunks as a list.
+    def _begin_synthesis(
+        self, sentence: str, voice=None, speed: Optional[float] = None, language=None
+    ) -> "_StreamingUtterance":
+        """Start synthesising a sentence and return its buffer IMMEDIATELY.
 
-        This runs the full gRPC synthesize_stream call and collects all chunks
-        so they can be played back immediately without waiting for synthesis.
+        The returned ``_StreamingUtterance`` fills in the background as chunks
+        arrive from the TTS service, so playback can begin on the first chunk
+        instead of the last. Nothing here awaits synthesis.
+
+        This replaces the old ``_prefetch_sentence``, which collected every
+        chunk into a list before returning — meaning the first audible sample of
+        a sentence waited for the WHOLE sentence to synthesize. Measured against
+        the Qwen3 provider that is time-to-first-audio ~235ms versus a full
+        stream of 1040-4138ms per sentence, i.e. we were paying 4-17x the
+        latency the provider was already capable of delivering.
         """
-        chunks = []
-        try:
-            async for chunk in self._tts.synthesize_stream(
-                text=sentence,
-                session_id=self._session_id,
-                voice=voice,
-                speed=speed,
-                language=language,
-            ):
-                chunks.append(chunk)
-        except Exception as e:
-            logger.error(f"[TTS] Prefetch failed: {e}")
-        return chunks
+        utt = _StreamingUtterance()
+
+        async def _pump() -> None:
+            try:
+                # ONE generation at a time. The TTS service shares a single model
+                # instance across a 10-thread gRPC pool with no lock of its own,
+                # so two overlapping synthesize_stream calls contend on the same
+                # weights and CUDA graphs. Observed on prod: two streams starting
+                # in the same millisecond, finishing in lockstep, and
+                # time-to-first-audio doubling from ~235ms to ~495ms — with
+                # audibly garbled output.
+                #
+                # Before playback streamed, this could not happen: sentence N was
+                # fully synthesized before it began playing, so only N+1 was ever
+                # in flight. Streaming playback removed that ACCIDENTAL
+                # serialization, so make it explicit. The next sentence is still
+                # armed early and simply waits here; the provider runs well
+                # faster than real time, so it acquires the lock early in the
+                # current sentence's playback and the prefetch overlap survives.
+                async with self._synthesis_lock:
+                    async for chunk in self._tts.synthesize_stream(
+                        text=sentence,
+                        session_id=self._session_id,
+                        voice=voice if voice is not None else self._tts_voice,
+                        speed=speed if speed is not None else self._tts_speed,
+                        language=language if language is not None else self._tts_language,
+                    ):
+                        utt.append(chunk.audio_data)
+            except asyncio.CancelledError:
+                utt.finish()
+                raise
+            except Exception as e:
+                # Same contract as the old _prefetch_sentence: never raise into
+                # the speech worker. A failed synthesis yields whatever audio
+                # arrived (usually none) and the worker moves on.
+                logger.error(f"[TTS] Synthesis failed: {e}")
+                utt.finish(error=e)
+            else:
+                utt.finish()
+
+        utt.task = asyncio.create_task(_pump())
+        return utt
 
     def _emit_first_byte(self, source: str) -> None:
         """Emit the TTS first-byte analytics event once per source per turn.
@@ -2070,68 +3183,254 @@ class AudioPipeline:
     async def _play_prefetched(
         self, chunks, source: str = "response", meta: Optional[dict] = None
     ) -> None:
-        """Play a pre-fetched utterance to LiveKit, in fixed frames from a
+        """Play an ALREADY-COMPLETE list of TTS chunks.
+
+        A thin adapter over ``_play_utterance`` for callers that hold the whole
+        utterance up front — synthesis that finished before playback began, and
+        the barge-in / teleprompter tests, which drive the playhead with
+        synthetic audio and must keep exercising the real playback loop.
+        """
+        utt = _StreamingUtterance()
+        for c in chunks:
+            utt.append(c.audio_data)
+        utt.finish()
+        await self._play_utterance(utt, source=source, meta=meta)
+
+    async def _play_utterance(
+        self, utt: "_StreamingUtterance", source: str = "response", meta: Optional[dict] = None
+    ) -> None:
+        """Play an utterance to LiveKit AS IT SYNTHESIZES, in fixed frames from a
         sample-accurate playhead so playback can be suspended and resumed.
 
-        The utterance's chunks are concatenated into one PCM buffer held in
-        memory; ``self._cur_cursor`` tracks the next byte to push. When barge-in
+        ``self._cur_audio`` is the utterance's buffer — the SAME object the
+        synthesis task appends to, so it grows underneath this loop — and
+        ``self._cur_cursor`` tracks the next byte to push. When the cursor
+        catches up with synthesis we wait for more audio (racing the stop event,
+        so barge-in stays responsive) rather than returning. When barge-in
         suspends playback the loop pauses here (without returning) until resumed
         or aborted, so the speech worker does not advance to the next sentence.
 
+        Only WHOLE frames are published while synthesis is still running; a
+        short final frame is allowed once the buffer is complete. Publishing a
+        partial frame early would glitch the output.
+
         ``meta`` carries the sentence's character span in the published
         agent_text; with it (and the teleprompter enabled) this emits a
-        ``speaking`` progress envelope on the first frame and ``spoken`` once the
-        whole utterance has played. Interruption envelopes come from
-        suspend_speech()/stop_speaking()/commit_interrupt(), which read the
-        live playhead.
+        ``speaking`` progress envelope and ``spoken`` once the whole utterance
+        has played. Interruption envelopes come from suspend_speech()/
+        stop_speaking()/commit_interrupt(), which read the live playhead.
+
+        TELEPROMPTER TIMING: progress is STREAMED as a tick every
+        ``_PROGRESS_TICK_MS``, starting on the first frame. Each tick describes
+        only audio already synthesized (plus at most one tick of extrapolation),
+        so it can never promise the frontend a sentence that is not there yet.
+
+        This deliberately replaces holding one envelope per sentence until
+        synthesis completed. That held envelope carried the true byte length,
+        but only arrived when the buffer did — and at the deployed RTF of ~1
+        that is the END of the sentence, so it described 4-8% of it and the
+        highlight jumped. Ticks decouple the highlight from synthesis speed
+        entirely; see ``_PROGRESS_TICK_MS`` for the measurements.
         """
-        # Concatenate this utterance into one position-addressable buffer.
-        self._cur_audio = b"".join(c.audio_data for c in chunks)
+        # Bind the growing buffer directly — no copy, so appends are visible here.
+        self._cur_audio = utt.data
         self._cur_cursor = 0
         self._cur_meta = meta
         first = True
+        # True while playback has caught up with synthesis and is waiting.
+        starved = False
+        # True when the last thing pushed was bridging silence, so the next
+        # real frame gets a fade-in.
+        bridged = False
+        last_sample = 0
+        starve_count = 0
+        bridged_ms = 0.0
+        self._cur_complete = utt.complete
+        self._cur_last_char = 0
+        self._cur_promised = 0
+        # Re-announce playback state for every sentence (the dedupe in
+        # _emit_playback_state only suppresses the ticks WITHIN a sentence), so
+        # a client that missed the first envelope is not left muted.
+        self._last_playback_state = None
+        # Monotonic deadline for the next teleprompter progress tick.
+        next_tick_at = 0.0
 
-        while self._cur_cursor < len(self._cur_audio):
-            # Reversible suspend (barge-in): pause until resumed or aborted.
-            if not self._play_allowed.is_set():
-                resumed = await self._await_resume_or_stop()
-                if not resumed:
-                    break  # committed / hard-stopped while suspended
+        try:
+            while True:
+                # Reversible suspend (barge-in): pause until resumed or aborted.
+                if not self._play_allowed.is_set():
+                    resumed = await self._await_resume_or_stop()
+                    if not resumed:
+                        break  # committed / hard-stopped while suspended
 
-            if self._stop_speaking_event.is_set():
-                logger.info("TTS interrupted mid-sentence")
-                break
+                if self._stop_speaking_event.is_set():
+                    logger.info("TTS interrupted mid-sentence")
+                    break
 
-            frame = self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]
-            self._cur_cursor += len(frame)
+                # Synthesis may finish at any point. The moment it does the
+                # byte->char mapping stops being an estimate and becomes exact,
+                # so spend a tick on it right away rather than waiting for the
+                # next deadline.
+                if utt.complete and not self._cur_complete:
+                    self._cur_complete = True
+                    if not first:
+                        self._emit_speech_progress("speaking", meta=meta)
+                        next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
 
-            if first:
-                first = False
-                self._emit_first_byte(source)
-                # Teleprompter: this sentence's audio has started. Tell the
-                # frontend its span and audible duration so it can advance a
-                # word cursor across it in time with the audio.
-                self._emit_speech_progress("speaking", meta=meta)
+                # Tick HERE, not in the frame-push path below: at RTF ~1 the
+                # loop spends most of its time waiting for synthesis, and a tick
+                # that only fired alongside a pushed frame stopped firing
+                # exactly when playback was starved — the schedule then covered
+                # a third of the sentence and the highlight fell behind.
+                if not first and _now() >= next_tick_at:
+                    self._emit_speech_progress("speaking", meta=meta)
+                    next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
 
-            # The agent is now audibly talking — a barge-in may start.
-            self._audio_active = True
-            await self._room.publish_audio(frame)
+                available = len(self._cur_audio) - self._cur_cursor
+                # The jitter buffer is armed ONCE, before the first frame.
+                # After that the LiveKit source IS the buffer: it holds
+                # everything already pushed and drains at 1x, so the player
+                # only ever needs the NEXT frame to keep it topped up.
+                #
+                # Re-arming the cushion mid-sentence (which this used to do on
+                # every starve) is actively harmful at RTF ~1: the player dumps
+                # its buffer into the source, immediately runs dry, then stops
+                # pushing for a whole pre-roll while the source drains that
+                # same amount. The source sawtooths down to empty on every
+                # cycle, and an empty source is exactly when the client starts
+                # concealing — see _bridge_underrun for what that sounds like.
+                need = _PLAYOUT_FRAME_BYTES if not first else 1
+                want = max(need, self._preroll_bytes if first else 0)
+                if available < want and not utt.complete:
+                    if not await utt.wait_for_data(
+                        self._cur_cursor + want,
+                        self._stop_speaking_event,
+                        # Before the first frame there is nothing to protect, so
+                        # wait outright. Once playing, wake up often enough to
+                        # keep the source fed while synthesis catches up.
+                        timeout=None if first else _UNDERRUN_POLL_MS / 1000.0,
+                    ):
+                        break  # stopped while waiting
+                    if (
+                        not first
+                        and not utt.complete
+                        and len(self._cur_audio) - self._cur_cursor < want
+                    ):
+                        if not starved:
+                            starved = True
+                            starve_count += 1
+                        pushed = await self._bridge_underrun(
+                            fade_from=0 if bridged else last_sample
+                        )
+                        if pushed:
+                            bridged = True
+                            bridged_ms += pushed
+                    continue
+                if available <= 0:
+                    break  # nothing left and nothing more coming
+                starved = False
 
-        # Did the utterance play to the end (vs. abort via break)?
-        completed = self._cur_cursor >= len(self._cur_audio)
-        if completed:
-            # CONTRACT: "spoken" fires when the last frame is *pushed* to the
-            # room, not when the user *hears* the end — up to queued_playout_ms
-            # of this audio is still draining the output + client buffers. The
-            # frontend must therefore drive end-of-highlight timing from the
-            # "speaking" envelope's schedule (delay_ms + duration_ms), and treat
-            # "spoken" only as "this sentence is done, settle it fully lit".
-            self._emit_speech_progress("spoken", meta=meta)
+                frame = bytes(
+                    self._cur_audio[self._cur_cursor:self._cur_cursor + _PLAYOUT_FRAME_BYTES]
+                )
+                self._cur_cursor += len(frame)
+                if bridged:
+                    # Coming back from inserted silence — ramp in so the
+                    # restart is a fade, not a step (a step is a click).
+                    frame = _fade_in(frame)
+                    bridged = False
+                last_sample = _tail_sample(frame)
 
-        # Utterance finished (or aborted) — clear held audio.
-        self._cur_audio = b""
-        self._cur_cursor = 0
-        self._cur_meta = None
+                if first:
+                    first = False
+                    self._emit_first_byte(source)
+                    # Emit immediately, complete or not. A tick only ever
+                    # describes audio already synthesized, so there is nothing
+                    # to wait for — and waiting is what broke the highlight at
+                    # RTF ~1 (see _PROGRESS_TICK_MS).
+                    self._emit_speech_progress("speaking", meta=meta)
+                    next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
+
+                # The agent is now audibly talking — a barge-in may start.
+                self._audio_active = True
+                if self._ducked:
+                    frame = _apply_gain(frame, self._barge_in_duck_gain)
+                await self._room.publish_audio(frame)
+
+            # Did the utterance play to the end (vs. abort via break)?
+            completed = (
+                not first  # something was actually spoken
+                and utt.complete
+                and self._cur_cursor >= len(self._cur_audio)
+            )
+            if completed:
+                # Learn this sentence's real pace before the buffer is released,
+                # so the NEXT sentence's mid-synthesis estimate is grounded in
+                # measurement rather than the seeded default.
+                self._calibrate_pace(meta)
+                # CONTRACT: "spoken" fires when the last frame is *pushed*, not
+                # when the user *hears* the end — up to queued_playout_ms of this
+                # audio is still draining the output + client buffers. The
+                # frontend must therefore drive end-of-highlight timing from the
+                # "speaking" envelope's schedule (delay_ms + duration_ms), and
+                # treat "spoken" only as "this sentence is done, settle it fully
+                # lit".
+                self._emit_speech_progress("spoken", meta=meta)
+
+            if starve_count:
+                # Without this the sawtooth is invisible: playback stalls do not
+                # surface anywhere else, so a session that sounds wrong leaves no
+                # trace to diagnose it from.
+                logger.info(
+                    f"[TTS] Playout starved {starve_count}x on a "
+                    f"{len(self._cur_audio)}B {source} utterance; bridged "
+                    f"{bridged_ms:.0f}ms of silence to keep the source fed"
+                )
+        finally:
+            # Never leave synthesis running for audio nobody will hear.
+            utt.cancel()
+            # Utterance finished (or aborted) — release held audio.
+            self._cur_audio = b""
+            self._cur_cursor = 0
+            self._cur_meta = None
+            self._cur_complete = False
+            self._cur_last_char = 0
+            self._cur_promised = 0
+
+    async def _bridge_underrun(self, fade_from: int = 0) -> float:
+        """Push silence when the output source is about to run dry.
+
+        A LiveKit AudioSource that empties does not play silence — the client
+        stops receiving packets and Opus concealment extrapolates the last frame
+        it had, producing the warbling "interference between chunks" that a
+        synthesis stall is heard as. Pushing real silence keeps the stream
+        continuous, so the same stall reads as a short pause instead.
+
+        Only fires once the source has actually drained below the floor, so a
+        healthy stream never has silence spliced into it. ``fade_from`` ramps the
+        silence down from the last real sample rather than cutting to zero.
+
+        Note the inserted silence deliberately does NOT advance ``_cur_cursor``:
+        the teleprompter playhead tracks synthesized audio, not wall clock, so a
+        bridged sentence highlights slightly ahead of the sound for the duration
+        of the stall. That is the lesser evil — the alternative is a highlight
+        that stops dead.
+
+        Returns the milliseconds pushed (0 when the source still has depth).
+        """
+        # Cap the floor at half the jitter buffer. A floor larger than the
+        # cushion itself would fire the moment playback starts and splice
+        # silence into a perfectly healthy stream.
+        cushion_ms = self._preroll_bytes / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+        floor_ms = min(_UNDERRUN_FLOOR_MS, cushion_ms / 2)
+        try:
+            queued = float(self._room.queued_playout_ms)
+        except Exception:
+            return 0.0
+        if queued > floor_ms:
+            return 0.0
+        await self._room.publish_audio(_silence_frame(fade_from))
+        return float(_PLAYOUT_FRAME_MS)
 
     async def _speech_worker(self) -> None:
         """Background worker that speaks queued sentences with prefetch.
@@ -2146,36 +3445,23 @@ class AudioPipeline:
         self.close_transcript_gate()
 
         try:
-            prefetch_task = None
-            prefetch_source = None
-            prefetch_meta = None
+            pending = None
+            pending_source = None
+            pending_meta = None
 
             while True:
-                # If we have a prefetched result, use it; otherwise wait for queue
-                if prefetch_task is not None:
-                    # Race the prefetch await against the stop signal. Otherwise an
-                    # in-flight synthesis blocks the worker while the transcript gate
-                    # stays closed, dropping user speech during barge-in.
-                    stop_waiter = asyncio.create_task(self._stop_speaking_event.wait())
-                    try:
-                        await asyncio.wait(
-                            {prefetch_task, stop_waiter},
-                            return_when=asyncio.FIRST_COMPLETED,
-                        )
-                    finally:
-                        stop_waiter.cancel()
-                    if self._stop_speaking_event.is_set():
-                        prefetch_task.cancel()
-                        prefetch_task = None
-                        prefetch_source = None
-                        prefetch_meta = None
-                        break
-                    chunks = await prefetch_task
-                    source = prefetch_source
-                    meta = prefetch_meta
-                    prefetch_task = None
-                    prefetch_source = None
-                    prefetch_meta = None
+                # If the previous iteration armed the next sentence, take it —
+                # its synthesis has been running during the last playback. No
+                # await here any more: an utterance is usable the moment it
+                # exists, so the worker never blocks on synthesis and the old
+                # "race the prefetch against the stop signal" dance is gone.
+                if pending is not None:
+                    utt = pending
+                    source = pending_source
+                    meta = pending_meta
+                    pending = None
+                    pending_source = None
+                    pending_meta = None
                 else:
                     # Race the queue against the stop signal. A commit/stop
                     # drains the queue (including the flush sentinel), so a bare
@@ -2199,37 +3485,32 @@ class AudioPipeline:
                     if item is None:
                         break
                     sentence, source, meta = item
-                    # No prefetch available — synthesize synchronously for this first sentence
-                    chunks = await self._prefetch_sentence(
-                        sentence, voice=self._tts_voice, language=self._tts_language
-                    )
+                    # Nothing armed (first sentence of a turn, or the peek below
+                    # lost the race). Start synthesis now — this returns at once
+                    # and playback begins on the first chunk, so the cost of
+                    # arriving here is time-to-first-audio, not a whole sentence.
+                    utt = self._begin_synthesis(sentence)
 
                 if self._stop_speaking_event.is_set():
+                    utt.cancel()
                     break
 
-                if not chunks:
-                    continue
-
-                # Before playing, peek at the next sentence and start prefetching it
+                # Before playing, peek at the next sentence and arm its synthesis
                 try:
                     next_item = self._speech_queue.get_nowait()
                     if next_item is not None:
                         next_sentence, next_source, next_meta = next_item
-                        prefetch_task = asyncio.create_task(
-                            self._prefetch_sentence(
-                                next_sentence, voice=self._tts_voice, language=self._tts_language
-                            )
-                        )
-                        prefetch_source = next_source
-                        prefetch_meta = next_meta
+                        pending = self._begin_synthesis(next_sentence)
+                        pending_source = next_source
+                        pending_meta = next_meta
                     else:
                         # Sentinel — put it back so the main loop sees it
                         self._speech_queue.put_nowait(None)
                 except asyncio.QueueEmpty:
-                    pass  # No next sentence yet — that's fine
+                    pass  # Not enqueued yet — see #460; costs TTFA, not a stream
 
-                # Play the current sentence's audio
-                await self._play_prefetched(chunks, source=source, meta=meta)
+                # Play the current sentence as it synthesizes
+                await self._play_utterance(utt, source=source, meta=meta)
 
                 # Emit tts_done events after each sentence completes
                 if self.turn_anchor_ts > 0:
@@ -2241,12 +3522,12 @@ class AudioPipeline:
 
         except asyncio.CancelledError:
             logger.info("[TTS] Speech worker cancelled")
-            if prefetch_task:
-                prefetch_task.cancel()
+            if pending:
+                pending.cancel()
         except Exception as e:
             logger.error(f"[TTS] Speech worker error: {e}")
-            if prefetch_task:
-                prefetch_task.cancel()
+            if pending:
+                pending.cancel()
         finally:
             # Emit response_tts_done with the last response sentence's completion time
             if hasattr(self, '_last_response_tts_done_elapsed') and self._last_response_tts_done_elapsed > 0:

@@ -45,8 +45,11 @@ _DEFAULT_FLAGGING_VERDICTS: Dict[str, set] = {
 }
 
 _DEFAULT_GATE_FAILURE_MESSAGE = "Sorry, I didn't quite catch that. Could you say it again?"
-# Optional locale-keyed overrides. The active message is selected by Arbitration.apply_config()
-# from the plan's `language` field, with explicit `gate_failure_message` taking precedence.
+# Locale-keyed defaults, selected PER TURN from the resolved conversation language
+# (see gate_failure_message_for). This used to be picked once in apply_config()
+# from a `language` key in the arbitration node config — but nothing ever puts one
+# there, so it always stayed English and leaked an English line into an otherwise
+# German turn. An explicit `gate_failure_message` override still wins verbatim.
 _GATE_FAILURE_MESSAGES_BY_LANG: Dict[str, str] = {
     "en": _DEFAULT_GATE_FAILURE_MESSAGE,
     "de": "Entschuldigung, das hab ich leider nicht verstanden. Könntest du das nochmal sagen?",
@@ -66,6 +69,9 @@ class Arbitration:
             k: set(v) for k, v in _DEFAULT_FLAGGING_VERDICTS.items()
         }
         self._gate_failure_message = _DEFAULT_GATE_FAILURE_MESSAGE
+        # Operator-typed override (wins verbatim, in whatever language they wrote)
+        # kept apart from the locale default so the two can't shadow each other.
+        self._gate_failure_override: Optional[str] = None
         # Compiler version used to resolve {{placeholders}} in verdict templates.
         # Kept in sync with the agent's PROMPT_COMPILER_VERSION via set_compiler_version().
         self._compiler_version = compiler_version
@@ -86,7 +92,22 @@ class Arbitration:
             if lang_key in _GATE_FAILURE_MESSAGES_BY_LANG:
                 self._gate_failure_message = _GATE_FAILURE_MESSAGES_BY_LANG[lang_key]
         if "gate_failure_message" in config:
-            self._gate_failure_message = str(config["gate_failure_message"])
+            self._gate_failure_override = str(config["gate_failure_message"])
+            self._gate_failure_message = self._gate_failure_override
+
+    def gate_failure_message_for(self, language: Optional[str]) -> str:
+        """The "didn't catch that" line in the turn's resolved language.
+
+        Precedence: operator override (verbatim) → locale default for the
+        resolved language → whatever apply_config settled on.
+        """
+        if self._gate_failure_override:
+            return self._gate_failure_override
+        if language:
+            key = language.split("-")[0].lower()
+            if key in _GATE_FAILURE_MESSAGES_BY_LANG:
+                return _GATE_FAILURE_MESSAGES_BY_LANG[key]
+        return self._gate_failure_message
 
     @property
     def gate_failure_message(self) -> str:
@@ -147,7 +168,7 @@ class Arbitration:
                 # so we never speak an empty turn. NOT applied to prepend: there an
                 # empty template must mean "add nothing before the reply", not inject
                 # the "didn't catch that" line ahead of an otherwise-normal answer.
-                resolved = self._gate_failure_message
+                resolved = self.gate_failure_message_for((sm_context or {}).get("language"))
             directive.action = winner_directive.action
             directive.directive_source = winner_verdict.expert_name
             directive.resolved_response = resolved

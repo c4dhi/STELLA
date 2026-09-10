@@ -353,6 +353,8 @@ export class PeerTransport implements Transport {
               agent_id: serverData.agent_id,
               agent_name: serverData.agent_name,
               source: serverData.source,
+              // Heard and shown, but not treated as a turn (see TranscriptChunk).
+              discarded: serverData.discarded === true,
               // Delivery tracking - correlationId from agent echo
               correlationId: serverData.correlation_id,
             }

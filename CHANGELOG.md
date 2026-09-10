@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+These landed on production in August from a deployment branch, but were not part
+of the v1.1.0 code; they were listed under 1.1.0 by mistake.
+
+### Added
+
+**Voice latency & audio quality**
+- Streaming TTS playback: audio starts on the first synthesised chunk instead of waiting for the whole sentence
+- Bridge generation overlaps the Expert Pool instead of running before it (#455)
+- Jitter buffer ahead of playback with a tunable pre-roll (`STELLA_TTS_PREROLL_MS`)
+- Underrun guard that emits real silence when synthesis falls behind, with de-click ramps and starvation logging
+- `BARGE_IN_MIN_SPEECH_MS` (voiced audio required before a barge-in) and `STT_DECODE_DIAGNOSTICS`
+- Deployments fail when the ConfigMap template has a placeholder with no substitution rule
+
+### Changed
+
+- First audio per sentence reduced from 2.2-3.9 s to approximately 1.0 s, and no longer scales with sentence length
+- TTS time-to-first-audio reduced by roughly 30% (233-244 ms to 148-167 ms)
+- Inter-sentence gap reduced to ~167 ms, below the 200-500 ms pause of natural speech
+- Reference voice clips trimmed from 17-20 s to 6.5 s (German) and 7.5 s (English), cutting the per-request model prefill by about two thirds
+
+### Fixed
+
+- Concurrent TTS synthesis corrupting audio within a session (per-session lock)
+- Jitter buffer re-arming its full cushion mid-sentence, starving the output source and producing audible warble
+- Speech-progress envelopes racing each other; now published in order
+- Teleprompter highlight trailing the voice
+
 ---
 
 ## [1.1.0] - 2026-09-06
@@ -21,11 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bridge Generator for reduced perceived latency in voice conversations
 - gRPC State Machine integration for decoupled conversation flow management
 - Documentation for stella-v2 architecture, pipeline configurator, and schema reference
-
-**Voice latency & audio quality**
-- Streaming TTS playback: audio starts on the first synthesised chunk instead of waiting for the whole sentence
-- Expert Pool now runs concurrently with bridge generation rather than after it
-- Underrun guard that emits real silence when synthesis falls behind, with de-click ramps and starvation logging
 
 **Delivery pipeline**
 - Continuous deployment: `development` to the test server, `main` to production, on self-hosted runners
@@ -78,11 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- First audio per sentence reduced from 2.2-3.9 s to approximately 1.0 s, and no longer scales with sentence length
-- TTS time-to-first-audio reduced by roughly 30% (233-244 ms to 148-167 ms)
-- Inter-sentence gap reduced to ~167 ms, below the 200-500 ms pause of natural speech
-- Reference voice clips trimmed from 17-20 s to 6.5 s (German) and 7.5 s (English), cutting the per-request model prefill by about two thirds
-
 **Editable agent prompts**
 - **stella-v2:** response and bridge behavioral prose moved into editable prompt slots behind one unified template interface; the bridge now streams to TTS and carries the full reaction to cover the response gap; sharper per-expert engage/tap-out contracts
 - **stella-light:** persona + conversation guidelines merged into a single editable System Prompt; safety guardrails and phase-transition notes moved into editable slots; deliverable-driven steering with precise skip semantics
@@ -92,9 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Concurrent TTS synthesis corrupting audio within a session (per-session lock)
-- Jitter buffer re-arming its full cushion mid-sentence, starving the output source and producing audible warble
-- Speech-progress envelopes racing each other; now published in order
 - GPU images unbuildable since a dependency bump raised the numpy floor above what the Python 3.11 base supports
 - CUDA base image pinned to a version the GPU drivers actually support
 
