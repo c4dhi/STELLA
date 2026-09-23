@@ -11,20 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] - 2026-09-24
 
-Restores the voice-latency work that production ran in August from a deployment
-branch. It was listed under 1.1.0 by mistake; that code was not part of v1.1.0.
+Restores the voice-latency and naturalness work that production ran in August
+from a deployment branch. It was listed under 1.1.0 by mistake; that code was not
+part of v1.1.0. **If your study tuned barge-in on 1.1.0, read "Interruptions work
+differently" under Changed first.**
 
 ### Added
 
 **Voice latency & audio quality**
 - Streaming TTS playback: audio starts on the first synthesised chunk instead of waiting for the whole sentence
 - Bridge generation overlaps the Expert Pool instead of running before it (#455)
-- Jitter buffer ahead of playback with a tunable pre-roll (`STELLA_TTS_PREROLL_MS`)
+- Jitter buffer ahead of playback with a tunable pre-roll (`STELLA_TTS_PREROLL_MS`, default 200 ms)
 - Underrun guard that emits real silence when synthesis falls behind, with de-click ramps and starvation logging
-- `BARGE_IN_MIN_SPEECH_MS` (voiced audio required before a barge-in) and `STT_DECODE_DIAGNOSTICS`
+- `STT_DECODE_DIAGNOSTICS`: per-turn speech-recognition metrics in the session metrics modal (costs extra GPU work; off by default)
 
 **Language**
 - Choosing a language when deploying now fixes the conversation to that language (`STELLA_LANGUAGE`): speech recognition, replies and voice all follow it, instead of Stella answering in English on a short or unclear first sentence (#214)
+- A plan can declare its own language, and speech recognition is told what it is
+- Public projects get the same Voice & Language step as a normal deployment (#214)
+
+**Conversation**
+- The agent keeps track of things the participant mentioned in passing but hasn't confirmed, so it checks back on them instead of treating them as answered or asking them cold later
 
 **Deployment safety**
 - Deployments fail when the ConfigMap template has a placeholder with no substitution rule
@@ -32,17 +39,40 @@ branch. It was listed under 1.1.0 by mistake; that code was not part of v1.1.0.
 
 ### Changed
 
+**Interruptions work differently (barge-in, #15)**
+- In 1.1.0, the agent stopped on the first few words of a partial transcript and then asked an LLM evaluator whether to carry on. In 1.2.0, the decision to stop comes from how long the participant has been speaking (`BARGE_IN_MIN_SPEECH_MS`, default 600 ms), with no transcript and no LLM call in the way
+- The agent now lowers its voice the moment the participant makes a sound (`BARGE_IN_DUCK_GAIN`, default 25%). It stops only once they keep going, and it can pick up again from where it paused
+- The evaluator now judges only the participant's complete utterance, never a partial. It decides whether the agent's interrupted reply is dropped or resumes. Short acknowledgements like "mhm" no longer take the turn, and an answer that opens with agreement ("yes, absolutely, …") is no longer mistaken for one. If your study edited the evaluator prompt in 1.1.0, compare it with the new default, because the old default treated agreement as a reason to carry on
+- Speech that whisper hallucinates over silence ("Thank you.", "You") no longer interrupts the agent
+- The agent no longer hands the turn back while the participant is still speaking, and a sentence the participant continued straight after a pause is no longer dropped
+
+**Replies & bridge**
+- One question per turn, and always at the end of the reply
+- Turns vary in shape, not just in wording: the bridge phrase is no longer played on every turn, and replies no longer follow a fixed "acknowledge, then ask" pattern
+- The bridge is a single prompted model instead of phrase inventories. It no longer repeats the participant's own words back, or falls into the same sympathetic phrase ("that sounds like a strain…") turn after turn
+- Bridge phrases arrive sooner: model connections are reused across calls
+
+**Speed**
 - First audio per sentence reduced from 2.2-3.9 s to approximately 1.0 s, and no longer scales with sentence length
 - TTS time-to-first-audio reduced by roughly 30% (233-244 ms to 148-167 ms)
 - Inter-sentence gap reduced to ~167 ms, below the 200-500 ms pause of natural speech
+- About 300 ms less wait after every participant turn: a transcript debounce that could never merge anything now defaults to 0
 - Reference voice clips trimmed from 17-20 s to 6.5 s (German) and 7.5 s (English), cutting the per-request model prefill by about two thirds
+- The task-extraction expert is offered only the tools it can use, making it about 300 ms faster per turn
+
+**Deploy UI**
+- The deploy wizards ask for the plan before the voice and language. If the plan declares a language, that becomes the session language and the language picker is skipped
 
 ### Fixed
 
+- Speech recognition no longer drops the beginning of utterances longer than 16 seconds
 - Concurrent TTS synthesis corrupting audio within a session (per-session lock)
 - Jitter buffer re-arming its full cushion mid-sentence, starving the output source and producing audible warble
 - Speech-progress envelopes racing each other; now published in order
 - Teleprompter highlight trailing the voice
+- Chat bubbles size to their content instead of every message filling 75% of the width
+- Session analytics: typed turns and other non-speech turns are timed too, and a session with no data no longer shows "NaN"
+- The live transcript no longer blanks out for up to a second before each final transcript arrives
 - Silent sessions after rebuilding the text-to-speech image: a newer `transformers` release broke the Qwen3 voice model, so it is now pinned below 5.17
 - Test workflows now also run on pull requests into `development`
 
