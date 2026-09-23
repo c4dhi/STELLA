@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.2.0] - 2026-09-10
+## [1.2.0] - 2026-09-24
 
 Restores the voice-latency work that production ran in August from a deployment
 branch. It was listed under 1.1.0 by mistake; that code was not part of v1.1.0.
@@ -22,7 +22,13 @@ branch. It was listed under 1.1.0 by mistake; that code was not part of v1.1.0.
 - Jitter buffer ahead of playback with a tunable pre-roll (`STELLA_TTS_PREROLL_MS`)
 - Underrun guard that emits real silence when synthesis falls behind, with de-click ramps and starvation logging
 - `BARGE_IN_MIN_SPEECH_MS` (voiced audio required before a barge-in) and `STT_DECODE_DIAGNOSTICS`
+
+**Language**
+- Choosing a language when deploying now fixes the conversation to that language (`STELLA_LANGUAGE`): speech recognition, replies and voice all follow it, instead of Stella answering in English on a short or unclear first sentence (#214)
+
+**Deployment safety**
 - Deployments fail when the ConfigMap template has a placeholder with no substitution rule
+- Deployments fail when the text-to-speech service comes up without a working voice model, instead of going green with every session silent
 
 ### Changed
 
@@ -37,6 +43,8 @@ branch. It was listed under 1.1.0 by mistake; that code was not part of v1.1.0.
 - Jitter buffer re-arming its full cushion mid-sentence, starving the output source and producing audible warble
 - Speech-progress envelopes racing each other; now published in order
 - Teleprompter highlight trailing the voice
+- Silent sessions after rebuilding the text-to-speech image: a newer `transformers` release broke the Qwen3 voice model, so it is now pinned below 5.17
+- Test workflows now also run on pull requests into `development`
 
 ---
 
