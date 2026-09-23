@@ -39,10 +39,15 @@
     "brace-expansion@1": "^1.1.16",
     "brace-expansion@2": "^2.1.4",
     "brace-expansion@5": "^5.0.9",
-    "js-yaml@3": "^3.15.0",
+    "js-yaml@3": "^3.15.1",
     "picomatch@2": "^2.3.2",
     "picomatch@4": "^4.0.4",
     "effect": "^3.21.0",
+    "js-yaml@4": "^4.3.1",
+    "fast-uri": "^3.1.5",
+    "socket.io-parser": "^4.2.7",
+    "ajv@8": "^8.18.0",
+    "deepmerge-ts": "^8.0.0",
     "@babel/core": "^7.29.7"
   },
   "dependencies": {
