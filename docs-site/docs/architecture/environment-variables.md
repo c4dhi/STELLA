@@ -148,14 +148,12 @@ Silero VAD settings for the whisper provider:
 </details>
 
 <details>
-<summary><strong>Barge-in & Diagnostics</strong></summary>
+<summary><strong>Interruption Threshold & Diagnostics</strong></summary>
 
-How the agent reacts when the user starts speaking over it. Barge-in is on for any agent that declares support for it. Set `BARGE_IN_ENABLED` to override that either way.
+The STT service reads these from the platform configuration. It decides when the user's speech is long enough to count as an interruption, and it reports that to the agent. Whether an agent acts on it is set per deployment: see `BARGE_IN_ENABLED` under [Agent SDK (Pod-Level)](#agent-sdk-pod-level).
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `BARGE_IN_ENABLED` | No | (agent decides) | `true`/`false` overrides the agent's own barge-in declaration for this deployment |
-| `BARGE_IN_DUCK_GAIN` | No | `0.25` | Volume the agent drops to the moment the user makes a sound. Reversible, so a cough only dips it briefly. `1.0` disables ducking, and the agent then only ever stops outright |
 | `BARGE_IN_MIN_SPEECH_MS` | No | `600` | Voiced audio (ms) before the user's speech counts as an interruption instead of a backchannel like "mhm". Below it the agent keeps talking; above it the agent stops and listens. Lower yields sooner but lets "mhm" cut it off |
 | `STT_DECODE_DIAGNOSTICS` | No | `0` | `1` logs per-turn decode metrics and fills the STT cards in the session metrics modal. Costs extra GPU work per turn, so leave it at `0` in normal use |
 
@@ -305,13 +303,16 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 |----------|----------|---------|-------------|
 | `TTS_ENABLED` | No | `true` | Enable text-to-speech audio output. Set to `false` for text-only mode (skips TTS connection entirely) |
 | `INTERRUPT_MODE` | No | `none` | Transcript interrupt behavior. `none` = strict turn-based gating (user speech suppressed while agent processes/narrates). `smart` = reserved for future barge-in with re-prompting |
-| `TRANSCRIPT_DEBOUNCE_MS` | No | `300` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Set to `0` to disable debouncing |
+| `BARGE_IN_ENABLED` | No | (agent decides) | Unset: barge-in is on for any agent that declares support for it. `true`/`false` forces it on or off for this deployment |
+| `TRANSCRIPT_DEBOUNCE_MS` | No | `0` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Off by default since 1.2.0: neither STT provider can emit a second final inside the window, so the old 300 ms only added delay |
 | `STT_WARMUP_ENABLED` | No | `true` | Warm up the STT model on agent start and when participants join. Set to `false` to skip warmup |
-| `STELLA_TTS_PREROLL_MS` | No | `800` | Jitter buffer (ms) held before the first frame of an utterance plays. Calibrated to the reference deployment's hardware, not a universal constant — faster GPUs should lower it. See [tuning guidance](./tts-pipeline.md#tuning-the-pre-roll-for-your-hardware) |
+| `STELLA_TTS_PREROLL_MS` | No | `200` | Jitter buffer (ms) held before the first frame of an utterance plays. Calibrated to the reference deployment's hardware, not a universal constant: raise it if the agent log shows non-zero "bridged" silence or "Playout starved". See [tuning guidance](./tts-pipeline.md#tuning-the-pre-roll-for-your-hardware) |
 | `TTS_PROGRESS_TICK_MS` | No | `200` | How often a teleprompter progress envelope is emitted during playback |
 | `TTS_VOICE` | No | provider default | Seed TTS voice, overridable per stream. Honored by voice-selecting providers, ignored by others |
 | `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
 | `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
+
+The SDK also reads `BARGE_IN_DUCK_GAIN` (default `0.25`): the volume the agent drops to the moment the user makes a sound, where `1.0` disables ducking. Neither built-in agent declares it in `agent.yaml` yet, so it can't be set from the deploy form and every deployment runs the default.
 
 ### Turn Management
 
