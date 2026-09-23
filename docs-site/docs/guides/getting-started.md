@@ -18,10 +18,12 @@ Before you begin, make sure you have:
 - **Docker**: [OrbStack](https://orbstack.dev/) (recommended for macOS), Docker Desktop (Windows), or Docker Engine (Linux)
 - **kubectl** configured with a Kubernetes cluster (OrbStack and Docker Desktop include one)
 - **OpenAI API key** for the conversational AI
-- **LiveKit account** (cloud or self-hosted) for real-time communication
+- **LiveKit server** (cloud or self-hosted) for real-time communication — STELLA does not bundle one
 
 :::tip New to LiveKit?
 You can [sign up for a free LiveKit Cloud account](https://cloud.livekit.io) to get started quickly. LiveKit Cloud handles all the WebRTC infrastructure for you.
+
+For local development, run LiveKit on your own machine at port `7880`. The setup wizard defaults to `ws://host.docker.internal:7880` (the internal URL pods use) and `ws://localhost:7880` (the public URL browsers use) with development credentials, so you won't need to enter anything.
 :::
 
 ## Installation
@@ -39,47 +41,41 @@ cd STELLA
 
 </Step>
 
-<Step number={2} title="Configure environment variables">
+<Step number={2} title="Run one command">
 
-Copy the example environment file and add your credentials.
-
-```bash title="terminal"
-cp .env.example .env
-```
-
-Edit the `.env` file with your essential configuration:
-
-```bash title=".env"
-# LiveKit (required)
-LIVEKIT_URL=wss://your-app.livekit.cloud
-LIVEKIT_API_KEY=your-api-key
-LIVEKIT_API_SECRET=your-api-secret
-
-# AI (required)
-OPENAI_API_KEY=sk-your-openai-key
-```
-
-<EnvVarReference description="See all available configuration options including database, security, and provider settings." />
-
-</Step>
-
-<Step number={3} title="Start the services">
-
-Deploy the entire STELLA stack with a single command.
+Start STELLA. There is no environment file to copy or hand-edit — on a fresh clone the script detects that setup is incomplete and offers the guided wizard.
 
 ```bash title="terminal"
 ./scripts/start-k8s.sh
 ```
 
-This script will:
-- Build all Docker images
-- Create the Kubernetes namespace
-- Deploy PostgreSQL, backend, and frontend services
-- Set up port forwarding for local access
+```text title="terminal"
+Setup not complete or missing required configuration
+
+  Run setup wizard now? [Y/n]
+```
+
+Press **Enter** to accept. The wizard walks you through a few chapters:
+
+| Chapter | What it does |
+|---------|--------------|
+| Credentials | Collects `OPENAI_API_KEY` and **auto-generates** `POSTGRES_PASSWORD`, `JWT_SECRET` and `ENV_VAR_ENCRYPTION_KEY` for you |
+| Optional Settings | STT/TTS providers, GPU, data root — safe to skip |
+| Admin | Bootstraps an initial system-admin login, so you can sign in right away (skippable) |
+
+For local development, LiveKit falls back to built-in development credentials, so you can leave the LiveKit fields alone. For production the wizard additionally asks for your real `LIVEKIT_URL`, `PUBLIC_LIVEKIT_URL`, API key/secret and `PRODUCTION_DOMAIN`.
+
+:::tip Where your settings are stored
+The wizard writes `.env.local` (or `.env.production` in production mode) — not `.env`. You normally never edit these by hand; re-run the wizard instead.
+:::
+
+When the wizard finishes it stops any stale services and deploys the full stack in the background: building images, creating the Kubernetes namespace, deploying PostgreSQL, backend and frontend, and setting up port forwarding.
+
+<EnvVarReference description="See all available configuration options including database, security, and provider settings." />
 
 </Step>
 
-<Step number={4} title="Verify the deployment" isLast>
+<Step number={3} title="Verify the deployment" isLast>
 
 Check that all services are running:
 
@@ -110,6 +106,25 @@ Once deployed, STELLA is available at:
 3. Click **Start Session** to begin a conversation
 4. Grant microphone permissions when prompted
 5. Start talking - the AI agent will respond in real-time
+
+## Reconfigure Anytime
+
+Configuration is always done through the wizard — there is no environment file to edit by hand.
+
+```bash title="terminal"
+# Re-run the onboarding wizard (required variables only)
+./scripts/start-k8s.sh --setup
+
+# Full configuration wizard (every variable)
+./scripts/start-k8s.sh --config
+
+# Target a specific environment
+./scripts/start-k8s.sh --setup --local
+./scripts/start-k8s.sh --setup --production
+
+# Guided backup & restore (export/import the whole system)
+./scripts/start-k8s.sh --backup
+```
 
 ## Deployment Modes
 
@@ -159,7 +174,7 @@ kubectl get pods -n ai-agents -l app=postgres
 
 ### LiveKit connection fails
 
-Verify your LiveKit credentials in `.env` and ensure WebSocket connections are allowed.
+Re-run `./scripts/start-k8s.sh --setup` to check your LiveKit URLs and credentials, and ensure WebSocket connections are allowed. Remember that `LIVEKIT_URL` is the URL the pods use internally — it must not be `localhost`.
 
 ## Next Steps
 
