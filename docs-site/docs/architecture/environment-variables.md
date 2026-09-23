@@ -147,6 +147,20 @@ Silero VAD settings for the whisper provider:
 
 </details>
 
+<details>
+<summary><strong>Barge-in & Diagnostics</strong></summary>
+
+How the agent reacts when the user starts speaking over it. Barge-in is on for any agent that declares support for it. Set `BARGE_IN_ENABLED` to override that either way.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `BARGE_IN_ENABLED` | No | (agent decides) | `true`/`false` overrides the agent's own barge-in declaration for this deployment |
+| `BARGE_IN_DUCK_GAIN` | No | `0.25` | Volume the agent drops to the moment the user makes a sound. Reversible, so a cough only dips it briefly. `1.0` disables ducking, and the agent then only ever stops outright |
+| `BARGE_IN_MIN_SPEECH_MS` | No | `600` | Voiced audio (ms) before the user's speech counts as an interruption instead of a backchannel like "mhm". Below it the agent keeps talking; above it the agent stops and listens. Lower yields sooner but lets "mhm" cut it off |
+| `STT_DECODE_DIAGNOSTICS` | No | `0` | `1` logs per-turn decode metrics and fills the STT cards in the session metrics modal. Costs extra GPU work per turn, so leave it at `0` in normal use |
+
+</details>
+
 ---
 
 ## Text-to-Speech
