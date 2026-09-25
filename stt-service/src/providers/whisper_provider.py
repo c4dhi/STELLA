@@ -7,10 +7,12 @@ Follows industry best practices (LiveKit, OpenAI Realtime, Deepgram, Pipecat):
 - Configurable endpointing delays for conversational speech
 """
 
+import asyncio
 import difflib
 import json
 import os
 import re
+import threading
 import time
 import unicodedata
 import uuid
@@ -154,6 +156,10 @@ try:
 except ImportError as e:
     print(f"[WhisperProvider] torch not available for Silero VAD: {e}")
     TORCH_AVAILABLE = False
+
+
+# Serialises use of the shared Silero VAD model across worker threads.
+_VAD_LOCK = threading.Lock()
 
 
 class WhisperSession(STTSession):
@@ -548,7 +554,11 @@ class WhisperSession(STTSession):
 
             # Get VAD probability (single signal)
             audio_tensor = torch.from_numpy(audio_float)
-            speech_prob = self.vad_model(audio_tensor, 16000).item()
+            # The Silero model is shared by every session and carries internal
+            # state, and process_audio now runs on worker threads, so calls must
+            # not overlap.
+            with _VAD_LOCK:
+                speech_prob = self.vad_model(audio_tensor, 16000).item()
 
             # Debug logging for VAD probability
             if self.chunk_count % 100 == 0:
@@ -1140,7 +1150,8 @@ class WhisperSession(STTSession):
         # Reset Silero VAD internal state (critical for accurate detection)
         try:
             if hasattr(self.vad_model, 'reset_states'):
-                self.vad_model.reset_states()
+                with _VAD_LOCK:
+                    self.vad_model.reset_states()
         except Exception as e:
             print(f"[WhisperSession] VAD reset error: {e}")
 
@@ -1321,26 +1332,31 @@ class WhisperProvider(STTProvider):
             # Generate white noise at -60dB (amplitude ~0.001)
             dummy_audio = np.random.randn(num_samples).astype(np.float32) * 0.001
 
-            # Run transcription on dummy audio
-            # Use configured language or auto-detect - warmup doesn't affect session language
-            # since each session has its own detected_language state
-            segments, info = self.whisper_model.transcribe(
-                dummy_audio,
-                language=self.language,  # Use configured language (or None for auto)
-                beam_size=self.beam_size,
-                vad_filter=False,
-                word_timestamps=False,
-                condition_on_previous_text=False,
-                temperature=0.0,
-            )
+            # Run transcription on dummy audio, off the event loop: a cold
+            # model takes 15-35 s here and would freeze every other stream.
+            # Use configured language or auto-detect - warmup doesn't affect
+            # session language since each session has its own detected_language.
+            def _infer():
+                segments, _info = self.whisper_model.transcribe(
+                    dummy_audio,
+                    language=self.language,
+                    beam_size=self.beam_size,
+                    vad_filter=False,
+                    word_timestamps=False,
+                    condition_on_previous_text=False,
+                    temperature=0.0,
+                )
+                # Consume the generator to ensure inference actually runs
+                for _ in segments:
+                    pass
 
-            # Consume the generator to ensure inference actually runs
-            for _ in segments:
-                pass
+                # Clear GPU cache after warmup to free any temporary allocations.
+                # Inside the worker thread: it waits on queued CUDA work and
+                # would otherwise hold the event loop for seconds.
+                if TORCH_AVAILABLE and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
-            # Clear GPU cache after warmup to free any temporary allocations
-            if TORCH_AVAILABLE and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            await asyncio.to_thread(_infer)
 
             # Update warmup state
             self._warmed_up = True
