@@ -1105,6 +1105,7 @@ build_images() {
     if [[ "$OS_TYPE" == "linux" ]]; then
         sync_images_to_k3s
     fi
+    tag_agent_images_latest
 
     # Prune build cache after rebuild to reclaim disk space
     # Only on --rebuild since incremental builds benefit from the cache
@@ -1115,6 +1116,37 @@ build_images() {
         docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
         verbose "build_images: build cache trimmed to 50GB"
     fi
+}
+
+# =============================================================================
+# Agent :latest tag (fast path for agent-config images)
+# =============================================================================
+# The session-management-server builds a per-config agent image by tagging the
+# pre-built ${agent}:latest (agent-image.service.ts tryTagFromLatest). Builds
+# tag only ${IMAGE_TAG}, so without this the fast path misses and every new
+# agent config falls back to a ~13 minute docker build. Runs after every build,
+# including when the agent image was skipped and re-tagged by
+# reuse_service_image, so :latest always matches the running release.
+tag_agent_images_latest() {
+    [[ "$DRY_RUN_MODE" == "true" ]] && return 0
+
+    local agent
+    for agent in "${DISCOVERED_AGENTS[@]}"; do
+        docker image inspect "${agent}:${IMAGE_TAG}" >/dev/null 2>&1 || continue
+        docker tag "${agent}:${IMAGE_TAG}" "${agent}:latest" 2>/dev/null || {
+            warning "Failed to tag ${agent}:latest"
+            continue
+        }
+        if [[ "$OS_TYPE" == "linux" ]]; then
+            # Tag inside containerd; the layers are already imported under
+            # ${IMAGE_TAG}, so no second docker save/import.
+            sudo k3s ctr images tag --force \
+                "docker.io/library/${agent}:${IMAGE_TAG}" \
+                "docker.io/library/${agent}:latest" >/dev/null 2>&1 \
+                || warning "Failed to tag ${agent}:latest in K3s containerd"
+        fi
+        verbose "tag_agent_images_latest: ${agent}:${IMAGE_TAG} -> :latest"
+    done
 }
 
 # =============================================================================
