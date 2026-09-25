@@ -15,6 +15,9 @@ export default function AgentGalleryCard({
 }: AgentGalleryCardProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
+  // Still selectable — deprecated means superseded, not retired, and existing
+  // deployments must stay reproducible. It just reads quieter than the rest.
+  const dimmed = agentType.deprecated && !isSelected
 
   return (
     <motion.button
@@ -23,6 +26,7 @@ export default function AgentGalleryCard({
       whileTap={{ scale: 0.99 }}
       className={`
         relative w-full h-[160px] p-3 rounded-xl text-left transition-[color,background-color,border-color,box-shadow] duration-200 border-2
+        ${dimmed ? 'opacity-60 hover:opacity-100' : ''}
         ${isSelected
           ? isDark
             ? 'bg-primary-500/20 border-primary-500 shadow-lg shadow-primary-500/20'
@@ -73,6 +77,17 @@ export default function AgentGalleryCard({
         `}
       >
         {agentType.name}
+        {agentType.deprecated && (
+          <span
+            className={`ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium align-middle ${
+              isDark
+                ? 'bg-amber-900/40 text-amber-300'
+                : 'bg-amber-100 text-amber-700'
+            }`}
+          >
+            Deprecated
+          </span>
+        )}
       </h3>
 
       {/* Description */}
@@ -84,6 +99,16 @@ export default function AgentGalleryCard({
       >
         {agentType.description}
       </p>
+
+      {agentType.deprecated && agentType.deprecationNote && (
+        <p
+          className={`mt-1.5 text-[10px] font-light leading-snug line-clamp-2 pr-8 ${
+            isDark ? 'text-amber-300/80' : 'text-amber-700/90'
+          }`}
+        >
+          {agentType.deprecationNote}
+        </p>
+      )}
 
       {/* Capabilities badges */}
       {agentType.capabilities && agentType.capabilities.length > 0 && (

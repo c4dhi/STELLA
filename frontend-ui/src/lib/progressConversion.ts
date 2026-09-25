@@ -192,5 +192,8 @@ export function progressUpdateToTodoList(data: ProgressUpdateMessage): TodoList 
     conversation_age_minutes: data.elapsed_minutes || 0,
     last_updated: data.last_updated || new Date().toISOString(),
     last_transition: data.metadata?.last_transition || null,
+    // Only companion agents send this. Its presence is what tells the UI to ask
+    // "is an activity running?" instead of assuming a plan is always there.
+    companion: data.metadata?.companion,
   } as TodoList
 }

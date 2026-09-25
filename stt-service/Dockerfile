@@ -220,7 +220,17 @@ ENV VAD_AUDIO_INACTIVITY_TIMEOUT_MS=1500
 # ============================================================================
 ENV SHERPA_SILENCE_THRESHOLD=1.5
 ENV SHERPA_SPEECH_TIMEOUT=10.0
+# 0.001 (-60dB), i.e. wide open. Tried 0.008 to stop room noise ducking the
+# agent; it cost transcription accuracy, because on this provider the same gate
+# also decides what counts as silence for endpointing. False barge-ins are
+# handled by the duck watchdog in the SDK instead. Note this ENV overrides the
+# Python default, so this line is the one that actually takes effect.
 ENV SHERPA_RMS_THRESHOLD=0.001
+# Silence before speech_ended fires (the agent stops ducking). The remaining
+# wait before the transcript is finalised is derived from
+# SHERPA_SILENCE_THRESHOLD, so endpointing timing is unchanged — this only
+# splits "they stopped" from "they are done", which used to be one event.
+ENV SHERPA_SILENCE_DURATION_MS=500
 ENV SHERPA_PRE_BUFFER_SAMPLES=8000
 ENV SHERPA_MIN_TRANSCRIPT_CHARS=3
 

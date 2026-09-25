@@ -4,6 +4,7 @@ import { useThemeStore } from '../../../store/themeStore'
 import { useToastStore } from '../../../store/toastStore'
 import { apiClient } from '../../../services/ApiClient'
 import type {
+  Persona,
   PlanTemplate,
   PlanContent,
   PlanMetadata,
@@ -470,8 +471,10 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
 
   const [name, setName] = useState(template?.name || '')
   const [description, setDescription] = useState(template?.description || '')
-  const [systemPrompt, setSystemPrompt] = useState(template?.content.system_prompt || '')
   const [planLanguage, setPlanLanguage] = useState(template?.content.language || '')
+  // Drives the {{persona.*}} palette — a plan does not know which persona will
+  // run it, so the offer is the union of what the author's personas define.
+  const [personas, setPersonas] = useState<Persona[]>([])
   const [sessionContext, setSessionContext] = useState<SessionContext>(template?.content.session_context || { fields: [] })
   const [agentSpawnMode, setAgentSpawnMode] = useState<AgentSpawnMode>(extractSpawnMode(template?.content.metadata))
   const [onParticipantJoin, setOnParticipantJoin] = useState(
@@ -606,7 +609,6 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
         },
       },
     },
-    ...(systemPrompt.trim() ? { system_prompt: systemPrompt.trim() } : {}),
     ...(planLanguage.trim() ? { language: planLanguage.trim().toLowerCase() } : {}),
   })
 
@@ -957,7 +959,6 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
         setSelectedTransition(null)
         setSelectedStartNode(false)
         setInitialStateId(validation.resolvedInitialStateId)
-        setSystemPrompt(content.system_prompt || '')
         setPlanLanguage(content.language || '')
         setSessionContext(content.session_context || { fields: [] })
         setAgentSpawnMode(extractSpawnMode(importedMetadata))
@@ -1075,6 +1076,10 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
       setIsSaving(false)
     }
   }
+
+  useEffect(() => {
+    apiClient.listPersonas().then(setPersonas).catch(() => setPersonas([]))
+  }, [])
 
   useEffect(() => {
     if (states.length === 0) {
@@ -1378,22 +1383,19 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
             </div>
 
             <div className={`px-5 py-4 border-b shrink-0 ${isDark ? 'border-zinc-700/70 bg-zinc-900/20' : 'border-neutral-200 bg-neutral-50/50'}`}>
-              <label className={`block text-caption font-medium mb-2 ${
-                isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'
+              {/* The System Prompt field lived here until #467. A plan describes
+                  WHAT happens; who the agent is now lives in a Persona chosen at
+                  deploy time, so there is one place to define identity instead of
+                  two that drift. Tasks can still name the agent via
+                  {'{{persona.name}}'}. */}
+              <p className={`text-caption mb-4 ${
+                isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'
               }`}>
-                System Prompt
-              </label>
-              <textarea
-                value={systemPrompt}
-                onChange={(e) => { setSystemPrompt(e.target.value); markChanged() }}
-                placeholder="Agent personality and high-level instructions..."
-                rows={5}
-                className={`w-full px-3 py-2.5 rounded-lg text-[13px] border resize-none transition-colors ${
-                  isDark
-                    ? 'bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500'
-                    : 'bg-white border-neutral-200 text-neutral-900 placeholder:text-neutral-400'
-                } focus:outline-none`}
-              />
+                Agent personality lives in{' '}
+                <span className="font-medium">Settings → Personas</span> and is picked when
+                you deploy. Refer to it here with{' '}
+                <code className="font-mono">{'{{persona.name}}'}</code>.
+              </p>
 
               <label className={`block text-caption font-medium mt-4 mb-2 ${
                 isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'
@@ -1509,6 +1511,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
                     className="h-full"
                   >
                     <PlanStateEditor
+                      personas={personas}
                       state={states[selectedStateIndex]}
                       onChange={(updated) => handleUpdateState(selectedStateIndex, updated)}
                       onDelete={() => handleDeleteState(selectedStateIndex)}

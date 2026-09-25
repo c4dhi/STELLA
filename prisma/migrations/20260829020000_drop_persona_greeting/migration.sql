@@ -1,0 +1,12 @@
+-- Drop Persona.greeting.
+--
+-- It was added for a "companion has no plan to open the conversation" case that
+-- companion mode did not end up needing: nothing in the agent ever read it, the
+-- persona editor never exposed it, and there is no proactive-opener mechanism
+-- for it to feed — the agent speaks only in reply to the user. A configurable
+-- field that silently does nothing is worse than no field.
+--
+-- Safe to drop unconditionally: with no writer and no UI, every row is NULL.
+-- A companion opener remains possible later, but it needs a trigger, a
+-- rejoin rule and a barge-in rule of its own — not a dormant column.
+ALTER TABLE "Persona" DROP COLUMN IF EXISTS "greeting";

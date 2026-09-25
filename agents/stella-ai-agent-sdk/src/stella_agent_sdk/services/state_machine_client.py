@@ -90,6 +90,59 @@ class StateMachineClient:
                 "current_state_id": None,
             }
 
+    async def load_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace the session's plan, discarding any progress.
+
+        Companion mode: the user has just chosen an activity and expects it from
+        the top. ``initialize`` deliberately RESUMES an existing state (so a
+        paused agent restarts where it left off), which is the wrong behaviour
+        here — running the same activity twice in one session must start over.
+
+        Returns:
+            Dict with success, error, current_state_id, plan_title
+        """
+        self._ensure_connected()
+        logger.info(f"Loading plan into session {self._session_id}")
+
+        try:
+            request = state_machine_pb2.LoadPlanRequest(
+                session_id=self._session_id,
+                plan_json=json.dumps(plan),
+            )
+            response = await self._stub.LoadPlan(request)
+
+            return {
+                "success": response.success,
+                "error": response.error or None,
+                "current_state_id": response.current_state_id or None,
+                "plan_title": response.plan_title or None,
+            }
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC error during load_plan: {e.code()} - {e.details()}")
+            return {
+                "success": False,
+                "error": f"gRPC error: {e.details()}",
+                "current_state_id": None,
+                "plan_title": None,
+            }
+
+    async def clear_plan(self) -> Dict[str, Any]:
+        """Drop the session's plan — back to free-flow companion conversation.
+
+        Returns:
+            Dict with success, error
+        """
+        self._ensure_connected()
+        logger.info(f"Clearing plan from session {self._session_id}")
+
+        try:
+            request = state_machine_pb2.ClearPlanRequest(session_id=self._session_id)
+            response = await self._stub.ClearPlan(request)
+            return {"success": response.success, "error": response.error or None}
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC error during clear_plan: {e.code()} - {e.details()}")
+            return {"success": False, "error": f"gRPC error: {e.details()}"}
+
     async def complete_task(
         self,
         task_id: str,

@@ -18,3 +18,13 @@ __all__ = [
     "ToolRegistry",
     "ToolExecutor",
 ]
+
+from stella_agent_sdk.tools.companion import (  # noqa: E402
+    create_companion_tools,
+    COMPANION_TOOL_GUIDANCE,
+)
+
+__all__ = list(globals().get("__all__", [])) + [
+    "create_companion_tools",
+    "COMPANION_TOOL_GUIDANCE",
+]

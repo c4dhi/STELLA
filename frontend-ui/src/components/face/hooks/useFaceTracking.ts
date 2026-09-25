@@ -1,10 +1,21 @@
 /**
  * useFaceTracking Hook
- * Implements webcam face detection with mouse tracking fallback
- * Uses @vladmandic/face-api for face detection
+ * Webcam face detection via @vladmandic/face-api.
+ *
+ * There is deliberately NO mouse fallback. A cursor is not a face: treating it
+ * as one meant every desktop without webcam permission reported a permanent
+ * detection, so the eyes tracked the pointer and the idle behavior could never
+ * run. With no face detected the gaze re-centers and looks straight ahead, and
+ * `useFaceBehavior` takes over with the idle look-around.
+ *
+ * `enableWebcam` is a live switch, not just a startup option (#face-sleep):
+ * dropping it releases the camera outright — tracks stopped, indicator light
+ * off — and raising it acquires a fresh stream. That is the whole point of the
+ * sleep state, so the teardown has to be real rather than merely pausing
+ * detection on a stream that is still open.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as faceapi from '@vladmandic/face-api';
 import type { UseFaceTrackingOptions, FaceTrackingData, FacePosition } from '../types';
 
@@ -13,7 +24,6 @@ const DETECTION_INTERVAL_MS = 100; // 10 FPS for face detection
 
 export const useFaceTracking = ({
   enableWebcam = true,
-  fallbackToMouse = true,
   smoothingFactor = LERP_FACTOR
 }: UseFaceTrackingOptions = {}) => {
   const [trackingData, setTrackingData] = useState<FaceTrackingData>({
@@ -46,7 +56,7 @@ export const useFaceTracking = ({
         setModelsLoaded(true);
       } catch (error) {
         console.error('[FaceTracking] ❌ Failed to load models:', error);
-        // Continue without webcam, use mouse fallback
+        // Continue without webcam — the face just looks straight ahead and idles
         setModelsLoaded(false);
       }
     };
@@ -76,7 +86,7 @@ export const useFaceTracking = ({
           console.log('[FaceTracking] ✅ Webcam initialized');
         }
       } catch (error) {
-        console.warn('[FaceTracking] ⚠️ Webcam access denied, using mouse fallback');
+        console.warn('[FaceTracking] ⚠️ Webcam unavailable — face will look straight ahead and idle');
         setIsWebcamReady(false);
       }
     };
@@ -84,15 +94,31 @@ export const useFaceTracking = ({
     initWebcam();
 
     return () => {
-      // Cleanup webcam stream
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
+      if (videoRef.current) videoRef.current.srcObject = null;
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
       }
+      // Without this the detection loop below — which is keyed on readiness,
+      // not on the switch — keeps polling a video element whose stream has been
+      // stopped, and every consumer goes on believing the camera is live.
+      setIsWebcamReady(false);
     };
   }, [enableWebcam, modelsLoaded]);
+
+  // Releasing the camera must also retract the last detection. Otherwise the
+  // final frame before shutdown stands as the answer to "is anyone there" for
+  // as long as the camera stays off, and the face would decide someone is
+  // present the entire time it is asleep.
+  useEffect(() => {
+    if (enableWebcam) return;
+    smoothPositionRef.current = { x: 0.5, y: 0.5 };
+    setTrackingData({ position: { x: 0.5, y: 0.5 }, hasDetection: false, method: 'none' });
+  }, [enableWebcam]);
 
   // Face detection loop
   useEffect(() => {
@@ -150,45 +176,13 @@ export const useFaceTracking = ({
     };
   }, [isWebcamReady, smoothingFactor]);
 
-  // Mouse tracking fallback
-  const handleMouseMove = useCallback(
-    (event: MouseEvent) => {
-      if (trackingData.method === 'webcam' && trackingData.hasDetection) {
-        // Don't override webcam tracking if it's working
-        return;
-      }
-
-      // Normalize mouse position (0-1)
-      const x = event.clientX / window.innerWidth;
-      const y = event.clientY / window.innerHeight;
-
-      // Apply smoothing
-      smoothPositionRef.current.x += (x - smoothPositionRef.current.x) * smoothingFactor;
-      smoothPositionRef.current.y += (y - smoothPositionRef.current.y) * smoothingFactor;
-
-      setTrackingData({
-        position: { ...smoothPositionRef.current },
-        hasDetection: true,
-        method: 'mouse'
-      });
-    },
-    [trackingData.method, trackingData.hasDetection, smoothingFactor]
-  );
-
+  // Create the hidden video element ONCE, for the lifetime of the hook.
+  //
+  // It deliberately does not depend on `enableWebcam`. React runs effects in
+  // declaration order, so tearing the element down and rebuilding it on the
+  // switch would have `initWebcam` above run first and attach the new stream to
+  // the element that was just removed from the document.
   useEffect(() => {
-    if (!fallbackToMouse) return;
-
-    window.addEventListener('mousemove', handleMouseMove);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-    };
-  }, [fallbackToMouse, handleMouseMove]);
-
-  // Create hidden video element for webcam
-  useEffect(() => {
-    if (!enableWebcam) return;
-
     const video = document.createElement('video');
     video.width = 640;
     video.height = 480;
@@ -206,13 +200,13 @@ export const useFaceTracking = ({
     videoRef.current = video;
 
     return () => {
+      videoRef.current = null;
       document.body.removeChild(video);
     };
-  }, [enableWebcam]);
+  }, []);
 
   return {
     trackingData,
-    isWebcamActive: isWebcamReady && trackingData.method === 'webcam',
-    isMouseTracking: trackingData.method === 'mouse'
+    isWebcamActive: isWebcamReady && trackingData.method === 'webcam'
   };
 };

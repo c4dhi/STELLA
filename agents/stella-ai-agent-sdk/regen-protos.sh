@@ -15,7 +15,7 @@ OUT=src/stella_agent_sdk/_grpc
 # not), so pointing at the root would silently regenerate the TTS stubs against
 # a different service contract as a side effect of an unrelated change.
 # Regenerate only what you changed here.
-python -m grpc_tools.protoc -I proto \
+"${PYTHON:-python}" -m grpc_tools.protoc -I proto \
     --python_out="$OUT" --grpc_python_out="$OUT" \
     "proto/${1:-stt}.proto"
 
@@ -23,7 +23,7 @@ python -m grpc_tools.protoc -I proto \
 sed -i.bak -E 's/^import ([a-z_]+_pb2) as /from . import \1 as /' "$OUT"/*_pb2_grpc.py
 rm -f "$OUT"/*.bak
 
-python - <<'PY'
+"${PYTHON:-python}" - <<'PY'
 import pathlib, re
 out = pathlib.Path("src/stella_agent_sdk/_grpc")
 bad = [p.name for p in out.glob("*_pb2_grpc.py")

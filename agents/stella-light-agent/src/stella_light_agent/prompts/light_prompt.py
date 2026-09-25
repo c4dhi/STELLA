@@ -30,7 +30,7 @@ class LightPromptBuilder:
 
         Args:
             context: State machine context from get_context_for_prompt()
-                     May include 'plan_system_prompt' for custom identity/instructions
+                     May include 'persona' — the deployed identity (#467)
             for_text_response: When True, build the prompt for the spoken-reply
                      pass (Phase 1) — the steering assumes the user's latest answer
                      is being recorded this turn, so the reply moves forward instead
@@ -50,12 +50,10 @@ class LightPromptBuilder:
         next_task = context.get("next_task")  # Preview task for strict mode
         available_tasks = context.get("available_tasks", [])
         collected_deliverables = context.get("collected_deliverables", {})
-        plan_system_prompt = context.get("plan_system_prompt")
-        # Configurator override. Light exposes a single combined System Prompt
-        # (identity + conversational style) which replaces BOTH default sections.
-        custom_system_prompt = context.get("custom_system_prompt")
-        # Legacy split fields, still honored for configs saved before the merge.
-        custom_persona = context.get("custom_persona")
+        # Identity has exactly ONE source: the deployed persona (#467). The plan's
+        # own system_prompt and the Configurator's persona slot are both gone —
+        # plans carry structure, the Configurator carries pipeline behaviour.
+        persona = context.get("persona")
         custom_guidelines = context.get("custom_guidelines")
         # Operator-editable prose blocks (response.* slots). Default text lives in
         # the builders; these override it so the developer controls them from the
@@ -63,24 +61,15 @@ class LightPromptBuilder:
         custom_safety = context.get("custom_safety_guidelines")
         custom_transition = context.get("custom_state_transition_note")
 
-        if custom_system_prompt:
-            # One field replaces the default identity + conversational style.
-            parts = [
-                self._build_identity(plan_system_prompt, custom_system_prompt),
-                self._build_guardrails(custom_safety),
-            ]
-        else:
-            # A custom delivery prompt (custom_guidelines) owns language — don't
-            # let the default identity force German past it (#304 review #10).
-            parts = [
-                self._build_identity(
-                    plan_system_prompt,
-                    custom_persona,
-                    operator_owns_language=bool(custom_guidelines),
-                ),
-                self._build_conversational_style(custom_guidelines),
-                self._build_guardrails(custom_safety),
-            ]
+        # A custom delivery prompt (custom_guidelines) owns language — don't let
+        # the default identity force German past it (#304 review #10).
+        parts = [
+            self._build_identity(
+                persona, operator_owns_language=bool(custom_guidelines)
+            ),
+            self._build_conversational_style(custom_guidelines),
+            self._build_guardrails(custom_safety),
+        ]
 
         # Deterministic language directive (single source of truth, parity with
         # stella-v2). When the resolver locked a concrete language, state it
@@ -121,60 +110,32 @@ class LightPromptBuilder:
 
     def _build_identity(
         self,
-        plan_system_prompt: Optional[str] = None,
-        custom_persona: Optional[str] = None,
+        persona: Optional[str] = None,
         operator_owns_language: bool = False,
     ) -> str:
-        """
-        Build STELLA identity section.
+        """Build the identity section — the persona, or the built-in default.
+
+        Two branches, not four. Identity used to arrive from the plan, from the
+        Configurator's persona slot, and from a merged system-prompt field, with
+        precedence rules between them; #467 made the persona the single source,
+        so there is nothing left to arbitrate.
 
         ``operator_owns_language`` suppresses the default identity's language rule
         when the operator supplied a custom delivery prompt (custom_guidelines)
         that should own language — otherwise the default "reply in German" rule
         leaks past the override and the operator can't configure, say, an
         English-only deployment (#304 review #10). It only affects the default
-        STELLA-identity branch; a plan prompt or custom persona already replaces
-        the whole block (and with it any language rule).
-
-        Precedence mirrors stella-v2's response prompt:
-          - plan_system_prompt AND custom_persona -> both are included
-          - plan_system_prompt only               -> plan identity
-          - custom_persona only                   -> custom persona as identity
-          - neither                               -> default STELLA identity
-
-        Args:
-            plan_system_prompt: Optional custom system prompt from the plan.
-            custom_persona: Optional persona injected via the Agent Configurator.
+        branch; a persona replaces the whole block, language rule included.
         """
-        # Plan prompt + configured persona: apply both (plan first, then persona).
-        if plan_system_prompt and custom_persona:
-            return f"""## Your Identity & Instructions
-{plan_system_prompt}
-
-## Persona
-{custom_persona}"""
-
-        # If a custom system prompt is provided in the plan, use it
-        if plan_system_prompt:
-            return f"""## Your Identity & Instructions
-{plan_system_prompt}
-
-## Core Personality Traits
-- Friendly, warm, and genuinely interested in the person you're speaking with
-- Supportive and encouraging, never judgmental
-- Natural and conversational - avoid sounding robotic or scripted
-- Concise but thorough - aim for 30-50 words per response
-- Ask only ONE question at a time to keep the conversation flowing naturally"""
-
-        # A configured persona (no plan prompt) overrides the default identity.
-        if custom_persona:
+        if persona:
             return f"""## Your Identity
-{custom_persona}"""
+{persona}"""
 
-        # Default STELLA identity. The language rule lives here (the single source
-        # of truth — the conversational-style block only scopes its rules to that
-        # language, #304 review #11) and is dropped when a custom delivery prompt
-        # owns language (#304 review #10).
+        # Default identity, used when a deployment resolves no persona at all.
+        # The language rule lives here (the single source of truth — the
+        # conversational-style block only scopes its rules to that language,
+        # #304 review #11) and is dropped when a custom delivery prompt owns
+        # language (#304 review #10).
         language_block = "" if operator_owns_language else """
 
 ## Language (highest priority)

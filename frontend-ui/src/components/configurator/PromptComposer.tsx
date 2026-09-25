@@ -179,7 +179,9 @@ const PLACEHOLDER_MAP = new Map(
   PLACEHOLDER_REGISTRY.filter((p) => typeof p.pattern === 'string').map((p) => [p.name, p])
 )
 
-const PLACEHOLDER_RE = /(\{\{\w+\}\})/g
+// Accepts one dotted segment so namespaced tokens ({{persona.name}}) are
+// recognised here too — the plain \w+ form silently left them unstyled.
+const PLACEHOLDER_RE = /(\{\{\w+(?:\.\w+)?\}\})/g
 
 // Deterministic color cycle for manifest-declared variables that aren't one of the
 // built-ins above (so a new agent type's custom variables still get distinct chips).
@@ -339,7 +341,7 @@ function renderHighlightedText(
 
   const parts = text.split(PLACEHOLDER_RE)
   return parts.map((part, i) => {
-    if (/^\{\{\w+\}\}$/.test(part)) {
+    if (/^\{\{\w+(?:\.\w+)?\}\}$/.test(part)) {
       const def = getPlaceholderDef(part, defs, map)
       if (def) {
         const colors = isDark ? def.dark : def.light

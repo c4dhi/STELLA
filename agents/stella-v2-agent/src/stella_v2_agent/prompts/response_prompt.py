@@ -1,15 +1,18 @@
 """System prompt builder for the Response Generator stage.
 
 Composes the final system prompt from:
-- Base persona and conversation guidelines
+- Identity (the deployed Persona) and conversation guidelines
 - State machine context (current state, tasks, deliverables)
 - Arbitration directive (injected expert guidance)
-- Optional custom system prompt from the plan
+
+Identity has exactly one source (#467). Plans carry structure only; one that needs
+to name the agent references {{persona.*}} instead of restating it.
 """
 
 from typing import Dict, Any, List, Optional
 
 from stella_v2_agent.models.arbitration_result import ResponseDirective
+from stella_agent_sdk.emotion.tags import EXPRESSION_TAGS, GESTURE_TAGS, STATE_TAGS
 from stella_agent_sdk.language import LANGUAGE_NAMES
 from stella_v2_agent.prompts.template import render_prompt
 from stella_agent_sdk.prompts import format_history
@@ -18,12 +21,12 @@ from stella_agent_sdk.prompts import format_history
 def build_response_system_prompt(
     sm_context: Dict[str, Any],
     directive: ResponseDirective,
-    plan_system_prompt: Optional[str] = None,
-    custom_persona: Optional[str] = None,
     custom_guidelines: Optional[str] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
     history_limit: int = 10,
     bridge: str = "",
+    persona: Optional[str] = None,
+    emotion_tags: bool = False,
 ) -> str:
     """Build the complete system prompt for the Response Generator.
 
@@ -37,11 +40,15 @@ def build_response_system_prompt(
     Args:
         sm_context: State machine context for conversation awareness.
         directive: Arbitration directive with expert guidance.
-        plan_system_prompt: Optional custom system prompt from the plan.
-        custom_persona: Optional custom persona from Agent Configurator.
         custom_guidelines: Optional custom guidelines from Agent Configurator.
+        persona: Identity from the deployed Persona entity (#467), snapshotted into
+            the deploy config. Like every persona source it is used VERBATIM.
         conversation_history: Recent turns, exposed as {{conversationHistory}}.
         history_limit: How many recent turns to include.
+        emotion_tags: Whether the agent is stripping [emotion tags] out of the
+            reply (#face-emotions). Exposed as {{emotionTags}}, and EMPTY when
+            False — asking for tags that nothing removes would have them read
+            aloud, so this flag must track the parser, not the other way round.
         bridge: The short acknowledgment already spoken to the user this turn
             (the Bridge stage). Exposed as {{bridge}} so the editable guidelines
             can instruct the reply to continue seamlessly from it instead of
@@ -54,17 +61,16 @@ def build_response_system_prompt(
     """
     sections: List[str] = []
 
-    # 1. Persona — verbatim, NOT rendered, so any {{...}} in a plan persona is
-    #    left untouched. Plan persona + configurator persona stack; else default.
-    if plan_system_prompt and custom_persona:
-        sections.append(plan_system_prompt)
-        sections.append(custom_persona)
-    elif plan_system_prompt:
-        sections.append(plan_system_prompt)
-    elif custom_persona:
-        sections.append(custom_persona)
-    else:
-        sections.append(_default_persona())
+    # 1. Identity — verbatim, NOT rendered, so any {{...}} in a persona is left
+    #    untouched. ONE source, no chain (#467 phase 2): plans carry structure
+    #    only, and a plan that needs to name the agent references {{persona.*}}
+    #    rather than restating who it is.
+    #
+    #    There is now exactly one source. The Agent Configurator's persona slot
+    #    was removed with the schema (#467), so no precedence rule is needed: the
+    #    deployed Persona IS the identity, and _default_persona() only covers an
+    #    agent running against a backend that has none.
+    sections.append(persona or _default_persona())
 
     # 2. Guidelines — rendered with the turn's context as template variables, so
     #    the configured prompt places state / directive / history / language
@@ -78,6 +84,11 @@ def build_response_system_prompt(
             sm_context.get("language"), pinned=bool(sm_context.get("language_pinned"))
         ) or "",
         "bridge": bridge or "",
+        "emotionTags": _emotion_tag_directive() if emotion_tags else "",
+        # {{persona.*}} in the configured guidelines. This engine and the
+        # placeholder compiler resolve the same namespace from the same values, so
+        # a variable reads identically wherever it is written.
+        **_persona_variables(sm_context),
         # Runtime flags so the editable guidelines own the "just collected /
         # phase completing / just transitioned" behavioral prose via {{#if ...}}.
         **_state_conditions(sm_context),
@@ -85,6 +96,73 @@ def build_response_system_prompt(
     sections.append(render_prompt(guidelines, ctx))
 
     return "\n\n".join(s for s in sections if s)
+
+
+def _persona_variables(sm_context: Dict[str, Any]) -> Dict[str, str]:
+    """Flatten the deployed persona into ``persona.<key>`` entries for render_prompt.
+
+    Author-defined variables win over the built-in identity fields, matching the
+    placeholder compiler's precedence exactly — the two engines must not disagree
+    about what {{persona.name}} means.
+    """
+    persona = sm_context.get("persona") or {}
+    if not persona:
+        return {}
+
+    flat: Dict[str, str] = {}
+    for key in ("name", "voice", "language"):
+        value = persona.get(key)
+        if value:
+            flat[f"persona.{key}"] = str(value)
+    for key, value in (persona.get("variables") or {}).items():
+        flat[f"persona.{key}"] = str(value)
+    return flat
+
+
+def _emotion_tag_directive() -> str:
+    """The instruction that teaches the model the emotion-tag vocabulary.
+
+    Generated from the SDK's registry rather than written out here, so the
+    prompt cannot drift from the tags the parser actually recognizes — a tag
+    named here but missing there would be dropped silently, and the face would
+    simply never react.
+    """
+    expressions = " ".join(f"[{tag}]" for tag in EXPRESSION_TAGS)
+    gestures = " ".join(f"[{tag}]" for tag in GESTURE_TAGS)
+    states = " ".join(f"[{tag}]" for tag in STATE_TAGS)
+    return f"""EMOTIONAL EXPRESSION — APPLIES TO EVERY SINGLE REPLY YOU WRITE:
+You have an animated face, and these inline tags are the only way you can move it. They are stripped out before anything is spoken or displayed — the user never hears or sees them — so never mention them, explain them, or describe your expression in words.
+- Expressions, held until the next tag: {expressions}
+- Gestures, a single beat after which the current expression resumes: {gestures}
+- States, which change your face until something changes it back: {states}
+
+Brackets are ONLY ever used for these tag names — never a sentence, a quote, or anything you have already said. And tag a reply because your face would genuinely have moved, not to satisfy a rule: if you would truly have stayed flat and matter-of-fact, [neutral] is a real choice and the honest one.
+
+This is what your replies look like — note how many tags a normal reply carries:
+- "[happy] Oh, the no-equipment route — you can train anywhere, no excuses. [curious] Is the running your wind-down, or the main event?"
+- "[thinking] Hm, let me sit with that a second. [concerned] That sounds like it has been wearing on you for a while now."
+- "[excited] Wait, you built the whole thing yourself? [laughing] That is properly ambitious. [brow_flash] I want to hear how you started."
+- "[neutral] Two, three times. [nod] Enough to keep the habit without it taking over your week. [curious] What does a typical session look like?"
+- "[surprised] Oh! [happy] I did not expect that at all."
+
+When you are CONTINUING something you have already begun saying out loud, the tag goes in front of the next thing you say — never in front of a reaction to your own words:
+- already said "I can hear you loud and clear!" -> continue "[curious] What's on your mind today?"   NOT "[happy] That's great to hear!"
+- already said "I'm doing well, thanks for asking!" -> continue "[curious] What have you been up to?"   NOT "[happy] I'm glad to hear that!"
+- already said "Got it, that makes sense." -> continue "[thinking] So where does that leave the rest of the week?"   NOT "[happy] Great!"
+
+How to use them:
+- Open with the expression that matches how you feel about what you are about to say.
+- Then tag every point where a person's face would have moved. Read your own words back and ask where your expression would have shifted, where you would have nodded, where your eyebrows would have gone up — and put a tag there. A human face does not hold one shape for a whole answer, and yours must not either.
+- Change the expression whenever the feeling changes: [thinking] while you work something out, [laughing] at something funny, [concerned] at something heavy, [curious] as you ask.
+- Gestures are the small beats between them and belong in nearly every reply — a [nod] as you agree, a [brow_flash] as something lands, a [wink] at a shared joke, a [lean_in] as you get interested. They cost nothing, and their absence is what makes a face look dead.
+- Err on the side of MORE. A tag too many is a flicker nobody minds; a reply with one tag is a mask that moves once and then holds for everything else you say.
+- Put expression and gesture tags immediately BEFORE the words they belong to, at the start of a sentence — never inside a word, and never as the last thing in your reply, since there would be nothing left to say under it.
+- ONLY the tags listed above, spelled exactly. Never invent one and never write stage directions like [smiles] or [laughs].
+[sleep] is different from every other tag, and the rules for it are stricter:
+- Write it ONLY when the user has asked you to go to sleep, told you goodnight, or otherwise ended the conversation and asked you to rest. Never because a lull feels long, never because you think you are done, never to be charming.
+- It is the one tag that goes at the very END of your reply, after your last words: "[happy] Sleep well. [sleep]"
+- Using it closes your eyes and switches your camera off. You cannot see or wake yourself afterwards; the user has to physically touch your face to bring you back. Writing it when nobody asked strands them with a screen that does not respond.
+- One per reply at most, and never together with a goodbye you were not asked for."""
 
 
 def _language_directive(language: Optional[str], pinned: bool = False) -> Optional[str]:
@@ -164,14 +242,6 @@ The user just answered for this task. Don't re-ask it — acknowledge it natural
 
 You just moved into a new phase. Ease in — connect it to what you were just talking about rather than announcing a topic change.
 {{/if}}
-{{#if bridge}}
-
-CONTINUE FROM WHAT YOU ALREADY SAID — you have just spoken this opener aloud: "{{bridge}}". Your reply is appended to it and spoken as ONE seamless utterance, so:
-- The opener already carried the reaction and empathy — open directly on the FORWARD move (the next thought, observation, or question). Do NOT re-acknowledge, re-empathize, or reflect their answer back again.
-- Do NOT restate, rephrase, define, or re-explain what the opener already conveyed. Never open with a textbook definition of something you just referenced.
-- Do NOT add a second greeting or acknowledgment — the opener already did that.
-- Pick up mid-breath, as the same person continuing: bring something real (react to the specific thing they said and/or move forward), don't reset and start the thought over.
-{{/if}}
 {{#if directive}}
 
 {{directive}}
@@ -188,6 +258,21 @@ Conversation so far:
 {{#if language}}
 
 {{language}}
+{{/if}}
+{{#if emotionTags}}
+
+{{emotionTags}}
+{{/if}}
+{{#if bridge}}
+
+CONTINUE FROM WHAT YOU ALREADY SAID — you have just spoken this opener aloud: "{{bridge}}". Your reply is appended to it and spoken as ONE seamless utterance, so:
+- The opener already carried the reaction and empathy — open directly on the FORWARD move (the next thought, observation, or question). Do NOT re-acknowledge, re-empathize, or reflect their answer back again.
+- NEVER repeat or rephrase the opener. You have ALREADY said "{{bridge}}" out loud a moment ago; saying it again, or answering it as though someone else had said it, is the single worst thing you can do here. If the user only greeted you and the opener already covered it, skip straight to your question.
+- Do NOT restate, rephrase, define, or re-explain what the opener already conveyed. Never open with a textbook definition of something you just referenced.
+- Do NOT add a second greeting or acknowledgment — the opener already did that.
+- You are one person mid-sentence, not two people talking. NEVER react to, agree with, or be pleased about the opener — it came out of your own mouth. "I'm doing well, thanks for asking!" is followed by "And you? What have you been up to?", never by "I'm glad to hear that!". "I can hear you loud and clear!" is followed by "What's on your mind today?", never by "That's great!".
+- Tagging does not change WHAT you say. The tag goes in front of the forward move — "[curious] What have you been up to?" — never in front of a reaction to your own words.
+- Pick up mid-breath, as the same person continuing: bring something real (react to the specific thing they said and/or move forward), don't reset and start the thought over.
 {{/if}}"""
 
 

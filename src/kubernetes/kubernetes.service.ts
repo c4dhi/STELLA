@@ -47,7 +47,7 @@ export class KubernetesService {
     private agentImageService: AgentImageService,
   ) {
     this.namespace = this.configService.get<string>('KUBERNETES_NAMESPACE', 'default');
-    this.defaultAgentType = this.configService.get<string>('DEFAULT_AGENT_TYPE', 'stella-light-agent');
+    this.defaultAgentType = this.configService.get<string>('DEFAULT_AGENT_TYPE', 'stella-v2-agent');
     this.imagePullPolicy = this.configService.get<string>('AGENT_IMAGE_PULL_POLICY', 'IfNotPresent');
     // Configurable gRPC server address for agent connections
     // Allows agents to connect from anywhere (K8s, external servers, etc.)

@@ -3,10 +3,12 @@ import {
   IsNotEmpty,
   IsOptional,
   IsObject,
+  Validate,
   MinLength,
   MaxLength,
 } from 'class-validator';
 import { Prisma } from '@prisma/client';
+import { IsPlanContent } from './plan-content.validator';
 
 export class CreatePlanTemplateDto {
   @IsString()
@@ -21,6 +23,7 @@ export class CreatePlanTemplateDto {
   description?: string;
 
   @IsObject()
+  @Validate(IsPlanContent)
   @IsNotEmpty()
   content: Prisma.InputJsonValue;
 }

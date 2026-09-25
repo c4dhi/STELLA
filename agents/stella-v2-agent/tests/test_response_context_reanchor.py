@@ -14,11 +14,10 @@ import pytest
 from stella_v2_agent.agent import StellaV2Agent
 
 
-def _make_agent(*, refreshed, plan_prompt=None, has_sm_client=True):
+def _make_agent(*, refreshed, has_sm_client=True):
     """Build a bare agent with just what _resolve_response_context needs."""
     agent = StellaV2Agent.__new__(StellaV2Agent)
     agent.sm_client = object() if has_sm_client else None
-    agent._plan_system_prompt = plan_prompt
     agent._fetch_called = False
 
     async def _fake_fetch():
@@ -56,17 +55,6 @@ async def test_transition_reanchors_to_new_state():
     assert out["state"]["id"] == "state_B"
     assert out["state_just_changed"] is True
     assert out["language"] == "de"
-
-
-@pytest.mark.asyncio
-async def test_transition_reinjects_plan_prompt():
-    sm = _turn_start_ctx("state_A")
-    refreshed = {"state": {"id": "state_B"}}
-    agent = _make_agent(refreshed=refreshed, plan_prompt="PLAN PROMPT")
-    out = await agent._resolve_response_context(
-        sm, "en", transitioned=True, new_state_id="state_B", session_completed=False
-    )
-    assert out["plan_system_prompt"] == "PLAN PROMPT"
 
 
 @pytest.mark.asyncio
