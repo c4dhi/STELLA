@@ -2,22 +2,26 @@ name: Seed Roundtrip Check
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'prisma/**'
       - 'agents/**/agent.yaml'
       - 'agents/**/Dockerfile'
       - 'src/agent-package/**'
       - 'src/agent-registry/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/seed-roundtrip-check.yml'
   pull_request:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'prisma/**'
       - 'agents/**/agent.yaml'
       - 'agents/**/Dockerfile'
       - 'src/agent-package/**'
       - 'src/agent-registry/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/seed-roundtrip-check.yml'
   workflow_dispatch:
 
@@ -47,10 +51,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'

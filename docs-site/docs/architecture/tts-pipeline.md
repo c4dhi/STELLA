@@ -14,7 +14,7 @@ The short version: text is cut into **sentences**, each sentence is synthesized 
 LLM tokens → sentence splitter → TTS queue → Qwen3 model → PCM buffer
                     │                                          │
                     ▼                                          ▼
-            published as text                          800 ms pre-roll
+            published as text                          200 ms pre-roll
                     │                                          │
                     ▼                                          ▼
              chat bubble                    20 ms frames → LiveKit → browser
@@ -60,7 +60,7 @@ This is load-bearing. The earlier implementation collected every chunk before re
 
 Output format is **24 kHz, 16-bit mono PCM** — raw uncompressed samples.
 
-### 7. Playback holds a cushion (default 800 ms), then starts
+### 7. Playback holds a cushion (default 200 ms), then starts
 
 See [Why the pre-roll exists](#why-the-pre-roll-exists) for the reasoning, and [Tuning the pre-roll for your hardware](#tuning-the-pre-roll-for-your-hardware) if you are running on a faster GPU. This is the least intuitive step and the one most worth understanding.
 
@@ -100,10 +100,20 @@ That deficit is what sets the constant. Playback must start late enough that it 
 - **300 ms** — first frame at ~434 ms, **below the 756 ms deficit**. Still underran mid-sentence.
 - **800 ms** — clears the deficit with margin. First frame at a **constant ~1037 ms**, regardless of sentence length (versus 2235–3907 ms when playback waited for full synthesis).
 
-:::info The 800 ms default is calibrated to one specific deployment
-It is **not** a universal constant. It is sized from the measured deficit of a 1.7B model on an L4 — hardware with no headroom to stream into. On a faster GPU (or a smaller model) this value is too conservative and adds latency you do not need to pay.
+That measurement set the default to 800 ms. It was re-run on the same production service before 1.2.0, this time with five German sentences of 0.88–2.72 s:
 
-If you are running STELLA on better hardware, see [Tuning the pre-roll for your hardware](#tuning-the-pre-roll-for-your-hardware) below. Lower it deliberately, using the measurement below — do not just try 300 because it appears in the comment, and do not leave 800 in place assuming it is a safe default.
+| Metric | Measured |
+|---|---|
+| Real-time factor | 0.75 – 0.82 (was 0.92 – 1.33) |
+| First chunk from provider | ~150 ms |
+| **Max playout deficit** | **~131 ms** (was 614 – 756 ms) |
+
+Synthesis now outruns playback at every length tested, so the only deficit left is the wait for the first chunk. **Since 1.2.0 the default is 200 ms**, about 1.5× that deficit, which takes roughly 490 ms off the first sound of every sentence.
+
+:::info The 200 ms default is calibrated to one specific deployment
+It is **not** a universal constant. It assumes synthesis runs faster than real time, as it does for the 1.7B model on the reference L4 today. If your provider is at or above real time (see the table below), 200 ms will underrun.
+
+The acceptance test is the agent log: the underrun guard logs `bridged Xms` whenever it has to insert silence. If that is ever non-zero, or you hear warbling, raise `STELLA_TTS_PREROLL_MS` using the rule below.
 :::
 
 ---
@@ -132,7 +142,7 @@ Which gives two regimes:
 | **≈ 1.0** | Synthesis barely keeps up. Any hiccup starves the source. | Scales with your longest sentence. **500–1000 ms.** |
 | **> 1.0** | Synthesis is slower than playback. Deficit grows with sentence length. | `D_max × (RTF−1)/RTF`, and consider a faster provider. |
 
-The formula is a conservative upper bound — it assumes RTF stays constant across the whole sentence. In practice the measured deficit on the reference deployment was 614–756 ms where the formula predicts ~1040 ms, which is why 800 ms suffices there.
+The formula is a conservative upper bound — it assumes RTF stays constant across the whole sentence. In practice the first measured deficit on the reference deployment was 614–756 ms where the formula predicted ~1040 ms, which is why 800 ms sufficed at the time.
 
 :::caution Two different "RTF" conventions appear in this codebase
 `audio/pipeline.py` uses **RTF = synthesis time ÷ audio duration** — *lower is better*, and `> 1` means slower than real time. That is the convention used on this page.
@@ -188,7 +198,8 @@ All are read by the SDK inside the agent pod. Declare them in `agent.yaml` under
 
 | Variable | Default | Description |
 |---|---|---|
-| `STELLA_TTS_PREROLL_MS` | `800` | Jitter buffer held before the first frame of an utterance. Read once at pipeline construction. **The default is calibrated to one specific deployment — [tune it for your hardware](#tuning-the-pre-roll-for-your-hardware).** Faster GPUs should lower it; `0` also disables the underrun guard. |
+| `STELLA_TTS_PLAYBACK` | `stream` | `stream` starts each sentence as it is generated; `sentence` generates the whole sentence first and then plays it (the 1.1.0 behaviour). Use `sentence` when the TTS runs slower than real time, e.g. Qwen3 on a T4, where `stream` can run dry mid-word (`Playout starved` in the agent log). Declared in `agent.yaml`, so it is set per deployment in the deploy modal and two deployments can run side by side. Read once at pipeline construction; unknown values fall back to `stream`. |
+| `STELLA_TTS_PREROLL_MS` | `200` | Jitter buffer held before the first frame of an utterance. Read once at pipeline construction. **The default is calibrated to one specific deployment — [tune it for your hardware](#tuning-the-pre-roll-for-your-hardware).** Raise it if synthesis runs at or below real time; `0` also disables the underrun guard. |
 | `TTS_PROGRESS_TICK_MS` | `200` | How often a teleprompter progress envelope is emitted during playback. |
 | `TTS_ENABLED` | `true` | `false` = text-only mode; the TTS connection is skipped entirely. |
 | `TTS_VOICE` | provider default | Seed voice, overridable per stream. Honored by voice-selecting providers. |

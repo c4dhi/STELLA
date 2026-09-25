@@ -16,6 +16,7 @@ version: 2
 updates:
   # ---------------------------------------------------------------- npm ----
   - package-ecosystem: "npm"
+    target-branch: "development"
     directories:
       - "/" # NestJS backend
       - "/frontend-ui" # React SPA
@@ -37,6 +38,7 @@ updates:
 
   # ---------------------------------------------------------------- pip ----
   - package-ecosystem: "pip"
+    target-branch: "development"
     directories:
       - "/message-recorder-python"
       - "/stt-service"
@@ -49,14 +51,21 @@ updates:
     open-pull-requests-limit: 10
     ignore:
       # numpy 2.5 raised its floor to Python >=3.12. stt-service's GPU image is
-      # nvidia/cuda on ubuntu22.04 with python3.11, so `numpy>=2.5.1` (merged
-      # 2026-07-30) made `pip install -r requirements.txt` fail outright — and,
-      # like the nvidia/cuda bump above, it stayed invisible until the next
-      # rebuild weeks later. requirements.txt carries the matching <2.5 bound.
-      # Lift both together with the interpreter, never on its own.
+      # nvidia/cuda on ubuntu22.04 with python3.11, so `numpy>=2.5.1` made
+      # `pip install -r requirements.txt` fail outright — and stayed invisible
+      # until the next rebuild weeks later. requirements.txt carries the
+      # matching <2.5 bound. Lift both together with the interpreter.
       - dependency-name: "numpy"
         versions:
           - ">=2.5"
+      # Same trap, same cause: scipy 1.18 requires Python >=3.12 (1.17 still
+      # supports 3.11), so `scipy>=1.18` breaks the GPU image build. Dependabot
+      # proposed it in #480 and #483. requirements.txt in stt-service and
+      # tts-service carries the matching <1.18 bound. Lift all of them together
+      # with the interpreter.
+      - dependency-name: "scipy"
+        versions:
+          - ">=1.18"
     groups:
       pip-minor-and-patch:
         applies-to: version-updates
@@ -70,6 +79,7 @@ updates:
 
   # ---------------------------------------------------- github-actions ----
   - package-ecosystem: "github-actions"
+    target-branch: "development"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -82,6 +92,7 @@ updates:
   # ------------------------------------------------------------- docker ----
   # Base-image updates for the services we build and ship.
   - package-ecosystem: "docker"
+    target-branch: "development"
     directories:
       - "/"
       - "/frontend-ui"
@@ -92,20 +103,13 @@ updates:
       interval: "monthly"
     open-pull-requests-limit: 5
     ignore:
-      # nvidia/cuda is pinned to what the GPU node's DRIVER supports, not to
-      # whatever is newest. A bump to 13.3.1 (2026-07-30) was merged unnoticed
-      # and only detonated on the next rebuild, weeks later, taking tts-service
-      # down: every pod died in the NVIDIA prestart hook with
-      # "unsatisfied condition: cuda>=13.3" against driver 565.57.01.
-      #
-      # There is no build-time signal for this — the image builds fine and
-      # fails at container start — so it cannot be caught by CI that only
-      # builds. Upgrade deliberately, alongside the node driver and the torch
-      # wheel, and verify by starting the image on a GPU host.
+      # NOT SAFELY BUMPABLE. The CUDA version must be supported by the GPU
+      # node's *driver*. A bump to 13.3.1 merged 2026-07-30 made every GPU pod
+      # fail in the NVIDIA prestart hook ("unsatisfied condition: cuda>=13.3"),
+      # and surfaced only on the next rebuild, 2026-08-25, as an outage.
+      # Bump this only together with the node driver, and only after actually
+      # starting the image on a GPU host. See stt-service/Dockerfile.
       - dependency-name: "nvidia/cuda"
-        update-types:
-          - "version-update:semver-major"
-          - "version-update:semver-minor"
     groups:
       docker-base-images:
         patterns:

@@ -14,15 +14,23 @@ The SDK defines the communication protocol - agents implement whatever logic the
 
 ## Installation
 
+Requires Python 3.10 or newer.
+
 ```bash
 pip install stella-ai-agent-sdk
 ```
 
-Or install from source:
+To work against unreleased changes, install from source:
 
 ```bash
-cd stella-ai-agent-sdk
-pip install -e .
+git clone https://github.com/c4dhi/STELLA.git
+pip install -e STELLA/agents/stella-ai-agent-sdk
+```
+
+Or pin directly to a tag without cloning:
+
+```bash
+pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.6.0#subdirectory=agents/stella-ai-agent-sdk"
 ```
 
 ## Quick Start
@@ -161,6 +169,8 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `TTS_SERVICE_ADDRESS` | `tts-service:50052` | TTS gRPC service address |
 | `TTS_ENABLED` | `true` | Set to `false` to disable TTS entirely. The agent will still receive speech input and send text responses, but no audio will be synthesized — effectively turning it into a text chatbot. |
 | `STT_WARMUP_ENABLED` | `true` | Warm up STT model before first utterance |
+| `STELLA_TTS_PLAYBACK` | `stream` | `stream` plays each sentence as it synthesizes; `sentence` synthesizes the whole sentence first, then plays it (use with a TTS provider slower than real time). Unknown values log a warning and use `stream` |
+| `STELLA_TTS_PREROLL_MS` | `200` | Audio buffered before an utterance starts playing in `stream` mode |
 | `SESSION_SERVER_URL` | `http://session-management-server:3000` | Session management HTTP URL |
 | `GRPC_SERVER` | `session-management-server:50051` | Session management gRPC address |
 | `SESSION_ID` | *(falls back to ROOM_NAME)* | Database session UUID |
@@ -173,10 +183,14 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 
 ## Examples
 
-See the `examples/` directory:
+Both examples are runnable as-is once the environment variables below are set.
+They are not shipped inside the installed package, so read them on GitHub:
 
-- `echo_agent.py` - Simplest possible agent (echoes input)
-- `openai_agent.py` - Integration with OpenAI GPT models
+- [`echo_agent.py`](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/examples/echo_agent.py)
+  — the smallest possible agent (echoes input back)
+- [`openai_agent.py`](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/examples/openai_agent.py)
+  — an LLM-backed agent that streams its reply token by token, and stops
+  generating when the user barges in
 
 ## Development
 
@@ -194,6 +208,31 @@ python -m grpc_tools.protoc \
     --grpc_python_out=src/stella_agent_sdk/_grpc/generated \
     proto/agent.proto
 ```
+
+## Changelog
+
+See [CHANGELOG.md](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md).
+The SDK versions independently of the STELLA platform.
+
+## Releasing
+
+Releases are published to [PyPI](https://pypi.org/project/stella-ai-agent-sdk/) by
+[`.github/workflows/publish-sdk.yml`](../../.github/workflows/publish-sdk.yml), which is
+triggered by pushing a `sdk-v<version>` tag:
+
+```bash
+# 1. Bump `version` in agents/stella-ai-agent-sdk/pyproject.toml, then commit it to main.
+# 2. Tag the commit. The tag version must match pyproject.toml or the workflow fails.
+git tag sdk-v0.6.0
+git push origin sdk-v0.6.0
+```
+
+The workflow builds the sdist and wheel, installs the wheel into a clean environment and runs
+the test suite against it, publishes to PyPI via trusted publishing (OIDC — no API token is
+stored in the repo), and creates a GitHub release with the distributions attached.
+
+Run the workflow manually (`workflow_dispatch`) to build and verify without publishing.
+Note that a version number can never be reused on PyPI, even after a release is deleted.
 
 ## License
 

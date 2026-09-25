@@ -489,7 +489,8 @@ export class AgentsService {
     // Grace came back as STELLA: the wake path has no personaId to pass, so the
     // system default silently overwrote the snapshot.
     if (!agentConfig.persona) {
-      const persona = await this.personasService.resolveForDeploy(
+      const persona = await this.personasService.resolveForDeployConfig(
+        agentConfig,
         personaId,
         userId,
       );

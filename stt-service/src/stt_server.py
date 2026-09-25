@@ -87,6 +87,8 @@ class STTEngine:
                     print(f"[STT Engine] Fallback {provider.name} init failed: {e}")
 
         self.initialized = True
+        if self.provider:
+            self.provider.start_keepalive()
         return True
 
     def get_status(self) -> dict:
@@ -177,11 +179,16 @@ class SpeechToTextServicer(stt_pb2_grpc.SpeechToTextServicer):
                 # place for the life of the session. set_language_hint() is a
                 # no-op when the value has not changed.
                 session.set_language_hint(chunk.language)
+                self.engine.provider.note_language(chunk.language)
 
                 # Process audio and yield events
                 # Pass sample_rate from proto (default to 16000 for backwards compatibility)
                 sample_rate = chunk.sample_rate if chunk.sample_rate > 0 else 16000
-                events = session.process_audio(chunk.audio_data, sample_rate=sample_rate)
+                # Off the event loop so one stream's decode never stalls the others.
+                # Awaited per chunk, so a stream's chunks stay in order.
+                events = await asyncio.to_thread(
+                    session.process_audio, chunk.audio_data, sample_rate=sample_rate
+                )
                 for event in events:
                     yield event
 

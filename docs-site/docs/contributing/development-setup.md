@@ -120,8 +120,8 @@ The frontend runs at http://localhost:5173.
 ## Agent Setup (Python)
 
 ```bash
-# Navigate to agent directory
-cd agents/stella-agent
+# Navigate to an agent directory (stella-v2-agent or stella-light-agent)
+cd agents/stella-v2-agent
 
 # Create virtual environment
 python3.11 -m venv venv
@@ -236,9 +236,9 @@ npm run start:dev
 cd frontend-ui && npm run dev
 
 # Terminal 4: Agent (when testing)
-cd agents/stella-agent
+cd agents/stella-v2-agent
 source venv/bin/activate
-python -m src.agent
+python -m stella_v2_agent
 ```
 
 ## IDE Setup
@@ -272,7 +272,7 @@ Workspace settings (`.vscode/settings.json`):
 
 ### PyCharm
 
-1. Open the `agents/stella-agent` directory
+1. Open the agent directory you're working in, e.g. `agents/stella-v2-agent`
 2. Configure Python interpreter (point to venv)
 3. Install Python Requirements plugin
 4. Enable Black formatter

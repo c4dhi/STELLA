@@ -117,9 +117,33 @@ start_all() {
     for svc_config in "${SERVICES[@]}"; do
         IFS=':' read -r service local_port remote_port <<< "$svc_config"
 
-        # Start in background
-        start_port_forward_loop "$service" "$local_port" "$remote_port" &
-        local pid=$!
+        # Start in background.
+        #
+        # In daemon mode this MUST leave the caller's session, not just the
+        # foreground. A plain `&` keeps the child in the same process group,
+        # so it dies with its parent -- which under a GitHub Actions runner
+        # means the forwards are torn down seconds after the deploy job
+        # reports success, and the site goes down. setsid detaches into a new
+        # session so the loop outlives the job (and an SSH logout).
+        local pid
+        if [ "$FOREGROUND" = true ]; then
+            start_port_forward_loop "$service" "$local_port" "$remote_port" &
+            pid=$!
+        else
+            # env -u RUNNER_TRACKING_ID is load-bearing, not tidiness.
+            #
+            # setsid alone is not enough under GitHub Actions. At job end the
+            # runner sweeps /proc and kills every process whose environment
+            # still carries the job's RUNNER_TRACKING_ID, regardless of session
+            # or parent. Children inherit it, so a setsid'd forward was still
+            # matched and killed -- observed on the first production deploy,
+            # which shipped the setsid fix and still lost its forwards.
+            # Dropping the variable makes the loop invisible to that sweep.
+            setsid env -u RUNNER_TRACKING_ID \
+                nohup "$0" _forward-loop "$service" "$local_port" "$remote_port" \
+                >/dev/null 2>&1 < /dev/null &
+            pid=$!
+        fi
         CHILD_PIDS+=($pid)
         echo "$pid" >> "$PID_DIR/daemon-pids.txt"
         echo -e "  ${GREEN}✓${NC} $service -> localhost:$local_port (PID: $pid)"
@@ -222,6 +246,11 @@ case "${1:-}" in
         stop_all
         sleep 1
         start_all
+        ;;
+    _forward-loop)
+        # Internal: one detached forward loop, re-entered via setsid above.
+        # Not part of the public interface, hence the leading underscore.
+        start_port_forward_loop "$2" "$3" "$4"
         ;;
     status)
         show_status

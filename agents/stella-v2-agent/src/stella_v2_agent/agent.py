@@ -1488,13 +1488,41 @@ class StellaV2Agent(BaseAgent):
         """
         persona = config.get("persona")
         if not isinstance(persona, dict) or not persona.get("system_prompt"):
-            return None
+            return self._legacy_plan_persona(config)
         logger.info(
             "Loaded persona '%s' (%s)",
             persona.get("name", "unnamed"),
             "system default" if persona.get("is_system_default") else "operator-selected",
         )
         return persona
+
+    @staticmethod
+    def _legacy_plan_persona(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Identity for a config saved before personas existed (#550).
+
+        A stored config replayed on restart or auto-pause wake has no `persona`
+        snapshot, but its plan still carries the `system_prompt` (and `voice`) the
+        session always spoke with. Falling through to the built-in default would
+        quietly turn that session into STELLA after the upgrade.
+
+        TEMPORARY safety net: remove one release after 1.3.0, together with the
+        backend's matching carve-out in PersonasService.resolveForDeployConfig.
+        """
+        plan = config.get("plan")
+        prompt = plan.get("system_prompt") if isinstance(plan, dict) else None
+        if not isinstance(prompt, str) or not prompt.strip():
+            return None
+        logger.warning(
+            "No persona snapshot in config; using the plan's own system_prompt "
+            "(config saved before personas)"
+        )
+        return {
+            "name": "Plan identity (pre-persona config)",
+            "system_prompt": prompt,
+            "voice": plan.get("voice") or None,
+            "variables": {},
+            "is_system_default": False,
+        }
 
     def _load_plan_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Load plan configuration from config or disk."""

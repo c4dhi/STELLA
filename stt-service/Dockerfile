@@ -28,22 +28,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ============================================================================
 # GPU base image
 # ============================================================================
-#
 # PINNED, AND NOT SAFELY BUMPABLE. The CUDA version here must be supported by
 # the GPU node's *driver*. The torch wheel installed below is unpinned and
 # bundles its own CUDA runtime, so the base only has to satisfy the driver.
 #
-# Dependabot bumped this to 13.3.1 on 2026-07-30. tts-service took the same
-# bump, and when it was first rebuilt on 2026-08-25 every pod failed in the
-# NVIDIA prestart hook before the container process even started:
+# Dependabot bumped this to 13.3.1 on 2026-07-30. When it was first rebuilt on
+# 2026-08-25 every pod failed in the NVIDIA prestart hook before the container
+# process even started:
 #
 #   nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.3
 #
-# The production node runs driver 565.57.01, which tops out at CUDA 12.x. The
-# failure is invisible until someone rebuilds, so it surfaced weeks after the
-# change that caused it, as an outage. Bump this only together with the node
-# driver, and only after actually starting the image on a GPU host. See
-# .github/dependabot.yml, which now ignores this dependency.
+# Measured 2026-09-01: production (L4) runs driver 565.57.01 -> max CUDA 12.7;
+# test (T4) runs 580.173.02 -> max CUDA 13.0. 13.3.1 is unrunnable on BOTH.
+# Bump this only together with the node drivers, and only after actually
+# starting the image on a GPU host. See .github/dependabot.yml.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base-gpu
 
 WORKDIR /app

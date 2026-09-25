@@ -129,18 +129,20 @@ class SkipStateResponse(_message.Message):
     def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ..., state_skipped: _Optional[str] = ..., tasks_skipped: _Optional[_Iterable[str]] = ..., transitioned: _Optional[bool] = ..., new_state_id: _Optional[str] = ..., new_state_title: _Optional[str] = ..., progress: _Optional[int] = ..., session_completed: _Optional[bool] = ..., farewell_message: _Optional[str] = ..., summary_behavior: _Optional[str] = ...) -> None: ...
 
 class SetDeliverableRequest(_message.Message):
-    __slots__ = ("session_id", "key", "value", "reasoning", "unconfirmed")
+    __slots__ = ("session_id", "key", "value", "reasoning", "unconfirmed", "correction")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     KEY_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     REASONING_FIELD_NUMBER: _ClassVar[int]
     UNCONFIRMED_FIELD_NUMBER: _ClassVar[int]
+    CORRECTION_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     key: str
     value: str
     reasoning: str
     unconfirmed: bool
-    def __init__(self, session_id: _Optional[str] = ..., key: _Optional[str] = ..., value: _Optional[str] = ..., reasoning: _Optional[str] = ..., unconfirmed: _Optional[bool] = ...) -> None: ...
+    correction: bool
+    def __init__(self, session_id: _Optional[str] = ..., key: _Optional[str] = ..., value: _Optional[str] = ..., reasoning: _Optional[str] = ..., unconfirmed: _Optional[bool] = ..., correction: _Optional[bool] = ...) -> None: ...
 
 class SetDeliverableResponse(_message.Message):
     __slots__ = ("success", "error", "task_completed", "transitioned", "new_state_id", "new_state_title", "progress", "session_completed", "farewell_message", "summary_behavior")

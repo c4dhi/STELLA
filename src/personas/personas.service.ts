@@ -106,6 +106,66 @@ export class PersonasService {
   }
 
   /**
+   * Resolve the persona for a deployment, given its config.
+   *
+   * Order: an explicit `personaId`, then the persona the deployed plan spoke with
+   * before identity moved out of plans (PlanTemplate.defaultPersonaId, linked by
+   * the upgrade script), then the system default. The middle step is what keeps
+   * an existing plan's personality across the 1.3.0 upgrade.
+   *
+   * Returns null when the plan still carries its own `system_prompt` and nothing
+   * names a persona. That is a config saved before the upgrade (a paused session
+   * waking up): stamping the system default here would make it win over the
+   * plan's identity, so the agent falls back to the plan's own prompt instead.
+   * TEMPORARY, together with that agent fallback — remove one release after 1.3.0.
+   */
+  async resolveForDeployConfig(
+    agentConfig: Record<string, unknown>,
+    personaId: string | undefined | null,
+    userId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const plan =
+      agentConfig.plan && typeof agentConfig.plan === 'object'
+        ? (agentConfig.plan as { id?: unknown; system_prompt?: unknown })
+        : null;
+
+    const effectiveId =
+      personaId ??
+      (await this.findPlanDefaultPersonaId(plan?.id ?? agentConfig.plan_id, userId));
+
+    const legacyPrompt = plan?.system_prompt;
+    if (
+      !effectiveId &&
+      typeof legacyPrompt === 'string' &&
+      legacyPrompt.trim().length > 0
+    ) {
+      this.logger.warn(
+        'Config has no persona but its plan carries a system_prompt; leaving the persona unset so the plan keeps its own identity',
+      );
+      return null;
+    }
+
+    return this.resolveForDeploy(effectiveId, userId);
+  }
+
+  /**
+   * Only plans the caller owns count, so a deploy config cannot borrow another
+   * user's persona by naming their plan id.
+   */
+  private async findPlanDefaultPersonaId(
+    planId: unknown,
+    userId: string,
+  ): Promise<string | undefined> {
+    if (typeof planId !== 'string' || !planId) return undefined;
+    const template = await this.prisma.planTemplate.findUnique({
+      where: { id: planId },
+      select: { userId: true, defaultPersonaId: true },
+    });
+    if (!template || template.userId !== userId) return undefined;
+    return template.defaultPersonaId ?? undefined;
+  }
+
+  /**
    * Resolve the persona payload injected into an agent's deploy config.
    *
    * Snapshot semantics, matching pipeline_config: the caller writes the resolved
@@ -141,10 +201,8 @@ export class PersonasService {
       // when the agent was deployed.
       variables: (persona.variables as Record<string, string> | null) ?? {},
       // Lets the agent tell "the operator chose this identity" from "nobody chose
-      // one, here is the floor". Until the phase-2 clean cut, a deployment that
-      // configured its persona in the Agent Configurator must keep winning over
-      // the default — otherwise simply shipping this feature would change the
-      // voice of every existing deployment.
+      // one, here is the floor". Plans no longer carry an identity of their own
+      // (#467 phase 2), so this is informational: the agent logs it.
       is_system_default: persona.isSystemDefault,
     };
   }

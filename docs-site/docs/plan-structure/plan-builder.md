@@ -137,6 +137,14 @@ Use this pattern for predictable endings:
 
 During save, the builder warns if a state has no outgoing transition and is not connected to End. This helps catch accidental dead-ends while still allowing intentional terminal states.
 
+## Plan Language
+
+The **Language** field sits under the System Prompt. Leave it empty to let Stella detect the participant's language. Enter an ISO 639-1 code (`de`, `en`, `fr`, …) to fix the whole session to that language. The suggestions are only shortcuts, and any code the speech recognizer supports works. The value is stored as `language` at the root of the plan JSON, and the AI plan generator fills it with the language it wrote the plan in.
+
+Set it whenever a plan is written for one language. Without it, a short or unclear first sentence can be detected as the wrong language, and speech recognition then transcribes, or even translates, into that language for the rest of the session.
+
+When you deploy an agent with a plan that declares a language, the deploy wizard uses it as the session language and skips its own language picker.
+
 ## Start Node Configuration
 
 The Start node decides how a session begins. In practice, this is where you choose the entry point state, decide when the agent should spawn, and define what participant data should be collected before the conversation starts.

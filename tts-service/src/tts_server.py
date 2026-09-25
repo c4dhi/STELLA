@@ -10,6 +10,7 @@ from concurrent import futures
 import numpy as np
 import os
 import sys
+import time
 
 # Add parent directory to path for proto imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,6 +29,24 @@ class TTSEngine:
         self.fallback_provider: TTSProvider = None
         self.provider_name = "none"
         self.initialized = False
+        # Synthesis calls in flight (real requests and warmups). The keep-alive
+        # skips a tick while this is non-zero: a busy model is already warm, and
+        # on the shared GPU a throwaway synthesis would compete with live speech.
+        self._active = 0
+        # True while a warmup synthesis runs. Live requests wait for it to
+        # finish, and a warmup never starts while any live request is in flight:
+        # two syntheses on one model instance is the cross-session garbling
+        # tracked in #463, and a background timer must not cause it.
+        self._warming = False
+        self._gate = asyncio.Condition()
+        # Seconds between keep-alive warmups; 0 disables. Runs only when the
+        # provider can go cold (kernels/CUDA graphs evicted while idle).
+        self.keepalive_interval = float(os.getenv("TTS_KEEPALIVE_INTERVAL", "180"))
+        # The deployment-wide switch (STELLA_MODEL_KEEP_WARM, asked in the setup
+        # wizard) turns the keep-alive off for STT and TTS together.
+        if os.getenv("STELLA_MODEL_KEEP_WARM", "true").strip().lower() in ("false", "0", "no", "off"):
+            self.keepalive_interval = 0
+        self._keepalive_task = None
 
     async def initialize(self) -> bool:
         """Initialize TTS with provider selection based on TTS_PROVIDER env var."""
@@ -110,13 +129,17 @@ class TTSEngine:
         if not self.initialized or not self.provider:
             raise RuntimeError("TTS Engine not initialized")
 
-        # Try primary provider
-        result = await self.provider.synthesize(text, voice, speed, language=language)
+        await self._enter_live()
+        try:
+            # Try primary provider
+            result = await self.provider.synthesize(text, voice, speed, language=language)
 
-        # Fallback if primary fails
-        if result is None and self.fallback_provider:
-            print(f"[TTS Engine] Primary provider failed, trying fallback...")
-            result = await self.fallback_provider.synthesize(text, voice, speed, language=language)
+            # Fallback if primary fails
+            if result is None and self.fallback_provider:
+                print(f"[TTS Engine] Primary provider failed, trying fallback...")
+                result = await self.fallback_provider.synthesize(text, voice, speed, language=language)
+        finally:
+            self._active -= 1
 
         if result is None:
             raise RuntimeError(f"All TTS providers failed for text: {text[:50]}...")
@@ -158,12 +181,74 @@ class TTSEngine:
             raise RuntimeError("TTS Engine not initialized")
 
         chunk_index = 0
-        async for chunk, is_final in self.provider.synthesize_stream(text, voice, speed, chunk_size, language=language):
-            yield chunk.tobytes(), is_final, chunk_index
-            chunk_index += 1
+        await self._enter_live()
+        try:
+            async for chunk, is_final in self.provider.synthesize_stream(text, voice, speed, chunk_size, language=language):
+                yield chunk.tobytes(), is_final, chunk_index
+                chunk_index += 1
+        finally:
+            await self._exit_live()
+
+    async def _enter_live(self) -> None:
+        """Count a live request in, first waiting out any warmup in progress."""
+        async with self._gate:
+            await self._gate.wait_for(lambda: not self._warming)
+            self._active += 1
+
+    async def _exit_live(self) -> None:
+        async with self._gate:
+            self._active -= 1
+            self._gate.notify_all()
+
+    async def warmup(self) -> tuple:
+        """Run a tiny throwaway synthesis to prime the model.
+
+        Returns (success, elapsed_ms, message). Uses synthesize (not the
+        stream) because only the side effect of running once matters.
+        """
+        t0 = time.time()
+        if not self.initialized or self.provider is None:
+            return False, 0, "TTS engine not initialized"
+        # No await between this check and setting _warming, so a live request
+        # cannot slip in between them on the event loop.
+        if self._active > 0 or self._warming:
+            return True, 0, "skipped: synthesis in progress, model already warm"
+        self._warming = True
+        try:
+            result = await self.provider.synthesize("Hi.")
+        except Exception as e:
+            return False, int((time.time() - t0) * 1000), f"warm-up failed: {e}"
+        finally:
+            async with self._gate:
+                self._warming = False
+                self._gate.notify_all()
+        elapsed_ms = int((time.time() - t0) * 1000)
+        if result is None:
+            return False, elapsed_ms, "Warm-up synthesis returned no audio"
+        return True, elapsed_ms, "ok"
+
+    def start_keepalive(self) -> None:
+        """Warm up now, then every TTS_KEEPALIVE_INTERVAL seconds (needs a running loop)."""
+        if self.keepalive_interval <= 0:
+            print("[TTS Engine] Keep-alive disabled (TTS_KEEPALIVE_INTERVAL=0)")
+            return
+        if self._keepalive_task is not None and not self._keepalive_task.done():
+            return
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        print(f"[TTS Engine] Keep-alive started (every {self.keepalive_interval:.0f}s)")
+
+    async def _keepalive_loop(self) -> None:
+        # First pass runs at once: the model is warm before the first session.
+        while True:
+            ok, elapsed_ms, message = await self.warmup()
+            print(f"[TTS Engine] Keep-alive warmup: ok={ok}, {elapsed_ms}ms, {message}")
+            await asyncio.sleep(self.keepalive_interval)
 
     async def cleanup(self):
         """Clean up all providers."""
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
         if self.provider:
             await self.provider.cleanup()
         if self.fallback_provider:
@@ -251,47 +336,17 @@ class TextToSpeechServicer(tts_pb2_grpc.TextToSpeechServicer):
         This RPC lets the agent re-prime the model at session start without
         racing the user's first utterance.
         """
-        import time
-        t0 = time.time()
-        try:
-            if not self.engine.initialized or self.engine.provider is None:
-                return tts_pb2.WarmupResponse(
-                    success=False,
-                    warmup_time_ms=0,
-                    provider=self.engine.provider_name,
-                    message="TTS engine not initialized",
-                )
-
-            # Run a tiny throwaway synth to prime kernels. Use synthesize
-            # (not synthesize_stream) because we don't actually need the
-            # streamed frames here — just the side-effects of running once.
-            result = await self.engine.provider.synthesize("Hi.")
-            elapsed_ms = int((time.time() - t0) * 1000)
-
-            if result is None:
-                return tts_pb2.WarmupResponse(
-                    success=False,
-                    warmup_time_ms=elapsed_ms,
-                    provider=self.engine.provider_name,
-                    message="Warm-up synthesis returned no audio",
-                )
-
+        success, elapsed_ms, message = await self.engine.warmup()
+        if success:
             print(f"[TTS Service] Warmup completed in {elapsed_ms}ms (session={request.session_id})")
-            return tts_pb2.WarmupResponse(
-                success=True,
-                warmup_time_ms=elapsed_ms,
-                provider=self.engine.provider_name,
-                message="ok",
-            )
-        except Exception as e:
-            elapsed_ms = int((time.time() - t0) * 1000)
-            print(f"[TTS Service] Warmup error: {e}")
-            return tts_pb2.WarmupResponse(
-                success=False,
-                warmup_time_ms=elapsed_ms,
-                provider=self.engine.provider_name,
-                message=f"warm-up failed: {e}",
-            )
+        else:
+            print(f"[TTS Service] Warmup failed: {message}")
+        return tts_pb2.WarmupResponse(
+            success=success,
+            warmup_time_ms=elapsed_ms,
+            provider=self.engine.provider_name,
+            message=message,
+        )
 
     async def HealthCheck(self, request, context):
         """Health check endpoint."""
@@ -351,6 +406,8 @@ async def serve():
     if not await servicer.initialize():
         print("[TTS Service] CRITICAL: Failed to initialize TTS engine!")
         print("[TTS Service] Server will start but synthesize requests will fail")
+    else:
+        servicer.engine.start_keepalive()
 
     tts_pb2_grpc.add_TextToSpeechServicer_to_server(servicer, server)
     server.add_insecure_port(f'[::]:{port}')

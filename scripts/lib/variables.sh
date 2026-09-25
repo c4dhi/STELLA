@@ -141,6 +141,9 @@ get_var_metadata() {
         QWEN3_CHUNK_SIZE)      echo "tts|text|optional|2|2|Codec frames per streamed yield (12Hz codec rate). 2 ≈ 167ms audio per yield, low TTFB. Drop to 1 for absolute minimum TTFB at the cost of more decoder calls.||" ;;
         QWEN3_DTYPE)           echo "tts|select|optional|bfloat16|bfloat16|Model weight dtype. bfloat16 on Ampere+ (A10/A100/L4/4090/H100). float16 on older cards without bf16 (V100/T4). float32 only for debugging.|bfloat16,float16,float32|" ;;
 
+        # --- KEEP WARM (STT + TTS) ---
+        STELLA_MODEL_KEEP_WARM) echo "gpu|boolean|optional|true|true|Keep the speech-recognition and voice models warm in the background so the first sentence after an idle spell is not slow. Costs a short inference every few minutes||" ;;
+
         # --- GPU ---
         ENABLE_GPU)            echo "gpu|boolean|optional|false|true|Enable CUDA GPU acceleration||" ;;
         ONNX_PROVIDER)         echo "gpu|select|optional|CPUExecutionProvider|CUDAExecutionProvider,CPUExecutionProvider|ONNX Runtime provider|CPUExecutionProvider,CUDAExecutionProvider+CPUExecutionProvider|" ;;
@@ -204,6 +207,7 @@ ALL_VARIABLES=(
     "HF_TOKEN"
     "QWEN3_CHUNK_SIZE"
     "QWEN3_DTYPE"
+    "STELLA_MODEL_KEEP_WARM"
     "ENABLE_GPU"
     "ONNX_PROVIDER"
     "KUBERNETES_NAMESPACE"

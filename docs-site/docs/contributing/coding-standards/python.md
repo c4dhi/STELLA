@@ -140,7 +140,7 @@ async def search_knowledge(
 ## File Organization
 
 ```
-agents/stella-agent/
+agents/stella-v2-agent/
 ├── src/
 │   └── stella_agent/
 │       ├── __init__.py

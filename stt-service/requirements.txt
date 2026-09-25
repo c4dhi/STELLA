@@ -1,11 +1,11 @@
 grpcio>=1.83.0
-grpcio-tools>=1.60.0
-sherpa-onnx>=1.12.0
-# Upper bound is the GPU image's Python, not a preference. base-gpu is
-# nvidia/cuda:12.4.1 on ubuntu22.04 with python3.11 from deadsnakes, and numpy
-# 2.5.x declares Requires-Python >=3.12 — so >=2.5.1 makes `pip install` fail
-# outright there. 2.4.6 is the newest release that still builds for 3.11.
-# Raise this only together with the interpreter in stt-service/Dockerfile.
+grpcio-tools>=1.83.1
+sherpa-onnx>=1.13.8
+# numpy 2.5 raised its floor to Python >=3.12, but the GPU stage below installs
+# python3.11, so `numpy>=2.5.1` makes `pip install -r requirements.txt` fail
+# outright with "No matching distribution found". Lift this bound only together
+# with the interpreter, never on its own. See .github/dependabot.yml.
 numpy>=2.0.0,<2.5
-scipy>=1.11.0
+# scipy 1.18 raised its floor to Python >=3.12 as well; same rule as numpy.
+scipy>=1.11.0,<1.18
 python-dotenv>=1.2.2

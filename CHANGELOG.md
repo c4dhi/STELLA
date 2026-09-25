@@ -7,16 +7,178 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.2.0] - 2026-09-25
+
+Restores the voice-latency and naturalness work that production ran in August
+from a deployment branch. It was listed under 1.1.0 by mistake; that code was not
+part of v1.1.0. **If your study tuned barge-in on 1.1.0, read "Interruptions work
+differently" under Changed first.**
+
+### Added
+
+**Voice latency & audio quality**
+- Streaming TTS playback: audio starts on the first synthesised chunk instead of waiting for the whole sentence
+- Bridge generation overlaps the Expert Pool instead of running before it (#455)
+- Jitter buffer ahead of playback with a tunable pre-roll (`STELLA_TTS_PREROLL_MS`, default 200 ms)
+- Underrun guard that emits real silence when synthesis falls behind, with de-click ramps and starvation logging
+- `STT_DECODE_DIAGNOSTICS`: per-turn speech-recognition metrics in the session metrics modal (costs extra GPU work; off by default)
+
+**Language**
+- Choosing a language when deploying now fixes the conversation to that language (`STELLA_LANGUAGE`): speech recognition, replies and voice all follow it, instead of Stella answering in English on a short or unclear first sentence (#214)
+- A plan can declare its own language, and speech recognition is told what it is
+- Public projects get the same Voice & Language step as a normal deployment (#214)
+
+**Conversation**
+- The agent keeps track of things the participant mentioned in passing but hasn't confirmed, so it checks back on them instead of treating them as answered or asking them cold later
+
+**Deployment safety**
+- Deployments fail when the ConfigMap template has a placeholder with no substitution rule
+- Deployments fail when the text-to-speech service comes up without a working voice model, instead of going green with every session silent
+
+**Agent SDK**
+- Agent SDK 0.6.0 on PyPI (`pip install stella-ai-agent-sdk==0.6.0`). For agent authors: speech streams sentence by sentence behind a tunable pre-roll, barge-in ducks first and calls `on_barge_in` once with the whole utterance, a deployment or plan language pins speech recognition, and `set_deliverable` accepts `unconfirmed=True`. Details in the [SDK changelog](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md)
+
+### Changed
+
+**Interruptions work differently (barge-in, #15)**
+- In 1.1.0, the agent stopped on the first few words of a partial transcript and then asked an LLM evaluator whether to carry on. In 1.2.0, the decision to stop comes from how long the participant has been speaking (`BARGE_IN_MIN_SPEECH_MS`, default 600 ms), with no transcript and no LLM call in the way
+- The agent now lowers its voice the moment the participant makes a sound (`BARGE_IN_DUCK_GAIN`, default 25%). It stops only once they keep going, and it can pick up again from where it paused
+- The evaluator now judges only the participant's complete utterance, never a partial. It decides whether the agent's interrupted reply is dropped or resumes. Short acknowledgements like "mhm" no longer take the turn, and an answer that opens with agreement ("yes, absolutely, …") is no longer mistaken for one. If your study edited the evaluator prompt in 1.1.0, compare it with the new default, because the old default treated agreement as a reason to carry on
+- Speech that whisper hallucinates over silence ("Thank you.", "You") no longer interrupts the agent
+- The agent no longer hands the turn back while the participant is still speaking, and a sentence the participant continued straight after a pause is no longer dropped
+
+**Replies & bridge**
+- One question per turn, and always at the end of the reply
+- Turns vary in shape, not just in wording: the bridge phrase is no longer played on every turn, and replies no longer follow a fixed "acknowledge, then ask" pattern
+- The bridge is a single prompted model instead of phrase inventories. It no longer repeats the participant's own words back, or falls into the same sympathetic phrase ("that sounds like a strain…") turn after turn
+- Bridge phrases arrive sooner: model connections are reused across calls
+
+**Speed**
+- First audio per sentence reduced from 2.2-3.9 s to approximately 1.0 s, and no longer scales with sentence length
+- TTS time-to-first-audio reduced by roughly 30% (233-244 ms to 148-167 ms)
+- Inter-sentence gap reduced to ~167 ms, below the 200-500 ms pause of natural speech
+- About 300 ms less wait after every participant turn: a transcript debounce that could never merge anything now defaults to 0
+- Reference voice clips trimmed from 17-20 s to 6.5 s (German) and 7.5 s (English), cutting the per-request model prefill by about two thirds
+- The task-extraction expert is offered only the tools it can use, making it about 300 ms faster per turn
+
+**Deploy UI**
+- The deploy wizards ask for the plan before the voice and language. If the plan declares a language, that becomes the session language and the language picker is skipped
+
+### Fixed
+
+- Speech recognition no longer drops the beginning of utterances longer than 16 seconds
+- Concurrent TTS synthesis corrupting audio within a session (per-session lock)
+- Jitter buffer re-arming its full cushion mid-sentence, starving the output source and producing audible warble
+- Speech-progress envelopes racing each other; now published in order
+- Teleprompter highlight trailing the voice
+- Chat bubbles size to their content instead of every message filling 75% of the width
+- Session analytics: typed turns and other non-speech turns are timed too, and a session with no data no longer shows "NaN"
+- The live transcript no longer blanks out for up to a second before each final transcript arrives
+- Silent sessions after rebuilding the text-to-speech image: a newer `transformers` release broke the Qwen3 voice model, so it is now pinned below 5.17
+- Test workflows now also run on pull requests into `development`
+
+### Known limitations
+
+- If no session has started for more than 5 minutes, the first sentence of the next session waits about 11 seconds while speech recognition warms up, down from about 30 seconds before this release. Sessions already running can pause briefly while this happens. A keep-warm setting is planned for 1.2.1 (#561).
+
+---
+
+## [1.1.0] - 2026-09-06
+
 ### Added
 
 **stella-v2 Agent**
-- stella-v2 agent with streamlined 5-stage pipeline: Input Gate, Expert Pool, Deterministic Arbitration, Response Generator, Bridge Generator
+- stella-v2 agent with a streamlined pipeline: Expert Pool, Deterministic Arbitration, Response Generator, and a parallel Bridge Generator (no Input Gate — see Removed)
 - Visual Pipeline Configurator for creating and managing pipeline configurations
 - Pipeline configuration management (create, edit, duplicate, delete) with sparse override pattern
 - Mandatory pipeline configuration selection for stella-v2 deployment
 - Bridge Generator for reduced perceived latency in voice conversations
 - gRPC State Machine integration for decoupled conversation flow management
 - Documentation for stella-v2 architecture, pipeline configurator, and schema reference
+
+**Delivery pipeline**
+- Continuous deployment: `development` to the test server, `main` to production, on self-hosted runners
+- Deploys verify themselves — the running service must report the version just built, reachable through the public URL, or the run fails
+- Every production deployment is tagged `prod/<version>` and published as a GitHub Release
+- `GET /version` reports the deployed build
+
+**Open source & project governance**
+- STELLA is now released under the **[MIT License](https://github.com/c4dhi/STELLA/blob/main/LICENSE)** (© Universität St. Gallen (HSG) & University of Zurich (UZH)) — free to use, modify, and self-host
+- Public documentation and a **researcher-focused landing page** are now hosted on **GitHub Pages** at [c4dhi.github.io/STELLA](https://c4dhi.github.io/STELLA/), auto-deployed from `main`
+- Community & release files added to the repository: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` (private vulnerability reporting), `NOTICE.md` (third-party attributions), `CITATION.cff` (GitHub "Cite this repository"), and `RELEASING.md`
+
+**Backup, restore & relocation (#378)**
+- **Full-system export/import** for backups and machine-to-machine migration, driven by a guided wizard (`./scripts/start-k8s.sh --backup`) with a readable restore report
+- `STELLA_DATA_ROOT` relocates all heavy storage (PVCs, models, temp) onto a chosen disk
+
+**Voice — TTS providers & voices**
+- Multiple text-to-speech providers: **Piper** (default local), **in-process Qwen3-TTS**, **ChatterBox** multilingual (EN/DE), and **Voxtral** (opt-in, GPU) with low-VRAM 4-bit/8-bit knobs
+- Default **Stella voice registry** shipped with de + en reference clips, plus language-aware, per-agent and per-stream reference-voice selection
+
+**Language handling**
+- End-to-end language support: **STT acoustic language detection**, coherent **per-turn language resolution** moved into the SDK and adopted by both agents, and a configurable resolver with sensible defaults
+
+**Barge-in**
+- Users can **interrupt the agent mid-speech** (voice and text), reusing the voice plumbing, via a configurable COMMIT/RESUME evaluator — at parity across stella-v2 and stella-light
+
+**Setup wizard & deployment**
+- Chapter-based onboarding wizard: **auto-generates required secrets**, guides the LiveKit internal URL with same-machine IP detection, prompts for `STELLA_DATA_ROOT` and a Hugging Face token, and adds a skippable initial-admin bootstrap chapter
+- **Independently configurable** public frontend and backend URLs; manifest-driven runtime-variable palette with a minimum config-compiler version; env-var templates and pipeline configs **scoped to agent type + version**
+
+**Sessions & transcripts**
+- Sessions **auto-end** on inactivity or max-duration
+- Transcript download with a **mode selector** (transcript / + verdicts / full debug export) and per-message-type checkboxes
+- **Word-by-word** speech highlighting (teleprompter) on both chat surfaces
+
+**Agent Configurator — Expert Module**
+- Deterministic, literature-informed **verdict responses**: each expert verdict maps to an action (`inform`/`prepend`/`override`/`short_circuit`) + template, applied by priority in the arbitration layer so safety-critical output doesn't depend on the LLM's interpretation
+- **Generic, editable verdict labels** with LLM-facing explanations (label + explanation handed to the classifier; action stays in arbitration); fixed output interface
+- Agent-declared expert defaults published from `config/experts/*.json` to `AgentType.expertDefaults`, **capability-gated** (`task_extraction` ← `plans`, assessment pool ← `experts`)
+- Unified prompt editor in the New Custom Expert form (#178), Always-Triggered toggle on creation (#175), and an unsaved-changes discard guard on close (#177)
+
+**Stella Light**
+- **Barge-in support** at parity with stella-v2: a configurable Barge-in Evaluator (COMMIT/RESUME classifier) with an editable prompt/model in the Configurator, plus `BARGE_IN_ENABLED` / `BARGE_IN_EVAL_TIMEOUT_MS` env controls
+- **"Branch chosen" indicator** now renders for the light agent too — it tracks state changes and emits `last_transition`, reaching parity with stella-v2
+
+**Agent SDK — shared progress builder (#310)**
+- New `stella_agent_sdk.progress.progress_from_full_state()` — the single canonical `get_full_state() → ProgressState` transform every agent uses, replacing two hand-maintained per-agent copies that had drifted (the source of the disappearing-skipped-state and `8000%` bugs). Group status derives only from the authoritative `state.status`; the percentage is used raw (0–100); real `task.status`, goal metadata, and discovered insights are handled consistently
+- New `build_last_transition()` — shared "branch chosen" derivation; agent identity is parameterized via `extra_metadata` and the clock is injectable for deterministic tests
+- Additive and backward compatible: existing custom agents need no changes. See [Progress Tracking → State machine–backed progress](https://c4dhi.github.io/STELLA/docs/agent-sdk/progress-tracking)
+
+### Changed
+
+**Editable agent prompts**
+- **stella-v2:** response and bridge behavioral prose moved into editable prompt slots behind one unified template interface; the bridge now streams to TTS and carries the full reaction to cover the response gap; sharper per-expert engage/tap-out contracts
+- **stella-light:** persona + conversation guidelines merged into a single editable System Prompt; safety guardrails and phase-transition notes moved into editable slots; deliverable-driven steering with precise skip semantics
+
+**State machine — task completion (#291)**
+- Task completion is now derived from collected data: a task with deliverables is addressed automatically once its **required** deliverables are collected (or, for an all-optional task, once **every** declared deliverable is in), with no separate "mark complete" step. Deliverable-less tasks still require an explicit complete/skip. A state advances only once **every** task (required *and* optional) is addressed, and is never vacuously complete on entry.
+
+### Fixed
+
+- GPU images unbuildable since a dependency bump raised the numpy floor above what the Python 3.11 base supports
+- CUDA base image pinned to a version the GPU drivers actually support
+
+**Audio & deployment reliability**
+- Prevent the STT stall when an audio track ends or the participant mutes; audio-output readiness is now a real-time round-trip test
+- LiveKit audio and webhook-processing fixes; barge-in now silences client audio on interrupt with a hardened evaluator
+- Agent image caching now rebuilds when Docker/config changes so config edits actually take effect
+
+**Progress / to-do rendering (#291)**
+- A skipped task no longer renders as pending — it shows as skipped and counts toward "tasks done". Skipping a task now also marks its uncollected deliverables `skipped`.
+- **stella-v2:** skipping a task no longer makes the whole state disappear from the route view (group status now follows the state machine's authoritative status), and the progress percentage is no longer mis-scaled.
+- Live and historical-replay views now share one progress→to-do conversion, so they can't disagree about task status.
+- **(#310)** The `full_state → progress` transform is now consolidated into one shared SDK builder, so the agents can no longer drift; the two historical bugs above are now covered by a single golden-fixture suite.
+
+**Goal states (#310)**
+- Goal-level deliverables now honour the **skip cascade**, same as regular task deliverables: once a goal state completes, any uncollected goal deliverable renders `skipped` instead of a stale `pending`, and the synthetic goal task reads `completed`.
+
+### Removed
+
+**stella-v2 — Input Gate (#363)**
+- Removed the Input Gate stage from the stella-v2 pipeline — experts now self-gate and arbitration filters, simplifying the pipeline to five stages
 
 ---
 

@@ -17,6 +17,7 @@ This page documents the full plan JSON structure used by STELLA, including build
 | `initial_state_id` | `string` | Recommended | Entry state |
 | `states` | `PlanState[]` | Yes | Conversation states |
 | `system_prompt` | `string` | No | Agent persona/style |
+| `language` | `string` | No | ISO 639-1 code (e.g. `de`). Fixes the session to this language: speech recognition is pinned from the first utterance and language detection is switched off. A deployment-wide `STELLA_LANGUAGE` still takes precedence. Omit for auto-detect |
 | `session_context` | `SessionContext` | No | Pre-session input fields |
 | `metadata` | `PlanMetadata` | No | Builder metadata and custom extensions |
 

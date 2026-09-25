@@ -5,21 +5,18 @@
 
 # gRPC server
 grpcio>=1.83.0
-grpcio-tools>=1.60.0
+grpcio-tools>=1.83.1
 
 # Shared audio handling (numpy is also pulled in by every provider, pinned
 # here so the floor is consistent across single-provider builds).
-#
-# Do NOT raise this to >=2.5 without also moving the GPU base image forward:
-# numpy 2.5 requires Python >=3.12 and nvidia/cuda:*-ubuntu22.04 ships 3.11,
-# so a >=2.5.1 floor makes the GPU image UNBUILDABLE ("No matching
-# distribution found for numpy"). That is exactly what happened in 2a8f638,
-# and it went unnoticed for weeks because the image was not rebuilt in
-# between. The floor below still resolves to the newest numpy each
-# interpreter can actually take.
-numpy>=2.4.6
+# numpy 2.5 raised its floor to Python >=3.12, but the GPU stage below installs
+# python3.11, so `numpy>=2.5.1` makes `pip install -r requirements.txt` fail
+# outright with "No matching distribution found". Lift this bound only together
+# with the interpreter, never on its own. See .github/dependabot.yml.
+numpy>=2.0.0,<2.5
 soundfile>=0.12.0
-scipy>=1.11.0
+# scipy 1.18 raised its floor to Python >=3.12 as well; same rule as numpy.
+scipy>=1.11.0,<1.18
 
 # Used by some init paths to fetch weights into the PVC.
-huggingface_hub>=0.20.0
+huggingface_hub>=1.29.0

@@ -121,6 +121,7 @@ generate_configmap() {
         -e "s|\${PARTIAL_INTERVAL_MS}|${PARTIAL_INTERVAL_MS:-1000}|g" \
         -e "s|\${BARGE_IN_MIN_SPEECH_MS}|${BARGE_IN_MIN_SPEECH_MS:-600}|g" \
         -e "s|\${STT_DECODE_DIAGNOSTICS}|${STT_DECODE_DIAGNOSTICS:-0}|g" \
+        -e "s|\${STELLA_MODEL_KEEP_WARM}|${STELLA_MODEL_KEEP_WARM:-true}|g" \
         -e "s|\${DISABLE_AEC}|${DISABLE_AEC:-false}|g" \
         -e "s|\${WHISPER_INITIAL_PROMPT}|${WHISPER_INITIAL_PROMPT:-}|g" \
         -e "s|\${LIVEKIT_TURN_ENABLED}|${LIVEKIT_TURN_ENABLED:-false}|g" \
@@ -199,6 +200,7 @@ generate_session_server_manifest() {
     # Replace placeholder with actual project directory path
     # This makes it work regardless of where the project is cloned
     sed -e "s|__PROJECT_DIR_PLACEHOLDER__|${PROJECT_DIR}|g" \
+        -e "s|__IMAGE_TAG_PLACEHOLDER__|${IMAGE_TAG}|g" \
         -e "s|namespace: ai-agents|namespace: ${KUBERNETES_NAMESPACE}|g" \
         -e "s|:latest|:${IMAGE_TAG}|g" \
         k8s/06-session-management-server.yaml > "$output_file"

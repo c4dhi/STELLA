@@ -2,20 +2,24 @@ name: Validate Agents
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'agents/**/agent.yaml'
       - 'agents/**/Dockerfile'
       - 'scripts/validate-agents.ts'
       - 'src/agent-package/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/validate-agents.yml'
   pull_request:
-    branches: [main]
+    branches: [main, development]
     paths:
       - 'agents/**/agent.yaml'
       - 'agents/**/Dockerfile'
       - 'scripts/validate-agents.ts'
       - 'src/agent-package/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/validate-agents.yml'
   workflow_dispatch:
 
@@ -27,10 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'
