@@ -65,6 +65,7 @@ differently" under Changed first.**
 
 ### Fixed
 
+- A session starting after more than 5 minutes of quiet no longer freezes speech recognition for up to about 30 seconds. Warming the recognizer back up stalled that session's first utterance and every other running session with it. It now warms up in the background (#561)
 - Speech recognition no longer drops the beginning of utterances longer than 16 seconds
 - Concurrent TTS synthesis corrupting audio within a session (per-session lock)
 - Jitter buffer re-arming its full cushion mid-sentence, starving the output source and producing audible warble
