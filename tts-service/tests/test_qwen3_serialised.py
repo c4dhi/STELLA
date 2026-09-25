@@ -167,3 +167,84 @@ def test_single_session_is_not_delayed_by_the_lock():
 
     # First frame arrives after the model's first step, plus scheduling only.
     assert asyncio.run(scenario()) < 0.2
+
+
+# ── cancellation and failure paths (review of #581) ─────────────────────────
+
+
+def test_cancelling_a_non_streaming_call_does_not_free_the_model_early():
+    """The worker thread outlives a cancelled synthesize(); the next request must wait for it."""
+
+    async def scenario():
+        model = FakeModel(chunks=10, step=0.02)  # ~200 ms inside generate_voice_clone
+        p = _provider(model)
+        first = asyncio.create_task(p.synthesize("A"))
+        await asyncio.sleep(0.05)  # the model is running A
+        first.cancel()  # client went away / deadline / cancelled keep-alive
+        try:
+            await first
+        except asyncio.CancelledError:
+            pass
+        await asyncio.wait_for(_drain(p, "B"), TIMEOUT)
+        return model
+
+    model = asyncio.run(scenario())
+    assert model.max_inside == 1, "B started on the model while A's thread was still running"
+    assert model.order[:2] == [("start", "A"), ("end", "A")]
+
+
+def test_a_request_cancelled_while_queued_never_touches_the_model():
+    async def scenario():
+        model = FakeModel(chunks=6, step=0.02)
+        p = _provider(model)
+        running = asyncio.create_task(_drain(p, "A"))
+        await asyncio.sleep(0.03)
+        queued = asyncio.create_task(p.synthesize("Q"))  # waits behind A
+        await asyncio.sleep(0.02)
+        queued.cancel()
+        try:
+            await queued
+        except asyncio.CancelledError:
+            pass
+        await running
+        after = await asyncio.wait_for(_drain(p, "C"), TIMEOUT)  # the lock is not stuck
+        return model, after
+
+    model, after = asyncio.run(scenario())
+    assert ("start", "Q") not in model.order
+    assert after > 0
+    assert model.max_inside == 1
+
+
+def test_a_failing_model_call_releases_the_lock():
+    class Exploding(FakeModel):
+        def generate_voice_clone(self, text, **kwargs):
+            raise RuntimeError("cuda oom")
+
+    async def scenario():
+        model = Exploding()
+        p = _provider(model)
+        first = await p.synthesize("boom")  # returns None, logs the failure
+        # Streaming must still get the model afterwards.
+        p._model = FakeModel()
+        frames = await asyncio.wait_for(_drain(p, "after"), TIMEOUT)
+        return first, frames
+
+    first, frames = asyncio.run(scenario())
+    assert first is None
+    assert frames > 0
+
+
+def test_a_streaming_error_releases_the_lock():
+    class BrokenStream(FakeModel):
+        def generate_voice_clone_streaming(self, text, **kwargs):
+            raise RuntimeError("stream broke")
+            yield  # pragma: no cover
+
+    async def scenario():
+        p = _provider(BrokenStream())
+        await asyncio.wait_for(_drain(p, "x"), TIMEOUT)  # errors are swallowed, no audio
+        p._model = FakeModel()
+        return await asyncio.wait_for(_drain(p, "y"), TIMEOUT)
+
+    assert asyncio.run(scenario()) > 0

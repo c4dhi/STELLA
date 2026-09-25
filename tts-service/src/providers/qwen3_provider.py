@@ -713,11 +713,21 @@ class Qwen3Provider(TTSProvider):
         try:
             loop = asyncio.get_event_loop()
             await self._acquire_model()
+            # The lock is released when the worker thread has actually finished,
+            # not when this coroutine stops waiting for it. If the caller goes
+            # away (client disconnect, deadline, a cancelled keep-alive) the
+            # thread keeps running generate_voice_clone, and the next request
+            # must not start on the model until it is done. shield() keeps a
+            # cancel from marking the executor future done early, which would
+            # fire the release callback while the model is still in use.
             try:
                 t0 = time.time()
-                audio_list, sr = await loop.run_in_executor(None, _run)
-            finally:
+                fut = loop.run_in_executor(None, _run)
+            except BaseException:
                 self._model_lock.release()
+                raise
+            fut.add_done_callback(lambda _f: self._model_lock.release())
+            audio_list, sr = await asyncio.shield(fut)
             # generate_voice_clone returns a list of chunks or one tensor.
             if isinstance(audio_list, list):
                 int16_parts = [self._to_int16_numpy(c) for c in audio_list if c is not None]
@@ -868,10 +878,11 @@ class Qwen3Provider(TTSProvider):
                         first_yielded = True
                     leftover = int16[full:]
 
-                await producer_fut
+                await asyncio.shield(producer_fut)
             finally:
-                # Stop + unblock the producer so a cancelled stream doesn't leak a
-                # worker thread mid-synthesis (parked on a full queue).
+                # Stop the producer so a cancelled stream does not keep the model
+                # busy on audio nobody will hear (it checks this between chunks;
+                # the lock is released when it ends).
                 stop_event.set()
                 while not queue.empty():
                     try:
