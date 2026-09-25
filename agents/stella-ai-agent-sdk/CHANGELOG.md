@@ -14,6 +14,7 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `set_deliverable` and `batch_update` accept `correction` (default false): a participant's deliberate change to an already-collected answer. A settled required deliverable is now rejected by the state machine without it, so a later, worse answer can no longer replace it silently. `StateMachineClient.set_deliverable(..., correction=False)` and the `SetDeliverableRequest.correction` field carry it.
+- `STELLA_TTS_PLAYBACK` (`stream` default, or `sentence`): `sentence` waits for the whole sentence to be synthesized before playing it, as 1.1.0 did, for TTS providers slower than real time. Barge-in and the teleprompter work in both modes; an unknown value logs a warning and uses `stream`.
 
 ## [0.6.0] - 2026-09-25
 

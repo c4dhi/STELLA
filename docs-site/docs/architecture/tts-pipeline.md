@@ -198,6 +198,7 @@ All are read by the SDK inside the agent pod. Declare them in `agent.yaml` under
 
 | Variable | Default | Description |
 |---|---|---|
+| `STELLA_TTS_PLAYBACK` | `stream` | `stream` starts each sentence as it is generated; `sentence` generates the whole sentence first and then plays it (the 1.1.0 behaviour). Use `sentence` when the TTS runs slower than real time, e.g. Qwen3 on a T4, where `stream` can run dry mid-word (`Playout starved` in the agent log). Declared in `agent.yaml`, so it is set per deployment in the deploy modal and two deployments can run side by side. Read once at pipeline construction; unknown values fall back to `stream`. |
 | `STELLA_TTS_PREROLL_MS` | `200` | Jitter buffer held before the first frame of an utterance. Read once at pipeline construction. **The default is calibrated to one specific deployment — [tune it for your hardware](#tuning-the-pre-roll-for-your-hardware).** Raise it if synthesis runs at or below real time; `0` also disables the underrun guard. |
 | `TTS_PROGRESS_TICK_MS` | `200` | How often a teleprompter progress envelope is emitted during playback. |
 | `TTS_ENABLED` | `true` | `false` = text-only mode; the TTS connection is skipped entirely. |

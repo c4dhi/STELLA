@@ -259,6 +259,33 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 # contention no amount of prediction saves it either.
 _DEFAULT_TTS_PREROLL_MS = 200
 
+# How synthesized speech is played (STELLA_TTS_PLAYBACK, a per-deployment agent
+# setting declared in agent.yaml):
+#   stream   -- start playing each sentence as it synthesizes, behind the
+#               pre-roll (5c3534a). Lowest latency; needs a provider that
+#               synthesizes at or faster than real time.
+#   sentence -- synthesize the whole sentence first, then play it (the 1.1.0
+#               behaviour). Costs first-audio latency but a sentence can never
+#               run dry mid-word, which is what a GPU slower than real time
+#               (a T4 running Qwen3) does to `stream`.
+_TTS_PLAYBACK_MODES = ("stream", "sentence")
+_DEFAULT_TTS_PLAYBACK = "stream"
+
+
+def _parse_tts_playback(raw: Optional[str]) -> str:
+    """Resolve STELLA_TTS_PLAYBACK; unset/empty means the default, and an
+    unknown value logs a warning and falls back to it (never fails an agent)."""
+    if raw is None or not raw.strip():
+        return _DEFAULT_TTS_PLAYBACK
+    value = raw.strip().lower()
+    if value in _TTS_PLAYBACK_MODES:
+        return value
+    logger.warning(
+        f"[TTS] Unknown STELLA_TTS_PLAYBACK={raw!r} "
+        f"(expected {' or '.join(_TTS_PLAYBACK_MODES)}); using {_DEFAULT_TTS_PLAYBACK!r}"
+    )
+    return _DEFAULT_TTS_PLAYBACK
+
 # Wall-clock covered by one playout frame.
 _PLAYOUT_FRAME_MS = _PLAYOUT_FRAME_SAMPLES * 1000 // _TTS_SAMPLE_RATE
 
@@ -594,6 +621,10 @@ class AudioPipeline:
         self._preroll_bytes = max(
             0, int(_preroll_ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE
         )
+        # Read once: stream (default) or sentence. See _TTS_PLAYBACK_MODES.
+        self._tts_playback: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
+        if self._tts_playback != _DEFAULT_TTS_PLAYBACK:
+            logger.info(f"[TTS] Playback mode: {self._tts_playback}")
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -3165,7 +3196,14 @@ class AudioPipeline:
             f"(target ≤{target_ms}ms, warn>{_FIRST_BYTE_WARN_MS}ms, "
             f"alarm>{_FIRST_BYTE_ALARM_MS}ms) → {status}"
         )
-        if status == "alarm":
+        if self._tts_playback == "sentence":
+            # sentence mode plays only after the whole sentence is synthesized,
+            # so this number INCLUDES the full synthesis by design (that is the
+            # trade for never running dry mid-word). Measured against the
+            # streaming budget it would alarm on every turn, so it is logged at
+            # info, and the analytics event says which mode produced it.
+            logger.info(msg + " [sentence playback: includes full synthesis]")
+        elif status == "alarm":
             logger.error(msg)
         elif status == "warn":
             logger.warning(msg)
@@ -3177,6 +3215,7 @@ class AudioPipeline:
                 elapsed_ms,
                 target_ms=target_ms,
                 status=status,
+                playback=self._tts_playback,
             )
         )
 
@@ -3285,6 +3324,16 @@ class AudioPipeline:
                 if not first and _now() >= next_tick_at:
                     self._emit_speech_progress("speaking", meta=meta)
                     next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
+
+                # sentence mode: hold the first frame until the whole sentence is
+                # synthesized, exactly like already-complete audio. The wait races
+                # the stop event, so barge-in stays responsive while it waits.
+                if first and self._tts_playback == "sentence" and not utt.complete:
+                    if not await utt.wait_for_data(
+                        1 << 62, self._stop_speaking_event
+                    ):
+                        break  # stopped while waiting
+                    continue
 
                 available = len(self._cur_audio) - self._cur_cursor
                 # The jitter buffer is armed ONCE, before the first frame.
