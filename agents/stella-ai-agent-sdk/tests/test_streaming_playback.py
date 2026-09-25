@@ -854,13 +854,13 @@ async def test_sentence_mode_barge_in_while_waiting_stops_playback_and_synthesis
 
     await asyncio.wait_for(play, timeout=1)  # must not sit out the synthesis
     assert len(room.published) == 0
-    utt.cancel()
+    # No manual utt.cancel(): the pipeline's own cleanup must stop the synthesis.
     await asyncio.sleep(0.05)
-    assert tts.cancelled
+    assert tts.cancelled, "synthesis kept running after playback was abandoned"
 
 
 @pytest.mark.asyncio
-async def test_sentence_mode_teleprompter_and_barge_in_still_work_once_playing():
+async def test_sentence_mode_teleprompter_still_works():
     tts = SlowTTS(frames=5, gap=0.01)
     pipe, room = make_pipeline(tts)
     pipe._tts_playback = "sentence"
@@ -868,6 +868,58 @@ async def test_sentence_mode_teleprompter_and_barge_in_still_work_once_playing()
     utt = pipe._begin_synthesis("hello there")
     await asyncio.wait_for(pipe._play_utterance(utt, source="response", meta=META), timeout=5)
 
-    events = progress_events(room)
-    assert events, "no teleprompter progress was emitted in sentence mode"
+    assert progress_events(room), "no teleprompter progress was emitted in sentence mode"
     assert real_frame_ids(room) == list(range(1, 6))
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_barge_in_once_playing_stops_mid_sentence():
+    """After the sentence is whole and playing, a stop still ends playback early."""
+    tts = SlowTTS(frames=12, gap=0.005)  # ~60 ms to synthesize, then it plays
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    # The room takes frames instantly, so barge in from inside it: the user
+    # interrupts on the third published frame.
+    real_publish = room.publish_audio
+    seen = {"complete_at_first_frame": None}
+
+    async def publish_and_interrupt(data: bytes):
+        await real_publish(data)
+        if seen["complete_at_first_frame"] is None:
+            seen["complete_at_first_frame"] = utt.complete
+        if len(room.published) >= 3 * _PLAYOUT_FRAME_BYTES:
+            pipe._stop_speaking_event.set()
+
+    room.publish_audio = publish_and_interrupt
+
+    utt = pipe._begin_synthesis("a sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response", meta=META), timeout=2)
+
+    assert seen["complete_at_first_frame"] is True, "sentence mode started before the sentence was whole"
+    assert len(real_frame_ids(room)) < 12, "playback ran to the end despite the barge-in"
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_latency_is_not_reported_as_an_alarm(caplog):
+    """The first-byte time includes full synthesis in sentence mode by design."""
+    pipe, room = make_pipeline(SlowTTS())
+    pipe._tts_playback = "sentence"
+    with caplog.at_level("INFO"):
+        pipe._report_first_byte_latency("response", 6000)  # far past the alarm line
+        await asyncio.sleep(0.05)
+    assert not [r for r in caplog.records if r.levelname in ("ERROR", "WARNING")]
+    assert "sentence playback" in caplog.text
+    published = [d for d in room.data if d.get("type") == "analytics"]
+    assert published and published[-1]["data"]["playback"] == "sentence"
+
+
+@pytest.mark.asyncio
+async def test_stream_mode_latency_alarms_are_unchanged(caplog):
+    pipe, room = make_pipeline(SlowTTS())
+    with caplog.at_level("INFO"):
+        pipe._report_first_byte_latency("response", 6000)
+        await asyncio.sleep(0.05)
+    assert [r for r in caplog.records if r.levelname == "ERROR"]
+    published = [d for d in room.data if d.get("type") == "analytics"]
+    assert published[-1]["data"]["playback"] == "stream"

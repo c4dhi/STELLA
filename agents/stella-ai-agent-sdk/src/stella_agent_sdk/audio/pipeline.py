@@ -3196,7 +3196,14 @@ class AudioPipeline:
             f"(target ≤{target_ms}ms, warn>{_FIRST_BYTE_WARN_MS}ms, "
             f"alarm>{_FIRST_BYTE_ALARM_MS}ms) → {status}"
         )
-        if status == "alarm":
+        if self._tts_playback == "sentence":
+            # sentence mode plays only after the whole sentence is synthesized,
+            # so this number INCLUDES the full synthesis by design (that is the
+            # trade for never running dry mid-word). Measured against the
+            # streaming budget it would alarm on every turn, so it is logged at
+            # info, and the analytics event says which mode produced it.
+            logger.info(msg + " [sentence playback: includes full synthesis]")
+        elif status == "alarm":
             logger.error(msg)
         elif status == "warn":
             logger.warning(msg)
@@ -3208,6 +3215,7 @@ class AudioPipeline:
                 elapsed_ms,
                 target_ms=target_ms,
                 status=status,
+                playback=self._tts_playback,
             )
         )
 
