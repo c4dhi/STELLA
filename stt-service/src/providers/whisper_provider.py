@@ -1350,11 +1350,13 @@ class WhisperProvider(STTProvider):
                 for _ in segments:
                     pass
 
-            await asyncio.to_thread(_infer)
+                # Clear GPU cache after warmup to free any temporary allocations.
+                # Inside the worker thread: it waits on queued CUDA work and
+                # would otherwise hold the event loop for seconds.
+                if TORCH_AVAILABLE and torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
-            # Clear GPU cache after warmup to free any temporary allocations
-            if TORCH_AVAILABLE and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            await asyncio.to_thread(_infer)
 
             # Update warmup state
             self._warmed_up = True
