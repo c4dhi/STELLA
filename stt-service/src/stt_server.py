@@ -87,6 +87,8 @@ class STTEngine:
                     print(f"[STT Engine] Fallback {provider.name} init failed: {e}")
 
         self.initialized = True
+        if self.provider:
+            self.provider.start_keepalive()
         return True
 
     def get_status(self) -> dict:
@@ -177,6 +179,7 @@ class SpeechToTextServicer(stt_pb2_grpc.SpeechToTextServicer):
                 # place for the life of the session. set_language_hint() is a
                 # no-op when the value has not changed.
                 session.set_language_hint(chunk.language)
+                self.engine.provider.note_language(chunk.language)
 
                 # Process audio and yield events
                 # Pass sample_rate from proto (default to 16000 for backwards compatibility)

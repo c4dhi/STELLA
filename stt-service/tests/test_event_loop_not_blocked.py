@@ -59,6 +59,9 @@ class _FakeSession:
 
 
 class _FakeProvider:
+    def note_language(self, _lang):
+        pass
+
     def create_session(self, session_id, participant_id):
         return _FakeSession(session_id)
 
@@ -146,3 +149,67 @@ def test_process_audio_runs_off_the_event_loop_and_stays_ordered():
         assert seen["session"].calls == [False] * 4, "process_audio ran on the loop thread"
 
     asyncio.run(scenario())
+
+
+class _CountingModel:
+    def __init__(self):
+        self.languages = []
+
+    def transcribe(self, audio, language=None, **kwargs):
+        self.languages.append(language)
+        return iter(()), None
+
+
+def test_keepalive_rewarms_before_the_ttl_and_uses_the_declared_language(monkeypatch):
+    """The model is warmed at start and again every interval, so no session meets it cold."""
+    monkeypatch.setenv("WHISPER_WARMUP_TTL", "10")
+    monkeypatch.setenv("WHISPER_KEEPALIVE_INTERVAL", "1")
+
+    async def scenario():
+        whisper_provider.TORCH_AVAILABLE = False
+        provider = WhisperProvider()
+        provider.model_ready = True
+        provider.whisper_model = _CountingModel()
+        provider.note_language("de")
+        provider._keepalive_interval_seconds = 0.05  # below the 1 s env floor, for speed
+
+        provider.start_keepalive()
+        await asyncio.sleep(0.4)
+        languages = list(provider.whisper_model.languages)
+        await provider.cleanup()
+        return provider, languages
+
+    provider, languages = asyncio.run(scenario())
+    assert len(languages) >= 3, "keep-alive did not re-run warmup on its interval"
+    assert set(languages) == {"de"}
+    assert provider._keepalive_task is None
+
+
+def test_keepalive_interval_is_clamped_under_the_ttl(monkeypatch):
+    monkeypatch.setenv("WHISPER_WARMUP_TTL", "100")
+    monkeypatch.setenv("WHISPER_KEEPALIVE_INTERVAL", "500")
+    assert WhisperProvider()._keepalive_interval_seconds == 80
+
+    monkeypatch.setenv("WHISPER_KEEPALIVE_INTERVAL", "0")
+    assert WhisperProvider()._keepalive_interval_seconds == 0
+
+
+def test_warmup_language_prefers_explicit_then_configured_then_declared(monkeypatch):
+    async def run(env_warmup, env_lang, declared):
+        for k, v in (("WHISPER_WARMUP_LANGUAGE", env_warmup), ("WHISPER_LANGUAGE", env_lang)):
+            if v:
+                monkeypatch.setenv(k, v)
+            else:
+                monkeypatch.delenv(k, raising=False)
+        whisper_provider.TORCH_AVAILABLE = False
+        provider = WhisperProvider()
+        provider.model_ready = True
+        provider.whisper_model = _CountingModel()
+        provider.note_language(declared)
+        await provider.warmup(100, force=True)
+        return provider.whisper_model.languages[0]
+
+    assert asyncio.run(run("fr", "en", "de")) == "fr"
+    assert asyncio.run(run(None, "en", "de")) == "en"
+    assert asyncio.run(run(None, None, "de")) == "de"
+    assert asyncio.run(run(None, None, None)) is None
