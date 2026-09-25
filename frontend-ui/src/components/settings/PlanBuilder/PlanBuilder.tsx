@@ -1039,7 +1039,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
         .join(', ')
       const suffix = statesWithoutOutgoing.length > 3 ? ', ...' : ''
       addToast({
-        message: `${statesWithoutOutgoing.length} state(s) have no outgoing transition and will end the conversation (${sampleTitles}${suffix}).`,
+        message: `${statesWithoutOutgoing.length} state(s) have no outgoing transition (${sampleTitles}${suffix}). Each moves on to the next state in the plan; the last state ends the conversation once its tasks are done.`,
         type: 'info',
       })
     }

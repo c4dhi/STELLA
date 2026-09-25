@@ -429,9 +429,27 @@ export class StateMachineService {
         return { ...state, transitions: normalizedExistingTransitions };
       }
 
-      // Last state: terminal, no transition.
+      // Last state with no authored exit: route it to the end of the conversation.
+      // Without this edge nothing ever ends the session after the farewell (#452).
+      // A goal state ends on goal_achieved; other states end once their tasks are
+      // done (a state without tasks has nothing to complete, so the stuck-state
+      // net releases it instead).
       if (isLastState) {
-        return { ...state, transitions: [] };
+        const endsOnGoal = stateType === 'goal';
+        if (!endsOnGoal && (state.tasks?.length ?? 0) === 0) {
+          return { ...state, transitions: [] };
+        }
+        this.logger.log(`Adding end-of-conversation transition for last state '${state.id}'`);
+        return {
+          ...state,
+          transitions: [
+            {
+              target_state_id: END_STATE_ID,
+              condition_type: endsOnGoal ? ('goal_achieved' as const) : ('all_tasks_complete' as const),
+              priority: StateMachineService.COMPLETION_FALLBACK_PRIORITY,
+            },
+          ],
+        };
       }
 
       // Default transition to the next state: completion-driven (goal states use
@@ -1383,8 +1401,8 @@ export class StateMachineService {
   /**
    * Safety-net release target (#291). Returns the next state in plan order when the
    * current state has been stuck for STUCK_STATE_TURN_LIMIT turns without progress
-   * (the agent never completed/skipped its tasks), or undefined otherwise — including
-   * for the last state, which is terminal and has nowhere to advance to.
+   * (the agent never completed/skipped its tasks), or undefined otherwise. The last
+   * state is released to the end of the conversation (#452).
    */
   private stuckStateReleaseTarget(
     plan: PlanData,
@@ -1395,8 +1413,11 @@ export class StateMachineService {
       return undefined;
     }
     const index = plan.states.findIndex(s => s.id === currentState.id);
-    if (index < 0 || index >= plan.states.length - 1) {
-      return undefined; // last state / not found: nothing to release to
+    if (index < 0) {
+      return undefined;
+    }
+    if (index >= plan.states.length - 1) {
+      return END_STATE_ID;
     }
     return plan.states[index + 1].id;
   }
@@ -2187,21 +2208,22 @@ export class StateMachineService {
         break;
       }
 
+      // A state with no transitions is not a dead end: the stuck-state net below
+      // can still release it (the last state releases to the end, #452).
       if (!currentState.transitions || currentState.transitions.length === 0) {
         this.logger.log(
           `[evaluateAndTransition] State '${currentState.id}' has no transitions defined`,
         );
-        break;
       }
 
       this.logger.log(
-        `[evaluateAndTransition] State '${currentState.id}' has ${currentState.transitions.length} transition(s)`,
+        `[evaluateAndTransition] State '${currentState.id}' has ${currentState.transitions?.length ?? 0} transition(s)`,
       );
 
       // Use ?? instead of || so that priority:0 (highest urgency) is respected.
       // With ||, 0 is falsy and would be replaced by 100, silently demoting the
       // highest-priority transition to the default bucket.
-      const sortedTransitions = [...currentState.transitions].sort(
+      const sortedTransitions = [...(currentState.transitions ?? [])].sort(
         (a, b) => (a.priority ?? 100) - (b.priority ?? 100),
       );
 
