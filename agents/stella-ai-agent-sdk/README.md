@@ -30,7 +30,7 @@ pip install -e STELLA/agents/stella-ai-agent-sdk
 Or pin directly to a tag without cloning:
 
 ```bash
-pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.5.0#subdirectory=agents/stella-ai-agent-sdk"
+pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.6.0#subdirectory=agents/stella-ai-agent-sdk"
 ```
 
 ## Quick Start
