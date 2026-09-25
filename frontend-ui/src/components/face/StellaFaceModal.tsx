@@ -183,8 +183,17 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
   const toggleMute = useCallback(async () => {
     if (!transport || status !== 'connected') return;
 
-    if (isMuted) {
-      // Unmute - start streaming audio
+    if (isMuted && transport.hasPublishedAudio()) {
+      // Soft unmute: the mic and track are still there, just muted (#362)
+      try {
+        await transport.unmuteAudio();
+        setIsMuted(false);
+        setIsRecording(true);
+      } catch (error) {
+        console.error('Error unmuting audio:', error);
+      }
+    } else if (isMuted) {
+      // First unmute - acquire the microphone and publish it
       try {
         // Clean up any existing stream
         if (streamRef.current) {
@@ -213,14 +222,8 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
         setIsRecording(false);
       }
     } else {
-      // Mute - stop streaming audio
-      await transport.unpublishAudioTrack();
-
-      // Stop and clean up stream
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
+      // Soft mute: keep the connection and the track, send silence (#362)
+      await transport.muteAudio();
 
       setIsMuted(true);
       setIsRecording(false);

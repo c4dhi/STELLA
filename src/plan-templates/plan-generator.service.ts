@@ -208,7 +208,7 @@ The structure must follow this exact schema:
         ],
         "transitions": [
           {
-            "target_state_id": "state_<target_id>",
+            "target_state_id": "state_<target_id>" | "__end__",
             "condition_type": "all_tasks_complete" | "goal_achieved" | "turn_count_exceeded" | "deliverable_value" | "deliverable_value_in" | "deliverable_value_numeric" | "deliverable_exists" | "all_of" | "any_of" | "compound",
             "priority": 1,
             "condition_config": {}
@@ -319,6 +319,9 @@ EXAMPLE 1 — Structured plan with strict/loose states:
             "required": true,
             "deliverables": []
           }
+        ],
+        "transitions": [
+          { "target_state_id": "__end__", "condition_type": "all_tasks_complete", "priority": 1 }
         ]
       }
     ],
@@ -424,6 +427,9 @@ EXAMPLE 2 — Goal-oriented plan for natural conversation:
             "required": true,
             "deliverables": []
           }
+        ],
+        "transitions": [
+          { "target_state_id": "__end__", "condition_type": "all_tasks_complete", "priority": 1 }
         ]
       }
     ],
@@ -672,7 +678,7 @@ Guidelines:
     plan ends up transcribed (and answered) in English.
 11. For goal states, the "goal" object is critical — it tells the AI HOW to conduct the conversation, not just WHAT to collect
 12. TRANSITIONS:
-    - Always include transitions for each non-terminal state.
+    - Always include transitions for every state. The last state must have a transition with "target_state_id": "__end__" (a reserved id, not a state): it ends the conversation once the farewell is done.
     - Always set an explicit numeric priority.
     - Lower priority number is evaluated first.
     - For goal states, use ONLY "goal_achieved", "deliverable_exists", or "deliverable_value".
@@ -789,9 +795,18 @@ Respond ONLY with valid JSON matching the schema above.`;
         return state;
       }
 
-      // If this is the last state, no transition needed
+      // The last state ends the conversation once it is complete.
       if (index === response.content.states.length - 1) {
-        return { ...state, transitions: [] };
+        return {
+          ...state,
+          transitions: [
+            {
+              target_state_id: '__end__',
+              condition_type: state.type === 'goal' ? 'goal_achieved' : 'all_tasks_complete',
+              priority: 1,
+            },
+          ],
+        };
       }
 
       // Generate default transition to next state

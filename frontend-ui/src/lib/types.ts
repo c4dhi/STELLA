@@ -252,6 +252,10 @@ export interface Transport extends TransportEvents {
   attachMicStream: (stream: MediaStream) => void
   publishAudioTrack: (stream: MediaStream) => Promise<boolean>
   unpublishAudioTrack: () => Promise<void>
+  // Soft mute: keep the track published, go silent (no STT teardown)
+  muteAudio: () => Promise<void>
+  unmuteAudio: () => Promise<void>
+  hasPublishedAudio: () => boolean
   setUserName: (name: string) => void
   // Connection state helpers
   isConnectedToRoom: (roomName: string) => boolean

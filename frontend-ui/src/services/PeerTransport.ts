@@ -720,8 +720,9 @@ export class PeerTransport implements Transport {
     }
   }
 
-  // Send mute signal to trigger VAD endpoint
-  sendMuteSignal() {
+  // Tell the agent the participant muted or unmuted on purpose. On mute the agent
+  // pads STT with silence so the in-flight utterance finalizes; nothing is torn down.
+  sendMuteSignal(muted: boolean = true) {
     if (!this.room || this.room.state !== 'connected') {
       console.warn('Cannot send mute signal - room not connected')
       return
@@ -729,10 +730,10 @@ export class PeerTransport implements Transport {
 
     const env: Envelope<any> = {
       //@ts-ignore
-      type: 'audio_stream_mute',
+      type: muted ? 'audio_stream_mute' : 'audio_stream_unmute',
       data: {
         timestamp: Date.now(),
-        reason: 'user_muted'
+        reason: muted ? 'user_muted' : 'user_unmuted'
       }
     }
 
@@ -856,19 +857,28 @@ export class PeerTransport implements Transport {
     }
   }
 
-  // Mute the microphone by disabling the audio track (deprecated - use unpublishAudioTrack instead)
+  // Whether a mic track is published (muted or not). Callers use it to choose
+  // between a soft unmute and acquiring the microphone for the first time.
+  hasPublishedAudio(): boolean {
+    return !!this.publishedAudioTrack
+  }
+
+  // Soft mute: the track stays published and the mic stays acquired, so the
+  // participant simply goes quiet. Unpublishing instead made the agent's STT tear
+  // down and restart on every mute (#362).
   async muteAudio() {
     if (this.publishedAudioTrack) {
       console.log('🔇 [AUDIO] Muting audio track')
       await this.publishedAudioTrack.mute()
-      this.sendMuteSignal()
+      this.sendMuteSignal(true)
     }
   }
 
-  // Unmute the microphone by enabling the audio track (deprecated - use publishAudioTrack instead)
+  // Soft unmute of a track muted with muteAudio().
   async unmuteAudio() {
     if (this.publishedAudioTrack) {
       console.log('🔊 [AUDIO] Unmuting audio track')
+      this.sendMuteSignal(false)
       await this.publishedAudioTrack.unmute()
     }
   }

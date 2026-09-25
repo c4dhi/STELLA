@@ -1920,6 +1920,15 @@ class AudioPipeline:
                     asyncio.create_task(self._session_end_handler(reason, deadline_ms))
                 return
 
+            # Deliberate mic mute/unmute. The track stays published and the STT
+            # stream stays open (#362); on mute the room feeds silence so the
+            # in-flight utterance finalizes as a normal pause.
+            if message.get("type") in ("audio_stream_mute", "audio_stream_unmute"):
+                muted = message["type"] == "audio_stream_mute"
+                logger.info(f"[MUTE] participant {'muted' if muted else 'unmuted'} the mic (soft mute, STT stream kept)")
+                self._room.set_mic_muted(muted)
+                return
+
             # Handle user_text messages from frontend
             if message.get("type") == "user_text":
                 # Handle both old format (data as string) and new format (data as object)
