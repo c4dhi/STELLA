@@ -155,6 +155,7 @@ The STT service reads these from the platform configuration. It decides when the
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `BARGE_IN_MIN_SPEECH_MS` | No | `600` | Voiced audio (ms) before the user's speech counts as an interruption instead of a backchannel like "mhm". Below it the agent keeps talking; above it the agent stops and listens. Lower yields sooner but lets "mhm" cut it off |
+| `STELLA_MODEL_KEEP_WARM` | No | `true` | Keeps the speech-recognition and voice models warm in the background so the first sentence after an idle spell is not slow. Set to `false` to turn it off. Asked in the setup wizard |
 | `STT_DECODE_DIAGNOSTICS` | No | `0` | `1` logs per-turn decode metrics and fills the STT cards in the session metrics modal. Costs extra GPU work per turn, so leave it at `0` in normal use |
 
 </details>
