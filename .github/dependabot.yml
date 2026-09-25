@@ -58,6 +58,14 @@ updates:
       - dependency-name: "numpy"
         versions:
           - ">=2.5"
+      # Same trap, same cause: scipy 1.18 requires Python >=3.12 (1.17 still
+      # supports 3.11), so `scipy>=1.18` breaks the GPU image build. Dependabot
+      # proposed it in #480 and #483. requirements.txt in stt-service and
+      # tts-service carries the matching <1.18 bound. Lift all of them together
+      # with the interpreter.
+      - dependency-name: "scipy"
+        versions:
+          - ">=1.18"
     groups:
       pip-minor-and-patch:
         applies-to: version-updates
