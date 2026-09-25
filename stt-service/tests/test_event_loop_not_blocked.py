@@ -213,3 +213,12 @@ def test_warmup_language_prefers_explicit_then_configured_then_declared(monkeypa
     assert asyncio.run(run(None, "en", "de")) == "en"
     assert asyncio.run(run(None, None, "de")) == "de"
     assert asyncio.run(run(None, None, None)) is None
+
+
+def test_stella_model_keep_warm_false_disables_the_keepalive(monkeypatch):
+    monkeypatch.setenv("STELLA_MODEL_KEEP_WARM", "false")
+    provider = WhisperProvider()
+    assert provider._keepalive_interval_seconds == 0
+
+    monkeypatch.setenv("STELLA_MODEL_KEEP_WARM", "true")
+    assert WhisperProvider()._keepalive_interval_seconds > 0

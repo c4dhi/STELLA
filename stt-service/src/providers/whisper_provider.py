@@ -1183,6 +1183,10 @@ class WhisperProvider(STTProvider):
         # ever meets a cold model. Kept under the TTL so the model is never
         # considered stale; 0 disables it.
         keepalive = int(os.getenv("WHISPER_KEEPALIVE_INTERVAL", "180"))
+        # The deployment-wide switch (STELLA_MODEL_KEEP_WARM, asked in the setup
+        # wizard) turns the keep-alive off for STT and TTS together.
+        if os.getenv("STELLA_MODEL_KEEP_WARM", "true").strip().lower() in ("false", "0", "no", "off"):
+            keepalive = 0
         if keepalive > 0:
             keepalive = min(keepalive, max(1, int(self._warmup_ttl_seconds * 0.8)))
         self._keepalive_interval_seconds = keepalive
