@@ -57,7 +57,7 @@
     "@nestjs/jwt": "^11.0.0",
     "@nestjs/microservices": "^11.1.19",
     "@nestjs/passport": "^11.0.5",
-    "@nestjs/platform-express": "^11.1.28",
+    "@nestjs/platform-express": "^11.2.6",
     "@nestjs/platform-socket.io": "^11.1.6",
     "@nestjs/schedule": "^6.1.0",
     "@nestjs/websockets": "^11.1.6",
