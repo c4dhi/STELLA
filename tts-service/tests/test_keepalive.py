@@ -102,3 +102,11 @@ def test_active_count_returns_to_zero_after_stream_and_failure():
     except RuntimeError:
         pass
     assert engine._active == 0
+
+
+def test_stella_model_keep_warm_false_disables_the_keepalive(monkeypatch):
+    monkeypatch.setenv("STELLA_MODEL_KEEP_WARM", "false")
+    assert TTSEngine().keepalive_interval == 0
+
+    monkeypatch.setenv("STELLA_MODEL_KEEP_WARM", "true")
+    assert TTSEngine().keepalive_interval > 0

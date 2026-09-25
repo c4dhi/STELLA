@@ -36,6 +36,10 @@ class TTSEngine:
         # Seconds between keep-alive warmups; 0 disables. Runs only when the
         # provider can go cold (kernels/CUDA graphs evicted while idle).
         self.keepalive_interval = float(os.getenv("TTS_KEEPALIVE_INTERVAL", "180"))
+        # The deployment-wide switch (STELLA_MODEL_KEEP_WARM, asked in the setup
+        # wizard) turns the keep-alive off for STT and TTS together.
+        if os.getenv("STELLA_MODEL_KEEP_WARM", "true").strip().lower() in ("false", "0", "no", "off"):
+            self.keepalive_interval = 0
         self._keepalive_task = None
 
     async def initialize(self) -> bool:
