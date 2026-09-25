@@ -11,6 +11,10 @@ This guide walks you through deploying STELLA on a production server with GPU su
 STELLA uses Caddy as its sole reverse proxy. Do **not** install nginx. All TLS termination and routing is handled by Caddy via the [STELLA_livekit](https://github.com/c4dhi/STELLA_livekit) repository.
 :::
 
+:::caution Known limitation: about 10 simultaneous conversations per server
+The speech-recognition and text-to-speech services each handle at most 10 streams at once, so plan studies for **no more than about 10 simultaneous sessions per server**. A session that ends badly (a crash or dropped connection) can keep its place until the services restart ([#557](https://github.com/c4dhi/STELLA/issues/557)). How many sessions your GPU actually carries before the voice slows or stutters hasn't been measured yet, and may be fewer, especially on a T4 ([#559](https://github.com/c4dhi/STELLA/issues/559)).
+:::
+
 ## Prerequisites
 
 - A Linux server (Ubuntu 24.04 recommended) with a supported NVIDIA GPU (L4 or T4)

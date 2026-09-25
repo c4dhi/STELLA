@@ -76,6 +76,11 @@ differently" under Changed first.**
 - Silent sessions after rebuilding the text-to-speech image: a newer `transformers` release broke the Qwen3 voice model, so it is now pinned below 5.17
 - Test workflows now also run on pull requests into `development`
 
+
+### Known limitations
+
+- **About 10 simultaneous conversations per server.** The speech-recognition and text-to-speech services each handle at most 10 streams at once. A session that ends badly (a crash or dropped connection) can keep its place, so fewer may be available until the services restart (#557). How many sessions each GPU actually carries before quality drops hasn't been measured yet (#559).
+
 ---
 
 ## [1.1.0] - 2026-09-06

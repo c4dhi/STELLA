@@ -102,6 +102,7 @@ Use this checklist to verify your STELLA deployment is ready for production.
 ### Capacity
 
 - [ ] **Load testing completed** - Know your limits
+- [ ] **Simultaneous sessions within limits** - About 10 per server today (see the known limitation in the [Production Deployment Guide](./production.md))
 - [ ] **Capacity planning** - Growth projections
 - [ ] **Graceful degradation** - Behavior under load
 
