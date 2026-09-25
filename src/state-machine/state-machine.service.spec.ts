@@ -2957,10 +2957,18 @@ describe('StateMachineService — the last state ends the conversation (#452)', 
   });
 
   it('releases a last state stuck past the turn limit to the end', async () => {
-    const svc = await start(farewellPlan({ tasks: [], transitions: [] }));
+    const svc = await start(farewellPlan(byeTask));
     await svc.completeTask('s', 'greet', 'done');
     let last: any;
     for (let i = 0; i < 10; i++) last = await svc.incrementTurn('s');
     expect(last.sessionCompleted).toBe(true);
+  });
+
+  it('does not end a last state with no tasks at the turn limit', async () => {
+    const svc = await start(farewellPlan({ tasks: [], transitions: [] }));
+    await svc.completeTask('s', 'greet', 'done');
+    let last: any;
+    for (let i = 0; i < 30; i++) last = await svc.incrementTurn('s');
+    expect(last.sessionCompleted).toBeFalsy();
   });
 });

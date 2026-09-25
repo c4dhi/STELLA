@@ -1417,7 +1417,10 @@ export class StateMachineService {
       return undefined;
     }
     if (index >= plan.states.length - 1) {
-      return END_STATE_ID;
+      // A last state with no tasks (free chat, a final "just talk" state) can
+      // never make progress, so the turn limit must not end it.
+      const hasWork = currentState.type === 'goal' || (currentState.tasks?.length ?? 0) > 0;
+      return hasWork ? END_STATE_ID : undefined;
     }
     return plan.states[index + 1].id;
   }
@@ -2343,6 +2346,8 @@ export class StateMachineService {
       }
 
       if (!matchedTargetId) {
+        // (A state with no transitions also gets here. ensureTransitions gives every
+        // middle state a default, so in practice only a task-less last state does.)
         // No authored/default condition matched. Before giving up, apply the
         // last-resort safety net: if the agent has left this state stuck for too
         // many no-progress turns, force the default forward transition so the
