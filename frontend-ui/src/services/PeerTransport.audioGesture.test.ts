@@ -55,6 +55,36 @@ describe('PeerTransport gesture retry', () => {
     expect(transport.audioEnabled).toBe(true)
   })
 
+  it('starts play() in the same tick as startAudio(), before any await (WebKit gesture)', async () => {
+    let releaseStartAudio: () => void = () => {}
+    startAudio.mockReturnValue(new Promise<void>((r) => (releaseStartAudio = r)))
+    transport.enableAudioOnNextGesture()
+
+    const handled = doc.fire('click')
+    // startAudio() has not resolved, yet play() must already have been called.
+    expect(startAudio).toHaveBeenCalledTimes(1)
+    expect(play).toHaveBeenCalledTimes(1)
+    releaseStartAudio()
+    await handled
+  })
+
+  it.each(['pointerdown', 'touchend'])('a %s tap on plain page background also unlocks (iOS)', async (type) => {
+    transport.enableAudioOnNextGesture()
+    await doc.fire(type)
+    expect(play).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-arms itself when the retry is still blocked', async () => {
+    play.mockRejectedValueOnce(new Error('NotAllowedError'))
+    transport.enableAudioOnNextGesture()
+    await doc.fire('click')
+    expect(doc.count()).toBeGreaterThan(0)
+
+    await doc.fire('pointerdown')
+    expect(play).toHaveBeenCalledTimes(2)
+    expect(transport.audioEnabled).toBe(true)
+  })
+
   it('also retries on a key press', async () => {
     transport.enableAudioOnNextGesture()
     await doc.fire('keydown')
@@ -65,18 +95,20 @@ describe('PeerTransport gesture retry', () => {
     transport.enableAudioOnNextGesture()
     transport.enableAudioOnNextGesture()
     transport.enableAudioOnNextGesture()
-    expect(doc.count()).toBe(2)
+    expect(doc.count()).toBe(4)
   })
 
   it('removes its listeners after firing and can be armed again if still blocked', async () => {
     play.mockRejectedValueOnce(new Error('NotAllowedError'))
     transport.enableAudioOnNextGesture()
     await doc.fire('click')
-    expect(doc.count()).toBe(0)
+    // The failed retry re-armed itself: one listener per event type, not two sets.
+    expect(doc.count()).toBe(4)
 
     transport.enableAudioOnNextGesture()
-    expect(doc.count()).toBe(2)
+    expect(doc.count()).toBe(4)
     await doc.fire('click')
     expect(play).toHaveBeenCalledTimes(2)
+    expect(doc.count()).toBe(0)
   })
 })

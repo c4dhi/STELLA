@@ -1102,25 +1102,35 @@ export class PeerTransport implements Transport {
     if (this.audioGestureListenerArmed) return
     this.audioGestureListenerArmed = true
 
+    // iOS Safari only dispatches `click` to targets it considers clickable, so a
+    // tap on plain page background never reaches a click listener. pointerdown
+    // and touchend fire for any tap; keydown covers the keyboard.
+    const events = ['click', 'keydown', 'pointerdown', 'touchend']
+
     const unlock = async () => {
-      document.removeEventListener('click', unlock)
-      document.removeEventListener('keydown', unlock)
+      for (const type of events) document.removeEventListener(type, unlock)
       this.audioGestureListenerArmed = false
       try {
-        // Unlock at the LiveKit level first, then the element: startAudio() is
-        // what clears the room-wide block, and without it the element retry can
-        // fail again for the same reason.
-        await this.room?.startAudio()
+        // Start BOTH inside the handler, before any await. WebKit only honours
+        // the user gesture for work started synchronously in its activation, so
+        // awaiting startAudio() first can leave play() outside it and blocked
+        // again. Order is kept: startAudio() clears the room-wide block.
+        const unlocked = this.room?.startAudio()
+        // remoteAudio holds the latest element only; with one agent that is the
+        // one that matters.
+        const played = this.remoteAudio?.play()
+        await Promise.all([unlocked, played])
         this.audioEnabled = true
-        await this.remoteAudio?.play()
         console.log('🔊 [AUDIO] playback enabled after user interaction')
       } catch (e) {
         console.warn('🔊 [AUDIO] retry after interaction failed:', (e as Error).message)
+        // Still blocked: try again on the next gesture rather than waiting for
+        // another track event that may never come.
+        this.enableAudioOnNextGesture()
       }
     }
 
-    document.addEventListener('click', unlock)
-    document.addEventListener('keydown', unlock)
+    for (const type of events) document.addEventListener(type, unlock)
   }
 
   private startAudioLevelMonitoring() {
