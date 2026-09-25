@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.2.0] - 2026-09-24
+## [1.2.0] - 2026-09-25
 
 Restores the voice-latency and naturalness work that production ran in August
 from a deployment branch. It was listed under 1.1.0 by mistake; that code was not
