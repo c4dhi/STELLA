@@ -307,6 +307,7 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `BARGE_IN_ENABLED` | No | (agent decides) | Unset: barge-in is on for any agent that declares support for it. `true`/`false` forces it on or off for this deployment |
 | `TRANSCRIPT_DEBOUNCE_MS` | No | `0` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Off by default since 1.2.0: neither STT provider can emit a second final inside the window, so the old 300 ms only added delay |
 | `STT_WARMUP_ENABLED` | No | `true` | Warm up the STT model on agent start and when participants join. Set to `false` to skip warmup |
+| `STELLA_TTS_PLAYBACK` | No | `stream` | Agent setting, per deployment: `stream` starts each sentence as it is generated; `sentence` generates it whole first and then plays it, as 1.1.0 did. Use `sentence` on a TTS slower than real time (e.g. Qwen3 on a T4). See [the TTS pipeline](./tts-pipeline.md) |
 | `STELLA_TTS_PREROLL_MS` | No | `200` | Jitter buffer (ms) held before the first frame of an utterance plays. Calibrated to the reference deployment's hardware, not a universal constant: raise it if the agent log shows non-zero "bridged" silence or "Playout starved". See [tuning guidance](./tts-pipeline.md#tuning-the-pre-roll-for-your-hardware) |
 | `TTS_PROGRESS_TICK_MS` | No | `200` | How often a teleprompter progress envelope is emitted during playback |
 | `TTS_VOICE` | No | provider default | Seed TTS voice, overridable per stream. Honored by voice-selecting providers, ignored by others |

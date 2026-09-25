@@ -759,3 +759,115 @@ def test_fade_in_ramps_up_and_leaves_the_tail_alone():
     head = faded[:_DECLICK_SAMPLES]
     assert head == sorted(head), "fade-in is not monotonically rising"
     assert faded[_DECLICK_SAMPLES:] == original[_DECLICK_SAMPLES:], "tail was altered"
+
+
+# ── STELLA_TTS_PLAYBACK: stream (default) | sentence ─────────────────────────
+# `sentence` restores the 1.1.0 behaviour for GPUs slower than real time: the
+# whole sentence is synthesized before the first frame is published.
+
+from stella_agent_sdk.audio.pipeline import _parse_tts_playback  # noqa: E402
+
+
+def test_playback_mode_defaults_to_stream_and_parses_values(caplog):
+    assert _parse_tts_playback(None) == "stream"
+    assert _parse_tts_playback("") == "stream"
+    assert _parse_tts_playback("  ") == "stream"
+    assert _parse_tts_playback("stream") == "stream"
+    assert _parse_tts_playback("Sentence") == "sentence"
+    assert _parse_tts_playback(" sentence ") == "sentence"
+
+
+def test_unknown_playback_mode_warns_and_falls_back_to_stream(caplog):
+    with caplog.at_level("WARNING"):
+        assert _parse_tts_playback("chunky") == "stream"
+    assert "chunky" in caplog.text
+
+
+def test_pipeline_reads_the_playback_env_once(monkeypatch):
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "sentence")
+    pipe, _ = make_pipeline(SlowTTS())
+    assert pipe._tts_playback == "sentence"
+
+    monkeypatch.delenv("STELLA_TTS_PLAYBACK")
+    pipe, _ = make_pipeline(SlowTTS())
+    assert pipe._tts_playback == "stream"
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_publishes_nothing_until_synthesis_completes():
+    tts = SlowTTS(frames=6, gap=0.03)  # ~180 ms to synthesize
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    utt = pipe._begin_synthesis("hello there")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+
+    await asyncio.sleep(0.09)  # stream mode would already be playing here
+    assert not utt.complete, "test is not exercising the in-flight case"
+    assert len(room.published) == 0, "audio was published before the sentence was complete"
+
+    await asyncio.wait_for(play, timeout=5)
+    # Nothing lost, nothing bridged with silence, every chunk once, in order.
+    assert real_frame_ids(room) == list(range(1, 7))
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_first_audio_costs_the_whole_synthesis():
+    tts = SlowTTS(frames=6, gap=0.03)
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
+    utt = pipe._begin_synthesis("hello")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+    while not room.published:
+        await asyncio.sleep(0.005)
+    ttfa_ms = (loop.time() - t0) * 1000
+    await asyncio.wait_for(play, timeout=5)
+    assert ttfa_ms >= 150, f"first audio after {ttfa_ms:.0f}ms; sentence mode should wait for ~180ms"
+
+
+@pytest.mark.asyncio
+async def test_stream_mode_is_unchanged_by_the_setting():
+    tts = SlowTTS(frames=6, gap=0.03)
+    pipe, room = make_pipeline(tts)
+    assert pipe._tts_playback == "stream"
+
+    utt = pipe._begin_synthesis("hello there")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+    await asyncio.sleep(0.09)
+    assert len(room.published) > 0 and not utt.complete
+    await asyncio.wait_for(play, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_barge_in_while_waiting_stops_playback_and_synthesis():
+    tts = SlowTTS(frames=50, gap=0.03)  # would take 1.5 s
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    utt = pipe._begin_synthesis("a long sentence")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+    await asyncio.sleep(0.06)
+    pipe._stop_speaking_event.set()  # the user interrupts before anything played
+
+    await asyncio.wait_for(play, timeout=1)  # must not sit out the synthesis
+    assert len(room.published) == 0
+    utt.cancel()
+    await asyncio.sleep(0.05)
+    assert tts.cancelled
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_teleprompter_and_barge_in_still_work_once_playing():
+    tts = SlowTTS(frames=5, gap=0.01)
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    utt = pipe._begin_synthesis("hello there")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response", meta=META), timeout=5)
+
+    events = progress_events(room)
+    assert events, "no teleprompter progress was emitted in sentence mode"
+    assert real_frame_ids(room) == list(range(1, 6))
