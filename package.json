@@ -43,7 +43,8 @@
     "picomatch@2": "^2.3.2",
     "picomatch@4": "^4.0.4",
     "effect": "^3.21.0",
-    "@babel/core": "^7.29.7"
+    "@babel/core": "^7.29.7",
+    "multer": "^2.4.0"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.5",
