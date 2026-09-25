@@ -657,6 +657,14 @@ class StellaLightAgent(BaseAgent):
             if result.transitioned:
                 print(f"[StellaLightAgent] Transitioned to: {result.new_state_id}")
 
+            # The plan reached __end__: speak the farewell, then let the SDK's audio
+            # loop exit and tell the client the session is complete (parity with v2).
+            if result.session_completed:
+                if result.farewell_message:
+                    yield AgentOutput.text_final(input.session_id, result.farewell_message)
+                self._session_completed = True
+                print(f"[StellaLightAgent] Session {input.session_id} completed — will exit after this turn")
+
         # Remember whether this turn moved to a new state so NEXT turn's prompt can
         # acknowledge the transition and stop soliciting the old state's deliverables
         # (#306 precise-skip follow-through).

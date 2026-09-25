@@ -86,7 +86,8 @@ function createPrismaMock() {
 
   return {
     // Service only touches prisma.sessionState in these tests.
-    prisma: { sessionState } as unknown as PrismaService,
+    // session.update is hit when the conversation reaches its end (CLOSING).
+    prisma: { sessionState, session: { update: jest.fn(async () => ({})) } } as unknown as PrismaService,
   };
 }
 
@@ -2897,5 +2898,77 @@ describe('StateMachineService — rejected changes leave a trace', () => {
     expect(d.unconfirmed).toBeUndefined();
     // So the next unflagged write is still refused.
     expect((await service.setDeliverable(sessionId, 'user_name', 'Bob', 'x')).success).toBe(false);
+  });
+});
+
+describe('StateMachineService — the last state ends the conversation (#452)', () => {
+  const farewellPlan = (last: Record<string, unknown>): PlanData => ({
+    id: 'plan-end',
+    title: 'End',
+    initial_state_id: 'hello',
+    states: [
+      {
+        id: 'hello',
+        title: 'Hello',
+        type: 'strict',
+        tasks: [{ id: 'greet', description: 'Greet', deliverables: [] }],
+        transitions: [],
+      },
+      { id: 'bye', title: 'Bye', type: 'strict', transitions: [], ...last } as any,
+    ],
+  });
+  const byeTask = { tasks: [{ id: 'goodbye', description: 'Say goodbye', deliverables: [] }] };
+
+  const start = async (plan: PlanData) => {
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    await svc.initializeForSession('s', plan);
+    return svc;
+  };
+  const transitionsOf = async (svc: StateMachineService, id: string) =>
+    ((await (svc as any).getState('s')).planData as PlanData).states.find(s => s.id === id)!.transitions;
+
+  it('routes a last state with tasks to the end, so completing the farewell ends the session', async () => {
+    const svc = await start(farewellPlan(byeTask));
+    expect(await transitionsOf(svc, 'bye')).toEqual([
+      expect.objectContaining({ target_state_id: '__end__', condition_type: 'all_tasks_complete' }),
+    ]);
+    await svc.completeTask('s', 'greet', 'done');
+    const result = await svc.completeTask('s', 'goodbye', 'said goodbye');
+    expect(result.sessionCompleted).toBe(true);
+  });
+
+  it('a last goal state ends on goal_achieved', async () => {
+    const svc = await start(farewellPlan({ type: 'goal', goal: { description: 'wrap up', deliverables: [] }, tasks: [] }));
+    expect(await transitionsOf(svc, 'bye')).toEqual([
+      expect.objectContaining({ target_state_id: '__end__', condition_type: 'goal_achieved' }),
+    ]);
+  });
+
+  it('keeps an authored exit instead of adding a second one', async () => {
+    const authored = [{ target_state_id: '__end__', condition_type: 'turn_count_exceeded', condition_config: { turns: 3 }, priority: 1 }];
+    const svc = await start(farewellPlan({ ...byeTask, transitions: authored }));
+    expect(await transitionsOf(svc, 'bye')).toEqual(authored);
+  });
+
+  it('leaves a last state with no tasks alone', async () => {
+    const svc = await start(farewellPlan({ tasks: [] }));
+    expect(await transitionsOf(svc, 'bye')).toEqual([]);
+  });
+
+  it('releases a last state stuck past the turn limit to the end', async () => {
+    const svc = await start(farewellPlan(byeTask));
+    await svc.completeTask('s', 'greet', 'done');
+    let last: any;
+    for (let i = 0; i < 10; i++) last = await svc.incrementTurn('s');
+    expect(last.sessionCompleted).toBe(true);
+  });
+
+  it('does not end a last state with no tasks at the turn limit', async () => {
+    const svc = await start(farewellPlan({ tasks: [], transitions: [] }));
+    await svc.completeTask('s', 'greet', 'done');
+    let last: any;
+    for (let i = 0; i < 30; i++) last = await svc.incrementTurn('s');
+    expect(last.sessionCompleted).toBeFalsy();
   });
 });
