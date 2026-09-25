@@ -240,6 +240,7 @@ class StateMachineClient:
         value: Any,
         reasoning: str = "",
         unconfirmed: bool = False,
+        correction: bool = False,
     ) -> Dict[str, Any]:
         """
         Set a deliverable value.
@@ -252,6 +253,10 @@ class StateMachineClient:
                 answering a question about it. Recorded, but surfaced to the
                 agent as 'partial' so it gets confirmed in conversation instead
                 of re-asked. Setting the same key again without this confirms it.
+            correction: The participant deliberately changed an answer that was
+                already collected. Required to replace a settled required
+                deliverable; without it the backend rejects the write. The
+                reasoning must say what they said.
 
         Returns:
             Dict with success, error, task_completed, transitioned, new_state_id, progress
@@ -266,6 +271,7 @@ class StateMachineClient:
                 value=json.dumps(value) if not isinstance(value, str) else value,
                 reasoning=reasoning,
                 unconfirmed=unconfirmed,
+                correction=correction,
             )
             response = await self._stub.SetDeliverable(request)
 

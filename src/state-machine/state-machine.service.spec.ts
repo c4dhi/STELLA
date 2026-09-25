@@ -2639,3 +2639,135 @@ describe('StateMachineService — unconfirmed deliverables', () => {
     expect(await service.getCollectedDeliverables(sessionId)).toHaveProperty('user_name');
   });
 });
+
+/**
+ * Required answers can't be silently overwritten (#406).
+ *
+ * A required deliverable that is already collected is study data. A later, worse
+ * answer used to replace it with no warning and no trace. It can now change only
+ * through a correction the agent marks, and every change leaves a history entry.
+ */
+describe('StateMachineService — protected required deliverables', () => {
+  const sessionId = 'session-protected';
+  let service: StateMachineService;
+
+  const historyOf = async (key: string) => {
+    const state = await (service as any).getState(sessionId);
+    return (state.deliverables as Record<string, any>)[key]?.history;
+  };
+  const valueOf = async (key: string) =>
+    (await service.getCollectedDeliverables(sessionId))[key];
+
+  beforeEach(async () => {
+    const { prisma } = createPrismaMock();
+    service = new StateMachineService(prisma);
+    await service.initializeForSession(sessionId, buildDeliverableGatePlan());
+  });
+
+  it('rejects a silent overwrite of a collected required deliverable and keeps the value', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'said their name');
+
+    const result = await service.setDeliverable(sessionId, 'user_name', 'Bob', 'maybe a later mention');
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('correction=true');
+    expect(result.error).toContain('"Felix"');
+    expect(await valueOf('user_name')).toBe('Felix');
+    expect(await historyOf('user_name')).toBeUndefined();
+  });
+
+  it('allows an explicit correction and records the previous value', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'said their name');
+
+    const result = await service.setDeliverable(
+      sessionId, 'user_name', 'Felicia', 'they said "actually, it is Felicia"', false, true,
+    );
+
+    expect(result.success).toBe(true);
+    expect(await valueOf('user_name')).toBe('Felicia');
+    const history = await historyOf('user_name');
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ value: 'Felix', reasoning: 'said their name', correction: true });
+    expect(typeof history[0].replacedAt).toBe('string');
+  });
+
+  it('keeps every change in order across several corrections', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'A', 'first');
+    await service.setDeliverable(sessionId, 'user_name', 'B', 'they corrected', false, true);
+    await service.setDeliverable(sessionId, 'user_name', 'C', 'they corrected again', false, true);
+
+    expect(await valueOf('user_name')).toBe('C');
+    expect((await historyOf('user_name')).map((h: any) => h.value)).toEqual(['A', 'B']);
+  });
+
+  it('refuses a correction with no reasoning', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'said their name');
+
+    const result = await service.setDeliverable(sessionId, 'user_name', 'Bob', '  ', false, true);
+
+    expect(result.success).toBe(false);
+    expect(await valueOf('user_name')).toBe('Felix');
+  });
+
+  it('setting the same value again is harmless and adds no history', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'said their name');
+    const again = await service.setDeliverable(sessionId, 'user_name', 'Felix', 'said it again');
+
+    expect(again.success).toBe(true);
+    expect(await historyOf('user_name')).toBeUndefined();
+  });
+
+  it('an unconfirmed value can still be refined and confirmed, and the change is logged', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Fel', 'mentioned in passing', true);
+    const result = await service.setDeliverable(sessionId, 'user_name', 'Felix', 'they confirmed');
+
+    expect(result.success).toBe(true);
+    expect(await valueOf('user_name')).toBe('Felix');
+    const history = await historyOf('user_name');
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ value: 'Fel', unconfirmed: true, correction: false });
+  });
+
+  it('a passing mention of the settled value does not demote it to partial', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'said their name');
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'mentioned again', true);
+
+    const full = await service.getFullState(sessionId);
+    const d = full!.states[0].tasks[0].deliverables!.find(x => x.key === 'user_name');
+    expect(d!.status).toBe('completed');
+  });
+
+  it('a passing mention of a different value cannot replace a settled one', async () => {
+    await service.setDeliverable(sessionId, 'user_name', 'Felix', 'said their name');
+    const result = await service.setDeliverable(sessionId, 'user_name', 'Bob', 'mentioned', true);
+
+    expect(result.success).toBe(false);
+    expect(await valueOf('user_name')).toBe('Felix');
+  });
+
+  it('optional deliverables stay freely overwritable, and the change is still logged', async () => {
+    await service.setDeliverable(sessionId, 'note', 'first', 'r1');
+    const result = await service.setDeliverable(sessionId, 'note', 'second', 'r2');
+
+    expect(result.success).toBe(true);
+    expect(await valueOf('note')).toBe('second');
+    expect((await historyOf('note'))[0]).toMatchObject({ value: 'first', correction: false });
+  });
+
+  it('discovered insights in a goal state stay overwritable and log the change', async () => {
+    const { prisma } = createPrismaMock();
+    const goalService = new StateMachineService(prisma);
+    await goalService.initializeForSession('goal-session', buildGoalStatePlan());
+
+    await goalService.setDeliverable('goal-session', 'insight_x', 'one', 'r1');
+    const result = await goalService.setDeliverable('goal-session', 'insight_x', 'two', 'r2');
+
+    expect(result.success).toBe(true);
+    const state = await (goalService as any).getState('goal-session');
+    const d = (state.deliverables as Record<string, any>)['insight_x'];
+    expect(d.value).toBe('two');
+    expect(d.discovered).toBe(true);
+    expect(d.history).toHaveLength(1);
+    expect(d.history[0].value).toBe('one');
+  });
+});

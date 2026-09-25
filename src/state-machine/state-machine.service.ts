@@ -130,6 +130,27 @@ export interface DeliverableValue {
    * is what confirms it.
    */
   unconfirmed?: boolean;
+  /**
+   * Earlier values of this deliverable, oldest first. Appended whenever the
+   * value changes, so a replaced answer is never lost: the study record shows
+   * what the participant said first, what replaced it, and whether the agent
+   * marked the change as a deliberate correction.
+   */
+  history?: DeliverableChange[];
+}
+
+/**
+ * One replaced value in a deliverable's history.
+ */
+export interface DeliverableChange {
+  value: unknown;
+  reasoning: string;
+  collectedAt: string;
+  /** When this value was replaced. */
+  replacedAt: string;
+  /** The replacement was an explicit, agent-marked correction. */
+  correction: boolean;
+  unconfirmed?: boolean;
 }
 
 /**
@@ -590,6 +611,43 @@ export class StateMachineService {
     };
   }
 
+  private sameValue(a: unknown, b: unknown): boolean {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  /**
+   * The `history` for a deliverable being written. When there is a previous
+   * value and the new one differs, the previous one is appended (and logged), so
+   * every change leaves a trace. Otherwise the existing history is carried over
+   * unchanged, and rows that never changed keep no `history` key at all.
+   */
+  private historyFor(
+    sessionId: string,
+    key: string,
+    existing: DeliverableValue | undefined,
+    newValue: unknown,
+    correction: boolean,
+  ): { history?: DeliverableChange[] } {
+    const prior = existing?.history ?? [];
+    if (!existing || this.sameValue(existing.value, newValue)) {
+      return prior.length ? { history: prior } : {};
+    }
+    const change: DeliverableChange = {
+      value: existing.value,
+      reasoning: existing.reasoning,
+      collectedAt: existing.collectedAt,
+      replacedAt: new Date().toISOString(),
+      correction,
+      ...(existing.unconfirmed ? { unconfirmed: true } : {}),
+    };
+    this.logger.log(
+      `[setDeliverable] '${key}' changed for session ${sessionId}: ` +
+        `${JSON.stringify(existing.value)} -> ${JSON.stringify(newValue)}` +
+        `${correction ? ' (correction)' : ''}`,
+    );
+    return { history: [...prior, change] };
+  }
+
   /**
    * Set a deliverable value
    */
@@ -599,10 +657,11 @@ export class StateMachineService {
     value: unknown,
     reasoning: string,
     unconfirmed = false,
+    correction = false,
   ): Promise<StateMachineResult> {
     // Serialized per session so concurrent writes don't clobber the deliverables JSON.
     return this.withSessionLock(sessionId, () =>
-      this.setDeliverableLocked(sessionId, key, value, reasoning, unconfirmed),
+      this.setDeliverableLocked(sessionId, key, value, reasoning, unconfirmed, correction),
     );
   }
 
@@ -612,6 +671,7 @@ export class StateMachineService {
     value: unknown,
     reasoning: string,
     unconfirmed = false,
+    correction = false,
   ): Promise<StateMachineResult> {
     const state = await this.getState(sessionId);
     if (!state) {
@@ -659,11 +719,13 @@ export class StateMachineService {
     if (!foundDeliverable && currentState.type === 'goal') {
       // Goal mode: accept as discovered insight
       this.logger.log(`[setDeliverable] Discovered insight '${key}' in goal state for session ${sessionId}`);
+      // Insights stay freely overwritable, but a replaced one is still logged.
       deliverables[key] = {
         value,
         reasoning,
         collectedAt: new Date().toISOString(),
         discovered: true,
+        ...this.historyFor(sessionId, key, deliverables[key], value, correction),
       };
 
       await this.prisma.sessionState.update({
@@ -714,14 +776,53 @@ export class StateMachineService {
       };
     }
 
+    // A required answer that is already collected and settled is study data: a
+    // later, worse one must not replace it silently. It can change only through
+    // an explicit correction the agent marks. Not guarded: optional
+    // deliverables, discovered insights, a value still `unconfirmed` (that is
+    // what confirming and refining it means), and re-setting the same value.
+    const existing = deliverables[key];
+    const isRequired = foundDeliverable.required !== false;
+    const changesValue = existing !== undefined && !this.sameValue(existing.value, value);
+    if (correction && !reasoning?.trim()) {
+      return {
+        success: false,
+        error: `A correction to '${key}' needs a reasoning that says what the participant said to change it.`,
+      };
+    }
+    if (
+      existing &&
+      isRequired &&
+      !existing.discovered &&
+      !existing.unconfirmed &&
+      changesValue &&
+      !correction
+    ) {
+      this.logger.warn(
+        `[setDeliverable] Rejected overwrite of required '${key}' for session ${sessionId} (no correction flag)`,
+      );
+      return {
+        success: false,
+        error:
+          `'${key}' is required and already collected as ${JSON.stringify(existing.value)}, ` +
+          `so it was not changed. If the participant deliberately corrected themselves, call again ` +
+          `with correction=true and a reasoning that quotes what they said. Otherwise keep the ` +
+          `collected answer.`,
+      };
+    }
+
     // Update deliverables. The flag is written only when true, so confirming a
     // value (setting it again without the flag) clears it, and rows collected
     // before this existed stay exactly as they were.
+    // A passing mention of the value already settled must not demote it back to
+    // 'partial'.
+    const staysSettled = existing !== undefined && !existing.unconfirmed && !changesValue;
     deliverables[key] = {
       value,
       reasoning,
       collectedAt: new Date().toISOString(),
-      ...(unconfirmed ? { unconfirmed: true } : {}),
+      ...(unconfirmed && !staysSettled ? { unconfirmed: true } : {}),
+      ...this.historyFor(sessionId, key, existing, value, correction),
     };
 
     // Setting a deliverable ONLY records data — it never auto-completes a task or

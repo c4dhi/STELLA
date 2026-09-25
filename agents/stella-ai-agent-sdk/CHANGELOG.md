@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `set_deliverable` and `batch_update` accept `correction` (default false): a participant's deliberate change to an already-collected answer. A settled required deliverable is now rejected by the state machine without it, so a later, worse answer can no longer replace it silently. `StateMachineClient.set_deliverable(..., correction=False)` and the `SetDeliverableRequest.correction` field carry it.
+
 ## [0.6.0] - 2026-09-25
 
 Ships with STELLA 1.2.0. What changes for agent authors:
