@@ -43,7 +43,8 @@
     "picomatch@2": "^2.3.2",
     "picomatch@4": "^4.0.4",
     "effect": "^3.21.0",
-    "@babel/core": "^7.29.7"
+    "@babel/core": "^7.29.7",
+    "multer": "$multer"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.5",
@@ -71,6 +72,7 @@
     "class-validator": "^0.15.1",
     "js-yaml": "^5.2.2",
     "livekit-server-sdk": "^2.19.0",
+    "multer": "^2.4.0",
     "openai": "^7.20.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
