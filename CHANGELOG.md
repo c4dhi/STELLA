@@ -65,7 +65,6 @@ differently" under Changed first.**
 
 ### Fixed
 
-- A session starting after more than 5 minutes of quiet no longer freezes speech recognition for up to about 30 seconds. Warming the recognizer back up stalled that session's first utterance and every other running session with it. It now warms up in the background (#561)
 - Speech recognition no longer drops the beginning of utterances longer than 16 seconds
 - Concurrent TTS synthesis corrupting audio within a session (per-session lock)
 - Jitter buffer re-arming its full cushion mid-sentence, starving the output source and producing audible warble
@@ -76,6 +75,11 @@ differently" under Changed first.**
 - The live transcript no longer blanks out for up to a second before each final transcript arrives
 - Silent sessions after rebuilding the text-to-speech image: a newer `transformers` release broke the Qwen3 voice model, so it is now pinned below 5.17
 - Test workflows now also run on pull requests into `development`
+
+
+### Known limitations
+
+- After more than 5 minutes without any session, the first sentence of a new session waits about 11 seconds while speech recognition warms up, down from about 30 seconds before this release. Sessions already running pause for the same time. A keep-warm setting is planned for 1.2.1 (#561)
 
 ---
 
