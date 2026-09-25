@@ -76,6 +76,11 @@ differently" under Changed first.**
 - Silent sessions after rebuilding the text-to-speech image: a newer `transformers` release broke the Qwen3 voice model, so it is now pinned below 5.17
 - Test workflows now also run on pull requests into `development`
 
+
+### Known limitations
+
+- The first utterance of a session that starts after more than 5 minutes without any session can be delayed by up to about 30 s while speech recognition warms up. Sessions already running stall briefly during that time too (#561).
+
 ---
 
 ## [1.1.0] - 2026-09-06
