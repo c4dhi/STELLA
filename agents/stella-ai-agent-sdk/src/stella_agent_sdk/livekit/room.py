@@ -79,6 +79,8 @@ class RoomManager:
         self._stream_tasks: Dict[str, asyncio.Task] = {}
         # Silence feeder running after a deliberate mic mute (see set_mic_muted).
         self._mute_silence_task: Optional[asyncio.Task] = None
+        # Monotonic time of the last real audio frame queued from any participant.
+        self._last_real_frame_at: float = 0.0
 
         # Audio sample rate tracking (updated from first frame received from LiveKit)
         self._audio_sample_rate: int = 48000  # Default to 48kHz (WebRTC standard)
@@ -366,6 +368,7 @@ class RoomManager:
                 elif frame_count % 500 == 0:
                     print(f"[ROOM] Received {frame_count} audio frames from {identity}")
 
+                self._last_real_frame_at = time.monotonic()
                 await self._audio_queue.put(frame.data.tobytes())
 
         except asyncio.CancelledError:
@@ -465,6 +468,9 @@ class RoomManager:
     # run through its silence window and continuation window and finalize.
     MUTE_SILENCE_MS = int(os.getenv("STELLA_MUTE_SILENCE_MS", "3000"))
 
+    # Real audio newer than this means the track is still delivering: don't pad.
+    MUTE_GAP_MS = 40
+
     def set_mic_muted(self, muted: bool) -> None:
         """The participant muted or unmuted their mic on purpose.
 
@@ -475,6 +481,12 @@ class RoomManager:
         for ``MUTE_SILENCE_MS`` so it finalizes like any pause, without the
         end-of-audio sentinel that tears the STT stream down and restarts it.
         Unmuting stops the feeder.
+
+        Silence only fills gaps: a chunk is queued only when no real frame arrived
+        in the last ``MUTE_GAP_MS``. Speech still in flight behind the mute signal
+        (or another participant's audio, since the queue is shared) is never
+        interleaved with zeros. The mute message carries no identity, so this is
+        also what keeps one person's mute from garbling a second speaker.
         """
         self._cancel_mute_silence()
         if not muted or not self._connected:
@@ -500,10 +512,8 @@ class RoomManager:
         logger.info(f"[ROOM] Mic muted by participant; feeding {self.MUTE_SILENCE_MS}ms of silence")
         try:
             while remaining > 0 and self._connected:
-                try:
+                if time.monotonic() - self._last_real_frame_at >= self.MUTE_GAP_MS / 1000.0:
                     self._audio_queue.put_nowait(silence)
-                except asyncio.QueueFull:
-                    pass  # real frames are flowing; nothing to pad
                 await asyncio.sleep(step_s)
                 remaining -= step_s
         except asyncio.CancelledError:

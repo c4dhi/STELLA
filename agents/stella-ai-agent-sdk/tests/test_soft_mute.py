@@ -93,3 +93,27 @@ def test_data_message_reaches_the_room(msg_type, expected):
     pipeline._handle_data_message("human", payload)
 
     assert pipeline._room.calls == [expected]
+
+
+@pytest.mark.asyncio
+async def test_silence_only_fills_gaps_while_real_frames_arrive():
+    import time
+
+    room = _room()
+    room.MUTE_SILENCE_MS = 1000
+
+    room.set_mic_muted(True)
+    real = b"\x01\x00" * 320
+    for _ in range(20):  # 20 ms real frames for ~0.4 s, as a jitter buffer would
+        room._last_real_frame_at = time.monotonic()
+        room._audio_queue.put_nowait(real)
+        await asyncio.sleep(0.02)
+    chunks = _drain(room)
+
+    assert chunks.count(real) == 20
+    silent = [c for c in chunks if set(c) == {0}]
+    assert len(silent) <= 2, "padding must not interleave with arriving frames"
+    # and no zero chunk sits between two real ones
+    for i in range(1, len(chunks) - 1):
+        if set(chunks[i]) == {0}:
+            assert chunks[i - 1] != real or chunks[i + 1] != real
