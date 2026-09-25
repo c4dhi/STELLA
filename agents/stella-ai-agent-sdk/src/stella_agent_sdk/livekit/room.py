@@ -77,6 +77,8 @@ class RoomManager:
         self._subscribed_tracks: Dict[str, rtc.RemoteAudioTrack] = {}
         self._audio_streams: Dict[str, rtc.AudioStream] = {}
         self._stream_tasks: Dict[str, asyncio.Task] = {}
+        # Silence feeder running after a deliberate mic mute (see set_mic_muted).
+        self._mute_silence_task: Optional[asyncio.Task] = None
 
         # Audio sample rate tracking (updated from first frame received from LiveKit)
         self._audio_sample_rate: int = 48000  # Default to 48kHz (WebRTC standard)
@@ -219,6 +221,8 @@ class RoomManager:
             self._outbound_task.cancel()
         self._outbound_task = None
         self._outbound.clear()
+
+        self._cancel_mute_silence()
 
         # Cancel all stream reading tasks
         for task in self._stream_tasks.values():
@@ -456,6 +460,54 @@ class RoomManager:
             logger.info("[ROOM] Cleared TTS playout queue (barge-in)")
         except Exception as e:
             logger.error(f"[ROOM] Failed to clear playout queue: {e}")
+
+    # How long to keep feeding silence after a mute: long enough for STT's VAD to
+    # run through its silence window and continuation window and finalize.
+    MUTE_SILENCE_MS = int(os.getenv("STELLA_MUTE_SILENCE_MS", "3000"))
+
+    def set_mic_muted(self, muted: bool) -> None:
+        """The participant muted or unmuted their mic on purpose.
+
+        Muting keeps the audio track and the STT stream; the participant simply
+        goes quiet. A muted track may deliver no frames at all, and STT's VAD
+        measures silence in wall-clock time only when audio arrives, so an
+        in-flight utterance would sit open. We therefore feed real-time silence
+        for ``MUTE_SILENCE_MS`` so it finalizes like any pause, without the
+        end-of-audio sentinel that tears the STT stream down and restarts it.
+        Unmuting stops the feeder.
+        """
+        self._cancel_mute_silence()
+        if not muted or not self._connected:
+            return
+        try:
+            self._mute_silence_task = asyncio.get_running_loop().create_task(
+                self._feed_mute_silence()
+            )
+        except RuntimeError:
+            logger.debug("[ROOM] No running loop; skipping mute silence")
+
+    def _cancel_mute_silence(self) -> None:
+        task = self._mute_silence_task
+        self._mute_silence_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _feed_mute_silence(self) -> None:
+        step_s = 0.02
+        samples = int(self._audio_sample_rate * step_s)
+        silence = b"\x00\x00" * samples
+        remaining = self.MUTE_SILENCE_MS / 1000.0
+        logger.info(f"[ROOM] Mic muted by participant; feeding {self.MUTE_SILENCE_MS}ms of silence")
+        try:
+            while remaining > 0 and self._connected:
+                try:
+                    self._audio_queue.put_nowait(silence)
+                except asyncio.QueueFull:
+                    pass  # real frames are flowing; nothing to pad
+                await asyncio.sleep(step_s)
+                remaining -= step_s
+        except asyncio.CancelledError:
+            pass
 
     def flush_audio_queue(self) -> None:
         """Flush all buffered audio frames from the queue.
