@@ -149,7 +149,7 @@ Step 1 — Read the current user message carefully. What information did the use
 
 Step 2 — Scan ALL pending deliverables across the entire plan. Did the user provide any of them? Think about synonyms, paraphrases, and indirect answers. In goal-oriented states, the user's answer may address multiple deliverables at once — extract ALL of them.
 
-Step 3 — Check completed deliverables too. If the user corrected a previous answer, overwrite it with the new value.
+Step 3 — Check completed deliverables too. If the user deliberately corrected a previous answer, set the same key again with the new value and correction: true, quoting what they said in reasoning (a collected required answer is rejected without it).
 Step 4 — For each match, call \`set_deliverable(key, value, reasoning)\` where reasoning explains WHY this matches.
 Step 5 — Validate each extraction with TWO checks before calling the tool:
   a) PROVENANCE: Does the value trace back to something the user actually said? If not, do not call the tool.

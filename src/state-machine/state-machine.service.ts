@@ -137,6 +137,19 @@ export interface DeliverableValue {
    * marked the change as a deliberate correction.
    */
   history?: DeliverableChange[];
+  /**
+   * Changes the state machine refused because they were not marked as a
+   * correction. Kept so a participant's genuine correction that the agent sent
+   * without the flag is not lost without a trace; empty for rows that never had
+   * one. Capped to the most recent few.
+   */
+  rejectedAttempts?: RejectedDeliverableChange[];
+}
+
+export interface RejectedDeliverableChange {
+  value: unknown;
+  reasoning: string;
+  attemptedAt: string;
 }
 
 /**
@@ -611,6 +624,68 @@ export class StateMachineService {
     };
   }
 
+  /** The plan's definition of a deliverable, searched across every state. */
+  private findDeliverableDefinition(plan: PlanData, key: string): PlanDeliverable | null {
+    for (const st of plan.states ?? []) {
+      for (const task of st.tasks ?? []) {
+        for (const d of task.deliverables ?? []) if (d.key === key) return d;
+      }
+      for (const d of st.goal?.deliverables ?? []) if (d.key === key) return d;
+    }
+    return null;
+  }
+
+  /**
+   * Refuse to change a collected, settled required deliverable unless the write
+   * is a marked correction. Returns the rejection to hand back, or null to let
+   * the write proceed. A rejected attempt is logged with what was attempted and
+   * kept on the deliverable, because neither agent reads tool results back, so
+   * without a trace the participant's correction would just vanish.
+   */
+  private async guardOverwrite(
+    sessionId: string,
+    deliverables: Record<string, DeliverableValue>,
+    key: string,
+    value: unknown,
+    reasoning: string,
+    correction: boolean,
+    isRequired: boolean,
+  ): Promise<StateMachineResult | null> {
+    const existing = deliverables[key];
+    if (
+      !existing ||
+      !isRequired ||
+      existing.discovered ||
+      existing.unconfirmed ||
+      correction ||
+      this.sameValue(existing.value, value)
+    ) {
+      return null;
+    }
+    this.logger.warn(
+      `[setDeliverable] Rejected overwrite of required '${key}' for session ${sessionId} ` +
+        `(no correction flag): kept ${JSON.stringify(existing.value)}, ` +
+        `attempted ${JSON.stringify(value)}, reasoning: ${JSON.stringify(reasoning)}`,
+    );
+    const attempts = [
+      ...(existing.rejectedAttempts ?? []),
+      { value, reasoning, attemptedAt: new Date().toISOString() },
+    ].slice(-10);
+    deliverables[key] = { ...existing, rejectedAttempts: attempts };
+    await this.prisma.sessionState.update({
+      where: { sessionId },
+      data: { deliverables: deliverables as unknown as Prisma.InputJsonValue },
+    });
+    return {
+      success: false,
+      error:
+        `'${key}' is required and already collected as ${JSON.stringify(existing.value)}, ` +
+        `so it was not changed. If the participant deliberately corrected themselves, call again ` +
+        `with correction=true and a reasoning that quotes what they said. Otherwise keep the ` +
+        `collected answer.`,
+    };
+  }
+
   private sameValue(a: unknown, b: unknown): boolean {
     return JSON.stringify(a) === JSON.stringify(b);
   }
@@ -720,12 +795,31 @@ export class StateMachineService {
       // Goal mode: accept as discovered insight
       this.logger.log(`[setDeliverable] Discovered insight '${key}' in goal state for session ${sessionId}`);
       // Insights stay freely overwritable, but a replaced one is still logged.
+      // A key that is really a defined deliverable collected in an earlier state
+      // is NOT an insight: the same protection applies, or a goal state could
+      // replace a settled required answer just by naming its key.
+      const prior = deliverables[key];
+      const settledDefined = prior !== undefined && !prior.discovered;
+      if (settledDefined) {
+        const guarded = await this.guardOverwrite(
+          sessionId,
+          deliverables,
+          key,
+          value,
+          reasoning,
+          correction,
+          this.findDeliverableDefinition(plan, key)?.required !== false,
+        );
+        if (guarded) return guarded;
+      }
       deliverables[key] = {
         value,
         reasoning,
         collectedAt: new Date().toISOString(),
-        discovered: true,
-        ...this.historyFor(sessionId, key, deliverables[key], value, correction),
+        // A protected deliverable that is corrected here stays what it was;
+        // only a genuine insight is marked discovered.
+        ...(settledDefined ? {} : { discovered: true }),
+        ...this.historyFor(sessionId, key, prior, value, correction),
       };
 
       await this.prisma.sessionState.update({
@@ -790,25 +884,17 @@ export class StateMachineService {
         error: `A correction to '${key}' needs a reasoning that says what the participant said to change it.`,
       };
     }
-    if (
-      existing &&
-      isRequired &&
-      !existing.discovered &&
-      !existing.unconfirmed &&
-      changesValue &&
-      !correction
-    ) {
-      this.logger.warn(
-        `[setDeliverable] Rejected overwrite of required '${key}' for session ${sessionId} (no correction flag)`,
+    if (existing) {
+      const guarded = await this.guardOverwrite(
+        sessionId,
+        deliverables,
+        key,
+        value,
+        reasoning,
+        correction,
+        isRequired,
       );
-      return {
-        success: false,
-        error:
-          `'${key}' is required and already collected as ${JSON.stringify(existing.value)}, ` +
-          `so it was not changed. If the participant deliberately corrected themselves, call again ` +
-          `with correction=true and a reasoning that quotes what they said. Otherwise keep the ` +
-          `collected answer.`,
-      };
+      if (guarded) return guarded;
     }
 
     // Update deliverables. The flag is written only when true, so confirming a
@@ -821,7 +907,9 @@ export class StateMachineService {
       value,
       reasoning,
       collectedAt: new Date().toISOString(),
-      ...(unconfirmed && !staysSettled ? { unconfirmed: true } : {}),
+      // A correction is the participant's deliberate answer, so it is never
+      // stored as unconfirmed (which would reopen the guard for the next write).
+      ...(unconfirmed && !correction && !staysSettled ? { unconfirmed: true } : {}),
       ...this.historyFor(sessionId, key, existing, value, correction),
     };
 
