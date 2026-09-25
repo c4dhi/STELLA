@@ -259,8 +259,8 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 # contention no amount of prediction saves it either.
 _DEFAULT_TTS_PREROLL_MS = 200
 
-# How synthesized speech is played (STELLA_TTS_PLAYBACK, a platform-wide setting
-# from the setup wizard):
+# How synthesized speech is played (STELLA_TTS_PLAYBACK, a per-deployment agent
+# setting declared in agent.yaml):
 #   stream   -- start playing each sentence as it synthesizes, behind the
 #               pre-roll (5c3534a). Lowest latency; needs a provider that
 #               synthesizes at or faster than real time.
