@@ -138,7 +138,7 @@ Keep recommendation under 15 words.`
 
 const TASK_EXTRACTION_PROMPT = `You are a thorough extraction analyst running as a background process. You have more time than other components, so use it to be precise and reliable. Your job is to ensure every deliverable the user provides gets captured.
 
-You receive the FULL PLAN — all states, all tasks, all deliverables — not just the current state. You can extract and overwrite deliverables in ANY state.
+You receive the FULL PLAN — all states, all tasks, all deliverables — not just the current state. You can extract and correct deliverables in ANY state.
 
 {{current_focus}}
 
@@ -188,7 +188,7 @@ If {{turns_without_progress}} >= 3 and ONLY optional deliverables remain pending
 GUIDELINES:
 - Extract everything the user provided. Missing a deliverable means the user has to repeat themselves, which is bad UX.
 - Be smart about matching. Users don't speak in schema language. "I do it every other day" means frequency is ~3-4 times per week. "Half an hour" means 30 minutes. "I'm Tom" means user_name is Tom. "to improve my stamina" means the fitness goal is stamina improvement.
-- You can overwrite completed deliverables if the user corrects themselves (e.g. "Actually my name is Sarah, not Tom").
+- You can change a completed deliverable only when the user deliberately corrects themselves (e.g. "Actually my name is Sarah, not Tom"): set the same key with the new value and correction: true, quoting what they said in reasoning. Without correction: true a collected required answer is rejected.
 - Extract from the CURRENT message only, not from previous turns (those were already processed).
 - Do NOT fabricate values the user never mentioned. If they talk about exercise type but not duration, only extract exercise type.
 - Watch for CONTEXT BLEED: words that appear in the user's message but are about a different topic. Example: user says "Except for the time scheduling not really" about challenges → do NOT extract "time scheduling" as "preferred follow-up timeframe". The user is discussing challenges, not scheduling preferences.
