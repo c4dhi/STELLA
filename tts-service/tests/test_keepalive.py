@@ -110,3 +110,69 @@ def test_stella_model_keep_warm_false_disables_the_keepalive(monkeypatch):
 
     monkeypatch.setenv("STELLA_MODEL_KEEP_WARM", "true")
     assert TTSEngine().keepalive_interval > 0
+
+
+def test_a_live_request_never_overlaps_a_running_warmup():
+    """The Qwen3 model must never run two syntheses at once (#463)."""
+
+    class Tracking(_Provider):
+        def __init__(self):
+            super().__init__(delay=0.15)
+            self.running = 0
+            self.max_running = 0
+
+        async def synthesize(self, text, voice=None, speed=1.0, language=None):
+            self.running += 1
+            self.max_running = max(self.max_running, self.running)
+            try:
+                return await super().synthesize(text, voice, speed, language)
+            finally:
+                self.running -= 1
+
+    async def scenario():
+        provider = Tracking()
+        engine = _engine(provider, 0)
+        warm = asyncio.create_task(engine.warmup())
+        await asyncio.sleep(0.03)             # warmup is mid-synthesis
+        live = asyncio.create_task(engine.synthesize("first sentence"))
+        await asyncio.gather(warm, live)
+        return provider.max_running
+
+    assert asyncio.run(scenario()) == 1
+
+
+def test_warmup_is_skipped_rather_than_started_next_to_a_live_request():
+    async def scenario():
+        provider = _Provider(delay=0.15)
+        engine = _engine(provider, 0)
+        live = asyncio.create_task(engine.synthesize("hello"))
+        await asyncio.sleep(0.03)
+        ok, _, message = await engine.warmup()
+        await live
+        return provider.calls, ok, message
+
+    calls, ok, message = asyncio.run(scenario())
+    assert calls == 1 and ok is True and message.startswith("skipped")
+
+
+def test_concurrent_live_requests_are_not_serialised():
+    """Only warmup is exclusive; live sessions keep today's concurrency."""
+
+    class Tracking(_Provider):
+        running = 0
+        max_running = 0
+
+        async def synthesize(self, *a, **k):
+            Tracking.running += 1
+            Tracking.max_running = max(Tracking.max_running, Tracking.running)
+            try:
+                return await super().synthesize(*a, **k)
+            finally:
+                Tracking.running -= 1
+
+    async def scenario():
+        engine = _engine(Tracking(delay=0.1), 0)
+        await asyncio.gather(engine.synthesize("a"), engine.synthesize("b"))
+        return Tracking.max_running
+
+    assert asyncio.run(scenario()) == 2

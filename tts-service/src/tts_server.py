@@ -33,6 +33,12 @@ class TTSEngine:
         # skips a tick while this is non-zero: a busy model is already warm, and
         # on the shared GPU a throwaway synthesis would compete with live speech.
         self._active = 0
+        # True while a warmup synthesis runs. Live requests wait for it to
+        # finish, and a warmup never starts while any live request is in flight:
+        # two syntheses on one model instance is the cross-session garbling
+        # tracked in #463, and a background timer must not cause it.
+        self._warming = False
+        self._gate = asyncio.Condition()
         # Seconds between keep-alive warmups; 0 disables. Runs only when the
         # provider can go cold (kernels/CUDA graphs evicted while idle).
         self.keepalive_interval = float(os.getenv("TTS_KEEPALIVE_INTERVAL", "180"))
@@ -123,7 +129,7 @@ class TTSEngine:
         if not self.initialized or not self.provider:
             raise RuntimeError("TTS Engine not initialized")
 
-        self._active += 1
+        await self._enter_live()
         try:
             # Try primary provider
             result = await self.provider.synthesize(text, voice, speed, language=language)
@@ -175,13 +181,24 @@ class TTSEngine:
             raise RuntimeError("TTS Engine not initialized")
 
         chunk_index = 0
-        self._active += 1
+        await self._enter_live()
         try:
             async for chunk, is_final in self.provider.synthesize_stream(text, voice, speed, chunk_size, language=language):
                 yield chunk.tobytes(), is_final, chunk_index
                 chunk_index += 1
         finally:
+            await self._exit_live()
+
+    async def _enter_live(self) -> None:
+        """Count a live request in, first waiting out any warmup in progress."""
+        async with self._gate:
+            await self._gate.wait_for(lambda: not self._warming)
+            self._active += 1
+
+    async def _exit_live(self) -> None:
+        async with self._gate:
             self._active -= 1
+            self._gate.notify_all()
 
     async def warmup(self) -> tuple:
         """Run a tiny throwaway synthesis to prime the model.
@@ -192,13 +209,19 @@ class TTSEngine:
         t0 = time.time()
         if not self.initialized or self.provider is None:
             return False, 0, "TTS engine not initialized"
-        self._active += 1
+        # No await between this check and setting _warming, so a live request
+        # cannot slip in between them on the event loop.
+        if self._active > 0 or self._warming:
+            return True, 0, "skipped: synthesis in progress, model already warm"
+        self._warming = True
         try:
             result = await self.provider.synthesize("Hi.")
         except Exception as e:
             return False, int((time.time() - t0) * 1000), f"warm-up failed: {e}"
         finally:
-            self._active -= 1
+            async with self._gate:
+                self._warming = False
+                self._gate.notify_all()
         elapsed_ms = int((time.time() - t0) * 1000)
         if result is None:
             return False, elapsed_ms, "Warm-up synthesis returned no audio"
@@ -217,11 +240,8 @@ class TTSEngine:
     async def _keepalive_loop(self) -> None:
         # First pass runs at once: the model is warm before the first session.
         while True:
-            if self._active > 0:
-                print("[TTS Engine] Keep-alive skipped: synthesis in progress")
-            else:
-                ok, elapsed_ms, message = await self.warmup()
-                print(f"[TTS Engine] Keep-alive warmup: ok={ok}, {elapsed_ms}ms, {message}")
+            ok, elapsed_ms, message = await self.warmup()
+            print(f"[TTS Engine] Keep-alive warmup: ok={ok}, {elapsed_ms}ms, {message}")
             await asyncio.sleep(self.keepalive_interval)
 
     async def cleanup(self):
