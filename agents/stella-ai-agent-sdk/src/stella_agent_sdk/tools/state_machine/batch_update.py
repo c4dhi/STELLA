@@ -67,6 +67,17 @@ class BatchUpdateTool(BaseTool):
                                     "conversation instead of being treated as settled. "
                                     "Use false when they answered directly."
                                 ),
+                            },
+                            "correction": {
+                                "type": "boolean",
+                                "description": (
+                                    "Set true ONLY when the participant deliberately "
+                                    "changes an answer that is already recorded "
+                                    "(\"actually, it is Sarah, not Tom\"). A required "
+                                    "answer that is already collected is rejected "
+                                    "without this. Put what they said in reasoning. "
+                                    "Leave false for a first answer."
+                                ),
                             }
                         },
                         "required": ["key", "value", "reasoning"]
@@ -144,6 +155,7 @@ class BatchUpdateTool(BaseTool):
                 result = await self._client.set_deliverable(
                     d["key"], d["value"], d.get("reasoning", ""),
                     bool(d.get("unconfirmed", False)),
+                    bool(d.get("correction", False)),
                 )
                 if result.get("success"):
                     results["deliverables_set"].append({

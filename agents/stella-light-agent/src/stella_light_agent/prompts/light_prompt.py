@@ -542,7 +542,7 @@ You can collect information in any natural order based on conversation flow.
 - Ask about ONE thing at a time, but choose based on natural conversation flow
 - If user provides multiple pieces of info in one response, collect them all
 - Prioritize REQUIRED items first, then optional ones if naturally offered
-- You CAN update already-collected information if user provides corrections"""
+- You CAN change already-collected information when the user deliberately corrects it: call set_deliverable with correction=true and what they said in reasoning"""
 
     def _build_collected_section(self, collected: Dict[str, Any]) -> str:
         """
@@ -554,7 +554,7 @@ You can collect information in any natural order based on conversation flow.
         if not collected:
             return ""
 
-        parts = ["## Already Collected (can be updated if user corrects)"]
+        parts = ["## Already Collected (settled; change only on a deliberate correction)"]
         for key, value in collected.items():
             # Format value nicely
             if isinstance(value, str):
@@ -563,7 +563,11 @@ You can collect information in any natural order based on conversation flow.
                 display_value = str(value)
             parts.append(f"- **{key}**: {display_value}")
 
-        parts.append("\nIf the user provides updated or corrected information for any of these, use set_deliverable to update the value.")
+        parts.append(
+            "\nIf the user deliberately corrects one of these (\"actually, it is Sarah, not Tom\"), "
+            "call set_deliverable with correction=true and put what they said in reasoning. "
+            "Without correction=true the change is rejected and the value above stays."
+        )
 
         return "\n".join(parts)
 

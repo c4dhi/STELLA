@@ -120,7 +120,7 @@ During conversation execution, each deliverable has a status:
 |--------|-------------|
 | `pending` | Not yet collected |
 | `partial` | Mentioned but not confirmed: the participant said something that answers it in passing. The value is stored and readable, and the agent brings it back to check it (at most one per turn) instead of treating it as settled or asking it cold. Setting the deliverable again without `unconfirmed` completes it |
-| `completed` | Successfully collected and validated |
+| `completed` | Successfully collected and validated. A required deliverable that is completed cannot be silently replaced: it changes only through an explicit correction the agent marks (`correction: true`, with the participant's words in the reasoning). Every change, corrected or not, is kept in the deliverable's `history` |
 | `skipped` | Not collected — either an optional deliverable the user declined, or any deliverable (required or optional) whose owning task was skipped |
 
 ### Status Flow
