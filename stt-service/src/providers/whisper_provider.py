@@ -1179,6 +1179,23 @@ class WhisperProvider(STTProvider):
         self._warmed_up = False
         self._last_warmup_time = 0
         self._warmup_ttl_seconds = int(os.getenv("WHISPER_WARMUP_TTL", "300"))  # 5 min default
+        # Background keep-alive: re-run warmup on this interval so no session
+        # ever meets a cold model. Kept under the TTL so the model is never
+        # considered stale; 0 disables it.
+        keepalive = int(os.getenv("WHISPER_KEEPALIVE_INTERVAL", "180"))
+        # The deployment-wide switch (STELLA_MODEL_KEEP_WARM, asked in the setup
+        # wizard) turns the keep-alive off for STT and TTS together.
+        if os.getenv("STELLA_MODEL_KEEP_WARM", "true").strip().lower() in ("false", "0", "no", "off"):
+            keepalive = 0
+        if keepalive > 0:
+            keepalive = min(keepalive, max(1, int(self._warmup_ttl_seconds * 0.8)))
+        self._keepalive_interval_seconds = keepalive
+        self._keepalive_task: Optional[asyncio.Task] = None
+        # Language to pin warmup decoding to, so it skips detection. Explicit
+        # WHISPER_WARMUP_LANGUAGE wins, then the configured language, then the
+        # last language any session declared.
+        self._warmup_language = os.getenv("WHISPER_WARMUP_LANGUAGE", None) or None
+        self._last_declared_language: Optional[str] = None
 
         # Whisper model configuration (4 parameters)
         self.model_size = os.getenv("WHISPER_MODEL", "large-v3")
@@ -1292,7 +1309,7 @@ class WhisperProvider(STTProvider):
             traceback.print_exc()
             return False
 
-    async def warmup(self, duration_ms: int = 1000) -> bool:
+    async def warmup(self, duration_ms: int = 1000, force: bool = False) -> bool:
         """Warm up the Whisper model by running inference on dummy audio.
 
         This eliminates cold-start latency caused by:
@@ -1305,6 +1322,8 @@ class WhisperProvider(STTProvider):
 
         Args:
             duration_ms: Duration of dummy audio to process (default 1000ms)
+            force: Run even if the TTL says the model is still warm (used by
+                the keep-alive, which refreshes the TTL itself)
 
         Returns:
             True if warmup ran successfully, False otherwise.
@@ -1316,7 +1335,7 @@ class WhisperProvider(STTProvider):
         current_time = time.time()
 
         # Check TTL - skip if already warm
-        if self._warmed_up and (current_time - self._last_warmup_time) < self._warmup_ttl_seconds:
+        if not force and self._warmed_up and (current_time - self._last_warmup_time) < self._warmup_ttl_seconds:
             time_since_warmup = current_time - self._last_warmup_time
             print(f"[WhisperProvider] Model still warm ({time_since_warmup:.0f}s since last warmup, TTL={self._warmup_ttl_seconds}s)")
             return True
@@ -1336,10 +1355,12 @@ class WhisperProvider(STTProvider):
             # model takes 15-35 s here and would freeze every other stream.
             # Use configured language or auto-detect - warmup doesn't affect
             # session language since each session has its own detected_language.
+            warmup_language = self._warmup_language or self.language or self._last_declared_language
+
             def _infer():
                 segments, _info = self.whisper_model.transcribe(
                     dummy_audio,
-                    language=self.language,
+                    language=warmup_language,
                     beam_size=self.beam_size,
                     vad_filter=False,
                     word_timestamps=False,
@@ -1403,8 +1424,37 @@ class WhisperProvider(STTProvider):
             config=config
         )
 
+    def note_language(self, language: Optional[str]) -> None:
+        if language:
+            self._last_declared_language = language
+
+    def start_keepalive(self) -> None:
+        """Keep the model warm in the background (needs a running event loop)."""
+        if self._keepalive_interval_seconds <= 0:
+            print("[WhisperProvider] Keep-alive disabled (WHISPER_KEEPALIVE_INTERVAL=0)")
+            return
+        if self._keepalive_task is not None and not self._keepalive_task.done():
+            return
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        print(f"[WhisperProvider] Keep-alive started (every {self._keepalive_interval_seconds}s, "
+              f"TTL={self._warmup_ttl_seconds}s)")
+
+    async def _keepalive_loop(self) -> None:
+        # First pass runs immediately: the model is warm before the first session.
+        while True:
+            try:
+                await self.warmup(force=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"[WhisperProvider] Keep-alive warmup error: {e}")
+            await asyncio.sleep(self._keepalive_interval_seconds)
+
     async def cleanup(self) -> None:
         """Clean up resources."""
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
         self.whisper_model = None
         self.vad_model = None
         self.model_ready = False

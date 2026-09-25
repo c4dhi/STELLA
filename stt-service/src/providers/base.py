@@ -101,6 +101,12 @@ class STTProvider(ABC):
         """
         return True
 
+    def start_keepalive(self) -> None:
+        """Start background work that keeps the model warm. No-op by default."""
+
+    def note_language(self, language: Optional[str]) -> None:
+        """A session declared this language; providers may use it to warm up. No-op by default."""
+
     def get_capabilities(self) -> dict:
         """Return provider capabilities.
 
