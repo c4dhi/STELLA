@@ -11,6 +11,26 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-25
+
+Ships with STELLA 1.2.0. What changes for agent authors:
+
+### Added
+- `set_deliverable` and `batch_update` (and `StateMachineClient.set_deliverable`) accept `unconfirmed=True` for something the user mentioned in passing but hasn't confirmed. It is stored with status `partial`, and setting the key again without the flag confirms it.
+- Language pinning: `STELLA_LANGUAGE` fixes a deployment to one language, and `LanguageResolver.set_plan_language()` lets a plan's declared language pin speech recognition from the first utterance.
+- `TranscriptEvent.decode_diagnostics`: optional speech-recognition decode metrics, filled when the STT service runs with `STT_DECODE_DIAGNOSTICS=1`.
+- `TTS_PROGRESS_TICK_MS`: how often teleprompter progress is emitted during playback (default 200 ms).
+
+### Changed
+- Speech plays sentence by sentence as it is synthesized, behind a jitter buffer (`STELLA_TTS_PREROLL_MS`, default 200 ms) with an underrun guard. Synthesis is serialized per session.
+- Barge-in: the agent ducks its voice on the first sound (`BARGE_IN_DUCK_GAIN`, default 0.25), yields once the STT service reports enough voiced audio, and can resume from where it paused. `on_barge_in` judges the final transcript of the whole utterance, after the agent has already ducked and yielded.
+- `TRANSCRIPT_DEBOUNCE_MS` defaults to 0 (was 300).
+- LangChain clients are pooled and reused across calls.
+
+### Fixed
+- Teleprompter progress tiles each sentence and no longer trails the voice.
+- Analytics anchor every turn, typed turns included.
+
 ## [0.5.0] - 2026-09-08
 
 First public release. The SDK has been used in production inside STELLA for some

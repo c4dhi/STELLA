@@ -37,6 +37,9 @@ differently" under Changed first.**
 - Deployments fail when the ConfigMap template has a placeholder with no substitution rule
 - Deployments fail when the text-to-speech service comes up without a working voice model, instead of going green with every session silent
 
+**Agent SDK**
+- Agent SDK 0.6.0 on PyPI (`pip install stella-ai-agent-sdk==0.6.0`). For agent authors: speech streams sentence by sentence behind a tunable pre-roll, barge-in ducks first and calls `on_barge_in` once with the whole utterance, a deployment or plan language pins speech recognition, and `set_deliverable` accepts `unconfirmed=True`. Details in the [SDK changelog](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md)
+
 ### Changed
 
 **Interruptions work differently (barge-in, #15)**
