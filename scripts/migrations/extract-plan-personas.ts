@@ -5,6 +5,7 @@
  *
  *   npx ts-node scripts/migrations/extract-plan-personas.ts           # dry run
  *   npx ts-node scripts/migrations/extract-plan-personas.ts --apply   # write
+ *   ... --show-prompts   # also print the start of each prompt (off by default)
  *
  * Deliberately a script rather than a SQL migration: the mapping deserves to be
  * read by a human before anything is stripped. Safe to re-run.
@@ -14,7 +15,10 @@ import { extractPlanPersonas } from '../../src/personas/persona-extraction';
 
 const prisma = new PrismaClient();
 
-extractPlanPersonas(prisma, { apply: process.argv.includes('--apply') })
+extractPlanPersonas(prisma, {
+  apply: process.argv.includes('--apply'),
+  showPrompts: process.argv.includes('--show-prompts'),
+})
   .catch((e) => {
     console.error(e);
     process.exit(1);

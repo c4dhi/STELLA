@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Personas: an agent's identity (name, system prompt, voice, language) is now separate from its plan and can be chosen when deploying. A plan remembers the persona it was built with, and a deployment that names no persona uses the plan's, then the system default
-- **Upgrade step for existing installations:** run `npx ts-node scripts/migrations/extract-plan-personas.ts` once after updating (a dry run that prints what it would do), read the output, then run it again with `--apply`. It turns each plan's and public project's own prompt and voice into a persona and links the plan to it, so existing plans keep their personality. It is safe to re-run. Saved configurations that set a custom persona in the old configurator slot are not carried over
+- **Upgrade step for existing installations:** run `npx ts-node scripts/migrations/extract-plan-personas.ts` once after updating (a dry run that prints plan names, counts and persona names; add `--show-prompts` to also print prompt text), read the output, then run it again with `--apply`. It turns each plan's and public project's own prompt and voice into a persona and links the plan to it, so existing plans keep their personality. It is safe to re-run. Saved configurations that set a custom persona in the old configurator slot are not carried over
 
 ### Changed
 

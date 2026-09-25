@@ -19,6 +19,8 @@ import { PrismaClient, Prisma } from '@prisma/client';
 
 export interface ExtractionOptions {
   apply: boolean;
+  /** Print the start of each prompt. Off by default: prompts can be study material. */
+  showPrompts?: boolean;
   log?: (line: string) => void;
 }
 
@@ -100,7 +102,7 @@ async function findOrCreatePersona(
 
 export async function extractPlanPersonas(
   prisma: PrismaClient,
-  { apply, log = console.log }: ExtractionOptions,
+  { apply, showPrompts = false, log = console.log }: ExtractionOptions,
 ): Promise<ExtractionSummary> {
   const summary: ExtractionSummary = {
     personasCreated: 0,
@@ -149,8 +151,10 @@ export async function extractPlanPersonas(
     log(
       `── ${personaNameFor(names)}  owner ${group.userId}  ` +
         `from ${names.map((n) => `"${n}"`).join(', ')}\n` +
-        `   prompt (${group.identity.prompt.length} chars): ` +
-        `${JSON.stringify(group.identity.prompt.slice(0, 120))}`,
+        `   prompt: ${group.identity.prompt.length} chars` +
+        (showPrompts
+          ? `: ${JSON.stringify(group.identity.prompt.slice(0, 120))}`
+          : ' (use --show-prompts to print it)'),
     );
     if (!apply) continue;
 

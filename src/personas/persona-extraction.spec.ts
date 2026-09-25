@@ -229,4 +229,26 @@ describe('extractPlanPersonas', () => {
     expect(summary.personasCreated).toBe(0);
     expect(summary.plansLinked).toBe(0);
   });
+
+  it('does not print prompt text unless asked', async () => {
+    const mk = () =>
+      fakeDb({
+        plans: [plan('a', 'u1', { system_prompt: 'SECRET prompt text for Grace.' })],
+      }).db;
+
+    const hidden: string[] = [];
+    await extractPlanPersonas(mk(), { apply: false, log: (l) => hidden.push(l) });
+    const out = hidden.join('\n');
+    expect(out).not.toContain('SECRET');
+    expect(out).toContain('Plan a');
+    expect(out).toContain('29 chars');
+
+    const shown: string[] = [];
+    await extractPlanPersonas(mk(), {
+      apply: false,
+      showPrompts: true,
+      log: (l) => shown.push(l),
+    });
+    expect(shown.join('\n')).toContain('SECRET prompt text');
+  });
 });
