@@ -59,4 +59,26 @@ message TranscriptEvent {
   string detected_language = 8;    // ISO 639-1 language detected for this utterance
                                    // (independent probe, final events only)
   float language_confidence = 9;   // Detection confidence (0.0-1.0); 0 when absent
+  string decode_diagnostics = 10;  // JSON blob of decode confidence + comparison
+                                   // metrics for a final event. Empty unless
+                                   // STT_DECODE_DIAGNOSTICS is on. Carried as
+                                   // JSON, not typed fields, because which
+                                   // metrics matter is exactly what the
+                                   // investigation is still deciding — the
+                                   // schema would churn every iteration.
+  bool speech_confirmed = 11;      // VAD has now heard enough CONTINUOUS speech
+                                   // that this utterance is an interruption
+                                   // rather than a backchannel ("mhm"). Emitted
+                                   // once per utterance, from VAD alone — no
+                                   // decode, no text, no language. This is the
+                                   // barge-in trigger: acting on it costs the
+                                   // threshold, not a transcription round trip.
+  bool speech_ended = 12;          // VAD has stopped hearing speech (entering
+                                   // MAYBE_ENDING). Pairs with speech_started
+                                   // to bracket "the user is talking right
+                                   // now", which is what the agent ducks its
+                                   // own voice against. Not the end of the
+                                   // utterance — speech may resume inside the
+                                   // continuation window, and speech_started
+                                   // is re-emitted if it does.
 }

@@ -12,7 +12,7 @@
        release-please reads "1.1.0-blue" as a semver with a "blue" prerelease and
        replaces the colour along with the version. Keep one version on this line,
        and none in the alt text. -->
-  <img src="https://img.shields.io/static/v1?label=version&message=1.1.0&color=blue&style=flat-square" alt="STELLA version"> <!-- x-release-please-version --> <!-- x-release-please-version -->
+  <img src="https://img.shields.io/static/v1?label=version&message=1.2.0&color=blue&style=flat-square" alt="STELLA version"> <!-- x-release-please-version --> <!-- x-release-please-version -->
   <a href="https://c4dhi.github.io/STELLA/"><img src="https://img.shields.io/badge/docs-live-green?style=flat-square" alt="Documentation"></a>
   <a href="https://github.com/c4dhi/STELLA/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome"></a>
 </p>

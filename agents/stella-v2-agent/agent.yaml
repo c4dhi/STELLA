@@ -74,10 +74,20 @@ configSchema:
     - name: EXPERT_TIMEOUT_MS
       description: "Timeout per expert in milliseconds"
       default: "3000"
+    - name: STELLA_LANGUAGE
+      description: "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT transcribes as it, the resolver forces every turn to it, and the reply is written in it — so a short or garbled first utterance still gets answered in that language. Empty or 'auto' = detect per turn and fall back to the default language."
     - name: TTS_LANGUAGE
       description: "Seed language for TTS (ISO 639-1, e.g. 'de'). Empty = follow the per-turn detected language; the agent overrides this each turn."
     - name: TTS_VOICE
       description: "Seed TTS voice, overridable per stream. Honored by voice-selecting providers (e.g. Kokoro), ignored by others. Empty = provider default."
+    - name: STELLA_TTS_PREROLL_MS
+      description: "Jitter buffer (ms) of audio buffered before an utterance starts playing. Default 800, calibrated for a provider running at roughly real time. On faster hardware lower it (150-300ms when synthesis outruns playback) to cut time-to-first-sound; if you hear warbling or see 'Playout starved' in the agent log, raise it. 0 also disables the underrun guard. Leave unset to use the default."
+    - name: STELLA_TTS_RATE_VARIATION
+      description: "Vary the speaking rate slightly by turn character (a heavier turn is taken a little slower, an opening beat a little brisker). ON BY DEFAULT — set 'false' to synthesize every utterance at exactly one rate. Only providers that implement rate honor it (Qwen3 does, by resampling)."
+    - name: TTS_SPEED
+      description: "Baseline speaking rate (0.5-2.0, default 1.0). The agent overrides this per turn when STELLA_TTS_RATE_VARIATION is on. Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker."
+    - name: TTS_PROGRESS_TICK_MS
+      description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
 
 defaultConfig: {}
 
@@ -161,6 +171,8 @@ pipelineSchema:
             - React to the SPECIFIC thing they said, never to the act of answering.
             - NEVER praise a mundane answer ("That's a solid routine!", "Helpful to know!", "Great!", "Perfect!") — it's empty and would fit any answer. A curious or neutral reaction beats hollow praise.
             - Reflect back the specific detail they gave (their number, their word), not a generic "got it".
+            - Appraising their SITUATION is not the same as praising their ANSWER. "That's a solid base to build on" is fine when you mean it and it follows from what they have actually told you; "great answer!" never is. This is your call to make and not the opener's — you can see the directive below, and the opener could not.
+            - If the directive asks for a cautious tone, do not appraise at all. They have told you something that deserves care instead.
 
             Give, don't just take:
             - Don't make every turn an extraction. Offer something — an observation, a connection — before, or instead of, asking the next thing. Not every turn needs a question.
@@ -174,7 +186,9 @@ pipelineSchema:
             - Natural contractions, always. Light spoken connectors and the occasional filler ("actually", "honestly", "naja", "ehrlich") are welcome where they fit — just don't lean on them.
 
             Response shape:
-            - 1-3 sentences, ~25-45 words. At most ONE question per turn, often none. Match the user's energy and length.
+            - 1-3 sentences, ~25-45 words. Match the user's energy and length.
+            - NEVER ask more than one question in a turn, and often ask none at all.
+            - If you do ask one, it is the LAST thing you say. They are LISTENING, not reading: whatever follows a question is talked over or forgotten, so a question in the middle costs you the rest of the turn. Say your observation first, then ask.
 
             Formatting:
             - No markdown, bullets, numbered lists, or emojis.
@@ -246,42 +260,33 @@ pipelineSchema:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "System prompt for bridge phrase generation"
+          description: "System prompt for the bridge. Supports {{conversationHistory}}, {{isBargeIn}}, {{allowAppraisal}}, {{userInput}} and {{bridgeMode}} — the per-turn instruction saying whether this turn wants a bare beat, a full reception, or a visible pause. If your prompt omits {{bridgeMode}} it is appended automatically, so the per-turn behaviour still applies."
           default: |
-            You are the real-time speech reflex for a professional Voice AI interviewer. Right after the user stops speaking, you say the natural opening beat of your reply — what a real person says first, before getting to their actual point. It is spoken aloud immediately while the full reply is still being prepared, so the more (genuinely) you can say here, the smoother the conversation feels.
-
-            Your job is to carry the ENTIRE reaction — receive what they said, reflect it back, and (when it's personal) sit with it for a beat — so the reply that follows only has to move things forward. Lean LONG, not short: the more genuine reaction you give here, the more present you sound AND the more time the full reply has to land. A bare "Okay, I follow." wastes that — when they've given you something real, take it in out loud across a sentence or two.
+            You just heard the user and you're about to answer. First you say the opening beat of your reply the way a real person would — spoken aloud on its own, while the rest of the answer is still being prepared.
             {{#if conversationHistory}}
 
             Recent context:
             {{conversationHistory}}
             {{/if}}
 
-            Core directives:
-            - End with . or ! — NEVER a question mark. The bridge never asks anything; the question belongs to the reply that follows.
-            - Never answer, advise, give facts, or move to the next topic — that's the reply's job. You only react to what they just said.
-            - Length scales to what they gave you — and lean toward the longer end; a fuller bridge sounds more present and buys the reply time:
-              - One word / a greeting -> 1-2 words ("Hey." / "Okay.").
-              - An ordinary factual answer -> acknowledge and mirror their specifics in a short sentence ("Right — twice a week, mostly bodyweight stuff.").
-              - A fuller, personal, or vulnerable turn -> receive it fully: mirror it back AND name what you're hearing — the feeling, the effort — across two or three short sentences, up to ~35 words, in their own words ("Okay, I hear you. Having to force yourself through every workout — that's draining, and it's honest of you to admit it.").
-            - Mirror the SPECIFIC thing they said (their words, their numbers), never a generic "okay". Naming the feeling or effort you hear ("that sounds draining") is reflection and welcome; giving advice, facts, or the next question is NOT — that's the reply's job.
-
-            {{#unless allowAppraisal}}
-            - Do NOT evaluate what they said — no "That's interesting", "That's a good point", "That's great". Just receive it and reflect it back plainly.
-            {{/unless}}
-            {{#if allowAppraisal}}
-            - You MAY add a brief, understated appraisal of the user's OWN situation or goal ("that's a solid base to build on", "makes sense that it all ties together") — low-key, never gushing, only about what they've actually told you, never about an answer or topic you haven't reached yet.
-            {{/if}}
-
-            Language matching — CRITICAL:
-            - ALWAYS respond in the SAME LANGUAGE the user is speaking. Natural, idiomatic phrasing — never translate literally.
-
+            Always:
+            - End with . or ! — never ask a question. The question belongs to the reply that follows.
+            - Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
+            - NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
+            - React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction ("Fair enough.", "Ah, okay.") beats an echo every time.
+            - Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
+            - VARY HOW YOU OPEN. Check what you already said in the recent context above and start this one differently — different words AND a different construction. Opening several turns in a row with the same frame ("That sounds like...", "Das klingt nach...") is the single most robotic thing you can do, even when each sentence is individually fine.
+            - No "hmm", "uh" or "erm" — they render badly in our synth.
             {{#if isBargeIn}}
-            Barge-in: The user just interrupted you. Acknowledge it briefly and yield ("Oh, go ahead." / "Sorry, yes?"). Do not continue your previous point.
+            - The user just interrupted you. Yield the floor: two or three words that hand it to them, then stop. No example is given here on purpose — a quoted one gets repeated verbatim, in the language it was written in. Do not continue your previous point.
             {{/if}}
-            Output ONLY the bridge. No quotes, no explanations.
+            - Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult. Naming what you hear in it ("that sounds draining") is welcome; judging it is not.
+            - Say only what follows from what they actually told you. Do not invent a mood, a motive or a situation they have not mentioned.
+            {{#if bridgeMode}}
 
-            Available variables: {{isBargeIn}} (yes/no — was this a user interruption), {{allowAppraisal}} (yes/no — may you lightly appraise this turn; set by a safety screen), {{userInput}}.
+            {{bridgeMode}}
+            {{/if}}
+            Output ONLY the bridge. No quotes, no labels.
         - id: model
           label: "Model"
           type: select
@@ -301,17 +306,6 @@ pipelineSchema:
           max: 120
           step: 5
           default: 90
-        - id: fast_path
-          label: "Fast Bridge (skip LLM)"
-          type: select
-          options: ["off", "on"]
-          default: "off"
-          description: >
-            When "on", the bridge is an INSTANT templated acknowledgement
-            (greeting / acknowledgement / "let me think") with no LLM call, so it
-            always lands inside the natural turn-taking gap. When "off" (default),
-            the LLM generates a contextual bridge from the prompt above — richer,
-            but it can take up to the timeout below to return.
         - id: timeout_ms
           label: "LLM Bridge Timeout (ms)"
           type: number
@@ -322,24 +316,14 @@ pipelineSchema:
           description: >
             How long to wait for the LLM bridge before falling back to an instant
             templated one. The bridge only buys ~1s while the main pipeline runs,
-            so a slow LLM must never stall the turn. Ignored when Fast Bridge is on.
-        - id: appraisal
-          label: "Bridge Appraisal"
-          type: select
-          options: ["off", "on"]
-          default: "on"
-          description: >
-            When "off" (default), the bridge is strictly reflective — it mirrors
-            back what the user said but never evaluates it. When "on", the LLM
-            bridge MAY add a brief, understated appraisal of the user's situation
-            ("that's a good amount to work with") — but only when a cheap safety
-            screen clears, so it never affirms ahead of a sensitive or "no"-type
-            answer. The instant templated fallback never appraises. Ignored when
-            Fast Bridge is on.
-
+            so a slow LLM must never stall the turn. Note the LLM bridge returns
+            in ~550-1030ms measured, so at the 2000ms default it always wins and
+            the templated fallback never fires — lower this toward the LLM's own
+            floor if you want the instant bridge, which is the only variant that
+            can open inside the natural turn gap.
     - id: barge_in
       label: "Barge-in Evaluator"
-      description: "Decides whether a user interruption is worth acting on (commit) or should be ignored so speech resumes (~150ms). This agent supports barge-in by default; operators can force it off with BARGE_IN_ENABLED=false."
+      description: "Decides whether an interruption — spoken or typed — should stop the agent (COMMIT) or be ignored so it keeps talking (RESUME). A spoken one reaches this prompt only after two cheaper filters have run: the agent ducks its own voice the moment it hears sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms). This prompt then judges the FINAL transcript — the one question duration cannot answer, since 'mhm' and 'no, wait' are both short. RESUME resumes playback from exactly where it paused, so a wrong guess here is recoverable. Noise that transcribes to nothing never gets this far. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s) and speech is queued as the next turn instead. Operators can force barge-in off entirely with BARGE_IN_ENABLED=false."
       icon: "✋"
       # Sits above the main pipeline, horizontally centered (cols 0-3 → 1.5).
       # Barge-in spans the whole turn rather than being a stage in the flow.
@@ -348,7 +332,7 @@ pipelineSchema:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "Decides if a barge-in is a real interruption. The interruption itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-committed reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
+          description: "Decides whether a mid-turn interruption — spoken or typed — is real. The interruption itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-spoken reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking from where it paused). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
           default: |
             You decide whether a user's interruption of the assistant's speech is a real interruption that should be acted on, or just a backchannel/noise that should be ignored so the assistant keeps talking.
             {{#if conversationHistory}}
@@ -364,9 +348,13 @@ pipelineSchema:
 
             The user's interruption (what they said while the assistant was speaking) is given as the user message. JUDGE IT IN CONTEXT.
 
-            Output COMMIT if the user's words are meaningful given the conversation — a relevant answer to what the assistant just asked, a question, a correction, a new request, a clear "stop"/"wait", or a change of topic. An on-topic answer (e.g. giving their name right after being asked for it) is a real turn and must COMMIT.
+            JUDGE THE WHOLE UTTERANCE, NEVER ITS OPENING WORDS. People begin real answers with agreement all the time. "Ja, absolut." on its own is a backchannel; "Ja, absolut. Pausen würden auch gehen, aber ich habe leider wenig Zeit." is an ANSWER that happens to start with agreement, and it is a real turn. Read to the end before deciding.
 
-            Output RESUME if it was just acknowledgement, agreement, thinking-aloud, or noise that does not require the assistant to stop — e.g. "mhm", "yeah", "right", "go on", a cough, or a few filler words.
+            THE TEST: strip the acknowledgement words from the front. Is anything left that the assistant would need to respond to — a fact about the user, an opinion, a qualification, a question, a refusal? If yes, COMMIT. If removing the filler leaves nothing, RESUME.
+
+            Output COMMIT if the user's words are meaningful given the conversation — a relevant answer to what the assistant just asked, a question, a correction, a new request, a clear "stop"/"wait", or a change of topic. An on-topic answer (e.g. giving their name right after being asked for it) is a real turn and must COMMIT. If the assistant's last sentence was a question and these words could be an answer to it, COMMIT.
+
+            Output RESUME only when the utterance is nothing BUT acknowledgement or noise and carries no information of its own — "mhm", "ja", "genau", "okay", "right", "go on", a cough, a few filler words.
 
             When unsure, prefer COMMIT — ignoring a real interruption is worse than briefly pausing.
 

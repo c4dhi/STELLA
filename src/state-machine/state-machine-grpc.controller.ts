@@ -186,6 +186,7 @@ export class StateMachineGrpcController {
     key: string;
     value: string;
     reasoning: string;
+    unconfirmed?: boolean;
   }): Promise<{
     success: boolean;
     error?: string;
@@ -215,6 +216,7 @@ export class StateMachineGrpcController {
       request.key,
       parsedValue,
       request.reasoning,
+      request.unconfirmed ?? false,
     );
 
     return {

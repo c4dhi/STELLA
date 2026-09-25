@@ -45,6 +45,22 @@ function formatMs(ms: number): string {
   return `${Math.round(ms)}ms`
 }
 
+/**
+ * Largest timing across the stages, or 0 when there is nothing to plot.
+ *
+ * A stage row can legitimately exist with every timing at zero: the backend
+ * keeps timeline events whose `elapsed_ms` is 0, and any turn recorded without
+ * an analytics anchor produces a full set of them. Feeding that 0 to the axis
+ * made `ms / maxMs` evaluate 0/0 = NaN, and SVG silently coerces a NaN
+ * coordinate to 0 — so every marker, gridline and tick collapsed onto the
+ * origin and the chart looked broken rather than empty.
+ */
+export function axisCeiling(stages: Array<Pick<StageLatency, 'p95_ms' | 'max_ms' | 'mean_ms'>>): number {
+  if (stages.length === 0) return 0
+  const max = Math.max(...stages.map(s => s.p95_ms || s.max_ms || s.mean_ms || 0))
+  return Number.isFinite(max) && max > 0 ? max : 0
+}
+
 function getAxisTicks(maxMs: number): number[] {
   if (maxMs <= 0) return [0]
   const candidates = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
@@ -91,12 +107,10 @@ export default function StageTimeline({
     [stages],
   )
 
-  // Compute the max value for the axis
-  const maxMs = useMemo(() => {
-    if (timelineStages.length === 0) return 100
-    const max = Math.max(...timelineStages.map(s => s.p95_ms || s.max_ms))
-    return max * 1.1 // 10% padding
-  }, [timelineStages])
+  // Compute the max value for the axis. `ceiling` is 0 when nothing is
+  // plottable; fall back to a finite axis so no coordinate can become NaN.
+  const ceiling = useMemo(() => axisCeiling(timelineStages), [timelineStages])
+  const maxMs = ceiling > 0 ? ceiling * 1.1 : 100 // 10% padding
 
   const chartWidth = containerWidth - LEFT_LABEL_WIDTH - RIGHT_PADDING
   const svgHeight = TOP_PADDING + timelineStages.length * (LANE_HEIGHT + LANE_GAP) + AXIS_HEIGHT
@@ -116,12 +130,23 @@ export default function StageTimeline({
     [onStageSelect, selectedStage],
   )
 
-  if (timelineStages.length === 0) {
+  // Two distinct empty states. "No stages at all" and "stages that carry no
+  // timing" are different problems, and collapsing them into one message sent
+  // people looking for a missing endpoint when the data was simply unmeasured.
+  if (timelineStages.length === 0 || ceiling === 0) {
     return (
       <div className={`rounded-xl p-8 text-center ${isDark ? 'bg-surface-dark-secondary' : 'bg-white border border-neutral-200'}`}>
         <p className={isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}>
-          No analytics data available
+          {timelineStages.length === 0
+            ? 'No analytics data available'
+            : 'No timing data recorded for this session'}
         </p>
+        {timelineStages.length > 0 && (
+          <p className={`text-xs mt-2 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
+            {timelineStages.length} stage{timelineStages.length !== 1 ? 's' : ''} were recorded, but every
+            measurement is 0ms — the turn had no analytics anchor.
+          </p>
+        )}
       </div>
     )
   }

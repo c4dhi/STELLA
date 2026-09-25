@@ -12,6 +12,7 @@ from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 from stella_v2_agent.prompts.response_prompt import (
     build_response_system_prompt,
+    _state_machine_section,
     build_response_user_message,
 )
 
@@ -327,3 +328,174 @@ def test_no_bridge_has_no_continuation_guidance_or_replay():
     rc = _roles_and_contents(svc.captured_messages)
     assert not any("CONTINUE FROM" in c.upper() for _, c in rc)
     assert not any(r == "assistant" for r, _ in rc)
+
+
+# ---------------------------------------------------------------------------
+# The state-machine section is orientation, not a form (#4 naturalness).
+# It used to emit a labelled checklist every turn — every pending deliverable by
+# snake_case key with acceptance criteria, plus "Overall progress: 40%". Models
+# follow structure over instruction, so a checklist in the window beat the
+# persona's "you are not a form" every time.
+# ---------------------------------------------------------------------------
+
+def _sm_with_backlog():
+    return {
+        "state": {"title": "Fitness baseline", "description": "Understand how they train"},
+        "current_task": {
+            "description": "Ask about frequency",
+            "instruction": "Ask how often they train",
+            "deliverable_keys": ["workout_freq"],
+        },
+        "deliverables": [
+            {"key": "workout_freq", "status": "pending",
+             "description": "how often they train", "acceptance_criteria": "a number per week"},
+            {"key": "sleep_quality", "status": "pending", "description": "how well they sleep"},
+            {"key": "goals", "status": "pending", "description": "what they want out of it"},
+            {"key": "injuries", "status": "pending", "description": "any injuries"},
+            {"key": "user_name", "status": "completed",
+             "description": "their name", "value": "Felix"},
+        ],
+        "progress": {"percentage": 40},
+    }
+
+
+def test_progress_percentage_is_not_in_the_prompt():
+    # A running completion meter is the most form-like thing in the window and
+    # has no bearing on what to say next.
+    result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
+    assert "Overall progress" not in result
+    assert "40%" not in result
+
+
+def test_deliverable_keys_are_not_exposed():
+    # This stage only writes prose; key names are the extraction expert's
+    # business and invited field-shaped turns.
+    result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
+    for key in ("workout_freq", "sleep_quality", "user_name", "injuries"):
+        assert key not in result
+
+
+def test_pending_items_are_described_not_enumerated_as_fields():
+    result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
+    assert "how often they train" in result
+    assert "Still need to collect" not in result
+
+
+def test_only_the_next_gap_is_named_and_the_rest_counted():
+    # Four pending items, ONE shown. A list of gaps is a list of things to ask,
+    # and models follow structure over instruction — three visible gaps produced
+    # turns that closed two of them at once, which is the multi-question reply
+    # the guidelines forbid in prose. The count keeps the agent oriented.
+    result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
+    assert "3 more" in result
+    assert "how well they sleep" not in result
+    assert "what they want out of it" not in result
+    assert "any injuries" not in result
+
+
+def test_the_one_named_gap_is_the_current_task_s():
+    # With a single visible item, ordering IS the selection: the live task's
+    # deliverable must be the one that survives, never a backlog item.
+    result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
+    section = result[result.index("The one thing to find out next"):]
+    assert "how often they train" in section
+
+
+def test_criteria_shown_only_for_what_is_in_play():
+    sm = _sm_with_backlog()
+    sm["deliverables"][1]["acceptance_criteria"] = "hours per night"
+    result = build_response_system_prompt(sm, ResponseDirective())
+    assert "a number per week" in result      # current task — in play
+    assert "hours per night" not in result    # backlog — noise this turn
+
+
+def test_already_answered_items_are_still_carried():
+    # The one thing this section must never lose: what NOT to ask again.
+    result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
+    assert "their name" in result and "Felix" in result
+    assert "never ask" in result.lower()
+
+
+def test_just_collected_items_are_marked_as_answered():
+    sm = _sm_with_backlog()
+    sm["_collected_keys"] = ["workout_freq"]
+    result = build_response_system_prompt(sm, ResponseDirective())
+    assert "they just told you this" in result
+    # …and must not still be listed as unknown. Slice only the unknown block:
+    # the phrase legitimately reappears under "already told you".
+    start = result.index("The one thing to find out next")
+    end = result.index("They have already told you", start)
+    assert "how often they train" not in result[start:end]
+
+
+def test_task_instruction_survives():
+    result = build_response_system_prompt(_sm_with_backlog(), ResponseDirective())
+    assert "Ask how often they train" in result
+
+
+def test_empty_context_renders_nothing():
+    assert _state_machine_section({}) == ""
+
+
+# ---------------------------------------------------------------------------
+# Mentioned-but-unconfirmed deliverables (status 'partial').
+#
+# There used to be only two states — unknown or settled — so something the user
+# volunteered came back later as a cold question ("do you go for walks?" after
+# they had already said they walk most days). A real interviewer brings it back
+# and checks instead.
+# ---------------------------------------------------------------------------
+
+def _sm_with_unconfirmed():
+    return {
+        "state": {"title": "Alltag"},
+        "current_task": {"description": "Bewegung", "deliverable_keys": ["movement"]},
+        "deliverables": [
+            {"key": "movement", "status": "pending",
+             "description": "how they move day to day"},
+            {"key": "walks", "status": "partial",
+             "description": "whether they walk regularly",
+             "value": "walks most days, not in this heat"},
+            {"key": "water", "status": "completed",
+             "description": "hydration", "value": "tries to drink enough"},
+        ],
+    }
+
+
+def test_unconfirmed_is_surfaced_as_something_to_check():
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    assert "MENTIONED these but have not confirmed" in result
+    assert "walks most days, not in this heat" in result
+
+
+def test_unconfirmed_is_not_listed_as_unknown():
+    # Asking cold is the bug being fixed — it must not appear as a gap.
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    start = result.index("The one thing to find out next")
+    end = result.index("They MENTIONED", start)
+    assert "walk" not in result[start:end]
+
+
+def test_unconfirmed_is_not_treated_as_settled():
+    # Nor may it be filed under "never ask this again" — that is the other
+    # failure: asserting something the user never actually agreed to.
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    # Slice on the section HEADER — the bare phrase "already told you" also
+    # occurs in the conversation guidelines further up.
+    settled = result[result.index("They have already told you (never ask"):]
+    assert "walk" not in settled
+    assert "hydration" in settled
+
+
+def test_confirmed_and_unconfirmed_coexist():
+    result = build_response_system_prompt(_sm_with_unconfirmed(), ResponseDirective())
+    assert "how they move day to day" in result   # still unknown
+    assert "whether they walk regularly" in result  # to be checked
+    assert "tries to drink enough" in result        # settled
+
+
+def test_no_unconfirmed_block_when_there_are_none():
+    sm = {"state": {"title": "X"},
+          "deliverables": [{"key": "a", "status": "completed",
+                            "description": "a thing", "value": "v"}]}
+    assert "MENTIONED" not in build_response_system_prompt(sm, ResponseDirective())

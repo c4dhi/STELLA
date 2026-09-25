@@ -1,4 +1,4 @@
 # Kokoro TTS provider — local ONNX inference.
 # Selected at build time via --build-arg TTS_PROVIDER=kokoro (or auto).
 
-kokoro-onnx>=0.4.0
+kokoro-onnx>=0.4.7

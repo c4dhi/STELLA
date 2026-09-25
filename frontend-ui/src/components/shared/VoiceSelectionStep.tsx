@@ -27,25 +27,44 @@ interface VoiceSelectionStepProps {
   loading: boolean
   /** Selected voice id. Empty string = provider default voice. */
   voice: string
-  /** Selected ISO language. Empty string = Auto (follow conversation). */
+  /** Pinned ISO conversation language. Empty string = Auto (detect per turn). */
   language: string
+  /**
+   * ISO code the SELECTED PLAN declares, if any. When present the plan is the
+   * session language and the picker is replaced by a read-only summary — there
+   * is nothing to decide, and offering a choice that the plan then overrides
+   * would just be a lie.
+   */
+  planLanguage?: string
   onVoiceChange: (voice: string) => void
   onLanguageChange: (language: string) => void
 }
 
 /**
- * Lets the operator pick the voice and spoken language an agent uses.
+ * Lets the operator pick the voice and conversation language an agent uses.
  *
  * Choices come from the *active* TTS provider's capabilities, so we never
- * offer something it can't produce. Language defaults to "Auto" — which makes
- * the reference voice follow the participant's spoken language turn-by-turn
- * (the core #311 behavior). Pinning a language overrides that.
+ * offer something it can't produce. Language defaults to "Auto" — detect the
+ * participant's language per turn, so the voice follows it turn-by-turn (the
+ * core #311 behavior), falling back to English when nothing is detectable.
+ *
+ * Pinning a language fixes the whole deployment to it (STELLA_LANGUAGE):
+ * transcription, the written reply, and the voice. That is the point of the
+ * pin — auto-detect needs a long enough utterance to be confident, so a short
+ * or garbled first turn would otherwise be answered in the default language.
+ *
+ * When the selected plan declares its own language, that IS the session
+ * language and the picker is replaced by a read-only summary. The plan is the
+ * better place for it: a plan written in German is German wherever it is
+ * deployed, so the operator should not have to restate it — or be able to
+ * contradict it — every time they deploy.
  */
 export default function VoiceSelectionStep({
   capabilities,
   loading,
   voice,
   language,
+  planLanguage,
   onVoiceChange,
   onLanguageChange,
 }: VoiceSelectionStepProps) {
@@ -105,7 +124,24 @@ export default function VoiceSelectionStep({
         </div>
       )}
 
-      {languages.length > 0 && (
+      {planLanguage ? (
+        <div>
+          <label className={labelClass}>Language</label>
+          <div
+            className={`w-full px-4 py-2.5 rounded-xl text-sm font-light border ${
+              isDark
+                ? 'bg-zinc-800/60 border-zinc-700 text-zinc-300'
+                : 'bg-neutral-50 border-neutral-200 text-neutral-700'
+            }`}
+          >
+            {languageLabel(planLanguage)} — set by the plan
+          </div>
+          <p className={hintClass}>
+            This plan is written in {languageLabel(planLanguage)}, so the whole session uses it:
+            transcription, replies, and voice. To change it, edit the plan's Language field.
+          </p>
+        </div>
+      ) : languages.length > 0 && (
         <div>
           <label className={labelClass}>Language</label>
           <select
@@ -121,8 +157,10 @@ export default function VoiceSelectionStep({
             ))}
           </select>
           <p className={hintClass}>
-            Auto picks the matching reference clip for whatever language the participant speaks.
-            Choose a language to pin it.
+            Auto detects the participant's language each turn and picks the matching reference
+            clip, falling back to English when it can't tell. Choose a language to fix this
+            agent to it — transcription, replies, and voice — even on a short or unclear first
+            message.
           </p>
         </div>
       )}

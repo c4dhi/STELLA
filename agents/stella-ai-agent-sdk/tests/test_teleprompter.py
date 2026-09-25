@@ -6,10 +6,16 @@ and that emission is gated by the STELLA_TELEPROMPTER_ENABLED flag.
 """
 
 import asyncio
+import time
 
 import pytest
 
-from stella_agent_sdk.audio.pipeline import AudioPipeline, _PLAYOUT_FRAME_BYTES
+from stella_agent_sdk.audio.pipeline import (
+    AudioPipeline,
+    _BYTES_PER_SAMPLE,
+    _PLAYOUT_FRAME_BYTES,
+    _TTS_SAMPLE_RATE,
+)
 
 
 class CapturingRoom:
@@ -21,23 +27,48 @@ class CapturingRoom:
     def __init__(self):
         self.published = bytearray()
         self.data = []
-        self.queued_ms = 0.0
+        # None = model a source draining at 1x (see queued_playout_ms).
+        # A number pins the depth for tests that need it deterministic.
+        self.queued_ms = None
         self.clear_count = 0
+        self._first_push = None
 
     def on_data_received(self, cb):
         pass
 
     async def publish_audio(self, data: bytes):
         await asyncio.sleep(0)
+        if self._first_push is None:
+            self._first_push = time.perf_counter()
         self.published.extend(data)
 
     async def publish_data(self, payload, *a, **k):
         await asyncio.sleep(0)
         self.data.append(payload)
 
+    def publish_data_ordered(self, payload, *a, **k):
+        # Stand-in for RoomManager's FIFO publisher. Recording synchronously
+        # preserves call order, which is the property it guarantees.
+        self.data.append(payload)
+
     @property
     def queued_playout_ms(self):
-        return self.queued_ms
+        """Depth of the output source, modelled as draining at 1x real time.
+
+        The real AudioSource holds what has been pushed and plays it out on a
+        wall clock, so "how much is still queued" is pushed-minus-drained. The
+        underrun guard reads this to decide whether the source needs bridging,
+        so a stand-in that always answered 0 would make every test look like a
+        permanent underrun. Tests that need a fixed depth still pin
+        ``queued_ms`` directly and that wins.
+        """
+        if self.queued_ms is not None:
+            return self.queued_ms
+        if self._first_push is None:
+            return 0.0
+        pushed_ms = len(self.published) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000
+        drained_ms = (time.perf_counter() - self._first_push) * 1000
+        return max(0.0, pushed_ms - drained_ms)
 
     def clear_playout(self):
         self.clear_count += 1
@@ -116,6 +147,10 @@ async def test_no_meta_emits_nothing():
 @pytest.mark.asyncio
 async def test_interrupt_freezes_at_playhead():
     pipe, room = make_pipeline()
+    # This test is about WHERE the highlight freezes, not about how much audio
+    # the output source still holds — pin the depth so the suspend rewind (which
+    # test_barge_in covers) does not move the playhead under it.
+    room.queued_ms = 0.0
     task = asyncio.create_task(pipe._play_prefetched(silence(50), meta=META))
 
     # Push a few frames, then suspend mid-utterance.

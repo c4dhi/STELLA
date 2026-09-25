@@ -60,6 +60,10 @@ interface PlanContent {
   states: PlanState[];
   metadata?: Record<string, unknown>;
   system_prompt?: string;
+  // ISO 639-1 code the conversation is conducted in. Pins STT transcription for
+  // the session; omitted/"auto" falls back to per-utterance detection, which is
+  // unreliable on short turns and translates rather than mis-hears when wrong.
+  language?: string;
 }
 
 export interface GeneratePlanTemplateResponse {
@@ -320,7 +324,8 @@ EXAMPLE 1 — Structured plan with strict/loose states:
         ]
       }
     ],
-    "system_prompt": "You are a friendly fitness coach conducting a quick check-in. Be encouraging and enthusiastic about exercise. Use casual, supportive language."
+    "system_prompt": "You are a friendly fitness coach conducting a quick check-in. Be encouraging and enthusiastic about exercise. Use casual, supportive language.",
+    "language": "en"
   },
   "suggestedName": "Fitness Activity Check-in",
   "suggestedDescription": "A brief conversation to learn about someone's exercise habits and fitness goals."
@@ -665,6 +670,11 @@ Guidelines:
     - Clear role (e.g., "You are a friendly fitness coach...")
     - Communication style (casual, professional, enthusiastic, etc.)
     - 2-3 sentences max
+10b. ALWAYS set "language" to the ISO 639-1 code you wrote the plan in — if the
+    instructions and system_prompt are German, set "language": "de". This pins
+    speech recognition for the session. Omitting it leaves the language to be
+    guessed per utterance from under a second of audio, which is how a German
+    plan ends up transcribed (and answered) in English.
 11. For goal states, the "goal" object is critical — it tells the AI HOW to conduct the conversation, not just WHAT to collect
 12. TRANSITIONS:
     - Always include transitions for each non-terminal state.

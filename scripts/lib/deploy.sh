@@ -119,6 +119,9 @@ generate_configmap() {
         -e "s|\${VAD_AUDIO_INACTIVITY_TIMEOUT_MS}|${VAD_AUDIO_INACTIVITY_TIMEOUT_MS:-1500}|g" \
         -e "s|\${VAD_RMS_THRESHOLD}|${VAD_RMS_THRESHOLD:-0.008}|g" \
         -e "s|\${PARTIAL_INTERVAL_MS}|${PARTIAL_INTERVAL_MS:-1000}|g" \
+        -e "s|\${BARGE_IN_MIN_SPEECH_MS}|${BARGE_IN_MIN_SPEECH_MS:-600}|g" \
+        -e "s|\${STT_DECODE_DIAGNOSTICS}|${STT_DECODE_DIAGNOSTICS:-0}|g" \
+        -e "s|\${DISABLE_AEC}|${DISABLE_AEC:-false}|g" \
         -e "s|\${WHISPER_INITIAL_PROMPT}|${WHISPER_INITIAL_PROMPT:-}|g" \
         -e "s|\${LIVEKIT_TURN_ENABLED}|${LIVEKIT_TURN_ENABLED:-false}|g" \
         -e "s|\${LIVEKIT_TURN_DOMAIN}|${LIVEKIT_TURN_DOMAIN:-localhost}|g" \
@@ -135,6 +138,22 @@ generate_configmap() {
         -e "s|KUBERNETES_NAMESPACE: \"ai-agents\"|KUBERNETES_NAMESPACE: \"${KUBERNETES_NAMESPACE}\"|g" \
         -e "s|:latest|:${IMAGE_TAG}|g" \
         k8s/04-configmap.yaml > "$output_file"
+
+    # Every ${PLACEHOLDER} in the template must have had a rule above. One that
+    # does not survives into the live ConfigMap as its own literal text, and the
+    # services then parse that: BARGE_IN_MIN_SPEECH_MS reached stt-service as
+    # the string "${BARGE_IN_MIN_SPEECH_MS}", int() raised, and STT crashlooped
+    # through a deploy that otherwise reported success. It had been missing a
+    # rule since the key was added; nothing noticed until the ConfigMap was next
+    # regenerated. Fail here instead — a missed rule is a deploy bug, not
+    # something to hand to a running cluster.
+    local leftover
+    leftover=$(grep -oE '\$\{[A-Z0-9_]+[^}]*\}' "$output_file" | sort -u || true)
+    if [[ -n "$leftover" ]]; then
+        error "ConfigMap has unsubstituted placeholders — add a sed rule in generate_configmap():"
+        echo "$leftover" | sed 's/^/    /'
+        return 1
+    fi
 
     # Generate message-recorder manifest with host gateway
     sed -e "s/192.168.194.1/${host_gateway_ip}/g" \

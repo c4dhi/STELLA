@@ -833,6 +833,12 @@ class BaseAgent(ABC):
                             if output.metadata.get("voice"):
                                 self.audio.set_tts_voice(output.metadata["voice"])
 
+                            # Per-turn speaking rate (same contract again), so a
+                            # conversation is not synthesised at one fixed rate
+                            # and one fixed affect from start to finish.
+                            if output.metadata.get("speed") is not None:
+                                self.audio.set_tts_speed(output.metadata["speed"])
+
                             # Stream text to frontend (agent sends accumulated text)
                             await self.audio.publish_text(
                                 output.content,

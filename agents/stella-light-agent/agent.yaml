@@ -59,9 +59,20 @@ configSchema:
     - name: TTS_ENABLED
       description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
       default: "true"
+    - name: STELLA_LANGUAGE
+      description: "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT transcribes as it, the resolver forces every turn to it, and the reply is written in it — so a short or garbled first utterance still gets answered in that language. Empty or 'auto' = detect per turn and fall back to the default language."
     - name: TRANSCRIPT_DEBOUNCE_MS
       description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
       default: "300"
+    - name: DISABLE_AEC
+      description: "Disable Acoustic Echo Cancellation (AEC) for debugging audio issues"
+      default: "false"
+    - name: STELLA_TTS_PREROLL_MS
+      description: "Jitter buffer (ms) of audio buffered before an utterance starts playing. Default 800, calibrated for a provider running at roughly real time. On faster hardware lower it (150-300ms when synthesis outruns playback) to cut time-to-first-sound; if you hear warbling or see 'Playout starved' in the agent log, raise it. 0 also disables the underrun guard. Leave unset to use the default."
+    - name: TTS_SPEED
+      description: "Baseline speaking rate (0.5-2.0, default 1.0). Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker. This agent has no bridge stage, so it does not vary rate per turn."
+    - name: TTS_PROGRESS_TICK_MS
+      description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
 
 defaultConfig: {}
 
@@ -91,6 +102,7 @@ pipelineSchema:
             - Natural and conversational - avoid sounding robotic or scripted
             - Concise but thorough - aim for 30-50 words per response
             - Ask only ONE question at a time to keep the conversation flowing naturally
+            - When you ask it, it is the LAST thing you say. They are listening, not reading: anything after a question is talked over or forgotten
 
             ## Conversational Style (CRITICAL - Follow These Rules)
             You are a calm, observant, and grounded conversationalist. Your goal is to sound like a thoughtful peer.
@@ -162,14 +174,14 @@ pipelineSchema:
 
     - id: barge_in
       label: "Interrupt · Barge-in (reversible)"
-      description: "One of two interrupt types. BARGE-IN is reversible and local: the user speaks while the agent talks, the agent pauses, and this evaluator decides COMMIT (act on it, drop the rest of the reply) or RESUME (ignore it, keep talking). Control returns to the conversation either way. (The terminal interrupt is 'Interrupt · Session End' below.) This agent supports barge-in by default; force it off with BARGE_IN_ENABLED=false."
+      description: "One of two interrupt types. This one is reversible and local: the user interrupts while the agent talks, the agent pauses, and this evaluator decides COMMIT (act on it, drop the rest of the reply) or RESUME (ignore it, resume from exactly where it paused). Control returns to the conversation either way. Spoken interruptions reach it only after two cheaper filters: the agent ducks its voice on the first sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms); this prompt then judges the FINAL transcript, which is the one question duration cannot answer. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s). (The terminal interrupt is 'Interrupt · Session End' below.) Force barge-in off entirely with BARGE_IN_ENABLED=false."
       icon: "✋"
       position: { row: -1, col: 0 }
       slots:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "Decides if a barge-in is a real interruption. The interruption itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-committed reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
+          description: "Decides whether a mid-turn interruption — spoken or typed — is real. The interruption itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-spoken reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking from where it paused). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
           default: |
             You decide whether a user's interruption of the assistant's speech is a real interruption that should be acted on, or just a backchannel/noise that should be ignored so the assistant keeps talking.
             {{#if conversationHistory}}

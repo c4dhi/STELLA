@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
         'architecture/overview',
         'architecture/data-flow',
         'architecture/session-lifecycle',
+        'architecture/tts-pipeline',
         'architecture/database',
         'architecture/kubernetes-orchestration',
         'architecture/environment-variables',

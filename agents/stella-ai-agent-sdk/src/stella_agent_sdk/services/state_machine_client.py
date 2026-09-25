@@ -239,6 +239,7 @@ class StateMachineClient:
         key: str,
         value: Any,
         reasoning: str = "",
+        unconfirmed: bool = False,
     ) -> Dict[str, Any]:
         """
         Set a deliverable value.
@@ -247,6 +248,10 @@ class StateMachineClient:
             key: The deliverable key
             value: The value to set
             reasoning: Explanation for the value
+            unconfirmed: The user mentioned this in passing rather than
+                answering a question about it. Recorded, but surfaced to the
+                agent as 'partial' so it gets confirmed in conversation instead
+                of re-asked. Setting the same key again without this confirms it.
 
         Returns:
             Dict with success, error, task_completed, transitioned, new_state_id, progress
@@ -260,6 +265,7 @@ class StateMachineClient:
                 key=key,
                 value=json.dumps(value) if not isinstance(value, str) else value,
                 reasoning=reasoning,
+                unconfirmed=unconfirmed,
             )
             response = await self._stub.SetDeliverable(request)
 

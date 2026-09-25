@@ -22,6 +22,13 @@ class TranscriptEvent:
     confidence: float
     timestamp_ms: int
     speech_started: bool = False
+    # VAD has heard enough CONTINUOUS speech to call this an interruption rather
+    # than a backchannel. Emitted once per utterance, from VAD alone — no decode,
+    # no text, so it does not carry transcription latency or language risk.
+    speech_confirmed: bool = False
+    # VAD has stopped hearing speech. Brackets speech_started, so the pair says
+    # "the user is talking right now" — which is what the agent ducks against.
+    speech_ended: bool = False
     # Independent per-utterance language detection (final events only).
     # ``detected_language`` is "" and confidence 0.0 when STT supplies no signal
     # (partials, short clips, typed text) — the agent then uses its text
@@ -31,6 +38,10 @@ class TranscriptEvent:
     # True when this transcript was produced by a committed barge-in and is
     # being injected as a new turn (set by the pipeline, not the STT service).
     is_barge_in: bool = False
+    # Raw JSON from the STT decode-diagnostics pass; "" unless the STT service
+    # has STT_DECODE_DIAGNOSTICS enabled. Forwarded verbatim — the SDK does not
+    # interpret the schema, it only surfaces it for analytics.
+    decode_diagnostics: str = ""
 
     @classmethod
     def from_proto(cls, proto) -> "TranscriptEvent":
@@ -43,8 +54,11 @@ class TranscriptEvent:
             confidence=proto.confidence,
             timestamp_ms=proto.timestamp_ms,
             speech_started=proto.speech_started,
+            speech_confirmed=getattr(proto, "speech_confirmed", False),
+            speech_ended=getattr(proto, "speech_ended", False),
             detected_language=getattr(proto, "detected_language", "") or "",
             language_confidence=getattr(proto, "language_confidence", 0.0) or 0.0,
+            decode_diagnostics=getattr(proto, "decode_diagnostics", "") or "",
         )
 
 

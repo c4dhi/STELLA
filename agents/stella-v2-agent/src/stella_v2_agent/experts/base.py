@@ -6,7 +6,7 @@ definition from a JSON file, with environment variable overrides.
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,14 @@ class ExpertConfig:
         output_schema: Expected output format (for documentation, not enforced by code).
         output_format: Compact JSON example appended to the compiled prompt so the LLM knows the schema.
             Not used for tool-calling experts (output_format should be empty when can_call_functions=True).
+        tools: Optional allow-list of tool names this expert may call. Empty (the
+            default) means every registered tool, which is the historical
+            behaviour. Naming them is worth doing for two reasons measured on
+            prod: the schemas are ~1500 tokens of the ~5900-token
+            task_extraction prompt and are re-sent every turn, and a tool the
+            expert has no use for is still an action it can choose — gpt-4o-mini
+            reached for skip_task on 4 of 9 replayed turns where gpt-4o reached
+            for it on none.
     """
     name: str
     description: str = ""
@@ -112,6 +120,8 @@ class ExpertConfig:
     trigger_criteria: str = ""
     history_limit: int = 0  # 0 = use runner default (8 for most, 10 for task_extraction)
     min_confidence: float = 0.0  # 0 = not applicable (unused with tool-calling experts)
+    # Tool allow-list (names). Empty = all registered tools.
+    tools: List[str] = field(default_factory=list)
     # Per-verdict deterministic response directives: {verdict_value: VerdictDirective}.
     # Drives literature-informed override/prepend/short_circuit at arbitration time.
     verdict_directives: Dict[str, VerdictDirective] = field(default_factory=dict)

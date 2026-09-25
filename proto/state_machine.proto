@@ -137,6 +137,12 @@ message SetDeliverableRequest {
   string key = 2;
   string value = 3;  // JSON-encoded value
   string reasoning = 4;
+  // The user mentioned this in passing rather than answering a question about
+  // it, so it is recorded but NOT taken as settled. The agent should confirm it
+  // in conversation ("you said you usually walk — still, in this heat?") instead
+  // of either asking cold or silently assuming. Setting the same key again
+  // without this flag confirms it.
+  bool unconfirmed = 5;
 }
 
 message SetDeliverableResponse {
