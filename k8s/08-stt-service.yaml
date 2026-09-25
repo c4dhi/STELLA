@@ -262,6 +262,12 @@ spec:
               name: stella-ai-config
               key: STT_DECODE_DIAGNOSTICS
               optional: true
+        - name: STELLA_MODEL_KEEP_WARM
+          valueFrom:
+            configMapKeyRef:
+              name: stella-ai-config
+              key: STELLA_MODEL_KEEP_WARM
+              optional: true
         - name: WHISPER_INITIAL_PROMPT
           valueFrom:
             configMapKeyRef:
