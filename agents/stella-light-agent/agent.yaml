@@ -68,7 +68,7 @@ configSchema:
       description: "Disable Acoustic Echo Cancellation (AEC) for debugging audio issues"
       default: "false"
     - name: STELLA_TTS_PREROLL_MS
-      description: "Jitter buffer (ms) of audio buffered before an utterance starts playing. Default 800, calibrated for a provider running at roughly real time. On faster hardware lower it (150-300ms when synthesis outruns playback) to cut time-to-first-sound; if you hear warbling or see 'Playout starved' in the agent log, raise it. 0 also disables the underrun guard. Leave unset to use the default."
+      description: "Fix the jitter buffer (ms) of audio held before each sentence plays. Leave unset (recommended): the agent measures how fast the voice is generated on this hardware and picks the head start itself, starting at 200 ms and raising it (up to 3 s) when the voice runs slower than real time or 'Playout starved' / 'bridged Xms' shows up in the agent log, then lowering it slowly when there is slack. Setting a value turns that off. 0 also disables the underrun guard."
     - name: STELLA_TTS_PLAYBACK
       description: "How synthesized speech is played: 'stream' (default) starts each sentence as it is generated, lowest latency; 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did. Use 'sentence' when the TTS runs slower than real time (e.g. Qwen3 on a T4), where 'stream' can run dry mid-word. Set per deployment, so two deployments can be compared side by side. Unknown values fall back to 'stream'. Leave unset for 'stream'."
       default: "stream"

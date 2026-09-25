@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Awaitable, Callable, Deque, List, Optional
 
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
+from stella_agent_sdk.audio.preroll import PrerollController
 from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
@@ -254,9 +255,10 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 # silence if the source actually drains, and logs the milliseconds it had to
 # insert. That number is the acceptance test for this constant — if "bridged
 # Xms" is ever non-zero, the cushion is too small for the hardware of the day.
-# Prefer raising it back over adding a rate controller: the only reason a fixed
-# cushion works at all is that RTF < 1, and if that stops holding under GPU
-# contention no amount of prediction saves it either.
+# This is now the FLOOR, not the value: unless STELLA_TTS_PREROLL_MS pins it, a
+# PrerollController (audio/preroll.py) raises the head start when the measured
+# RTF or a non-zero "bridged Xms" says 200ms is not enough (a slower GPU than the
+# one this was tuned on), and lowers it slowly back toward this floor.
 _DEFAULT_TTS_PREROLL_MS = 200
 
 # How synthesized speech is played (STELLA_TTS_PLAYBACK, a per-deployment agent
@@ -400,7 +402,7 @@ class _StreamingUtterance:
     coming; ``wait_for_data`` parks the player when it catches up with synthesis.
     """
 
-    __slots__ = ("data", "complete", "error", "task", "_new")
+    __slots__ = ("data", "complete", "error", "task", "_new", "synth_ms")
 
     def __init__(self) -> None:
         self.data = bytearray()
@@ -408,6 +410,9 @@ class _StreamingUtterance:
         self.error: Optional[Exception] = None
         self.task: Optional[asyncio.Task] = None
         self._new = asyncio.Event()
+        # Wall time the TTS service spent producing this audio (lock wait
+        # excluded); with the audio length it gives the real-time factor.
+        self.synth_ms: Optional[float] = None
 
     def append(self, audio: bytes) -> None:
         self.data += audio
@@ -611,16 +616,23 @@ class AudioPipeline:
         # audio; this keeps at most one stream in flight per pipeline.
         self._synthesis_lock: asyncio.Lock = asyncio.Lock()
         # Jitter buffer before an utterance starts playing (see the constant).
-        # 0 disables it, which is only sane if the provider streams smoothly.
-        try:
-            _preroll_ms = int(
-                os.getenv("STELLA_TTS_PREROLL_MS", str(_DEFAULT_TTS_PREROLL_MS))
-            )
-        except ValueError:
-            _preroll_ms = _DEFAULT_TTS_PREROLL_MS
-        self._preroll_bytes = max(
-            0, int(_preroll_ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE
+        # STELLA_TTS_PREROLL_MS pins it (0 disables it, which is only sane if the
+        # provider streams smoothly). Unset, a PrerollController learns it from
+        # the RTF of the sentences actually synthesized, so a slower GPU than the
+        # one the default was tuned on gets a longer head start by itself.
+        _env_preroll = os.getenv("STELLA_TTS_PREROLL_MS")
+        _fixed_preroll: Optional[int] = None
+        if _env_preroll not in (None, ""):
+            try:
+                _fixed_preroll = int(_env_preroll)
+            except ValueError:
+                logger.warning(
+                    f"[TTS] Ignoring STELLA_TTS_PREROLL_MS={_env_preroll!r}: not an integer"
+                )
+        self._preroll = PrerollController(
+            fixed_ms=_fixed_preroll, min_ms=_DEFAULT_TTS_PREROLL_MS
         )
+        self._preroll_bytes = self._preroll_ms_to_bytes(self._preroll.current_ms)
         # Read once: stream (default) or sentence. See _TTS_PLAYBACK_MODES.
         self._tts_playback: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
         if self._tts_playback != _DEFAULT_TTS_PLAYBACK:
@@ -3114,6 +3126,10 @@ class AudioPipeline:
         self._turn_response_tts_first_byte_emitted = False
         self._last_response_tts_done_elapsed = 0
 
+    @staticmethod
+    def _preroll_ms_to_bytes(ms: int) -> int:
+        return max(0, int(ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE)
+
     def _begin_synthesis(
         self, sentence: str, voice=None, speed: Optional[float] = None, language=None
     ) -> "_StreamingUtterance":
@@ -3150,6 +3166,7 @@ class AudioPipeline:
                 # faster than real time, so it acquires the lock early in the
                 # current sentence's playback and the prefetch overlap survives.
                 async with self._synthesis_lock:
+                    _synth_started = time.monotonic()
                     async for chunk in self._tts.synthesize_stream(
                         text=sentence,
                         session_id=self._session_id,
@@ -3158,6 +3175,7 @@ class AudioPipeline:
                         language=language if language is not None else self._tts_language,
                     ):
                         utt.append(chunk.audio_data)
+                    utt.synth_ms = (time.monotonic() - _synth_started) * 1000.0
             except asyncio.CancelledError:
                 utt.finish()
                 raise
@@ -3293,6 +3311,8 @@ class AudioPipeline:
         last_sample = 0
         starve_count = 0
         bridged_ms = 0.0
+        # The head start for THIS sentence, as learned from the previous ones.
+        self._preroll_bytes = self._preroll_ms_to_bytes(self._preroll.current_ms)
         self._cur_complete = utt.complete
         self._cur_last_char = 0
         self._cur_promised = 0
@@ -3426,6 +3446,7 @@ class AudioPipeline:
                 # so the NEXT sentence's mid-synthesis estimate is grounded in
                 # measurement rather than the seeded default.
                 self._calibrate_pace(meta)
+                self._learn_preroll(utt, bridged_ms)
                 # CONTRACT: "spoken" fires when the last frame is *pushed*, not
                 # when the user *hears* the end — up to queued_playout_ms of this
                 # audio is still draining the output + client buffers. The
@@ -3454,6 +3475,22 @@ class AudioPipeline:
             self._cur_complete = False
             self._cur_last_char = 0
             self._cur_promised = 0
+
+    def _learn_preroll(self, utt: "_StreamingUtterance", bridged_ms: float) -> None:
+        """Feed a finished sentence to the pre-roll controller (no-op when pinned)."""
+        if self._preroll.fixed or utt.error is not None or not utt.synth_ms:
+            return
+        before = self._preroll.current_ms
+        audio_ms = len(utt.data) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000.0
+        self._preroll.observe(audio_ms, utt.synth_ms, bridged_ms)
+        if self._preroll.current_ms != before:
+            rtf = self._preroll.rtf
+            logger.info(
+                f"[TTS] Pre-roll {before}ms -> {self._preroll.current_ms}ms "
+                f"(RTF {rtf:.2f}, bridged {bridged_ms:.0f}ms)"
+                if rtf is not None
+                else f"[TTS] Pre-roll {before}ms -> {self._preroll.current_ms}ms"
+            )
 
     async def _bridge_underrun(self, fade_from: int = 0) -> float:
         """Push silence when the output source is about to run dry.
