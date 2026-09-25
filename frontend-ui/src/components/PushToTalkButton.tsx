@@ -21,6 +21,13 @@ export default function PushToTalkButton() {
     }
 
     try {
+      // The mic is already published (muted after an earlier press): just unmute
+      if (transport.hasPublishedAudio()) {
+        await transport.unmuteAudio()
+        setIsRecording(true)
+        return
+      }
+
       // Create new AudioContext for push-to-talk
       const audioContext = new AudioContext()
       audioContextRef.current = audioContext
@@ -42,19 +49,9 @@ export default function PushToTalkButton() {
   }, [transport, status, setIsRecording, setPushToTalkActive])
 
   const stopRecording = useCallback(async () => {
-    if (streamRef.current && isRecording) {
-      // Unpublish audio track from LiveKit
-      await transport?.unpublishAudioTrack()
-
-      // Stop and clean up stream
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-
-      // Close audio context
-      if (audioContextRef.current) {
-        audioContextRef.current.close()
-        audioContextRef.current = null
-      }
+    if (isRecording) {
+      // Soft mute: keep the connection and the track, send silence (#362)
+      await transport?.muteAudio()
 
       // Update state
       setIsRecording(false)

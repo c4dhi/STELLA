@@ -16,6 +16,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `set_deliverable` and `batch_update` accept `correction` (default false): a participant's deliberate change to an already-collected answer. A settled required deliverable is now rejected by the state machine without it, so a later, worse answer can no longer replace it silently. `StateMachineClient.set_deliverable(..., correction=False)` and the `SetDeliverableRequest.correction` field carry it.
 - `STELLA_TTS_PLAYBACK` (`stream` default, or `sentence`): `sentence` waits for the whole sentence to be synthesized before playing it, as 1.1.0 did, for TTS providers slower than real time. Barge-in and the teleprompter work in both modes; an unknown value logs a warning and uses `stream`.
 
+### Changed
+
+- A participant's deliberate mute (`audio_stream_mute` / `audio_stream_unmute` data messages) no longer restarts the STT stream. The track stays published; on mute the room feeds `STELLA_MUTE_SILENCE_MS` (default 3000) of real-time silence so the in-flight utterance finalizes like any pause. The end-of-audio sentinel from a real track unsubscribe (#165) is unchanged.
+
 ## [0.6.0] - 2026-09-25
 
 Ships with STELLA 1.2.0. What changes for agent authors:
