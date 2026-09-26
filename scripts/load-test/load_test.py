@@ -384,6 +384,7 @@ def parse_args(argv=None):
 
 
 def publish(result: dict, url: str):
+    import urllib.error
     import urllib.request
 
     token = os.environ.get("STELLA_ADMIN_TOKEN")
@@ -392,8 +393,11 @@ def publish(result: dict, url: str):
     req = urllib.request.Request(
         url.rstrip("/") + "/admin/capacity", data=json.dumps(result).encode(), method="POST",
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        print(f"Published: HTTP {resp.status}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            print(f"Published: HTTP {resp.status}")
+    except urllib.error.HTTPError as e:
+        sys.exit(f"Publish failed: HTTP {e.code} {e.read().decode(errors='replace')[:500]}")
 
 
 def main():
