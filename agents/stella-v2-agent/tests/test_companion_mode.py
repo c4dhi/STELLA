@@ -86,6 +86,18 @@ def test_ending_an_activity_drops_the_plan():
     assert agent._active_activity is None
 
 
+def test_ending_when_nothing_is_running_is_a_no_op():
+    # Regression (local test, 26 Sep): the router called end_activity again after
+    # the activity was already left, and the user saw "Left the activity" twice.
+    agent = _agent()
+    assert agent._active_activity is None and agent._plan_config is None
+
+    out = agent._apply_companion_tool_results([_verdict(activity_ended=True)])
+
+    assert "ended" not in out
+    assert agent._companion_decisions("s1", out) == []
+
+
 def test_listing_activities_surfaces_them_for_the_reply():
     agent = _agent()
     out = agent._apply_companion_tool_results(

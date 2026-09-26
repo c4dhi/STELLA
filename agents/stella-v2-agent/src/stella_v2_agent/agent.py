@@ -1402,7 +1402,11 @@ class StellaV2Agent(BaseAgent):
                     # Where LoadPlan left the state machine. The response for THIS
                     # turn must be authored against it — see _resolve_response_context.
                     outcome["started_state_id"] = data.get("current_state_id")
-                if data.get("activity_ended"):
+                # Only leave something that is running: the router can call
+                # end_activity again once the activity is already gone.
+                if data.get("activity_ended") and (
+                    self._active_activity or self._plan_config
+                ):
                     # Capture the title BEFORE clearing it — the decision tag and
                     # the sidebar both need to name what was just left, and by the
                     # next line there is nothing left to name it with.
