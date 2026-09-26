@@ -52,10 +52,13 @@ DEFAULT_SENTENCES = [
 def build_stubs() -> Path:
     """Generate the gRPC stubs from proto/ into a temp dir and put it on sys.path."""
     out = Path(tempfile.mkdtemp(prefix="stella-loadtest-stubs-"))
-    proto_dir = HERE.parent.parent / "proto"
+    root = HERE.parent.parent
+    # The services' own copies: they are what each service is built from, and the
+    # TTS one carries RPCs (Warmup) the shared proto/ copy lacks.
+    protos = [root / "stt-service" / "proto" / "stt.proto", root / "tts-service" / "proto" / "tts.proto"]
     subprocess.run(
-        [sys.executable, "-m", "grpc_tools.protoc", f"-I{proto_dir}", f"--python_out={out}",
-         f"--grpc_python_out={out}", str(proto_dir / "stt.proto"), str(proto_dir / "tts.proto")],
+        [sys.executable, "-m", "grpc_tools.protoc", *[f"-I{p.parent}" for p in protos],
+         f"--python_out={out}", f"--grpc_python_out={out}", *map(str, protos)],
         check=True,
     )
     sys.path.insert(0, str(out))
@@ -219,7 +222,7 @@ class Session:
                 if not self.stop.is_set():
                     self.r.errors += 1
                     print(f"  [session {self.idx}] TTS error: {e}", file=sys.stderr)
-            starved, audio = playout_starvation(chunks)
+            starved, audio = playout_starvation(chunks, self.args.preroll_ms / 1000.0)
             self.r.tts_starved_s += starved
             self.r.tts_audio_s += audio
             # Then wait for the participant's next turn.
@@ -292,6 +295,20 @@ async def prepare(args, stubs):
     import grpc
 
     stt_pb2, tts_pb2, stt_grpc, tts_grpc = stubs
+    # Warm both models first: a cold Whisper or TTS stalls every stream for tens
+    # of seconds, which would make the one-session baseline meaningless.
+    async with grpc.aio.insecure_channel(args.stt) as ch:
+        try:
+            w = await stt_grpc.SpeechToTextStub(ch).Warmup(stt_pb2.WarmupRequest(session_id="loadtest"), timeout=180)
+            print(f"STT warmup: {w.warmup_time_ms} ms")
+        except Exception as e:  # noqa: BLE001
+            print(f"STT warmup skipped: {e}")
+    async with grpc.aio.insecure_channel(args.tts) as ch:
+        try:
+            w = await tts_grpc.TextToSpeechStub(ch).Warmup(tts_pb2.WarmupRequest(session_id="loadtest"), timeout=180)
+            print(f"TTS warmup: {w.warmup_time_ms} ms")
+        except Exception as e:  # noqa: BLE001
+            print(f"TTS warmup skipped: {e}")
     async with grpc.aio.insecure_channel(args.tts) as ch:
         stub = tts_grpc.TextToSpeechStub(ch)
         health = await stub.HealthCheck(tts_pb2.Empty(), timeout=30)
@@ -323,8 +340,12 @@ async def main_async(args) -> dict:
     ctx = await prepare(args, (stt_pb2, tts_pb2, stt_pb2_grpc, tts_pb2_grpc))
     ctx["gpu"] = bool(args.gpu_command) or bool(shutil.which("nvidia-smi"))
     criteria = Criteria(stt_final_slack_ms=args.stt_slack_ms, tts_ttfa_slack_ms=args.ttfa_slack_ms,
-                        max_tts_starved_pct=args.max_starved_pct)
+                        max_tts_starved_pct=args.max_starved_pct, preroll_ms=args.preroll_ms)
     levels: list[dict] = []
+    if args.settle > 0:
+        print(f"Settling for {args.settle:.0f}s (not measured) ...", flush=True)
+        settle = argparse.Namespace(**{**vars(args), "duration": int(args.settle)})
+        await run_level(args.levels[0], settle, ctx)
     for n in args.levels:
         print(f"Level: {n} simultaneous session(s) for {args.duration}s ...", flush=True)
         r = (await run_level(n, args, ctx)).summary()
@@ -367,6 +388,9 @@ def parse_args(argv=None):
     p.add_argument("--stt-slack-ms", type=float, default=1000.0, dest="stt_slack_ms")
     p.add_argument("--ttfa-slack-ms", type=float, default=1000.0, dest="ttfa_slack_ms")
     p.add_argument("--max-starved-pct", type=float, default=5.0)
+    p.add_argument("--preroll-ms", type=float, default=200.0,
+                   help="player pre-roll when judging starvation; use the deployment's STELLA_TTS_PREROLL_MS")
+    p.add_argument("--settle", type=float, default=15.0, help="seconds of unmeasured load before the first level")
     p.add_argument("--sentence", action="append", help="utterance the simulated participant speaks (repeatable)")
     p.add_argument("--reply", help="text the agent's TTS reply speaks")
     p.add_argument("--gpu-name", help="GPU model when this machine has none (e.g. the GPU is on the server)")

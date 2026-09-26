@@ -14,17 +14,26 @@ def percentile(values: Iterable[float], pct: float) -> Optional[float]:
     return data[min(rank, len(data)) - 1]
 
 
-def playout_starvation(chunks: list[tuple[float, float]]) -> tuple[float, float]:
-    """Simulate a player that starts on the first chunk and never waits for more.
+def playout_starvation(chunks: list[tuple[float, float]], preroll_s: float = 0.0) -> tuple[float, float]:
+    """Simulate the agent's player: it waits for `preroll_s` of audio, then plays on.
 
     `chunks` is (arrival_time_s, audio_duration_s) in arrival order. Returns
     (starved_s, audio_s): the time the player would have sat silent waiting for
-    a chunk, and the total audio played. A chunk that arrives after the buffer
-    has run dry counts the gap as starvation.
+    a chunk after it started, and the total audio played. A chunk that arrives
+    after the buffer has run dry counts the gap as starvation. The pre-roll
+    mirrors STELLA_TTS_PREROLL_MS: playback starts once that much audio has
+    arrived (or when the last chunk arrives, for a shorter reply).
     """
     if not chunks:
         return 0.0, 0.0
-    played_until = chunks[0][0]
+    buffered = 0.0
+    start = chunks[-1][0]
+    for arrival, duration in chunks:
+        buffered += duration
+        if buffered >= preroll_s:
+            start = arrival
+            break
+    played_until = start
     starved = 0.0
     audio = 0.0
     for arrival, duration in chunks:
@@ -86,6 +95,7 @@ class Criteria:
     tts_ttfa_slack_ms: float = 1000.0
     max_tts_starved_pct: float = 5.0
     max_finals_missed_pct: float = 0.0
+    preroll_ms: float = 200.0  # player pre-roll used to judge starvation (SDK default)
 
 
 def failures(level: dict, baseline: dict, c: Criteria) -> list[str]:
@@ -122,9 +132,8 @@ def find_capacity(levels: list[dict], c: Criteria) -> dict:
     capacity = 0
     limited_by: list[str] = []
     for level in levels:
-        fails = failures(level, baseline, c) if level is not baseline else (
-            [f"{level['errors']} request errors"] if level["errors"] else []
-        )
+        # The baseline has nothing to be relative to, so only the absolute limits apply.
+        fails = failures(level, level if level is baseline else baseline, c)
         if fails:
             limited_by = fails
             break

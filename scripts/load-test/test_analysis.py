@@ -36,6 +36,19 @@ def test_starvation_counts_the_gap_when_the_buffer_runs_dry():
     assert starved == 2.0 and audio == 2.0
 
 
+def test_preroll_absorbs_a_short_stall():
+    # 0.5 s chunks, one arriving 0.3 s late: 0.6 s of pre-roll rides it out, none does not.
+    chunks = [(0.0, 0.5), (0.5, 0.5), (1.3, 0.5), (1.5, 0.5)]
+    assert playout_starvation(chunks, preroll_s=0.0)[0] > 0
+    assert playout_starvation(chunks, preroll_s=0.6)[0] == 0.0
+
+
+def test_a_baseline_that_already_stutters_gives_zero_capacity():
+    cap = find_capacity([summary(1, starved=50.0), summary(2)], Criteria())
+    assert cap["sessions"] == 0
+    assert "starved" in cap["limited_by"][0]
+
+
 def test_capacity_is_highest_passing_level():
     levels = [summary(1), summary(2), summary(4, final_ms=900), summary(6, final_ms=3000)]
     cap = find_capacity(levels, Criteria())

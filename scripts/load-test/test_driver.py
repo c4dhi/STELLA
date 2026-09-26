@@ -81,7 +81,7 @@ async def serve(decode_s, synth_s):
 def args_for(addr, levels):
     return load_test.parse_args([
         "--stt", addr, "--tts", addr, "--levels", ",".join(map(str, levels)), "--duration", "9",
-        "--turn-gap", "3", "--gpu-name", "Fake GPU", "--stt-slack-ms", "300", "--ttfa-slack-ms", "300",
+        "--turn-gap", "3", "--settle", "0", "--gpu-name", "Fake GPU", "--stt-slack-ms", "300", "--ttfa-slack-ms", "300",
         "--sentence", "one", "--sentence", "two",
     ])
 
