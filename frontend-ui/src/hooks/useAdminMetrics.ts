@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiClient } from '../services/ApiClient'
 import { usePageVisibility } from './usePageVisibility'
-import type { AdminDashboardMetrics, SessionActivityDay, HistoricalUsageData, SessionStatusItem } from '../lib/api-types'
+import type { CapacityMeasurement, AdminDashboardMetrics, SessionActivityDay, HistoricalUsageData, SessionStatusItem } from '../lib/api-types'
 
 /**
  * Hook for subscribing to real-time admin dashboard metrics via SSE
@@ -136,4 +136,34 @@ export function useAllSessions() {
   }, [fetchData])
 
   return { sessions, isLoading, error, refetch: () => fetchData(true) }
+}
+
+/**
+ * Hook for the measured voice capacity of each server GPU (load test results)
+ */
+export function useCapacityMeasurements() {
+  const [data, setData] = useState<CapacityMeasurement[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    apiClient
+      .getCapacityMeasurements()
+      .then((rows) => {
+        if (!cancelled) setData(rows)
+      })
+      .catch((err) => {
+        console.error('Failed to fetch capacity measurements:', err)
+        if (!cancelled) setError('Failed to load capacity')
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return { data, isLoading, error }
 }

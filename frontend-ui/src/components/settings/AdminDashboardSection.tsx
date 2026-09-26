@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, type ChangeEvent } from 'reac
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
-import { useAdminDashboardStream, useUsageHistory, useAllSessions } from '../../hooks/useAdminMetrics'
+import { useAdminDashboardStream, useUsageHistory, useAllSessions, useCapacityMeasurements } from '../../hooks/useAdminMetrics'
 import { useServerMetricsStream } from '../../hooks/useServerMetrics'
 import { apiClient } from '../../services/ApiClient'
 import type { BackupImportReport } from '../../services/ApiClient'
@@ -130,6 +130,9 @@ export default function AdminDashboardSection() {
     metricsHistory,
     isConnected: serverConnected,
   } = useServerMetricsStream()
+
+  // Measured voice capacity (load test results)
+  const { data: capacity, isLoading: capacityLoading } = useCapacityMeasurements()
 
   // All sessions data
   const { sessions, isLoading: sessionsLoading, refetch: refetchSessions } = useAllSessions()
@@ -337,6 +340,7 @@ export default function AdminDashboardSection() {
           currentMetrics={serverMetrics}
           metricsHistory={metricsHistory}
           isConnected={serverConnected}
+          capacity={{ measurements: capacity, isLoading: capacityLoading }}
         />
       </motion.div>
 

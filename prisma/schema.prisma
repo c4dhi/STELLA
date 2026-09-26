@@ -596,6 +596,30 @@ model ServerMetricsSnapshot {
   @@index([timestamp])
 }
 
+// One run of the voice load test (scripts/load-test): how many simultaneous
+// sessions a server's GPU carried before the voice slowed or stuttered.
+model CapacityMeasurement {
+  id              String   @id @default(uuid())
+  measuredAt      DateTime
+  createdAt       DateTime @default(now())
+
+  gpuName         String
+  gpuMemoryMb     Int?
+  environment     String // which deployment was measured, e.g. "development"
+  sttProvider     String?
+  ttsProvider     String?
+  gitRevision     String?
+
+  maxSessions     Int
+  limitedBy       String[]
+  reachedTopLevel Boolean // true: the top level passed, so the real limit is higher
+  durationSeconds Int
+  criteria        Json
+  levels          Json
+
+  @@index([environment, gpuName, measuredAt])
+}
+
 // Compatibility of a saved AgentConfiguration with its AgentType's current pipelineSchema.
 // Computed by the reconciliation pass that runs when an AgentType version/schema changes.
 enum ConfigCompatibility {

@@ -4,6 +4,7 @@ import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { ServerMetricsService } from './services/server-metrics.service';
 import { UsageLoggingService } from './services/usage-logging.service';
+import { CapacityService } from './services/capacity.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { KubernetesModule } from '../kubernetes/kubernetes.module';
 
@@ -27,7 +28,7 @@ import { KubernetesModule } from '../kubernetes/kubernetes.module';
     ScheduleModule.forRoot(),
   ],
   controllers: [AdminController],
-  providers: [AdminService, ServerMetricsService, UsageLoggingService],
+  providers: [AdminService, ServerMetricsService, UsageLoggingService, CapacityService],
   exports: [AdminService],
 })
 export class AdminModule {}
