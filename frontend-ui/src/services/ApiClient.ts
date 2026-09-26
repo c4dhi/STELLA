@@ -67,6 +67,7 @@ import type {
   ProjectInvitationResponse,
   UserNotificationEvent,
   AdminDashboardMetrics,
+  CapacityMeasurement,
   SessionActivityDay,
   HistoricalUsageData,
   ServerMetrics,
@@ -1638,6 +1639,13 @@ class SessionManagementClient {
    */
   async getAllSessions(): Promise<SessionStatusItem[]> {
     return this.get<SessionStatusItem[]>('/admin/sessions')
+  }
+
+  /**
+   * Measured voice capacity: the newest load-test result per environment and GPU.
+   */
+  async getCapacityMeasurements(): Promise<CapacityMeasurement[]> {
+    return this.get<CapacityMeasurement[]>('/admin/capacity')
   }
 
   /**

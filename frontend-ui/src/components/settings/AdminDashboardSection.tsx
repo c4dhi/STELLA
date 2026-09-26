@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, type ChangeEvent } from 'reac
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
-import { useAdminDashboardStream, useUsageHistory, useAllSessions } from '../../hooks/useAdminMetrics'
+import { useAdminDashboardStream, useUsageHistory, useAllSessions, useCapacityMeasurements } from '../../hooks/useAdminMetrics'
 import { useServerMetricsStream } from '../../hooks/useServerMetrics'
 import { apiClient } from '../../services/ApiClient'
 import type { BackupImportReport } from '../../services/ApiClient'
@@ -10,6 +10,7 @@ import StatsCard from './admin/StatsCard'
 import SessionsGrid from './admin/SessionsGrid'
 import ServerPerformanceMonitor from './admin/ServerPerformanceMonitor'
 import GpuMonitor from './admin/GpuMonitor'
+import CapacityCard from './admin/CapacityCard'
 import HistoricalUsageCharts from './admin/HistoricalUsageCharts'
 
 const containerVariants = {
@@ -130,6 +131,9 @@ export default function AdminDashboardSection() {
     metricsHistory,
     isConnected: serverConnected,
   } = useServerMetricsStream()
+
+  // Measured voice capacity (load test results)
+  const { data: capacity, isLoading: capacityLoading } = useCapacityMeasurements()
 
   // All sessions data
   const { sessions, isLoading: sessionsLoading, refetch: refetchSessions } = useAllSessions()
@@ -338,6 +342,11 @@ export default function AdminDashboardSection() {
           metricsHistory={metricsHistory}
           isConnected={serverConnected}
         />
+      </motion.div>
+
+      {/* Measured voice capacity per GPU */}
+      <motion.div variants={itemVariants}>
+        <CapacityCard measurements={capacity} isLoading={capacityLoading} />
       </motion.div>
 
       {/* Sessions Grid */}
