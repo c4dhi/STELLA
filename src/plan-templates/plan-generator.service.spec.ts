@@ -39,6 +39,32 @@ describe('PlanGeneratorService — plans end after the last state (#452)', () =>
     expect(state.transitions[0].target_state_id).toBe('__end__');
   });
 
+  it('maps the model\'s initial_state_id to the new state id', () => {
+    const content = (service as any).validateAndNormalizeResponse({
+      content: {
+        initial_state_id: 'b',
+        states: [
+          { id: 'a', title: 'A', type: 'strict', tasks: task },
+          { id: 'b', title: 'B', type: 'strict', tasks: task },
+        ],
+      },
+    }).content;
+    expect(content.initial_state_id).toBe(content.states[1].id);
+  });
+
+  it('falls back to the first state when initial_state_id names no state', () => {
+    const content = (service as any).validateAndNormalizeResponse({
+      content: {
+        initial_state_id: 'state_name',
+        states: [
+          { id: 'a', title: 'A', type: 'strict', tasks: task },
+          { id: 'b', title: 'B', type: 'strict', tasks: task },
+        ],
+      },
+    }).content;
+    expect(content.initial_state_id).toBe(content.states[0].id);
+  });
+
   it('tells the model about the end transition', () => {
     const prompt: string = (service as any).buildSystemPrompt();
     expect(prompt).toContain('"__end__"');
