@@ -43,6 +43,9 @@ def _agent(companion=True):
     agent._active_activity = None
     agent._plan_config = None
     agent._last_known_state_id = None
+    agent._activity_started_at = None
+    agent._activity_segments = []
+    agent._activity_collected = {}
     # Set in __init__ in production; listed here because this harness builds the
     # agent with __new__ and so gets no initialisation. Kept explicit rather than
     # made defensive in the agent, where a missing attribute is a real init bug.
@@ -515,3 +518,67 @@ def test_other_experts_keep_honouring_their_saved_config():
     # Only the router is structural. Everything else stays operator-controlled.
     registry = _apply(True, {"probing": {"enabled": False}})
     assert registry.enabled_for("probing") is False
+
+
+# ---------------------------------------------------------------------------
+# History scoped to the current mode
+# ---------------------------------------------------------------------------
+
+def _with_history(agent, messages):
+    """Serve `messages` (role, content, iso timestamp) as the session's chat history."""
+    from types import SimpleNamespace
+
+    agent._history_client = object()
+
+    async def get_chat_history(include_debug=False, limit=20):
+        return [SimpleNamespace(role=r, content=c, timestamp=t) for r, c, t in messages]
+
+    agent.get_chat_history = get_chat_history
+
+
+def test_history_after_leaving_an_activity_is_one_line():
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    agent = _agent()
+    agent._apply_companion_tool_results(
+        [_verdict(activity_started=True, activity_id="memory", activity_title="Memory Game")]
+    )
+    agent._activity_collected = {"nickname": "Fee"}
+    started = agent._activity_started_at
+    agent._apply_companion_tool_results([_verdict(activity_ended=True)])
+    ended = agent._activity_segments[-1].ended_at
+
+    def iso(dt):
+        return dt.isoformat()
+
+    _with_history(agent, [
+        ("user", "hi", iso(started - timedelta(seconds=5))),
+        ("assistant", "what is your nickname?", iso(started + timedelta(microseconds=1))),
+        ("user", "Fee", iso(started + timedelta(microseconds=2))),
+        ("assistant", "back to chatting", iso(ended + timedelta(seconds=1))),
+    ])
+    history = asyncio.run(agent._fetch_conversation_history())
+
+    assert [m["content"] for m in history] == [
+        "hi",
+        'Activity "Memory Game" ended. Collected: nickname = Fee.',
+        "back to chatting",
+    ]
+
+
+def test_history_inside_an_activity_starts_at_the_activity():
+    import asyncio
+    from datetime import timedelta
+
+    agent = _agent()
+    agent._apply_companion_tool_results(
+        [_verdict(activity_started=True, activity_id="memory", activity_title="Memory Game")]
+    )
+    started = agent._activity_started_at
+    _with_history(agent, [
+        ("user", "earlier chat", (started - timedelta(minutes=1)).isoformat()),
+        ("assistant", "step one question", (started + timedelta(seconds=1)).isoformat()),
+    ])
+    history = asyncio.run(agent._fetch_conversation_history())
+    assert [m["content"] for m in history] == ["step one question"]
