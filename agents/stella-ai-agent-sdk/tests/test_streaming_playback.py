@@ -963,3 +963,21 @@ async def test_pinned_preroll_is_left_alone(monkeypatch):
     await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=30)
 
     assert pipe._preroll.fixed and pipe._preroll.current_ms == 300
+
+
+@pytest.mark.parametrize(
+    "env, expected",
+    [
+        (None, "auto, starting at 200 ms"),
+        ("300", "pinned to 300 ms"),
+    ],
+)
+def test_preroll_setting_is_logged_once_at_session_start(monkeypatch, caplog, env, expected):
+    if env is None:
+        monkeypatch.delenv("STELLA_TTS_PREROLL_MS", raising=False)
+    else:
+        monkeypatch.setenv("STELLA_TTS_PREROLL_MS", env)
+    with caplog.at_level("INFO"):
+        AudioPipeline(PacedRoom(), stt_client=None, tts_client=SlowTTS(frames=1, gap=0), session_id="s")
+    lines = [r.getMessage() for r in caplog.records if "Pre-roll" in r.getMessage()]
+    assert len(lines) == 1 and expected in lines[0]

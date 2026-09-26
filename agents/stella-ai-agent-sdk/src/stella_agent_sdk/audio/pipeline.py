@@ -633,6 +633,12 @@ class AudioPipeline:
             fixed_ms=_fixed_preroll, min_ms=_DEFAULT_TTS_PREROLL_MS
         )
         self._preroll_bytes = self._preroll_ms_to_bytes(self._preroll.current_ms)
+        logger.info(
+            f"[TTS] Pre-roll: pinned to {self._preroll.current_ms} ms (STELLA_TTS_PREROLL_MS)"
+            if self._preroll.fixed
+            else f"[TTS] Pre-roll: auto, starting at {self._preroll.current_ms} ms "
+            "(adapts from measured synthesis speed)"
+        )
         # Read once: stream (default) or sentence. See _TTS_PLAYBACK_MODES.
         self._tts_playback: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
         if self._tts_playback != _DEFAULT_TTS_PLAYBACK:
