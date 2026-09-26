@@ -127,7 +127,15 @@ def resample_to_16k(pcm16: bytes, rate: int) -> bytes:
 
 
 class Session:
-    """One simulated conversation: an STT stream plus a spoken reply every turn."""
+    """One simulated conversation, turn by turn like a real one.
+
+    The participant speaks an utterance; speech recognition returns the final
+    transcript; the agent answers with a spoken reply; the participant pauses and
+    speaks again. Within a session the two never overlap, so any slowdown comes
+    from other sessions sharing the GPU, which is the thing being measured.
+    """
+
+    FINAL_TIMEOUT_S = 30.0
 
     def __init__(self, idx, utterances, tts_text, stt_stub, tts_stub, tts_rate, args, result, stubs):
         self.idx = idx
@@ -140,59 +148,35 @@ class Session:
         self.r = result
         self.stt_pb2, self.tts_pb2 = stubs
         self.sid = f"loadtest-{idx}-{int(time.time())}"
-        self.end_of_speech: list[float] = []  # monotonic time each utterance's last audio was sent
-        self.finals: list[float] = []
+        self.frames: list[bytes] = []  # audio waiting to be sent (an utterance), else silence goes out
+        self.final = asyncio.Event()
+        self.last_final_at = 0.0
         self.stop = asyncio.Event()  # no new turns
         self.done = asyncio.Event()  # close the streams
 
     async def _audio_stream(self):
-        """Real-time 20 ms frames: silence, then an utterance, then the turn gap."""
+        """Real-time 20 ms frames: silence, except while an utterance is queued."""
         frame = STT_RATE * CHUNK_MS // 1000 * 2
         silence = bytes(frame)
         next_tick = time.monotonic()
-
-        async def paced(buf: bytes):
-            nonlocal next_tick
-            for i in range(0, len(buf), frame):
-                piece = buf[i:i + frame]
-                if len(piece) < frame:
-                    piece += bytes(frame - len(piece))
-                yield self.stt_pb2.AudioChunk(
-                    audio_data=piece, session_id=self.sid, participant_id="loadtest",
-                    timestamp_ms=int(time.time() * 1000), sample_rate=STT_RATE)
-                next_tick += CHUNK_MS / 1000.0
-                delay = next_tick - time.monotonic()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-
-        # Stagger sessions so they do not all speak in the same instant.
-        async for c in paced(silence * int(random.uniform(0, self.args.turn_gap) * 1000 / CHUNK_MS)):
-            yield c
-        turn = 0
-        while not self.stop.is_set():
-            utt = self.utterances[turn % len(self.utterances)]
-            turn += 1
-            async for c in paced(utt):  # an utterance in progress always finishes
-                yield c
-            self.end_of_speech.append(time.monotonic())
-            gap = silence * int(self.args.turn_gap * 1000 / CHUNK_MS)
-            async for c in paced(gap):
-                yield c
-                if self.stop.is_set():
-                    break
-        # Keep the stream alive, silent, until the run has collected the last final.
         while not self.done.is_set():
-            async for c in paced(silence):
-                yield c
+            piece = self.frames.pop(0) if self.frames else silence
+            yield self.stt_pb2.AudioChunk(
+                audio_data=piece, session_id=self.sid, participant_id="loadtest",
+                timestamp_ms=int(time.time() * 1000), sample_rate=STT_RATE)
+            next_tick += CHUNK_MS / 1000.0
+            delay = next_tick - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
 
     async def run_stt(self):
         last_partial = None
         try:
-            call = self.stt.StreamTranscribe(self._audio_stream())
-            async for ev in call:
+            async for ev in self.stt.StreamTranscribe(self._audio_stream()):
                 now = time.monotonic()
                 if ev.is_final:
-                    self.finals.append(now)
+                    self.last_final_at = now
+                    self.final.set()
                     last_partial = None
                 elif ev.text.strip():
                     if last_partial is not None:
@@ -203,48 +187,55 @@ class Session:
                 self.r.errors += 1
                 print(f"  [session {self.idx}] STT error: {e}", file=sys.stderr)
 
-    async def run_tts(self):
-        await asyncio.sleep(random.uniform(0, self.args.turn_gap))
+    async def _speak(self, utterance: bytes) -> float:
+        """Queue the utterance and return when its last frame has gone out."""
+        frame = STT_RATE * CHUNK_MS // 1000 * 2
+        pieces = [utterance[i:i + frame].ljust(frame, b"\0") for i in range(0, len(utterance), frame)]
+        self.final.clear()
+        self.frames.extend(pieces)
+        while self.frames:
+            await asyncio.sleep(CHUNK_MS / 1000.0)
+        return time.monotonic()
+
+    async def _reply(self):
+        start = time.monotonic()
+        chunks: list[tuple[float, float]] = []
+        try:
+            req = self.tts_pb2.SynthesizeRequest(text=self.tts_text, session_id=self.sid)
+            first = None
+            async for ch in self.tts.SynthesizeStream(req):
+                now = time.monotonic()
+                if first is None:
+                    first = now
+                    self.r.tts_ttfa_s.append(now - start)
+                if ch.audio_data:
+                    chunks.append((now, len(ch.audio_data) / 2 / self.tts_rate))
+        except Exception as e:  # noqa: BLE001
+            self.r.errors += 1
+            print(f"  [session {self.idx}] TTS error: {e}", file=sys.stderr)
+        starved, audio = playout_starvation(chunks, self.args.preroll_ms / 1000.0)
+        self.r.tts_starved_s += starved
+        self.r.tts_audio_s += audio
+        # The reply takes as long to play as it is long; the participant waits for it.
+        await asyncio.sleep(max(0.0, audio - (time.monotonic() - start)))
+
+    async def run_turns(self):
+        await asyncio.sleep(random.uniform(0, self.args.turn_gap))  # stagger the sessions
+        turn = 0
         while not self.stop.is_set():
-            start = time.monotonic()
-            chunks: list[tuple[float, float]] = []
+            eos = await self._speak(self.utterances[turn % len(self.utterances)])
+            turn += 1
+            self.r.stt_utterances += 1
             try:
-                req = self.tts_pb2.SynthesizeRequest(text=self.tts_text, session_id=self.sid)
-                first = None
-                async for ch in self.tts.SynthesizeStream(req):
-                    now = time.monotonic()
-                    if first is None:
-                        first = now
-                        self.r.tts_ttfa_s.append(now - start)
-                    if ch.audio_data:
-                        chunks.append((now, len(ch.audio_data) / 2 / self.tts_rate))
-            except Exception as e:  # noqa: BLE001
-                if not self.stop.is_set():
-                    self.r.errors += 1
-                    print(f"  [session {self.idx}] TTS error: {e}", file=sys.stderr)
-            starved, audio = playout_starvation(chunks, self.args.preroll_ms / 1000.0)
-            self.r.tts_starved_s += starved
-            self.r.tts_audio_s += audio
-            # Then wait for the participant's next turn.
+                await asyncio.wait_for(self.final.wait(), self.FINAL_TIMEOUT_S)
+                self.r.stt_final_s.append(self.last_final_at - eos)
+            except asyncio.TimeoutError:
+                self.r.stt_finals_missed += 1
+            await self._reply()
             try:
-                await asyncio.wait_for(self.stop.wait(), timeout=self.args.turn_gap)
+                await asyncio.wait_for(self.stop.wait(), self.args.turn_gap)
             except asyncio.TimeoutError:
                 pass
-
-    def collect(self):
-        """Match each utterance's end to the first final that followed it."""
-        finals = sorted(self.finals)
-        j = 0
-        for eos in self.end_of_speech:
-            self.r.stt_utterances += 1
-            while j < len(finals) and finals[j] < eos:
-                j += 1
-            # A final only counts for this utterance if it arrives before the next one ends.
-            if j < len(finals):
-                self.r.stt_final_s.append(finals[j] - eos)
-                j += 1
-            else:
-                self.r.stt_finals_missed += 1
 
 
 async def run_level(n, args, ctx) -> LevelResult:
@@ -264,14 +255,13 @@ async def run_level(n, args, ctx) -> LevelResult:
         for i in range(n)
     ]
     tasks = [asyncio.create_task(s.run_stt()) for s in sessions] + \
-            [asyncio.create_task(s.run_tts()) for s in sessions]
+            [asyncio.create_task(s.run_turns()) for s in sessions]
     await asyncio.sleep(args.duration)
-    # No new turns; keep listening until every spoken utterance has its final.
+    # No new turns; let the turn each session is in finish, then close the streams.
     for s in sessions:
         s.stop.set()
-    deadline = time.monotonic() + args.drain
-    while time.monotonic() < deadline and any(len(s.finals) < len(s.end_of_speech) for s in sessions):
-        await asyncio.sleep(0.25)
+    turns = tasks[len(sessions):]
+    await asyncio.wait(turns, timeout=args.drain)
     for s in sessions:
         s.done.set()
     await asyncio.sleep(0.3)
@@ -281,8 +271,6 @@ async def run_level(n, args, ctx) -> LevelResult:
     await sampler.stop()
     await stt_chan.close()
     await tts_chan.close()
-    for s in sessions:
-        s.collect()
     if sampler.util:
         result.gpu_util_avg = round(sum(sampler.util) / len(sampler.util), 1)
         result.gpu_util_max = max(sampler.util)
@@ -382,8 +370,8 @@ def parse_args(argv=None):
     p.add_argument("--levels", type=lambda s: [int(x) for x in s.split(",")], default=[1, 2, 4, 6, 8, 10],
                    help="simultaneous sessions per level, ascending; the first is the baseline")
     p.add_argument("--duration", type=int, default=60, help="seconds per level")
-    p.add_argument("--turn-gap", type=float, default=8.0, help="seconds between a session's turns")
-    p.add_argument("--drain", type=float, default=10.0, help="seconds to wait for the last transcripts after the run")
+    p.add_argument("--turn-gap", type=float, default=2.0, help="seconds a participant pauses after the reply, before speaking again")
+    p.add_argument("--drain", type=float, default=45.0, help="seconds to let each session finish the turn it is in after the run")
     p.add_argument("--keep-going", action="store_true", help="run every level even after one degrades")
     p.add_argument("--stt-slack-ms", type=float, default=1000.0, dest="stt_slack_ms")
     p.add_argument("--ttfa-slack-ms", type=float, default=1000.0, dest="ttfa_slack_ms")

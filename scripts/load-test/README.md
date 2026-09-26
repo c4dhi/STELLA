@@ -8,11 +8,15 @@ until one degrades. The level before it is the measured capacity.
 ## What a simulated session does
 
 Each session holds one streaming speech-recognition (STT) connection open and
-speaks a recorded utterance into it in real time, in 20 ms frames like a
-LiveKit participant. Every turn it also asks the text-to-speech (TTS) service
-for a spoken reply. Sessions start at random offsets, so they overlap the way
-real ones do. The test audio is synthesized once by the TTS service under test
-and resampled to 16 kHz, so it needs no audio files and any provider works.
+plays a conversation turn by turn: the participant speaks a recorded utterance
+in real time (20 ms frames, like a LiveKit participant), speech recognition
+returns the final transcript, the agent answers with a spoken reply from the
+text-to-speech (TTS) service, the participant pauses and speaks again. Within a
+session the two never overlap, so a slowdown comes from other sessions sharing
+the GPU. Sessions start at random offsets, so they overlap the way real ones do.
+Both models are warmed up first and the first level is preceded by an unmeasured
+settling period. The test audio is synthesized once by the TTS service under
+test and resampled to 16 kHz, so it needs no audio files and any provider works.
 
 Not covered: the LLM, LiveKit and the agent process. They cost CPU and network,
 not the GPU. A bigger GPU can still be limited elsewhere.
@@ -25,12 +29,14 @@ A level fails when any of these is true (all tunable):
 | --- | --- |
 | Speech recognition: end of speech to final transcript, p95 | more than 1000 ms above the same figure with one session (`--stt-slack-ms`) |
 | Voice: time to first audio, p95 | more than 1000 ms above one session (`--ttfa-slack-ms`) |
-| Voice: starvation, the share of playback the player would have sat silent waiting for audio | above 5% (`--max-starved-pct`) |
+| Voice: starvation, the share of playback the player would have sat silent waiting for audio after its pre-roll (`--preroll-ms`, set it to the deployment's `STELLA_TTS_PREROLL_MS`) | above 5% (`--max-starved-pct`) |
 | Utterances that got no final transcript, or any request error | at least one |
 
 Latency limits are relative to the one-session baseline because the absolute
 numbers differ per GPU and model. The run stops at the first failing level; a
-later level that would pass does not count.
+later level that would pass does not count. A server whose single session
+already fails (for example a GPU too slow to synthesize in real time) measures
+0 sessions, and says why.
 
 ## Running it
 
