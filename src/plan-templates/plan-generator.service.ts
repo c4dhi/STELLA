@@ -779,12 +779,12 @@ Respond ONLY with valid JSON matching the schema above.`;
       })),
     }));
 
-    // Set initial_state_id to first state if not provided
-    if (
-      !response.content.initial_state_id &&
-      response.content.states.length > 0
-    ) {
-      response.content.initial_state_id = response.content.states[0].id;
+    // Map the model's initial_state_id to the new UUID; fall back to the
+    // first state when it is missing or names no state
+    if (response.content.states.length > 0) {
+      response.content.initial_state_id =
+        stateIdMap.get(response.content.initial_state_id || '') ||
+        response.content.states[0].id;
     }
 
     // Auto-generate transitions if missing
