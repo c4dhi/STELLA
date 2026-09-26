@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useThemeStore } from '../../../store/themeStore'
 import type { CapacityMeasurement } from '../../../lib/api-types'
 
@@ -146,7 +147,7 @@ export function CapacityModal({ measurements, isLoading, onClose }: CapacityModa
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  return (
+  const dialog = (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
       role="dialog"
@@ -160,4 +161,6 @@ export function CapacityModal({ measurements, isLoading, onClose }: CapacityModa
       </div>
     </div>
   )
+  // Portal so a dimmed parent (the GPU card without a GPU) does not fade the dialog.
+  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body)
 }
