@@ -10,7 +10,6 @@ import StatsCard from './admin/StatsCard'
 import SessionsGrid from './admin/SessionsGrid'
 import ServerPerformanceMonitor from './admin/ServerPerformanceMonitor'
 import GpuMonitor from './admin/GpuMonitor'
-import CapacityCard from './admin/CapacityCard'
 import HistoricalUsageCharts from './admin/HistoricalUsageCharts'
 
 const containerVariants = {
@@ -341,12 +340,8 @@ export default function AdminDashboardSection() {
           currentMetrics={serverMetrics}
           metricsHistory={metricsHistory}
           isConnected={serverConnected}
+          capacity={{ measurements: capacity, isLoading: capacityLoading }}
         />
-      </motion.div>
-
-      {/* Measured voice capacity per GPU */}
-      <motion.div variants={itemVariants}>
-        <CapacityCard measurements={capacity} isLoading={capacityLoading} />
       </motion.div>
 
       {/* Sessions Grid */}

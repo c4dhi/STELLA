@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useThemeStore } from '../../../store/themeStore'
 import type { CapacityMeasurement } from '../../../lib/api-types'
 
@@ -35,7 +36,7 @@ export function basisLine(m: Pick<CapacityMeasurement, 'sttProvider' | 'ttsProvi
 const ms = (v: number | null) => (v === null || v === undefined ? '–' : `${Math.round(v)} ms`)
 const pct = (v: number | null) => (v === null || v === undefined ? '–' : `${v.toFixed(1)}%`)
 
-export default function CapacityCard({ measurements, isLoading }: CapacityCardProps) {
+function CapacityBody({ measurements, isLoading, onClose }: CapacityCardProps & { onClose?: () => void }) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
   const muted = isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'
@@ -44,7 +45,14 @@ export default function CapacityCard({ measurements, isLoading }: CapacityCardPr
 
   return (
     <div className={`p-5 rounded-xl border ${box}`} data-testid="capacity-card">
-      <h3 className={`text-body font-medium mb-1 ${strong}`}>Voice capacity</h3>
+      <div className="flex items-start justify-between">
+        <h3 className={`text-body font-medium mb-1 ${strong}`}>Voice capacity</h3>
+        {onClose && (
+          <button type="button" onClick={onClose} aria-label="Close" className={`text-body-sm ${muted}`}>
+            ✕
+          </button>
+        )}
+      </div>
       <p className={`text-caption mb-4 ${muted}`}>
         How many conversations at once a server&apos;s GPU carries before speech recognition or the
         voice slows down or stutters. Measured with the load test, not estimated.
@@ -118,6 +126,38 @@ export default function CapacityCard({ measurements, isLoading }: CapacityCardPr
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+export default function CapacityCard(props: CapacityCardProps) {
+  return <CapacityBody {...props} />
+}
+
+interface CapacityModalProps extends CapacityCardProps {
+  onClose: () => void
+}
+
+/** The capacity numbers only change when the load test is run again, so they live behind the GPU card's info icon. */
+export function CapacityModal({ measurements, isLoading, onClose }: CapacityModalProps) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Voice capacity"
+      data-testid="capacity-modal"
+      onClick={onClose}
+    >
+      <div className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-2xl" onClick={(e) => e.stopPropagation()}>
+        <CapacityBody measurements={measurements} isLoading={isLoading} onClose={onClose} />
+      </div>
     </div>
   )
 }

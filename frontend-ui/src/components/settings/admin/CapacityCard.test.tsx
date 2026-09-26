@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import CapacityCard, { basisLine, capacityHeadline, formatMeasuredDate } from './CapacityCard'
+import CapacityCard, { CapacityModal, basisLine, capacityHeadline, formatMeasuredDate } from './CapacityCard'
+import GpuMonitor from './GpuMonitor'
 import type { CapacityMeasurement } from '../../../lib/api-types'
 
 const base: CapacityMeasurement = {
@@ -58,5 +59,21 @@ describe('CapacityCard', () => {
 
   it('formats the date in UTC so it does not shift with the viewer', () => {
     expect(formatMeasuredDate('2026-09-26T23:30:00.000Z')).toBe('26 Sep 2026')
+  })
+
+  it('opens as a dialog with the same numbers and a close button', () => {
+    const html = renderToStaticMarkup(<CapacityModal measurements={[base]} isLoading={false} onClose={() => {}} />)
+    expect(html).toContain('role="dialog"')
+    expect(html).toContain('4 simultaneous conversations')
+    expect(html).toContain('aria-label="Close"')
+  })
+
+  it('shows an info icon on the GPU card and keeps the numbers hidden until it is opened', () => {
+    const html = renderToStaticMarkup(
+      <GpuMonitor currentMetrics={null} metricsHistory={[]} isConnected={false} capacity={{ measurements: [base], isLoading: false }} />,
+    )
+    expect(html).toContain('data-testid="capacity-info"')
+    expect(html).not.toContain('simultaneous conversations')
+    expect(renderToStaticMarkup(<GpuMonitor currentMetrics={null} metricsHistory={[]} isConnected={false} />)).not.toContain('capacity-info')
   })
 })
