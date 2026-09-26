@@ -141,6 +141,8 @@ interface CapacityModalProps extends CapacityCardProps {
 
 /** The capacity numbers only change when the load test is run again, so they live behind the GPU card's info icon. */
 export function CapacityModal({ measurements, isLoading, onClose }: CapacityModalProps) {
+  const { resolvedTheme } = useThemeStore()
+  const surface = resolvedTheme === 'dark' ? 'bg-surface-dark' : 'bg-surface'
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -156,7 +158,7 @@ export function CapacityModal({ measurements, isLoading, onClose }: CapacityModa
       data-testid="capacity-modal"
       onClick={onClose}
     >
-      <div className="w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className={`w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-2xl shadow-2xl ${surface}`} onClick={(e) => e.stopPropagation()}>
         <CapacityBody measurements={measurements} isLoading={isLoading} onClose={onClose} />
       </div>
     </div>
