@@ -17,8 +17,19 @@ export function formatMeasuredDate(iso: string): string {
 /** The headline number, honest about a test that never found the limit. */
 export function capacityHeadline(m: Pick<CapacityMeasurement, 'maxSessions' | 'reachedTopLevel'>): string {
   const n = m.maxSessions
+  if (n === 0) return 'Not even one conversation stays fluent'
   const noun = n === 1 ? 'conversation' : 'conversations'
   return m.reachedTopLevel ? `at least ${n} simultaneous ${noun}` : `${n} simultaneous ${noun}`
+}
+
+/** What the number was measured with, so a bare figure is never read out of context. */
+export function basisLine(m: Pick<CapacityMeasurement, 'sttProvider' | 'ttsProvider' | 'criteria'>): string {
+  const parts: string[] = []
+  if (m.ttsProvider) parts.push(`Voice engine: ${m.ttsProvider}`)
+  if (m.sttProvider) parts.push(`speech recognition: ${m.sttProvider}`)
+  if (m.criteria?.preroll_ms !== undefined) parts.push(`player pre-roll ${Math.round(m.criteria.preroll_ms)} ms`)
+  if (m.criteria?.max_tts_starved_pct !== undefined) parts.push(`fails above ${m.criteria.max_tts_starved_pct}% voice starvation`)
+  return parts.join(' · ')
 }
 
 const ms = (v: number | null) => (v === null || v === undefined ? '–' : `${Math.round(v)} ms`)
@@ -60,9 +71,13 @@ export default function CapacityCard({ measurements, isLoading }: CapacityCardPr
                   · measured {formatMeasuredDate(m.measuredAt)}
                 </span>
               </div>
+              <p className={`text-caption mt-1 ${muted}`} data-testid="capacity-basis">
+                {basisLine(m)}
+              </p>
               {m.limitedBy.length > 0 && (
                 <p className={`text-caption mt-1 ${muted}`}>
-                  Next level failed: {m.limitedBy.join('; ')}
+                  {m.maxSessions === 0 ? 'One session already failed' : 'Next level failed'}:{' '}
+                  {m.limitedBy.join('; ')}
                 </p>
               )}
               {m.reachedTopLevel && (

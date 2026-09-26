@@ -1514,6 +1514,8 @@ export interface CapacityMeasurement {
   /** True when the highest level tried still passed: the real limit is higher. */
   reachedTopLevel: boolean
   durationSeconds: number
+  /** The limits the run was judged by (preroll_ms, max_tts_starved_pct, latency slacks). */
+  criteria: Record<string, number>
   levels: CapacityLevel[]
 }
 

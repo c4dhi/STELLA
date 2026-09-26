@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import CapacityCard, { capacityHeadline, formatMeasuredDate } from './CapacityCard'
+import CapacityCard, { basisLine, capacityHeadline, formatMeasuredDate } from './CapacityCard'
 import type { CapacityMeasurement } from '../../../lib/api-types'
 
 const base: CapacityMeasurement = {
@@ -16,6 +16,7 @@ const base: CapacityMeasurement = {
   limitedBy: ['voice starved 12.0% of playback (limit 5%)'],
   reachedTopLevel: false,
   durationSeconds: 60,
+  criteria: { preroll_ms: 800, max_tts_starved_pct: 5 },
   levels: [
     { sessions: 1, stt_final_p95_ms: 600, tts_ttfa_p95_ms: 900, tts_starved_pct: 0, gpu_util_max_pct: 40, errors: 0 },
     { sessions: 4, stt_final_p95_ms: 1400, tts_ttfa_p95_ms: 2100, tts_starved_pct: 2.5, gpu_util_max_pct: 97, errors: 0 },
@@ -42,6 +43,17 @@ describe('CapacityCard', () => {
 
   it('tells the admin how to measure when nothing has been measured', () => {
     expect(renderToStaticMarkup(<CapacityCard measurements={[]} isLoading={false} />)).toContain('Not measured yet')
+  })
+
+  it('never shows a bare zero: it says why and what it was measured with', () => {
+    const zero = { ...base, maxSessions: 0, limitedBy: ['voice starved 11.8% of playback (limit 5%)'] }
+    const html = renderToStaticMarkup(<CapacityCard measurements={[zero]} isLoading={false} />)
+    expect(html).toContain('Not even one conversation stays fluent')
+    expect(html).toContain('One session already failed')
+    expect(html).toContain('Voice engine: qwen3')
+    expect(html).toContain('player pre-roll 800 ms')
+    expect(html).toContain('fails above 5% voice starvation')
+    expect(basisLine({ sttProvider: null, ttsProvider: null, criteria: {} })).toBe('')
   })
 
   it('formats the date in UTC so it does not shift with the viewer', () => {
