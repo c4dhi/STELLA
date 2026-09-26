@@ -31,3 +31,8 @@ for the setup, what counts as "degraded", and the options.
 
 Measure on the GPU you deploy on and without other load. A GPU that is faster
 or slower than the one measured will carry a different number.
+
+## Known limitations
+
+- **Development server (Tesla T4), Qwen3 voice, streaming playback:** measured capacity is **0**. One session already starves the voice (9.7% of playback against the 5% limit, judged with an 800 ms player pre-roll), and two sessions collapse: speech-recognition finals take about 7 s and the voice's first audio about 6 s. The GPU is at about 82% with one session and about 97% from three. The shared Qwen3 model is the ceiling.
+- This says nothing about other GPUs (production's has not been measured) or about the sentence-by-sentence playback mode (`STELLA_TTS_PLAYBACK=sentence`), which the test does not model. Capacity also does not include the language model, LiveKit or agent CPU.

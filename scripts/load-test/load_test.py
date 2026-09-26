@@ -149,8 +149,8 @@ class Session:
         self.stt_pb2, self.tts_pb2 = stubs
         self.sid = f"loadtest-{idx}-{int(time.time())}"
         self.frames: list[bytes] = []  # audio waiting to be sent (an utterance), else silence goes out
-        self.final = asyncio.Event()
-        self.last_final_at = 0.0
+        self.finals: list[float] = []  # arrival times of finals since the current turn began
+        self.final_arrived = asyncio.Event()
         self.stop = asyncio.Event()  # no new turns
         self.done = asyncio.Event()  # close the streams
 
@@ -175,8 +175,8 @@ class Session:
             async for ev in self.stt.StreamTranscribe(self._audio_stream()):
                 now = time.monotonic()
                 if ev.is_final:
-                    self.last_final_at = now
-                    self.final.set()
+                    self.finals.append(now)
+                    self.final_arrived.set()
                     last_partial = None
                 elif ev.text.strip():
                     if last_partial is not None:
@@ -191,11 +191,28 @@ class Session:
         """Queue the utterance and return when its last frame has gone out."""
         frame = STT_RATE * CHUNK_MS // 1000 * 2
         pieces = [utterance[i:i + frame].ljust(frame, b"\0") for i in range(0, len(utterance), frame)]
-        self.final.clear()
+        self.finals.clear()
+        self.final_arrived.clear()
         self.frames.extend(pieces)
         while self.frames:
             await asyncio.sleep(CHUNK_MS / 1000.0)
         return time.monotonic()
+
+    async def _final_after(self, eos: float):
+        """Arrival time of the first final after the end of speech, or None on timeout."""
+        deadline = eos + self.FINAL_TIMEOUT_S
+        while True:
+            late = [t for t in self.finals if t > eos]
+            if late:
+                return late[0]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            self.final_arrived.clear()
+            try:
+                await asyncio.wait_for(self.final_arrived.wait(), remaining)
+            except asyncio.TimeoutError:
+                return None
 
     async def _reply(self):
         start = time.monotonic()
@@ -205,10 +222,10 @@ class Session:
             first = None
             async for ch in self.tts.SynthesizeStream(req):
                 now = time.monotonic()
-                if first is None:
-                    first = now
-                    self.r.tts_ttfa_s.append(now - start)
                 if ch.audio_data:
+                    if first is None:
+                        first = now
+                        self.r.tts_ttfa_s.append(now - start)
                     chunks.append((now, len(ch.audio_data) / 2 / self.tts_rate))
         except Exception as e:  # noqa: BLE001
             self.r.errors += 1
@@ -226,11 +243,14 @@ class Session:
             eos = await self._speak(self.utterances[turn % len(self.utterances)])
             turn += 1
             self.r.stt_utterances += 1
-            try:
-                await asyncio.wait_for(self.final.wait(), self.FINAL_TIMEOUT_S)
-                self.r.stt_final_s.append(self.last_final_at - eos)
-            except asyncio.TimeoutError:
+            final_at = await self._final_after(eos)
+            # Finals before the end of speech (a pause inside the sentence, or the late final
+            # of the previous turn) are not this turn's final: count them apart.
+            self.r.stt_early_finals += sum(1 for t in self.finals if t <= eos)
+            if final_at is None:
                 self.r.stt_finals_missed += 1
+            else:
+                self.r.stt_final_s.append(final_at - eos)
             await self._reply()
             try:
                 await asyncio.wait_for(self.stop.wait(), self.args.turn_gap)

@@ -16,7 +16,7 @@ import load_test  # noqa: E402
 TTS_RATE = 24000
 
 
-def make_servers(stt_pb2, stt_grpc, tts_pb2, tts_grpc, decode_s, synth_s):
+def make_servers(stt_pb2, stt_grpc, tts_pb2, tts_grpc, decode_s, synth_s, mid_final=False):
     gpu = asyncio.Lock()
 
     async def work(seconds):
@@ -30,10 +30,14 @@ def make_servers(stt_pb2, stt_grpc, tts_pb2, tts_grpc, decode_s, synth_s):
         async def StreamTranscribe(self, request_iterator, context):
             speaking = False
             quiet = 0
+            loud_frames = 0
             async for chunk in request_iterator:
                 loud = np.abs(np.frombuffer(chunk.audio_data, dtype=np.int16)).mean() > 200
                 if loud:
                     quiet = 0
+                    loud_frames += 1
+                    if mid_final and loud_frames == 10:  # a final in the middle of the utterance
+                        yield stt_pb2.TranscriptEvent(text="early", is_final=True)
                     if not speaking:
                         speaking = True
                         yield stt_pb2.TranscriptEvent(speech_started=True)
@@ -42,6 +46,7 @@ def make_servers(stt_pb2, stt_grpc, tts_pb2, tts_grpc, decode_s, synth_s):
                     if quiet == 20:  # 400 ms of silence ends the utterance
                         await work(decode_s)
                         speaking = False
+                        loud_frames = 0
                         yield stt_pb2.TranscriptEvent(text="hello", is_final=True)
 
     class Tts(tts_grpc.TextToSpeechServicer):
@@ -63,13 +68,13 @@ def make_servers(stt_pb2, stt_grpc, tts_pb2, tts_grpc, decode_s, synth_s):
     return Stt(), Tts()
 
 
-async def serve(decode_s, synth_s):
+async def serve(decode_s, synth_s, mid_final=False):
     import grpc
 
     load_test.build_stubs()
     import stt_pb2, stt_pb2_grpc, tts_pb2, tts_pb2_grpc  # noqa: E401
 
-    stt, tts = make_servers(stt_pb2, stt_pb2_grpc, tts_pb2, tts_pb2_grpc, decode_s, synth_s)
+    stt, tts = make_servers(stt_pb2, stt_pb2_grpc, tts_pb2, tts_pb2_grpc, decode_s, synth_s, mid_final)
     server = grpc.aio.server()
     stt_pb2_grpc.add_SpeechToTextServicer_to_server(stt, server)
     tts_pb2_grpc.add_TextToSpeechServicer_to_server(tts, server)
@@ -111,3 +116,18 @@ async def test_a_slow_shared_gpu_is_found_to_degrade_and_the_run_stops():
     assert result["maxSessions"] < 16
     assert result["limitedBy"]
     assert len(result["levels"]) < 4  # stopped at the first degraded level
+
+
+@pytest.mark.asyncio
+async def test_a_final_in_the_middle_of_an_utterance_is_not_the_turns_final():
+    # The fake emits a final 200 ms into every utterance, then the real one 0.3 s after the end.
+    server, addr = await serve(decode_s=0.3, synth_s=0.01, mid_final=True)
+    try:
+        result = await load_test.main_async(args_for(addr, [1, 2]))
+    finally:
+        await server.stop(0)
+    level = result["levels"][0]
+    assert level["stt_early_finals"] >= 1
+    assert level["stt_finals_missed"] == 0
+    # Timed from the end of speech: at least the 400 ms silence window plus the decode.
+    assert level["stt_final_p50_ms"] >= 600

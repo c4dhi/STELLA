@@ -54,6 +54,7 @@ class LevelResult:
     stt_partial_gap_s: list[float] = field(default_factory=list)
     stt_utterances: int = 0
     stt_finals_missed: int = 0
+    stt_early_finals: int = 0  # finals that arrived before the end of speech
     tts_ttfa_s: list[float] = field(default_factory=list)
     tts_starved_s: float = 0.0
     tts_audio_s: float = 0.0
@@ -71,6 +72,7 @@ class LevelResult:
             "stt_partial_gap_p95_ms": ms(percentile(self.stt_partial_gap_s, 95)),
             "stt_utterances": self.stt_utterances,
             "stt_finals_missed": self.stt_finals_missed,
+            "stt_early_finals": self.stt_early_finals,
             "tts_ttfa_p50_ms": ms(percentile(self.tts_ttfa_s, 50)),
             "tts_ttfa_p95_ms": ms(percentile(self.tts_ttfa_s, 95)),
             "tts_starved_pct": round(100.0 * self.tts_starved_s / self.tts_audio_s, 2)
