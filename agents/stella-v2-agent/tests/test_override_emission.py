@@ -64,7 +64,7 @@ def _build_agent(monkeypatch, *, action: str) -> StellaV2Agent:
     )
     agent.expert_registry.as_map = lambda: {"medical": medical}
 
-    agent._fetch_conversation_history = AsyncMock(return_value=([], []))
+    agent._fetch_conversation_history = AsyncMock(return_value=[])
     return agent
 
 
