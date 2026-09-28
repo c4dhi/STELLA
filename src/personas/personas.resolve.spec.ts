@@ -1,6 +1,7 @@
+import { jest } from '@jest/globals';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { PersonasService } from './personas.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { PersonasService } from './personas.service.js';
 
 type PersonaRow = {
   id: string;

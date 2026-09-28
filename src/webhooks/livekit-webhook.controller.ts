@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { Public } from '../common/decorators/public.decorator';
+import { Public } from '../common/decorators/public.decorator.js';
 import { WebhookReceiver } from 'livekit-server-sdk';
 import type { Request } from 'express';
 

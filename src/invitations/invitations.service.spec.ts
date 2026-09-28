@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 // InvitationsService pulls in LiveKitService / AuthService whose transitive deps
 // are ESM-only (livekit-server-sdk) and trip ts-jest. create() only needs a stub
 // of each, so cut those module subtrees at the boundary.
@@ -5,7 +6,7 @@ jest.mock('../livekit/livekit.service', () => ({ LiveKitService: class {} }));
 jest.mock('../auth/auth.service', () => ({ AuthService: class {} }));
 jest.mock('livekit-server-sdk', () => ({ TokenVerifier: class {}, AccessToken: class {} }));
 
-import { InvitationsService } from './invitations.service';
+import { InvitationsService } from './invitations.service.js';
 
 type SessionRow = {
   id: string;

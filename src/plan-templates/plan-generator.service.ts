@@ -6,7 +6,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid';
-import { GeneratePlanTemplateDto } from './dto/generate-plan-template.dto';
+import { GeneratePlanTemplateDto } from './dto/generate-plan-template.dto.js';
 
 // Canonical plan types matching stella-ai-agent-sdk/plan
 interface PlanDeliverable {

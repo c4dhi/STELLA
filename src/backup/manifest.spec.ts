@@ -9,7 +9,7 @@ import {
   tablesForExport,
   ImportTarget,
   validateForImport,
-} from './manifest'
+} from './manifest.js'
 
 /** A manifest that, against `matchingTarget()`, passes every guard. */
 function baseManifest(overrides: Partial<BackupManifest> = {}): BackupManifest {

@@ -13,11 +13,11 @@ import {
 } from '@nestjs/common';
 import { Observable, interval } from 'rxjs';
 import { map } from 'rxjs/operators';
-import { AgentsService } from './agents.service';
-import { AgentImageService } from '../agent-image/agent-image.service';
-import { CreateAgentDto } from './dto/create-agent.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
+import { AgentsService } from './agents.service.js';
+import { AgentImageService } from '../agent-image/agent-image.service.js';
+import { CreateAgentDto } from './dto/create-agent.dto.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
+import { ProjectAccessGuard } from '../auth/guards/project-access.guard.js';
 
 interface MessageEvent {
   data: string;

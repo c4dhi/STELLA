@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
-import { PrismaModule } from '../prisma/prisma.module'
-import { AgentPackageModule } from '../agent-package/agent-package.module'
-import { AgentBuildService } from './agent-build.service'
+import { PrismaModule } from '../prisma/prisma.module.js'
+import { AgentPackageModule } from '../agent-package/agent-package.module.js'
+import { AgentBuildService } from './agent-build.service.js'
 
 @Module({
   imports: [ConfigModule, PrismaModule, AgentPackageModule],

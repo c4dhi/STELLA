@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { LiveKitService } from './livekit.service';
-import { LiveKitController } from './livekit.controller';
+import { LiveKitService } from './livekit.service.js';
+import { LiveKitController } from './livekit.controller.js';
 
 @Module({
   controllers: [LiveKitController],

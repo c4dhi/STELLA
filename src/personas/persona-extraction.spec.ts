@@ -1,5 +1,5 @@
 import { PrismaClient } from '@prisma/client';
-import { extractPlanPersonas } from './persona-extraction';
+import { extractPlanPersonas } from './persona-extraction.js';
 
 /**
  * A small in-memory stand-in for the four tables the extraction touches, with a

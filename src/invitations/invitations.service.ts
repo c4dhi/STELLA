@@ -6,11 +6,11 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { PrismaService } from '../prisma/prisma.service';
-import { LiveKitService } from '../livekit/livekit.service';
-import { AuthService } from '../auth/auth.service';
-import { CreateInvitationDto } from './dto/create-invitation.dto';
-import { AcceptInvitationDto } from './dto/accept-invitation.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { LiveKitService } from '../livekit/livekit.service.js';
+import { AuthService } from '../auth/auth.service.js';
+import { CreateInvitationDto } from './dto/create-invitation.dto.js';
+import { AcceptInvitationDto } from './dto/accept-invitation.dto.js';
 import { InvitationStatus } from '@prisma/client';
 
 @Injectable()

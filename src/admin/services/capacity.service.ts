@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { PrismaService } from '../../prisma/prisma.service';
-import { RecordCapacityDto } from '../dto/capacity.dto';
+import { PrismaService } from '../../prisma/prisma.service.js';
+import { RecordCapacityDto } from '../dto/capacity.dto.js';
 
 export interface CapacityMeasurementView {
   id: string;

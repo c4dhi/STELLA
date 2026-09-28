@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { PrismaService } from '../../prisma/prisma.service';
-import { ServerMetricsService } from './server-metrics.service';
+import { PrismaService } from '../../prisma/prisma.service.js';
+import { ServerMetricsService } from './server-metrics.service.js';
 
 /**
  * UsageLoggingService - Automated metrics logging for historical data

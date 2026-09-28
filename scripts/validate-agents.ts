@@ -1,6 +1,9 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { parseAgentManifestYaml } from '../src/agent-package/schemas/agent-manifest.schema'
+import { fileURLToPath } from 'url'
+import { parseAgentManifestYaml } from '../src/agent-package/schemas/agent-manifest.schema.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const SKIP_DIRS = new Set(['stella-ai-agent-sdk'])
 

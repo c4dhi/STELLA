@@ -1,10 +1,10 @@
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
-import { PrismaService } from '../prisma/prisma.service';
-import { AgentsService } from '../agents/agents.service';
-import { SessionsService } from '../sessions/sessions.service';
-import { LiveKitService } from '../livekit/livekit.service';
-import { EncryptionService } from '../env-var-templates/encryption.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { AgentsService } from '../agents/agents.service.js';
+import { SessionsService } from '../sessions/sessions.service.js';
+import { LiveKitService } from '../livekit/livekit.service.js';
+import { EncryptionService } from '../env-var-templates/encryption.service.js';
 
 interface ParticipantJoinedEvent {
   roomName: string;
@@ -34,6 +34,14 @@ export class WebhooksService {
   // Timers for delayed agent pause (keyed by sessionId)
   private agentPauseTimers: Map<string, NodeJS.Timeout> = new Map();
 
+  // Typed `any` on the constructor parameter (assigned to the field above) so
+  // TS's emitDecoratorMetadata doesn't reference the still-circularly-importing
+  // class eagerly in design:paramtypes, which throws a TDZ ReferenceError under
+  // ESM depending on module evaluation order. forwardRef already handles the
+  // actual lazy DI resolution.
+  private agentsService: AgentsService;
+  private sessionsService: SessionsService;
+
   constructor(
     private prisma: PrismaService,
     private eventEmitter: EventEmitter2,
@@ -41,10 +49,13 @@ export class WebhooksService {
     // Used to decrypt manualEnvVarsEncrypted when recreating an agent from lastAgentConfig.
     private encryptionService: EncryptionService,
     @Inject(forwardRef(() => AgentsService))
-    private agentsService: AgentsService,
+    agentsService: any,
     @Inject(forwardRef(() => SessionsService))
-    private sessionsService: SessionsService,
-  ) {}
+    sessionsService: any,
+  ) {
+    this.agentsService = agentsService;
+    this.sessionsService = sessionsService;
+  }
 
   /**
    * Check if a participant identity is a human (not an agent or system participant)

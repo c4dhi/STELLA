@@ -1,11 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { exec, ExecException } from 'child_process';
+import { exec, execSync, ExecException } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { createHash, Hash } from 'crypto';
-import { AgentTypeService, AgentTypeInfo as DbAgentTypeInfo } from '../agent-type/agent-type.service';
+import { fileURLToPath } from 'url';
+import { AgentTypeService, AgentTypeInfo as DbAgentTypeInfo } from '../agent-type/agent-type.service.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const execAsync = promisify(exec);
 
@@ -155,7 +158,6 @@ export class AgentImageService {
    * Runs synchronously at startup to test if Docker CLI works.
    */
   private checkDockerSocket(): boolean {
-    const { execSync } = require('child_process');
     try {
       // Test if docker command is available and can connect
       execSync('docker version', { stdio: 'pipe', timeout: 5000 });

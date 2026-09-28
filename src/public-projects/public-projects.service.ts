@@ -4,17 +4,17 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { SessionsService } from '../sessions/sessions.service';
-import { AgentsService } from '../agents/agents.service';
-import { InvitationsService } from '../invitations/invitations.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { SessionsService } from '../sessions/sessions.service.js';
+import { AgentsService } from '../agents/agents.service.js';
+import { InvitationsService } from '../invitations/invitations.service.js';
 import { AgentStatus } from '@prisma/client';
 import {
   PublicProjectInfoDto,
   JoinPublicProjectResponseDto,
   StartJoinPublicProjectResponseDto,
   JoinProgressDto,
-} from './dto/public-project-info.dto';
+} from './dto/public-project-info.dto.js';
 
 // In-memory progress state
 interface ProgressState {

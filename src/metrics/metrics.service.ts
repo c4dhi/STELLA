@@ -1,8 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Observable, ReplaySubject, interval, merge } from 'rxjs';
 import { map, finalize, switchMap, startWith } from 'rxjs/operators';
-import { PrismaService } from '../prisma/prisma.service';
-import { ProjectMetricsDto } from './dto/project-metrics.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { ProjectMetricsDto } from './dto/project-metrics.dto.js';
 
 interface MessageEvent {
   data: string;

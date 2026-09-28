@@ -1,10 +1,17 @@
+import { jest } from '@jest/globals';
 import { ConfigService } from '@nestjs/config';
-import * as childProcess from 'child_process';
+import type { AgentTypeService } from '../agent-type/agent-type.service.js';
 
-import { AgentImageService } from './agent-image.service';
-import { AgentTypeService } from '../agent-type/agent-type.service';
+// Real ES module namespace objects are frozen, so an auto-mock of a bare
+// `import * as childProcess from 'child_process'` can't be reassigned per-test
+// the way `jest.mock('child_process')` + `exec`
+// worked under CJS. Mock the module before importing the service under test,
+// per Jest's documented ESM mocking pattern, and use these fns directly.
+const exec = jest.fn();
+const execSync = jest.fn();
+jest.unstable_mockModule('child_process', () => ({ exec, execSync }));
 
-jest.mock('child_process');
+const { AgentImageService } = await import('./agent-image.service.js');
 
 describe('AgentImageService.checkContainerdHealth', () => {
   const agentTypeService = {} as AgentTypeService;
@@ -21,7 +28,7 @@ describe('AgentImageService.checkContainerdHealth', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     // execSync is called by the constructor's checkDockerSocket(); make it succeed by default.
-    (childProcess.execSync as jest.Mock).mockReturnValue(Buffer.from(''));
+    execSync.mockReturnValue(Buffer.from(''));
   });
 
   afterEach(() => {
@@ -37,7 +44,7 @@ describe('AgentImageService.checkContainerdHealth', () => {
     const svc = makeService({ NODE_ENV: 'local' });
 
     await expect(svc.checkContainerdHealth()).resolves.toEqual({ ok: true });
-    expect(childProcess.exec).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
   });
 
   it('returns ok when CONTAINER_RUNTIME=none even if NODE_ENV=production', async () => {
@@ -45,12 +52,12 @@ describe('AgentImageService.checkContainerdHealth', () => {
     const svc = makeService({ NODE_ENV: 'production', CONTAINER_RUNTIME: 'none' });
 
     await expect(svc.checkContainerdHealth()).resolves.toEqual({ ok: true });
-    expect(childProcess.exec).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
   });
 
   it('returns ok when k3s ctr version succeeds', async () => {
     process.env.KUBERNETES_SERVICE_HOST = '10.0.0.1';
-    (childProcess.exec as unknown as jest.Mock).mockImplementation(
+    exec.mockImplementation(
       (_cmd: string, _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
         cb(null, 'Client version', '');
       },
@@ -58,7 +65,7 @@ describe('AgentImageService.checkContainerdHealth', () => {
     const svc = makeService({ NODE_ENV: 'production', CONTAINER_RUNTIME: 'k3s' });
 
     await expect(svc.checkContainerdHealth()).resolves.toEqual({ ok: true });
-    expect(childProcess.exec).toHaveBeenCalledWith(
+    expect(exec).toHaveBeenCalledWith(
       'k3s ctr version',
       expect.objectContaining({ timeout: 5000 }),
       expect.any(Function),
@@ -67,7 +74,7 @@ describe('AgentImageService.checkContainerdHealth', () => {
 
   it('returns ok=false with error when k3s ctr version fails', async () => {
     process.env.KUBERNETES_SERVICE_HOST = '10.0.0.1';
-    (childProcess.exec as unknown as jest.Mock).mockImplementation(
+    exec.mockImplementation(
       (_cmd: string, _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
         cb(new Error('connect: connection refused'), '', '');
       },
@@ -114,7 +121,7 @@ describe('AgentImageService.pruneOldConfigImages', () => {
 
   /** Route each shell command to a canned result, recording every command issued. */
   function routeExec(router: (cmd: string) => { stdout?: string; error?: Error }): void {
-    (childProcess.exec as unknown as jest.Mock).mockImplementation(
+    exec.mockImplementation(
       (cmd: string, optsOrCb: unknown, maybeCb?: unknown) => {
         issued.push(cmd);
         const cb = (typeof optsOrCb === 'function' ? optsOrCb : maybeCb) as (
@@ -145,7 +152,7 @@ describe('AgentImageService.pruneOldConfigImages', () => {
     jest.clearAllMocks();
     issued = [];
     delete process.env.KUBERNETES_SERVICE_HOST;
-    (childProcess.execSync as jest.Mock).mockReturnValue(Buffer.from(''));
+    execSync.mockReturnValue(Buffer.from(''));
   });
 
   afterEach(() => {

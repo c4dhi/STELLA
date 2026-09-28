@@ -12,6 +12,7 @@
  * on-disk format.
  */
 import type { Archiver as ArchiverInstance } from 'archiver'
+import { ZipArchive } from 'archiver'
 import * as yauzl from 'yauzl'
 import * as fs from 'fs'
 import { pipeline } from 'stream/promises'
@@ -49,10 +50,7 @@ export class ZipWriter {
     this.archive.pipe(out)
   }
 
-  /** archiver 8 ships ESM-only (no CJS build), so it has to be loaded with a
-   * dynamic `import()` even though the rest of this project is CommonJS. */
   static async create(outPath: string): Promise<ZipWriter> {
-    const { ZipArchive } = await import('archiver')
     return new ZipWriter(new ZipArchive({ zlib: { level: ZIP_LEVEL } }), outPath)
   }
 

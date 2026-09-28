@@ -1,12 +1,12 @@
 import { Injectable, Logger, NotFoundException, ForbiddenException, MessageEvent } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service.js';
 import { UserMessageType } from '@prisma/client';
 import { Observable, Subject, ReplaySubject, filter, map, finalize } from 'rxjs';
 import {
   QueryMessagesDto,
   UserMessageResponseDto,
   PaginatedMessagesResponseDto,
-} from './dto/user-message.dto';
+} from './dto/user-message.dto.js';
 
 // Event types for user notifications
 export interface UserNotificationEvent {

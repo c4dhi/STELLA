@@ -1,6 +1,7 @@
+import { jest } from '@jest/globals';
 import { ArgumentsHost, BadRequestException, HttpStatus } from '@nestjs/common';
 import { MulterError } from 'multer';
-import { AllExceptionsFilter, statusForMulterError } from './http-exception.filter';
+import { AllExceptionsFilter, statusForMulterError } from './http-exception.filter.js';
 
 function hostFor(response: { status: jest.Mock; json: jest.Mock }): ArgumentsHost {
   return {

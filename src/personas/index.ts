@@ -1,2 +1,2 @@
-export * from './personas.module';
-export * from './personas.service';
+export * from './personas.module.js';
+export * from './personas.service.js';

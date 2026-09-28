@@ -3,7 +3,7 @@ import {
   DEFAULT_MEMORY_LIMIT,
   clampCpuLimit,
   clampMemoryLimit,
-} from './resource-clamping.util'
+} from './resource-clamping.util.js'
 
 describe('resource-clamping util', () => {
   it('accepts valid CPU limits up to 2000m', () => {

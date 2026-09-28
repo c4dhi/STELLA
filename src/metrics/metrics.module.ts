@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { MetricsService } from './metrics.service';
-import { MetricsController } from './metrics.controller';
-import { PrismaModule } from '../prisma/prisma.module';
+import { MetricsService } from './metrics.service.js';
+import { MetricsController } from './metrics.controller.js';
+import { PrismaModule } from '../prisma/prisma.module.js';
 
 /**
  * MetricsModule - Real-time metrics and analytics

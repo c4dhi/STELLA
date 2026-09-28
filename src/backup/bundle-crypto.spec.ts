@@ -6,7 +6,7 @@ import {
   encryptBundle,
   decryptBundle,
   isEncryptedBundle,
-} from './bundle-crypto'
+} from './bundle-crypto.js'
 
 /**
  * Streaming AES-256-GCM envelope round-trip (#378). Exercises the real file I/O

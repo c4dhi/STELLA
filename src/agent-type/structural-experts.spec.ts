@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseAgentManifestYaml } from '../agent-package/schemas/agent-manifest.schema';
+import { fileURLToPath } from 'url';
+import { parseAgentManifestYaml } from '../agent-package/schemas/agent-manifest.schema.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Two experts are structural rather than assessment (#467).

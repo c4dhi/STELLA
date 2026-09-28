@@ -9,10 +9,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { Public } from '../common/decorators/public.decorator';
-import { PublicProjectsService } from './public-projects.service';
-import { SessionsService } from '../sessions/sessions.service';
-import { PublicProjectInfoDto, JoinPublicProjectResponseDto, StartJoinPublicProjectResponseDto, JoinProgressDto } from './dto/public-project-info.dto';
+import { Public } from '../common/decorators/public.decorator.js';
+import { PublicProjectsService } from './public-projects.service.js';
+import { SessionsService } from '../sessions/sessions.service.js';
+import { PublicProjectInfoDto, JoinPublicProjectResponseDto, StartJoinPublicProjectResponseDto, JoinProgressDto } from './dto/public-project-info.dto.js';
 
 interface MessageEvent {
   data: string | object;

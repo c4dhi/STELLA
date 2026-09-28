@@ -10,10 +10,10 @@ import {
   ValidationPipe,
   UsePipes,
 } from '@nestjs/common';
-import { AgentConfigurationsService } from './agent-configurations.service';
-import { CreateAgentConfigurationDto } from './dto/create-agent-configuration.dto';
-import { UpdateAgentConfigurationDto } from './dto/update-agent-configuration.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { AgentConfigurationsService } from './agent-configurations.service.js';
+import { CreateAgentConfigurationDto } from './dto/create-agent-configuration.dto.js';
+import { UpdateAgentConfigurationDto } from './dto/update-agent-configuration.dto.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 
 @Controller('agent-configurations')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))

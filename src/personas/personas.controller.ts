@@ -9,10 +9,10 @@ import {
   ValidationPipe,
   UsePipes,
 } from '@nestjs/common';
-import { PersonasService } from './personas.service';
-import { CreatePersonaDto } from './dto/create-persona.dto';
-import { UpdatePersonaDto } from './dto/update-persona.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { PersonasService } from './personas.service.js';
+import { CreatePersonaDto } from './dto/create-persona.dto.js';
+import { UpdatePersonaDto } from './dto/update-persona.dto.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 
 @Controller('personas')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))

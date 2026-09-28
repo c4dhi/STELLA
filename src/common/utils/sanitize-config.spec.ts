@@ -1,4 +1,4 @@
-import { sanitizeAgentConfig } from './sanitize-config'
+import { sanitizeAgentConfig } from './sanitize-config.js'
 
 describe('sanitizeAgentConfig', () => {
   it('keeps legitimate configuration keys and values', () => {

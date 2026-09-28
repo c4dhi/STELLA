@@ -10,10 +10,10 @@ import {
   ValidationPipe,
   UsePipes,
 } from '@nestjs/common';
-import { EnvVarTemplatesService } from './env-var-templates.service';
-import { CreateEnvVarTemplateDto } from './dto/create-env-var-template.dto';
-import { UpdateEnvVarTemplateDto } from './dto/update-env-var-template.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { EnvVarTemplatesService } from './env-var-templates.service.js';
+import { CreateEnvVarTemplateDto } from './dto/create-env-var-template.dto.js';
+import { UpdateEnvVarTemplateDto } from './dto/update-env-var-template.dto.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 
 @Controller('env-var-templates')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))

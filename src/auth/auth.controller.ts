@@ -7,12 +7,12 @@ import {
   ValidationPipe,
   UsePipes,
 } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { SignupDto } from './dto/signup.dto';
-import { LoginDto } from './dto/login.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { Public } from '../common/decorators/public.decorator';
+import { AuthService } from './auth.service.js';
+import { SignupDto } from './dto/signup.dto.js';
+import { LoginDto } from './dto/login.dto.js';
+import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
+import { Public } from '../common/decorators/public.decorator.js';
 
 @Controller('auth')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
