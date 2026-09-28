@@ -503,3 +503,59 @@ def test_no_unconfirmed_block_when_there_are_none():
           "deliverables": [{"key": "a", "status": "completed",
                             "description": "a thing", "value": "v"}]}
     assert "MENTIONED" not in build_response_system_prompt(sm, ResponseDirective())
+
+
+# ---------------------------------------------------------------------------
+# generate() end to end — the model sometimes restarts a continuation with
+# the bridge it just spoke, usually tagged (#627: "Nice to meet you, Sam!"
+# spoken, then the model's own continuation opened with "[happy] Nice to meet
+# you, Sam! [curious] What type..." — heard twice by the participant).
+# ---------------------------------------------------------------------------
+
+class _RespondingLLMService:
+    """Like _CapturingLLMService, but returns a configurable final response."""
+
+    def __init__(self, content: str):
+        self._content = content
+        self.captured_messages = None
+
+    async def generate(self, messages, config, callback, component_name="unknown"):
+        self.captured_messages = messages
+        resp = LLMResponse(content=self._content, model="test", provider="test")
+        await callback.on_complete(resp)
+        return resp
+
+
+def test_generate_drops_a_repeated_bridge_before_it_reaches_tts():
+    svc = _RespondingLLMService(
+        "[happy] Nice to meet you, Sam! [curious] What type of exercise do you enjoy?"
+    )
+    gen = ResponseGenerator(llm_service=svc)
+    outputs = _run_generate(
+        gen,
+        session_id="s1",
+        user_input="Hi, my name is Sam.",
+        directive=ResponseDirective(),
+        conversation_history=[],
+        sm_context={},
+        bridge="Nice to meet you, Sam!",
+    )
+    final_text = outputs[-1].content
+    assert final_text.count("Nice to meet you, Sam!") == 1
+    assert final_text == "Nice to meet you, Sam! [curious] What type of exercise do you enjoy?"
+
+
+def test_generate_leaves_a_genuine_continuation_untouched():
+    svc = _RespondingLLMService("[curious] What type of exercise do you enjoy?")
+    gen = ResponseGenerator(llm_service=svc)
+    outputs = _run_generate(
+        gen,
+        session_id="s1",
+        user_input="Hi, my name is Sam.",
+        directive=ResponseDirective(),
+        conversation_history=[],
+        sm_context={},
+        bridge="Nice to meet you, Sam!",
+    )
+    final_text = outputs[-1].content
+    assert final_text == "Nice to meet you, Sam! [curious] What type of exercise do you enjoy?"
