@@ -31,6 +31,10 @@ class ResponseDirective:
         resolved_response: The compiled, ready-to-speak literature template for the
             winning non-inform directive (empty for "inform").
         directive_source: Name of the expert whose verdict directive won (debug/analytics).
+        routing_directive: Something that ALREADY happened to this session — the
+            activity list was read, an activity started, one was dropped. Unlike
+            every other field here it is a FACT, not an expert's suggestion, so
+            it outranks them and cannot be arbitrated away. See to_prompt_section.
     """
     tone: str = "neutral"
     must_avoid: List[str] = field(default_factory=list)
@@ -46,6 +50,7 @@ class ResponseDirective:
     action: str = "inform"
     resolved_response: str = ""
     directive_source: str = ""
+    routing_directive: str = ""
 
     def to_prompt_section(self) -> str:
         """Render as a single coherent instruction for the response system prompt.
@@ -54,8 +59,9 @@ class ResponseDirective:
         receive competing instructions (e.g. "focus on X" AND "ask about Y" AND
         "also consider Z"). That produces incoherent multi-direction responses.
 
-        Priority: must_avoid > deliverable acknowledgment > primary_action.
-        The follow-up question is folded INTO the primary action, not added on top.
+        Priority: must_avoid > deliverable acknowledgment > routing_directive >
+        follow-up question > primary_action. The follow-up question is folded INTO
+        the primary action, not added on top.
         """
         lines: list[str] = []
 
@@ -75,9 +81,14 @@ class ResponseDirective:
         if self.tone and self.tone != "neutral":
             lines.append(f"Tone: {self.tone}")
 
-        # Single direction — pick ONE: follow-up question wins over generic action,
-        # because it's more specific. Never emit both.
-        if self.ask_followup and self.followup_question:
+        # Single direction — pick ONE, most-grounded first. A routing directive
+        # reports a state change that has ALREADY been committed, so the reply has
+        # to be built on it; an expert's follow-up was written from the same user
+        # turn WITHOUT knowing the routing happened, and following it instead
+        # produces a reply that contradicts what the session just did.
+        if self.routing_directive:
+            lines.append(self.routing_directive)
+        elif self.ask_followup and self.followup_question:
             lines.append(f"Your response should lead to: {self.followup_question}")
         elif self.primary_action:
             lines.append(f"Focus: {self.primary_action}")
@@ -98,6 +109,8 @@ class ResponseDirective:
         }
         if self.directive_source:
             result["directive_source"] = self.directive_source
+        if self.routing_directive:
+            result["routing_directive"] = self.routing_directive
         if self.resolved_response:
             result["resolved_response"] = self.resolved_response
         if self.deliverable_signals:

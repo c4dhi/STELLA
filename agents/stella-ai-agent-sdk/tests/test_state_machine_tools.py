@@ -46,8 +46,12 @@ class FakeClient:
             "new_state_id": "state-y",
         }
 
-    async def set_deliverable(self, key, value, reasoning=""):
-        self.calls.append(("set_deliverable", key, value, reasoning))
+    async def set_deliverable(
+        self, key, value, reasoning="", unconfirmed=False, correction=False
+    ):
+        self.calls.append(("set_deliverable", key, value, reasoning, unconfirmed))
+        if correction:
+            self.calls.append(("correction", key))
         return {"success": True, "transitioned": False, "task_completed": None}
 
 
@@ -115,3 +119,89 @@ async def test_batch_update_completes_and_skips_explicitly():
     # Verify the tool drove explicit complete + skip via the client.
     assert ("complete_task", "task-1", "done") in client.calls
     assert ("skip_task", "task-2", "skip") in client.calls
+
+
+# ---------------------------------------------------------------------------
+# `unconfirmed` reaches the wire (mentioned-but-not-confirmed deliverables).
+# ---------------------------------------------------------------------------
+
+def test_set_deliverable_request_carries_unconfirmed():
+    from stella_agent_sdk._grpc import state_machine_pb2 as pb
+    req = pb.SetDeliverableRequest(
+        session_id="s", key="walks", value='"most days"',
+        reasoning="mentioned in passing", unconfirmed=True,
+    )
+    assert req.unconfirmed is True
+
+
+def test_unconfirmed_defaults_to_false_on_the_wire():
+    # Existing callers, and every deliverable recorded before this existed,
+    # must keep meaning "settled".
+    from stella_agent_sdk._grpc import state_machine_pb2 as pb
+    assert pb.SetDeliverableRequest(session_id="s", key="k", value="1").unconfirmed is False
+
+
+def test_batch_update_schema_exposes_unconfirmed():
+    # batch_update is the tool the extraction expert actually calls, so the flag
+    # is inert unless it is offered here.
+    from stella_agent_sdk.tools.state_machine.batch_update import BatchUpdateTool
+    schema = BatchUpdateTool(client=None).parameters_schema
+    props = schema["properties"]["deliverables"]["items"]["properties"]
+    assert "unconfirmed" in props
+    assert props["unconfirmed"]["type"] == "boolean"
+
+
+def test_set_deliverable_schema_exposes_unconfirmed():
+    from stella_agent_sdk.tools.state_machine.set_deliverable import SetDeliverableTool
+    props = SetDeliverableTool(client=None).parameters_schema["properties"]
+    assert "unconfirmed" in props
+
+
+# `correction` reaches the wire and the tools (protected required deliverables, #406).
+
+def test_set_deliverable_request_carries_correction():
+    from stella_agent_sdk._grpc import state_machine_pb2 as pb
+
+    req = pb.SetDeliverableRequest(
+        session_id="s", key="k", value="1", reasoning="they said actually 2", correction=True,
+    )
+    assert req.correction is True
+
+
+def test_correction_defaults_to_false_on_the_wire():
+    from stella_agent_sdk._grpc import state_machine_pb2 as pb
+
+    assert pb.SetDeliverableRequest(session_id="s", key="k", value="1").correction is False
+
+
+def test_set_deliverable_and_batch_schemas_expose_correction():
+    tools = {t.name: t for t in create_state_machine_tools(FakeClient())}
+    assert "correction" in tools["set_deliverable"].parameters_schema["properties"]
+    item = tools["batch_update"].parameters_schema["properties"]["deliverables"]["items"]
+    assert "correction" in item["properties"]
+    # Optional: a first answer never has to mention it.
+    assert "correction" not in item["required"]
+
+
+@pytest.mark.asyncio
+async def test_set_deliverable_tool_forwards_correction():
+    client = FakeClient()
+    tool = {t.name: t for t in create_state_machine_tools(client)}["set_deliverable"]
+    result = await tool.execute("user_name", "Sarah", "they said actually Sarah", correction=True)
+    assert result.success
+    assert ("correction", "user_name") in client.calls
+
+
+@pytest.mark.asyncio
+async def test_batch_update_forwards_correction_per_deliverable():
+    client = FakeClient()
+    tool = {t.name: t for t in create_state_machine_tools(client)}["batch_update"]
+    await tool.execute(
+        deliverables=[
+            {"key": "a", "value": "1", "reasoning": "first"},
+            {"key": "b", "value": "2", "reasoning": "they corrected", "correction": True},
+        ],
+        tasks=[],
+    )
+    assert ("correction", "b") in client.calls
+    assert ("correction", "a") not in client.calls

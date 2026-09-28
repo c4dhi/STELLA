@@ -2,17 +2,22 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../../store/themeStore'
 import type { PlanTask, PlanDeliverable, DeliverableType } from '../../../lib/api-types'
+import { VariableTextArea } from '../../shared/VariableText'
+import type { Persona } from '../../../lib/api-types'
 
 interface PlanTaskEditorProps {
   task: PlanTask
   onChange: (task: PlanTask) => void
   createEmptyDeliverable: () => PlanDeliverable
+  /** The author's personas, so {{persona.*}} can be offered and highlighted. */
+  personas?: Persona[]
 }
 
 export default function PlanTaskEditor({
   task,
   onChange,
   createEmptyDeliverable,
+  personas = [],
 }: PlanTaskEditorProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
@@ -90,12 +95,12 @@ export default function PlanTaskEditor({
           }`}>
             Instructions (optional)
           </label>
-          <textarea
+          <VariableTextArea
             value={task.instruction || ''}
-            onChange={(e) => onChange({ ...task, instruction: e.target.value || undefined })}
+            onChange={(v) => onChange({ ...task, instruction: v || undefined })}
+            personas={personas}
             placeholder="Instructions or context for this task"
             rows={2}
-            className="input-field w-full resize-none"
           />
         </div>
 
@@ -207,15 +212,15 @@ export default function PlanTaskEditor({
                         }`}>
                           Acceptance Criteria
                         </label>
-                        <textarea
+                        <VariableTextArea
                           value={deliverable.acceptance_criteria || ''}
-                          onChange={(e) => handleUpdateDeliverable(index, {
+                          onChange={(v) => handleUpdateDeliverable(index, {
                             ...deliverable,
-                            acceptance_criteria: e.target.value || undefined,
+                            acceptance_criteria: v || undefined,
                           })}
+                          personas={personas}
                           placeholder="What constitutes a valid answer? Include examples of good and bad answers. e.g., A specific name or nickname. Accept 'Sarah', 'Dr. Johnson'. Reject 'nobody' or 'doesn't matter'."
                           rows={3}
-                          className="input-field w-full text-body-sm resize-none"
                         />
                         <p className={`text-caption mt-1 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
                           Describe what a valid answer looks like, with concrete examples

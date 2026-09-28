@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
         'architecture/overview',
         'architecture/data-flow',
         'architecture/session-lifecycle',
+        'architecture/tts-pipeline',
         'architecture/database',
         'architecture/kubernetes-orchestration',
         'architecture/environment-variables',
@@ -60,6 +61,7 @@ const sidebars: SidebarsConfig = {
           },
           items: [
             'agents/stella-v2/pipeline-configurator',
+            'agents/stella-v2/companion-mode',
             'agents/stella-v2/pipeline-schema',
           ],
         },
@@ -78,8 +80,10 @@ const sidebars: SidebarsConfig = {
             'agents/stella-agent/custom-experts',
           ],
         },
-        'agents/stella-light-agent',
         'agents/echo-agent',
+        // Deprecated — kept in the sidebar so existing links resolve and the
+        // migration guidance stays findable, but last, after what to actually use.
+        'agents/stella-light-agent',
       ],
     },
     {
@@ -132,6 +136,7 @@ const sidebars: SidebarsConfig = {
         'deployment/message-recording',
         'deployment/production-checklist',
         'deployment/monitoring',
+        'deployment/capacity',
         'deployment/agent-validation',
         'deployment/backup-restore',
       ],

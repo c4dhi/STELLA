@@ -36,6 +36,9 @@ class ToolProcessorResult:
     tasks_skipped: List[str] = field(default_factory=list)
     transitioned: bool = False
     new_state_id: Optional[str] = None
+    # Set when a tool moved the plan to __end__ (backend reports session_completed).
+    session_completed: bool = False
+    farewell_message: Optional[str] = None
 
 
 class TextStreamingCallback(LLMStreamingCallback):
@@ -341,6 +344,14 @@ class ToolProcessor:
                 "arguments": tool_call.arguments,
                 "success": tool_result.success
             })
+
+            # Any state-machine tool can end the session (the last task or goal
+            # completing reaches __end__); remember it and the farewell to speak.
+            if tool_result.success and tool_result.data and tool_result.data.get("session_completed"):
+                result.session_completed = True
+                result.farewell_message = (
+                    tool_result.data.get("farewell_message") or result.farewell_message
+                )
 
             # Track specific tool effects
             if tool_call.name == "set_deliverable" and tool_result.success:

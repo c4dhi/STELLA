@@ -68,7 +68,7 @@ Whisper transcribes in **auto-detect mode** (`language=None`) and the detection 
 
 - A genuine `(detected_language, confidence)` rides on every final `TranscriptEvent` above the ~2s reliability floor. Below it, no signal is emitted and the agent falls back to its text classifier ([§6](#6-typed-input--unified-fallback)).
 - Because transcription is never forced to a stale language, the switch utterance itself transcribes correctly — there is no garbled turn.
-- **Pinning is opt-in** (`WHISPER_LANGUAGE` env, or a per-session `AudioChunk.language`) for deployments that must stay in one language; it trades away the free detection. Off by default.
+- **Pinning is opt-in** (`WHISPER_LANGUAGE` env service-wide, or a per-session `AudioChunk.language`) for deployments that must stay in one language; it trades away the free detection. Off by default. This is the mechanism the per-agent deployment pin uses ([§6.1](#61-the-deployment-pin)).
 
 > An earlier cut forced transcription to the resolved language and ran a separate `detect_language()` probe (~one extra encoder pass per utterance). Auto-detect makes both unnecessary — same signal, zero cost.
 
@@ -95,6 +95,10 @@ A lock established *provisionally* from the seed/default (turn-1 ambiguity) is n
 
 ## 6. Plan language vs. spoken language — *hint, never deafen*
 
+> **Exception: the deployment pin.** Everything in this section describes the
+> default `auto` mode. When an operator picks a language in the deploy UI
+> (`STELLA_LANGUAGE`), that deployment is *fixed* to it — see [§6.1](#61-the-deployment-pin).
+
 The plan language is a seed, not a cage: **the spoken language wins.**
 
 | Plan | User speaks | Resolution |
@@ -107,6 +111,38 @@ The plan language is a seed, not a cage: **the spoken language wins.**
 This is safe because **plans are instructions, not scripts** — states carry LLM-interpreted `description`/`instruction`/`goal`/`acceptance_criteria`, never verbatim spoken lines, and transitions match collected *data values*, not text. A German-authored plan conducted in English still behaves correctly; it just sounds English.
 
 > The seed may *bias* STT's first guess but must never suppress STT's independent detection ([§4](#4-stt-detection--free-no-added-latency)). Once STT confidently hears another supported language, that wins — for transcription, response, and voice.
+
+### 6.1 The deployment pin
+
+The seed-never-deafens rule solves the *multilingual* case, but it leaves the
+**fixed-language deployment** unserved. Auto-detect needs a long enough,
+clear enough utterance to clear `detect_threshold`; a short or garbled opener
+produces no confident signal, so the fallback chain lands on the plan seed or
+the global default — English. A study running entirely in German would open in
+English on exactly the turn that makes the first impression.
+
+So the deploy UI's language choice is a **pin**, not a seed:
+
+| Mode | STT | Resolver | Reply + voice |
+|---|---|---|---|
+| `auto` (default) | auto-detect | detect → lock → seed → default | follows detection; English when undetectable |
+| pinned `de` | **forced to `de`** | **forced to `de`** — detection not consulted | always German |
+
+- One env var, `STELLA_LANGUAGE`, read in the SDK (`language.forced_language()`),
+  so both agents inherit it with no per-agent wiring.
+- `LanguageResolver.resolve()` short-circuits on the pin before any gating, so no
+  signal — however confident, however sustained — can flip it, and the plan seed
+  is outranked.
+- STT is pinned per session via the existing `AudioChunk.language` hint
+  (`language_provider` in `audio/pipeline.py`), **not** `WHISPER_LANGUAGE`: the
+  env var is service-wide and would drag every other agent along with it.
+- A garbled opener is therefore *transcribed as* the pinned language rather than
+  auto-detected badly, which is the whole point.
+- An unsupported pin is ignored with a warning and falls back to auto-detect,
+  so a bad value degrades to today's behavior instead of breaking the session.
+
+This deliberately trades away the free per-utterance detection (§4) — that is
+what "pinned" means.
 
 ### Typed input & unified fallback
 
@@ -162,4 +198,6 @@ The resolved value (`session.language`) is the single source of truth; `{{langua
 
 **TTS provider for spoken multilingualism** — a *deployment toggle, no code*: to make the spoken **voice** switch language, deploy Qwen3 (60+ langs) or ChatterBox (native en/de) instead of Piper (env/build-arg + model weights). Response text already follows the language on any provider. Recommendation: **ChatterBox** for the committed en/de v1.
 
-Possible later refinements: an explicit `force: true` plan flag (pin output, never the ears — still let STT detect so the agent comprehends and can redirect); empirical tuning of `detect_threshold` / `switch_threshold` / debounce; deliverable normalization across languages (extraction must map e.g. a German answer to the plan's canonical value).
+**Done since:** the explicit force flag, shipped as the deployment pin `STELLA_LANGUAGE` ([§6.1](#61-the-deployment-pin)) and surfaced in the deploy UI's "Voice & Language" step. It pins the ears too (STT), which the original sketch left open — a fixed-language deployment gains nothing from detecting a language it will not use, and pinning is what rescues the short/garbled first turn.
+
+Possible later refinements: empirical tuning of `detect_threshold` / `switch_threshold` / debounce; deliverable normalization across languages (extraction must map e.g. a German answer to the plan's canonical value).

@@ -6,9 +6,17 @@
  * barge-in froze mid-way). Shared by the organizer chat (`MessageBubble`) and
  * the participant chat (`ParticipantChatPanel`) so both surfaces highlight
  * identically. Non-agent messages and inactive bubbles render as plain text.
+ *
+ * `cues` is what separates the two surfaces (#face-emotions): pass it and the
+ * emotion tags are put back into the text for display, which the admin board
+ * wants and participant-facing surfaces must never do. The cursor is mapped
+ * into the annotated text's coordinates along with it — the offsets index the
+ * stripped reply, so a highlight left unmapped would trail the voice by the
+ * combined length of every tag ahead of it.
  */
-import React from 'react'
+import React, { useMemo } from 'react'
 import SpokenText from './SpokenText'
+import { annotateWithCues, type DisplayCue } from '../../lib/emotionAnnotation'
 
 interface SpokenMessageTextProps {
   text: string
@@ -20,6 +28,8 @@ interface SpokenMessageTextProps {
   spokenChar?: number
   spokenTranscriptId?: string
   frozenSpoken?: Record<string, number>
+  /** Emotion cues for THIS message. Supplying them shows the tags inline. */
+  cues?: DisplayCue[]
 }
 
 const SpokenMessageText: React.FC<SpokenMessageTextProps> = ({
@@ -29,15 +39,23 @@ const SpokenMessageText: React.FC<SpokenMessageTextProps> = ({
   spokenChar = 0,
   spokenTranscriptId,
   frozenSpoken,
+  cues,
 }) => {
+  const annotated = useMemo(
+    () => (isAgent && cues?.length ? annotateWithCues(text, cues) : null),
+    [isAgent, cues, text]
+  )
+  const shown = annotated?.text ?? text
+  const at = (cursor: number) => annotated?.mapCursor(cursor) ?? cursor
+
   if (isAgent && messageId === spokenTranscriptId) {
-    return <SpokenText text={text} spokenChar={spokenChar} />
+    return <SpokenText text={shown} spokenChar={at(spokenChar)} />
   }
   const frozen = isAgent ? frozenSpoken?.[messageId] : undefined
   if (frozen != null) {
-    return <SpokenText text={text} spokenChar={frozen} />
+    return <SpokenText text={shown} spokenChar={at(frozen)} />
   }
-  return <>{text}</>
+  return <>{shown}</>
 }
 
 export default SpokenMessageText

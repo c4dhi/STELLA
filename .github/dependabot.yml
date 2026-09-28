@@ -37,6 +37,15 @@ updates:
           - "*"
 
   # ---------------------------------------------------------------- pip ----
+  # `pip-minor-and-patch` below only groups a manifest's dependency if
+  # Dependabot can classify the bump as a real "version update" (major/minor/
+  # patch). A requirements.txt line left as a floor (`grpcio>=1.83.0`) instead
+  # produces a "requirement update" — Dependabot just raises the bound — which
+  # this filter can't see, so each one still lands as its own PR regardless of
+  # the group. That's what happened in #625: message-recorder-python pins
+  # exactly (`==`) and grouped correctly; stt-service and tts-service used
+  # floors and got 9 separate PRs in one week. Pin a package exactly once
+  # Dependabot has bumped it here, and its future bumps join the group.
   - package-ecosystem: "pip"
     target-branch: "development"
     directories:
@@ -58,6 +67,24 @@ updates:
       - dependency-name: "numpy"
         versions:
           - ">=2.5"
+      # Same trap, same cause: scipy 1.18 requires Python >=3.12 (1.17 still
+      # supports 3.11), so `scipy>=1.18` breaks the GPU image build. Dependabot
+      # proposed it in #480 and #483. requirements.txt in stt-service and
+      # tts-service carries the matching <1.18 bound. Lift all of them together
+      # with the interpreter.
+      - dependency-name: "scipy"
+        versions:
+          - ">=1.18"
+      # transformers 5.17.0 breaks Qwen3 model loading: its Mimi weight init
+      # calls qwen-tts's rope compat shim, which reads MimiConfig.rope_theta
+      # and raises AttributeError, so tts-service starts anyway with
+      # "Provider: none" and every session goes silent (#625). Production
+      # loads the model on 5.16.1 with the same qwen-tts-hf. Lift this only
+      # after loading the model on a GPU host. See
+      # tts-service/requirements-qwen3.txt.
+      - dependency-name: "transformers"
+        versions:
+          - ">=5.17"
     groups:
       pip-minor-and-patch:
         applies-to: version-updates

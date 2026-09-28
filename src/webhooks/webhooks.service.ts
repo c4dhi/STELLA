@@ -534,9 +534,12 @@ export class WebhooksService {
           {
             name: config.name || 'Agent',
             icon: config.icon || '🤖',
-            agentType: config.agentType || 'stella-light-agent',
+            agentType: config.agentType || 'stella-v2-agent',
             config: config.agentConfig || {},
             agentConfigurationId: config.agentConfigurationId,
+            // Only public projects set this — their saved agentConfig is built
+            // from the stored setup and carries no persona snapshot to preserve.
+            personaId: config.personaId ?? undefined,
             envVarTemplateId: config.envVarTemplateId,
             envVars: manualEnvVars,
           },

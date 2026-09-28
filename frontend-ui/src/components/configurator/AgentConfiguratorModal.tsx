@@ -260,6 +260,7 @@ export default function AgentConfiguratorModal({
               bgExperts={state.bgExperts}
               disabledExperts={state.disabledExperts}
               taskExtractionEnabled={state.taskExtractionEnabled}
+              companionRouter={state.companionRouter}
               onUpdateExpert={state.updateExpert}
               onReorderExperts={state.reorderExperts}
               onAddCustomExpert={state.addCustomExpert}

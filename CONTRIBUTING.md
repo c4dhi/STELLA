@@ -2,6 +2,22 @@
 
 Thank you for your interest in contributing to STELLA! This document provides guidelines and information for contributors.
 
+## 🧭 Two ways to contribute
+
+**Building your own agent?** You probably don't need this repository at all. The
+STELLA Agent SDK is published on PyPI, so you can build and deploy an agent on
+the platform from your own project:
+
+```bash
+pip install stella-ai-agent-sdk
+```
+
+See the [SDK README](agents/stella-ai-agent-sdk/README.md) to get started. Your
+agent stays yours — it lives in your repository, on your own schedule.
+
+**Improving STELLA itself?** That's what the rest of this document is about —
+the platform, the frontend, the services, or the SDK.
+
 ## 🚀 Getting Started
 
 ### 📋 Prerequisites
@@ -75,6 +91,9 @@ Thank you for your interest in contributing to STELLA! This document provides gu
    git checkout -b fix/your-bug-fix
    ```
 
+   Branch from `main`, and open your pull request against `main`. See
+   [Where your change goes](#-where-your-change-goes) for what happens next.
+
 2. **Make your changes**
 
    - Follow the code style guidelines
@@ -112,6 +131,65 @@ Thank you for your interest in contributing to STELLA! This document provides gu
 
    Then create a PR on GitHub using the pull request template.
 
+## 🚚 Where your change goes
+
+Once your pull request is open, you don't need to cut a release, tag anything, or
+ask for a deploy. Getting it merged is the whole job — shipping is automatic.
+
+### The journey of a change
+
+1. **You open a pull request** against `main`.
+
+2. **Automated checks run.** Depending on what you touched, these cover agent
+   validation, unit tests, agent startup, a database seed round-trip, and a docs
+   build. They need to pass.
+
+3. **A maintainer reviews it.** Every pull request needs approval from a code
+   owner before it can merge — see [CODEOWNERS](.github/CODEOWNERS).
+
+4. **It merges, and it ships.** Merging to `main` deploys to production
+   automatically, within minutes. There is no separate release step and no
+   manual promotion.
+
+That last point is worth repeating, because it surprises people: **on this
+project, merging is releasing.** If your change is risky, or you'd like to see it
+running before real users do, say so in the pull request — a maintainer can route
+it through the test environment first.
+
+### The two long-lived branches
+
+| Branch | What it is |
+|--------|------------|
+| `main` | Production. What study participants are using right now. |
+| `development` | The test environment, for work that needs a trial run first. |
+
+Both deploy themselves when something lands on them. Contributors normally only
+ever target `main`.
+
+### Two things release on their own schedule
+
+Almost everything ships the moment it merges. Two exceptions:
+
+- **The Agent SDK** is published separately to PyPI, because a version number
+  there is permanent and can never be reused. Your SDK change merges to `main`
+  like anything else, and a maintainer publishes it when it's ready to go out.
+  Don't bump the version yourself — just mention in your pull request if the
+  change should go out promptly.
+
+- **The STELLA version number** (on the README badge and in `CITATION.cff`) is
+  bumped by maintainers when a batch of work is worth marking, and for **study
+  cuts** — frozen, citeable versions, so the exact software behind a published
+  paper stays reproducible. See [RELEASING.md](RELEASING.md).
+
+### What this means for you
+
+- **Don't** add version bumps or changelog entries to your pull request.
+  Maintainers handle those.
+- **Do** write a clear pull request description. It becomes the public record of
+  why the change exists, and it feeds the generated release notes.
+- **Do** flag anything needing a migration, a config change, or a coordinated
+  rollout. Because merging deploys, there's no window to catch it afterwards.
+
 ## 🎨 Code Style
 
 ### TypeScript/JavaScript
@@ -144,19 +222,22 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 STELLA/
-├── src/                    # Backend source code
-│   ├── controllers/        # API route handlers
-│   ├── services/           # Business logic
-│   ├── models/             # Database models
-│   └── middleware/         # Express middleware
-├── frontend-ui/            # React frontend
-├── agent-sdk/              # Python SDK for agents
-├── agents/                 # Agent implementations
-│   ├── stella-agent/       # Full-featured agent
-│   └── echo-agent/         # Reference implementation
-├── k8s/                    # Kubernetes manifests
-├── scripts/                # Deployment scripts
-└── docs-site/              # Documentation (Docusaurus)
+├── src/                        # Backend (NestJS), one directory per feature module
+│   ├── auth/                   # Authentication and guards
+│   ├── agents/                 # Agent lifecycle
+│   ├── sessions/               # Session management
+│   └── ...                     # admin, projects, livekit, metrics, and more
+├── frontend-ui/                # React frontend
+├── agents/
+│   ├── stella-ai-agent-sdk/    # The Python SDK (published to PyPI)
+│   ├── stella-v2-agent/        # Full-featured agent
+│   └── stella-light-agent/     # Lighter agent
+├── stt-service/                # Speech-to-text service
+├── tts-service/                # Text-to-speech service
+├── prisma/                     # Database schema and migrations
+├── k8s/                        # Kubernetes manifests
+├── scripts/                    # Deployment scripts
+└── docs-site/                  # Documentation (Docusaurus)
 ```
 
 ## 🧪 Testing
@@ -178,9 +259,12 @@ npm test
 ### Agent Tests
 
 ```bash
-cd agents/stella-agent
-python -m pytest tests/
+cd agents/stella-ai-agent-sdk
+python -m pytest
 ```
+
+Python 3.10 or newer. The other agents under `agents/` have their own suites, run
+the same way.
 
 ## 📚 Documentation
 

@@ -7,6 +7,10 @@ asyncio.gather(), and returns structured ExpertVerdict objects.
 All experts (including task_extraction) run as foreground — their results
 are needed before response generation to ensure accurate state context.
 
+The caller starts this pool as a task alongside bridge generation and joins it
+before arbitration (#455), so most of this latency is spent while the user is
+already hearing the bridge.
+
 Target latency: ~300-500ms wall-clock (parallelized).
 
 Timeout per expert: configurable via EXPERT_TIMEOUT_MS env var (default: 15000ms).
@@ -133,6 +137,15 @@ class ExpertPool:
         tools = None
         if config.can_call_functions and self._tool_registry:
             tools = self._tool_registry.list_tools()
+            if config.tools:
+                allowed = set(config.tools)
+                tools = [t for t in tools if t.name in allowed]
+                missing = allowed - {t.name for t in tools}
+                if missing:
+                    logger.warning(
+                        "Expert '%s' allows tools that are not registered: %s",
+                        config.name, sorted(missing),
+                    )
 
         try:
             return await asyncio.wait_for(

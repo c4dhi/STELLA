@@ -12,7 +12,6 @@ On failure: returns a short fallback bridge. Every turn always gets a bridge.
 """
 
 import asyncio
-import random
 import re
 import time
 from typing import Dict, Any, List, Optional
@@ -43,244 +42,281 @@ def _coerce_bool(value: Any) -> bool:
 # Minimal fallback only. The full, editable bridge prompt lives in agent.yaml
 # (bridge_generator → system_prompt) and is what runs in production; this default
 # is used solely when no configured prompt is provided. It stays reflection-only
-# and short so the fallback is always safe (no appraisal, no questions).
-BRIDGE_SYSTEM_PROMPT = """You just heard the user and you're about to answer, but first you briefly acknowledge them the way a real person would — a short, natural beat, spoken aloud on its own.
+# and short so the fallback is always safe (no evaluation, no questions).
+BRIDGE_SYSTEM_PROMPT = """You just heard the user and you're about to answer. First you say the opening beat of your reply the way a real person would — spoken aloud on its own, while the rest of the answer is still being prepared.
 {{#if conversationHistory}}
 
 Recent context:
 {{conversationHistory}}
 {{/if}}
 
-- End with . or ! — never ask a question.
-- 1-2 words for a short answer or greeting; up to ~35 words to fully receive a longer or more personal turn — mirror it back and name the feeling or effort you hear, in their own words.
-- Never answer, advise, or evaluate what they said — just receive it and lead in. Naming what you hear ("that sounds draining") is reflection and welcome; advice or the next question is not.
-- Mirror the specific thing they said, not a generic "okay". Match the user's language.
+Always:
+- End with . or ! — never ask a question. The question belongs to the reply that follows.
+- Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
+- NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
+- React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction ("Fair enough.", "Ah, okay.") beats an echo every time.
+- Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
+- VARY HOW YOU OPEN. Check what you already said in the recent context above and start this one differently — different words AND a different construction. Opening several turns in a row with the same frame ("That sounds like...", "Das klingt nach...") is the single most robotic thing you can do, even when each sentence is individually fine.
+- No "hmm", "uh" or "erm" — they render badly in our synth.
 {{#if isBargeIn}}
-The user just interrupted you — acknowledge it briefly and yield ("Oh, go ahead."). Don't continue your previous point.
+- The user just interrupted you. Yield the floor: two or three words that hand it to them, then stop. No example is given here on purpose — a quoted one gets repeated verbatim, in the language it was written in. Do not continue your previous point.
+{{/if}}
+- Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult. Naming what you hear in it ("that sounds draining") is welcome; judging it is not.
+- Say only what follows from what they actually told you. Do not invent a mood, a motive or a situation they have not mentioned.
+{{#if bridgeMode}}
+
+{{bridgeMode}}
 {{/if}}
 Output ONLY the bridge. No quotes, no labels."""
 
-# ── Typed bridge inventories (#304 A2) ───────────────────────────────────────
-# Listener tokens are NOT interchangeable (Yngve 1970; Schegloff 1982). We pick
-# a sub-type by context rather than emitting one generic "acknowledgement":
-#   • GREETING       — greet back when the user greets.
-#   • ACKNOWLEDGEMENT — "received, go on" for an ordinary completed turn.
-#   • PENSIVE        — "let me think", signalling effortful/longer compute; used
-#                      when the turn looks hard (a question, a long input).
-#   • CONTINUER      — "mm-hm"-class. Reserved: continuers are mid-turn feedback
-#                      while the OTHER party holds the floor, so they are usually
-#                      wrong here (the user's turn is already complete). Kept for
-#                      completeness; not selected by default.
-# DELIBERATELY NO ASSESSMENT SUB-TYPE: evaluative tokens ("that's great", "wow")
-# are jarring before dispreferred content (a "no"/correction the agent can't yet
-# rule out at bridge time, since this runs before the experts). Omitting the
-# class entirely is the structural guarantee the A2 acceptance criterion asks for.
-BRIDGE_TYPE_GREETING = "greeting"
-BRIDGE_TYPE_ACKNOWLEDGEMENT = "acknowledgement"
-BRIDGE_TYPE_PENSIVE = "pensive"
-BRIDGE_TYPE_CONTINUER = "continuer"
-
-ACKNOWLEDGEMENT_BRIDGES_EN = [
-    "Okay, yeah.",
-    "Right, okay.",
-    "Got it.",
-    "Sure, okay.",
-    "Yeah, I hear you.",
-    "Alright.",
-    "Yeah, gotcha.",
-    "Okay, I follow.",
-]
-
-ACKNOWLEDGEMENT_BRIDGES_DE = [
-    "Ja, okay.",
-    "Okay, verstehe.",
-    "Ja, alles klar.",
-    "Ja, ich verstehe.",
-    "Alles klar.",
-    "Ja, genau.",
-    "Okay, ich versteh.",
-    "Ja, ich hör dich.",
-]
-
-# Pensive bridges signal "I'm working on something effortful" — they buy more
-# floor for a harder turn and soften a longer wait. No TTS-poor sounds
-# ("hmm"/"uh") — those render badly in our synth (see system prompt).
-PENSIVE_BRIDGES_EN = [
-    "Okay, let me think.",
-    "Right, let me think for a sec.",
-    "Okay, give me a moment.",
-    "Let me think about that.",
-]
-
-PENSIVE_BRIDGES_DE = [
-    "Okay, lass mich kurz überlegen.",
-    "Moment, ich überlege kurz.",
-    "Okay, einen Moment.",
-    "Lass mich kurz nachdenken.",
-]
-
-GREETING_BRIDGES_EN = [
-    "Hey.",
-    "Hi there.",
-    "Hello.",
-    "Hey, hi.",
-]
-
-GREETING_BRIDGES_DE = [
-    "Hey.",
-    "Hallo.",
-    "Hi.",
-    "Hey, hallo.",
-]
-
-# Inventory lookup: (type, is_german) → list. Greeting/ack/pensive only;
-# continuer intentionally has no inventory (not selected — see note above).
-_BRIDGE_INVENTORY = {
-    (BRIDGE_TYPE_GREETING, True): GREETING_BRIDGES_DE,
-    (BRIDGE_TYPE_GREETING, False): GREETING_BRIDGES_EN,
-    (BRIDGE_TYPE_PENSIVE, True): PENSIVE_BRIDGES_DE,
-    (BRIDGE_TYPE_PENSIVE, False): PENSIVE_BRIDGES_EN,
-    (BRIDGE_TYPE_ACKNOWLEDGEMENT, True): ACKNOWLEDGEMENT_BRIDGES_DE,
-    (BRIDGE_TYPE_ACKNOWLEDGEMENT, False): ACKNOWLEDGEMENT_BRIDGES_EN,
-}
-
-_GREETING_WORDS = {"hello", "hi", "hey", "hallo", "hei", "greetings", "good morning", "good evening", "good afternoon",
-                   "guten morgen", "guten tag", "guten abend", "moin", "servus", "grüß gott"}
-
-# German words/patterns for quick language detection on user input
-_GERMAN_INDICATORS = {
-    "ich", "du", "er", "sie", "wir", "ihr", "mein", "dein", "sein",
-    "ist", "bin", "bist", "sind", "hat", "habe", "hatte", "war",
-    "und", "oder", "aber", "weil", "dass", "nicht", "kein", "keine",
-    "ja", "nein", "nee", "doch", "schon", "noch", "auch", "sehr",
-    "das", "die", "der", "den", "dem", "des", "ein", "eine", "einem",
-    "mit", "für", "von", "auf", "aus", "bei", "nach", "über", "unter",
-    "hallo", "danke", "bitte", "tschüss", "genau", "okay",
-}
-
-
-def _detect_german(text: str) -> bool:
-    """Quick heuristic: is this text likely German?"""
-    words = set(text.lower().split())
-    german_count = len(words & _GERMAN_INDICATORS)
-    # If at least 2 German indicator words, or the text is short and has 1
-    return german_count >= 2 or (len(words) <= 3 and german_count >= 1)
-
-
-def _is_greeting(user_input: str) -> bool:
-    """Is the user's whole turn just a greeting (hi/hello/hallo)?"""
-    return user_input.strip().lower().rstrip("!.,?") in _GREETING_WORDS
-
-
-# A turn longer than this (in words) reads as effortful → favour a pensive bridge
-# that buys more floor while the heavier turn computes.
-_PENSIVE_WORD_THRESHOLD = 25
-
-
-def select_bridge_type(
-    user_input: str,
-    predicted_cost: Optional[int] = None,
-) -> str:
-    """Pick the bridge sub-type for a turn from context + predicted compute cost.
-
-    Inputs (per #304 A2):
-      • turn type — a bare greeting picks ``greeting``.
-      • predicted compute cost — when known (e.g. number of experts the gate
-        triggered), a heavier turn picks ``pensive``. When unknown (the bridge
-        runs in parallel with the gate, before that count exists), a cheap proxy
-        stands in: the user asked a question, or gave a long/complex turn.
-
-    Never returns an assessment sub-type — none exists (see inventory note): an
-    evaluative token before a not-yet-known dispreferred answer is the failure
-    mode A2 guards against. Continuers are also not selected (mid-turn only).
-    """
-    if _is_greeting(user_input):
-        return BRIDGE_TYPE_GREETING
-
-    if predicted_cost is not None:
-        # ≥2 experts / explicitly hard turn → effortful → pensive.
-        if predicted_cost >= 2:
-            return BRIDGE_TYPE_PENSIVE
-        return BRIDGE_TYPE_ACKNOWLEDGEMENT
-
-    # No cost signal yet — proxy from the input itself.
-    text = user_input.strip()
-    if "?" in text or len(text.split()) >= _PENSIVE_WORD_THRESHOLD:
-        return BRIDGE_TYPE_PENSIVE
-    return BRIDGE_TYPE_ACKNOWLEDGEMENT
-
-
-def pick_bridge_from_inventory(
-    bridge_type: str,
-    is_german: bool,
-) -> str:
-    """Return a random templated bridge of ``bridge_type`` in the right language.
-
-    Falls back to the acknowledgement inventory for any type without its own
-    list (e.g. continuer), so this never raises on an unexpected type.
-    """
-    inventory = _BRIDGE_INVENTORY.get(
-        (bridge_type, is_german),
-        ACKNOWLEDGEMENT_BRIDGES_DE if is_german else ACKNOWLEDGEMENT_BRIDGES_EN,
-    )
-    return random.choice(inventory)
-
-
-# ── Appraisal risk screen (bridge naturalness, #343 follow-up) ───────────────
-# The bridge runs BEFORE the experts, so it cannot know whether the agent's real
-# answer will be dispreferred (a "no", a caution, a correction). A light appraisal
-# ("that's a solid routine") is jarring — or unsafe — ahead of such an answer.
-# Before allowing any appraisal we run this cheap, deterministic, LLM-free screen
-# on the user input; if it trips, the bridge clamps back to pure reflection.
+# ── Bridge modes ─────────────────────────────────────────────────────────────
+# Listener tokens are NOT interchangeable (Yngve 1970; Schegloff 1982), so the
+# bridge varies what it DOES from turn to turn rather than only how it words it.
+# It used to pick from hand-written phrase inventories, one list per sub-type per
+# language. That could only ever cover the two languages someone had written
+# lists for, repeated within a session because a six-item pool does, and never
+# referred to anything the user had actually said. All of it is gone: there is
+# one LLM bridge, and the mode below tells it what this particular turn needs.
 #
-# The screen is intentionally trigger-happy: suppressing appraisal is the SAFE
-# direction (you just fall back to a reflective bridge), so over-triggering costs
-# nothing, while a miss is the exact failure mode we're guarding against. It does
-# NOT replace the experts — they still govern the real response — it only decides
-# whether the pre-expert bridge may affirm.
-_APPRAISAL_RISK_WORDS = {
-    # health / medical (EN)
-    "hurt", "injured", "injury", "pain", "painful", "sick", "ill", "illness",
-    "disease", "diagnosis", "diagnosed", "symptom", "symptoms", "surgery",
-    "hospital", "doctor", "medication", "meds", "chronic", "disabled", "disability",
-    # health / medical (DE)
-    "verletzt", "verletzung", "schmerz", "schmerzen", "krank", "krankheit",
-    "diagnose", "operation", "krankenhaus", "arzt", "ärztin", "medikament",
-    # mental health / distress (EN)
-    "depressed", "depression", "anxious", "anxiety", "stressed", "overwhelmed",
-    "burnout", "burnt", "exhausted", "suicidal", "hopeless", "lonely", "grief",
-    "grieving", "died", "death", "struggling", "panic",
-    # mental health / distress (DE)
-    "depressiv", "angst", "gestresst", "überfordert", "erschöpft", "einsam",
-    "trauer", "gestorben", "panik", "hoffnungslos",
-    # legal (EN/DE)
-    "lawyer", "lawsuit", "court", "sue", "sued", "legal", "anwalt", "gericht",
-    "klage", "rechtlich",
-    # dispreferred / negation markers (EN/DE) — a "no"/"didn't"/"never" turn
-    "no", "not", "didn't", "haven't", "won't", "can't", "cannot", "never",
-    "nothing", "lazy", "failed", "fail", "nein", "nicht", "nee", "nie",
-    "nichts", "faul",
+#   • BRIEF    — a beat and no more. Either they gave you almost nothing, or you
+#                received them in full last turn; a second full reception in a
+#                row is the questionnaire lockstep (see select_bridge_mode).
+#   • FULL     — they gave you something real: mirror it and name what you hear.
+#   • THINKING — a question or a lot at once: take a visible moment, don't answer.
+#
+# THE BRIDGE NEVER APPRAISES. Evaluative openers ("that's great", "wow") are
+# jarring before dispreferred content — a "no", a correction, a disclosure — which
+# the bridge cannot rule out because it runs BEFORE the experts. It once had an
+# opt-in appraisal tier guarded by a word-list risk screen; that screen was
+# guessing at information which arrives ~200ms later in the same turn, and could
+# only guess in English and German. Appraisal now lives in the Response
+# Generator, which runs after arbitration and is handed the tone — so it knows
+# rather than guesses.
+BRIDGE_MODE_BRIEF = "brief"
+BRIDGE_MODE_FULL = "full"
+BRIDGE_MODE_THINKING = "thinking"
+
+# The modes that perform a FULL reception. Two of these back to back is the
+# "acknowledge + question" lockstep the conversation guidelines forbid, so
+# select_bridge_mode never returns one twice running on an ordinary turn.
+_FULL_RECEPTION_MODES = frozenset({BRIDGE_MODE_FULL, BRIDGE_MODE_THINKING})
+
+# What this turn's bridge should do, handed to the LLM as {{bridgeMode}}. These
+# live in code rather than in the editable prompt so that a deployment whose
+# stored prompt predates modes still gets them (see _build_messages).
+_MODE_DIRECTIVES = {
+    BRIDGE_MODE_BRIEF: (
+        "THIS TURN — keep it to a beat. One or two words, then stop. Either they "
+        "gave you very little, or you already received them in full a moment ago; "
+        "either way a fuller reception here would sound like a routine rather than "
+        "a person. Just show you heard them and hand the floor back: \"Okay.\", "
+        "\"Right.\", \"Fair enough.\", \"Got it.\" — in their language. Do not name "
+        "a feeling, do not add warmth you have not been given a reason for, and "
+        "above all do not hand their own words back to them."
+    ),
+    BRIDGE_MODE_FULL: (
+        "THIS TURN — they gave you something real. React the way a person would: "
+        "agree, recognise it, say what it makes you think, follow their point. In "
+        "YOUR words — do not restate theirs; they know what they said, and hearing "
+        "it read back is what makes this sound like a machine.\n"
+        "Do NOT assume there is a hardship in it. Most turns are ordinary, and "
+        "some are good news. Manufacturing a struggle ('that sounds demanding', "
+        "'that must be exhausting') for a turn that contained none is worse than "
+        "saying something small and true. Only name a difficulty if they actually "
+        "described one.\n"
+        "One or two short sentences, around 15-25 words. Stop once you have "
+        "actually reacted."
+    ),
+    BRIDGE_MODE_THINKING: (
+        "THIS TURN — they asked you something, or gave you a lot at once. Take the "
+        "beat you would take in person before answering something that deserves a "
+        "moment, and say so in your own words — freshly, not the same phrase you "
+        "used last time. Do NOT begin answering: the answer belongs to the reply "
+        "that follows. One or two short sentences."
+    ),
 }
 
-# Multi-word markers a single-token scan would miss.
-_APPRAISAL_RISK_PHRASES = (
-    "not really", "haven't been", "have not been", "gave up", "give up",
-    "kann nicht", "keine lust", "keine motivation", "aufgegeben", "war faul",
+# Per-mode ceiling on generated tokens. A BRIEF bridge is one or two words, so
+# capping it hard is what keeps the LLM round trip inside the turn-taking gap
+# now that there is no instant template to fall back on. FULL uses the
+# configured max_tokens, since its whole job is to be substantial.
+_MODE_MAX_TOKENS = {
+    BRIDGE_MODE_BRIEF: 12,
+    BRIDGE_MODE_THINKING: 40,
+}
+
+# Scripts that do not put spaces between words. Splitting on whitespace returns
+# ~1 "word" for an entire Chinese or Japanese sentence, which made every turn in
+# those languages look bare — so every turn got a two-word beat, and a personal
+# disclosure was brushed off with one. That is the exact failure the substantial
+# threshold exists to prevent, total for those languages.
+#
+# These are properties of writing systems rather than of any language's
+# vocabulary, which is why this is a table and not a word list: it makes the
+# thresholds work in MORE languages, not in a hand-picked few.
+#
+# Korean is deliberately absent: Hangul is written with spaces between words, so
+# whitespace splitting already works there.
+_DENSE_SCRIPT_RANGES = (
+    (0x3040, 0x30FF),   # Hiragana + Katakana
+    (0x3400, 0x4DBF),   # CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),   # CJK Unified Ideographs
+    (0xF900, 0xFAFF),   # CJK Compatibility Ideographs
+    (0x0E00, 0x0E7F),   # Thai
 )
+
+# Characters per word in a dense script. Chinese averages roughly 1.5 characters
+# per word and Japanese is close enough that one constant serves both; this only
+# has to be good enough to put a turn on the right side of a threshold.
+_DENSE_CHARS_PER_WORD = 1.5
+
+
+def _turn_length(text: str) -> int:
+    """Roughly how much the user said, in word-equivalents.
+
+    Whitespace splitting for space-delimited scripts, character count scaled by
+    ``_DENSE_CHARS_PER_WORD`` for those without spaces. Takes the larger of the
+    two so mixed input ("老实说我really不想") is not undercounted.
+    """
+    words = len(text.split())
+    dense = sum(
+        1 for ch in text
+        if any(lo <= ord(ch) <= hi for lo, hi in _DENSE_SCRIPT_RANGES)
+    )
+    if not dense:
+        return words
+    return max(words, round(dense / _DENSE_CHARS_PER_WORD))
+
+
+# A turn this long (in words) reads as effortful → THINKING: take a visible beat.
+_THINKING_WORD_THRESHOLD = 25
+
+# At or below this many words the turn carries too little to receive in full.
+# Mirroring "yeah" back at the user is the empty acknowledgement the conversation
+# guidelines explicitly forbid. Kept deliberately low: a short FACTUAL answer
+# ("I run three times a week") is still worth reflecting.
+_BRIEF_WORD_THRESHOLD = 3
+
+# At or above this many words the user gave you something real, which exempts the
+# turn from the anti-lockstep demotion below. Deliberately well UNDER the
+# thinking threshold: a 20-word disclosure ("I've been forcing myself through
+# every workout and it just feels like a chore") is emotionally substantial long
+# before it is computationally heavy, and answering that with a beat would be the
+# worst thing this selector could do.
+_SUBSTANTIAL_WORD_THRESHOLD = 12
+
+
+def select_bridge_mode(
+    user_input: str,
+    previous_mode: Optional[str] = None,
+) -> str:
+    """Pick what this turn's bridge should DO, from its shape and the last turn.
+
+    The bridge used to run the same way on every turn: one LLM call told to
+    "lean long", so every turn opened with a full reflective reception and the
+    reply was then told to open on the forward move. That hardcodes the exact
+    shape the conversation guidelines forbid — "Never run the same 'acknowledge
+    + question' shape twice in a row, that lockstep is what makes you sound like
+    a questionnaire" — on every single turn. Prompt and pipeline were fighting,
+    and the pipeline won.
+
+    The rules, in order:
+
+    * a turn of ``_BRIEF_WORD_THRESHOLD`` words or fewer gets a beat, because
+      there is nothing in "yeah" worth receiving in full;
+    * **the anti-lockstep rule** — after a full reception, an ordinary turn gets
+      a beat rather than a second full reception. A substantial turn (a question,
+      or ``_SUBSTANTIAL_WORD_THRESHOLD`` words or more) is exempt: when someone
+      actually opens up, receiving it properly matters more than varying shape;
+    * a question or a genuinely long turn takes a visible moment instead.
+
+    ``previous_mode`` is the mode chosen for the preceding turn (``None`` on the
+    first turn of a session, which is therefore never demoted).
+    """
+    text = user_input.strip()
+    word_count = _turn_length(text)
+    # Substantial gates the anti-lockstep exemption; thinking needs a distinctly
+    # heavier turn, so the two thresholds are deliberately separate.
+    substantial = "?" in text or word_count >= _SUBSTANTIAL_WORD_THRESHOLD
+
+    if word_count <= _BRIEF_WORD_THRESHOLD and not substantial:
+        return BRIDGE_MODE_BRIEF
+
+    # Anti-lockstep: never two full receptions back to back on ordinary turns.
+    if not substantial and previous_mode in _FULL_RECEPTION_MODES:
+        return BRIDGE_MODE_BRIEF
+
+    if "?" in text or word_count >= _THINKING_WORD_THRESHOLD:
+        return BRIDGE_MODE_THINKING
+    return BRIDGE_MODE_FULL
 
 
 # Shared bridge-validation invariants — referenced by BOTH the whole-string
-# validator (_validate_bridge, used by the non-streaming path) and the
+# validator (there is no longer a whole-string one — see _gate_stream) and the
 # sentence-gated streaming validator (_gate_stream), so the two can't drift.
 _BRIDGE_MAX_WORDS = 35
-# Evaluative openers rejected unless the risk-screened appraisal tier is active.
-_EVALUATIVE_OPENERS = ("that's a", "that's an", "what a", "what an")
-
 # A sentence boundary for streaming gates: terminal . ! ? followed by whitespace
 # or end-of-text. Used only to decide how much of the streamed bridge is safe to
 # release to TTS yet — the SDK's own segmenter (with its abbreviation guard) does
 # the actual TTS sentence splitting on the emitted text.
 _BRIDGE_SENTENCE_END = re.compile(r"[.!?]+(?=\s|$)")
+
+
+# An echo — the user's own words handed straight back — is the single worst
+# thing the bridge can produce. "I don't know." answered with "I don't know."
+# reads as mockery; "not really" answered with "not really" reads as a machine
+# with nothing of its own. Both were observed in production on 2026-08-25.
+#
+# The prompt is the real fix (it no longer asks for a "mirror"); this is the
+# backstop for when the model does it anyway. It is structural rather than a
+# word list — it compares the two strings' own tokens, so it works in any
+# language.
+#
+# Only SHORT bridges are checked. A longer reception legitimately reuses some of
+# the user's words while adding something of its own, and its overlap ratio is
+# naturally well below the threshold.
+_ECHO_MAX_WORDS = 6
+_ECHO_OVERLAP_RATIO = 0.8
+# Below this length a shared prefix collides too easily to mean anything.
+_STEM_MIN_LEN = 4
+
+
+def _is_echo(bridge: str, user_input: str) -> bool:
+    """True when a short bridge says almost nothing the user did not just say."""
+    if not bridge or not user_input:
+        return False
+    b_words = re.findall(r"\w+", bridge.lower(), flags=re.UNICODE)
+    if not b_words or len(b_words) > _ECHO_MAX_WORDS:
+        return False
+    u_words = set(re.findall(r"\w+", user_input.lower(), flags=re.UNICODE))
+    if not u_words:
+        return False
+    shared = sum(1 for w in b_words if _same_word(w, u_words))
+    return shared / len(b_words) >= _ECHO_OVERLAP_RATIO
+
+
+def _same_word(word: str, others: set) -> bool:
+    """Does ``word`` appear in ``others``, allowing for endings?
+
+    Exact match alone is too brittle here: the user's turn arrives from STT, so
+    it carries transcription noise and inflection the bridge will not reproduce.
+    The real failure "not really." against "no, not reallyy" slipped through an
+    exact check on one duplicated letter.
+
+    Words of _STEM_MIN_LEN or more match on a shared prefix, which covers both
+    that and ordinary inflection ("laufe"/"laufen") without needing to know any
+    language's morphology. Shorter words must match exactly, since a 2-3 letter
+    prefix collides far too easily.
+    """
+    if word in others:
+        return True
+    if len(word) < _STEM_MIN_LEN:
+        return False
+    return any(
+        o.startswith(word) or word.startswith(o)
+        for o in others
+        if len(o) >= _STEM_MIN_LEN
+    )
 
 
 def _split_complete_sentences(text: str) -> tuple:
@@ -310,7 +346,7 @@ def _clean_stream_text(raw: str) -> str:
     return t
 
 
-def _gate_stream(raw: str, allow_appraisal: bool, final: bool) -> tuple:
+def _gate_stream(raw: str, final: bool, user_input: str = "") -> tuple:
     """Decide how much of the streamed bridge is safe to release to TTS yet.
 
     The whole-string validator can't run mid-stream (TTS speaks sentence 1 before
@@ -319,9 +355,18 @@ def _gate_stream(raw: str, allow_appraisal: bool, final: bool) -> tuple:
     means a rule tripped (a question, the word cap, or an evaluative opener) and
     no further sentences should be released this turn.
 
-    Mirrors :meth:`BridgeGenerator._validate_bridge`'s invariants
-    (``_BRIDGE_MAX_WORDS``, ``_EVALUATIVE_OPENERS``, no question marks) at
-    sentence granularity. Incomplete trailing text is held back unless ``final``.
+    Every rule here is structural and language-agnostic — a word cap and "no
+    question mark" are properties of text, not of a vocabulary.
+
+    It used to also reject a hardcoded list of evaluative openers. That list
+    existed to stop the bridge appraising ahead of a sensitive answer, a job
+    that has moved to the Response Generator — which, unlike the bridge, runs
+    after the experts and is handed the tone. With the bridge never permitted to
+    appraise at all, the list was an English/German guess defending a case that
+    no longer exists, and it failed silently in every other language.
+
+    Call with ``final=True`` for whole-string validation. Incomplete trailing
+    text is held back unless ``final``.
     """
     text = _clean_stream_text(raw)
     if not text:
@@ -337,7 +382,8 @@ def _gate_stream(raw: str, allow_appraisal: bool, final: bool) -> tuple:
     for idx, s in enumerate(candidates):
         if "?" in s:  # a bridge never asks — drop this sentence and stop
             return " ".join(accepted), True
-        if idx == 0 and not allow_appraisal and s.lower().startswith(_EVALUATIVE_OPENERS):
+        if idx == 0 and _is_echo(s, user_input):
+            # Better to say nothing than to read their own words back at them.
             return " ".join(accepted), True
         n = len(s.split())
         if words + n > _BRIDGE_MAX_WORDS:  # would overrun the cap — stop before it
@@ -349,19 +395,6 @@ def _gate_stream(raw: str, allow_appraisal: bool, final: bool) -> tuple:
     if final and out and out[-1] not in ".!":
         out += "."
     return out, False
-
-
-def _screen_risk(user_input: str) -> bool:
-    """Return True when the turn is too sensitive/dispreferred for an appraisal.
-
-    Cheap and deterministic — no LLM, no dependency on the (being-removed) input
-    gate. Biased toward suppression: a hit means "clamp the bridge to reflection".
-    """
-    text = user_input.lower()
-    words = set(re.findall(r"[a-zäöüß']+", text))
-    if words & _APPRAISAL_RISK_WORDS:
-        return True
-    return any(phrase in text for phrase in _APPRAISAL_RISK_PHRASES)
 
 
 class BridgeGenerator:
@@ -383,39 +416,33 @@ class BridgeGenerator:
         self.bridge_max_tokens = 80
         self.bridge_temperature = 0.7
         self.custom_system_prompt: Optional[str] = None
-        self.history_limit: int = 0  # 0 = default (2)
+        # 0 = default (6). Was 2, which is one prior assistant turn — far too
+        # little for the "vary how you open" rule to work with. Production
+        # showed six consecutive bridges opening "Das klingt nach einer...",
+        # each individually fine and collectively a template, because the model
+        # could not see its own pattern.
+        self.history_limit: int = 0
         # The bridge only buys ~1s while the main pipeline runs; it must never
         # stall the turn. If the LLM is slow (API latency spike), fall back to a
         # canned bridge instead of hanging. Tunable via BRIDGE_TIMEOUT_MS.
         self.bridge_timeout_s: float = _env_float("BRIDGE_TIMEOUT_MS", 2000.0) / 1000
 
-        # Fast-path bridge (#304 A3). The LLM bridge can itself take up to
-        # ``bridge_timeout_s`` to return — i.e. the latency-masking mechanism can
-        # add latency and miss the gap window it exists to fill. When enabled,
-        # the bridge is served INSTANTLY from the typed templated inventory (no
-        # LLM call), guaranteeing first-byte inside the gap window. Trades the
-        # LLM bridge's contextual richness for guaranteed timing, so it's opt-in
-        # via BRIDGE_FAST_PATH and easy to A/B against the A1 baseline.
-        self.fast_path_enabled: bool = _env_bool("BRIDGE_FAST_PATH", False)
-
-        # Appraisal tier (#343 follow-up). When OFF (default), the bridge is
-        # strictly reflective — it never evaluates what the user said (the #304 A2
-        # guarantee). When ON, the LLM bridge MAY add a brief, understated
-        # appraisal of the user's situation, but ONLY when the risk screen
-        # (_screen_risk) clears — so it never affirms ahead of a sensitive or
-        # dispreferred answer. The templated fast-path/fallback never appraises
-        # regardless, so the deterministic route stays veto-proof. Opt-in and
-        # A/B-able via BRIDGE_APPRAISAL, mirroring BRIDGE_FAST_PATH.
-        self.appraisal_enabled: bool = _env_bool("BRIDGE_APPRAISAL", False)
+        # Anti-lockstep state (#1 naturalness). The mode chosen for the previous
+        # turn of THIS session, so select_bridge_mode can refuse two full
+        # receptions back to back. One BridgeGenerator lives for the life of the
+        # agent, so this is per-session by construction.
+        self._previous_mode: Optional[str] = None
+        # The mode chosen for the most recent turn, read by the agent to pick a
+        # speaking rate for the whole turn (see agent.py / set_tts_speed).
+        self.last_bridge_mode: Optional[str] = None
 
     def apply_config(self, config: dict) -> None:
         """Apply configuration overrides from the Agent Configurator.
 
         The configurator is the primary control surface for the bridge: every
         knob below maps to a slot on the ``bridge_generator`` node in agent.yaml
-        (prompt, model, temperature, max_tokens, fast_path, timeout_ms). The env
-        vars (BRIDGE_FAST_PATH / BRIDGE_TIMEOUT_MS) are only deploy-time defaults
-        — any value set here overrides them.
+        (prompt, model, temperature, max_tokens, timeout_ms). The env var
+        BRIDGE_TIMEOUT_MS is only a deploy-time default — a value set here wins.
         """
         if "model" in config:
             self.bridge_model = config["model"]
@@ -427,28 +454,8 @@ class BridgeGenerator:
             self.custom_system_prompt = config["system_prompt"]
         if "history_limit" in config:
             self.history_limit = int(config["history_limit"])
-        if "fast_path" in config:
-            self.fast_path_enabled = _coerce_bool(config["fast_path"])
-        if "appraisal" in config:
-            self.appraisal_enabled = _coerce_bool(config["appraisal"])
         if config.get("timeout_ms") not in (None, ""):
             self.bridge_timeout_s = float(config["timeout_ms"]) / 1000
-
-    def fast_bridge(self, user_input: str, language: Optional[str] = None) -> str:
-        """Return a typed templated bridge INSTANTLY — no LLM call (#304 A3).
-
-        Picks the sub-type with :func:`select_bridge_type` and a phrase from the
-        matching inventory. Used for the fast-path and as the failure fallback,
-        so both routes are guaranteed to land inside the gap window.
-
-        (No ``predicted_cost`` here: at bridge time the expert count doesn't exist
-        yet — the bridge runs in parallel with the gate — so selection uses the
-        input-shape heuristic. ``select_bridge_type`` keeps a ``predicted_cost``
-        hook for if/when a pre-gate cost estimate becomes available.)
-        """
-        is_german = (language == "de") if language else _detect_german(user_input)
-        bridge_type = select_bridge_type(user_input)
-        return pick_bridge_from_inventory(bridge_type, is_german)
 
     def _build_messages(
         self,
@@ -456,26 +463,36 @@ class BridgeGenerator:
         conversation_history: List[Dict[str, str]],
         language: Optional[str],
         variables: Optional[Dict[str, Any]],
-        allow_appraisal: bool,
+        mode: str = BRIDGE_MODE_FULL,
     ) -> List[LLMMessage]:
         """Render the bridge system prompt + user message. Shared by the
         streaming and non-streaming paths so they prompt the LLM identically."""
         raw_prompt = self.custom_system_prompt or BRIDGE_SYSTEM_PROMPT
         # Render template variables into the prompt so the bridge can adapt:
         # the recent context ({{conversationHistory}}), whether the turn is a
-        # barge-in ({{isBargeIn}}), and whether a brief appraisal is permitted
-        # ({{allowAppraisal}}).
+        # barge-in ({{isBargeIn}}), and what this turn's beat should do
+        # ({{bridgeMode}}).
+        directive = _MODE_DIRECTIVES.get(mode, "")
         ctx = {
             **(variables or {}),
             "userInput": user_input,
-            "conversationHistory": format_history(conversation_history, self.history_limit or 2),
-            "allowAppraisal": allow_appraisal,
+            "conversationHistory": format_history(conversation_history, self.history_limit or 6),
+            "bridgeMode": directive,
         }
         system_prompt = render_prompt(raw_prompt, ctx)
+        # A deployment whose stored prompt predates modes has no {{bridgeMode}}
+        # placeholder, and prompts are stored per-deployment rather than read
+        # from agent.yaml at run time — so without this the per-turn directive
+        # would silently never reach production. Appended for exactly the same
+        # reason RESOLVED LANGUAGE is below.
+        if directive and "{{bridgeMode}}" not in raw_prompt:
+            system_prompt += "\n\n" + directive
         if language:
             system_prompt += (
-                f"\n\nRESOLVED LANGUAGE (overrides the rule above): "
-                f"Produce the bridge in {_LANGUAGE_NAMES.get(language, language)} only."
+                f"\n\nRESOLVED LANGUAGE (overrides every rule above): "
+                f"Produce the bridge in {_LANGUAGE_NAMES.get(language, language)} only. "
+                f"This includes any wording quoted as an example earlier in this "
+                f"prompt — examples show the MOVE, never the words to say."
             )
         return [
             LLMMessage(role="system", content=system_prompt),
@@ -526,8 +543,8 @@ class BridgeGenerator:
         the first sentence starts speaking after a few hundred ms instead of
         waiting for the whole (now richer) bridge to generate.
 
-        Because TTS starts before the bridge finishes, the whole-string validator
-        (_validate_bridge) can't gate it — so each sentence is validated as it
+        Because TTS starts before the bridge finishes, a whole-string validator
+        cannot gate it — so each sentence is validated as it
         completes (``_gate_stream``: never release a question, an over-length run,
         or an evaluative opener). If the very first sentence is rejected or the
         LLM times out/fails before anything is released, a canned templated bridge
@@ -538,29 +555,28 @@ class BridgeGenerator:
         """
         start_time = time.time()
 
-        # Fast-path (#304 A3): skip the LLM entirely and serve an instant typed
-        # template as a single chunk. Guarantees the bridge lands inside the gap
-        # window instead of waiting on the LLM that masks latency.
-        if self.fast_path_enabled:
-            bridge = self.fast_bridge(user_input, language)
-            logger.info(f"Fast-path bridge '{bridge}' in {(time.time() - start_time) * 1000:.0f}ms")
-            yield bridge
-            return
-
-        # Appraisal is allowed only when enabled AND the turn clears the risk
-        # screen — so the bridge never affirms ahead of a sensitive/dispreferred
-        # answer it can't yet see. Off → strictly reflective (the #304 A2 default).
-        allow_appraisal = self.appraisal_enabled and not _screen_risk(user_input)
+        # Decide what this turn's beat should DO before producing it. This is
+        # what makes the bridge conditional: it used to prompt the LLM the same
+        # way every turn, so every turn opened with a full reception.
+        mode = select_bridge_mode(user_input, previous_mode=self._previous_mode)
+        self._previous_mode = mode
+        self.last_bridge_mode = mode
 
         released = ""  # accumulated, validated bridge text yielded so far
         try:
             messages = self._build_messages(
-                user_input, conversation_history, language, variables, allow_appraisal
+                user_input, conversation_history, language, variables, mode,
             )
             config = LLMConfig(
                 model=self.bridge_model,
                 temperature=self.bridge_temperature,
-                max_tokens=self.bridge_max_tokens,
+                # A beat is one or two words; capping it hard is what keeps the
+                # round trip inside the turn-taking gap now that there is no
+                # instant template to fall back on.
+                max_tokens=min(
+                    self.bridge_max_tokens,
+                    _MODE_MAX_TOKENS.get(mode, self.bridge_max_tokens),
+                ),
                 provider=LLMProvider.OPENAI_LANGCHAIN,
                 streaming=True,
                 json_mode=False,
@@ -575,7 +591,7 @@ class BridgeGenerator:
                 async for raw, final in stream_completion(
                     self._llm_service, messages, config, component_name="bridge_generator",
                 ):
-                    candidate, stop = _gate_stream(raw, allow_appraisal, final=final)
+                    candidate, stop = _gate_stream(raw, final=final, user_input=user_input)
                     if candidate and candidate != released and candidate.startswith(released):
                         released = candidate
                         yield released
@@ -594,52 +610,14 @@ class BridgeGenerator:
                 logger.error(f"Bridge stream failed in {latency_ms:.0f}ms: {e}")
 
         # Nothing valid was released (rejected first sentence, timeout/error
-        # before first byte, or empty output) → safe canned fallback.
+        # before first byte, or empty output) → say nothing at all.
+        #
+        # This used to emit a canned phrase from a hand-written inventory. Those
+        # are gone, and a silent bridge is the better failure anyway: the reply
+        # still carries the reaction (its prompt drops the {{#if bridge}}
+        # continuation block when no bridge was spoken), so the turn degrades to
+        # "no opener, normal reply" rather than to a stock phrase that fits any
+        # answer. The cost is that the pipeline's latency is heard as silence on
+        # this turn, which is the honest signal that something went wrong.
         if not released.strip():
-            fallback = self.fast_bridge(user_input, language)
-            logger.info(f"Fallback bridge '{fallback}'")
-            yield fallback
-
-    @staticmethod
-    def _validate_bridge(raw: str, allow_appraisal: bool = False) -> str:
-        """Validate the bridge phrase. Returns "" if invalid.
-
-        The bridge must be a natural spoken acknowledgment ending with . or !
-        Questions are always rejected — bridges must never ask the user anything.
-        Evaluative commentary is rejected UNLESS ``allow_appraisal`` is set (the
-        risk-screened appraisal tier) — by default bridges must not judge the
-        user's input.
-        """
-        if not isinstance(raw, str) or not raw.strip():
-            return ""
-
-        bridge = raw.strip().strip('"').strip("'").strip()
-
-        # Strip trailing ellipsis and re-check
-        if bridge.endswith("..."):
-            bridge = bridge[:-3].strip()
-
-        if not bridge:
-            return ""
-
-        # Reject any bridge containing a question mark — bridges must never ask questions
-        if "?" in bridge:
-            return ""
-
-        # Cap the bridge length — it carries the full reaction (acknowledge +
-        # mirror + name the feeling/effort, and a brief appraisal when allowed),
-        # up to two or three short sentences for a personal turn. A richer bridge
-        # both sounds more present and buys the main reply more time to land.
-        if len(bridge.split()) > _BRIDGE_MAX_WORDS:
-            return ""
-
-        # Reject evaluative commentary ("That's a great question!", "What a nice thought!")
-        # unless the risk-screened appraisal tier is active for this turn.
-        if not allow_appraisal and bridge.lower().startswith(_EVALUATIVE_OPENERS):
-            return ""
-
-        # Must end with sentence-ending punctuation (no questions)
-        if bridge[-1] not in ".!":
-            bridge += "."
-
-        return bridge
+            logger.warning(f"Bridge produced nothing usable (mode={mode}) — staying silent")

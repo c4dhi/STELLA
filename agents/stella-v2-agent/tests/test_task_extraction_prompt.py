@@ -46,3 +46,11 @@ def test_strict_mode_exempts_corrections(system_prompt: str):
     strict_section = system_prompt.split("STRICT/SEQUENTIAL MODE RULE:")[1]
     assert "EXCEPTION" in strict_section
     assert "ALREADY COLLECTED" in strict_section
+
+
+def test_prompt_marks_corrections_with_the_correction_flag(system_prompt: str):
+    # The state machine rejects a change to a collected required deliverable
+    # unless the write carries correction=true (#406). Without this in the
+    # prompt every correction would silently fail.
+    assert system_prompt.count("`correction: true`") >= 3
+    assert "REJECTED without `correction: true`" in system_prompt
