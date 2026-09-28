@@ -4,7 +4,7 @@ import {
   hashPipelineSchema,
   compareVersions,
   satisfiesMinCompilerVersion,
-} from './configuration-compat.util';
+} from './configuration-compat.util.js';
 
 const schema = {
   nodes: [{ id: 'input_gate' }, { id: 'planner' }],

@@ -1,10 +1,10 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { AgentServerService } from './agent-server.service';
-import { AgentGrpcController } from './agent-grpc.controller';
-import { AgentHealthMonitorService } from './agent-health-monitor.service';
-import { PrismaModule } from '../prisma/prisma.module';
-import { SessionsModule } from '../sessions/sessions.module';
+import { AgentServerService } from './agent-server.service.js';
+import { AgentGrpcController } from './agent-grpc.controller.js';
+import { AgentHealthMonitorService } from './agent-health-monitor.service.js';
+import { PrismaModule } from '../prisma/prisma.module.js';
+import { SessionsModule } from '../sessions/sessions.module.js';
 
 /**
  * AgentServerModule - gRPC server module for agent health checks.

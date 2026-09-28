@@ -1,7 +1,10 @@
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { existsSync } from 'fs';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 function resolveProtoDir(): string {
   if (process.env.PROTO_PATH) return process.env.PROTO_PATH;

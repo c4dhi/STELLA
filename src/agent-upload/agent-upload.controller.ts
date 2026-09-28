@@ -15,12 +15,12 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express'
 import { Observable, interval, map, takeWhile, concat, of } from 'rxjs'
 import { Request } from 'express'
-import { AgentPackageService } from '../agent-package/agent-package.service'
-import { AgentBuildService, BuildStatus } from '../agent-build/agent-build.service'
-import { StorageService } from '../storage/storage.service'
-import { PrismaService } from '../prisma/prisma.service'
+import { AgentPackageService } from '../agent-package/agent-package.service.js'
+import { AgentBuildService, BuildStatus } from '../agent-build/agent-build.service.js'
+import { StorageService } from '../storage/storage.service.js'
+import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentValidationStatus, Prisma } from '@prisma/client'
-import { hashPipelineSchema } from '../agent-configurations/configuration-compat.util'
+import { hashPipelineSchema } from '../agent-configurations/configuration-compat.util.js'
 
 interface AuthenticatedRequest extends Request {
   user?: { id: string; email: string }

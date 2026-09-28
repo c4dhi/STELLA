@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TRANSCRIPT_PROCESSOR } from './transcript-processor.interface';
-import { PassthroughProcessor } from './passthrough.processor';
+import { TRANSCRIPT_PROCESSOR } from './transcript-processor.interface.js';
+import { PassthroughProcessor } from './passthrough.processor.js';
 
 /**
  * TranscriptProcessorModule

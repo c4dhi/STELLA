@@ -1,4 +1,4 @@
-import { IsPlanContent } from './dto/plan-content.validator';
+import { IsPlanContent } from './dto/plan-content.validator.js';
 
 /**
  * The write-time half of the phase-2 clean cut (#467).

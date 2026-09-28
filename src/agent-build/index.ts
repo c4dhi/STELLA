@@ -1,2 +1,2 @@
-export * from './agent-build.module'
-export * from './agent-build.service'
+export * from './agent-build.module.js'
+export * from './agent-build.service.js'

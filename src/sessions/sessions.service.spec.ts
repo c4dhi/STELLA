@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 // SessionsService imports heavy collaborators (AgentsService → KubernetesService /
 // agent-server gRPC, LiveKitService) whose transitive deps are ESM-only
 // (@kubernetes/client-node, uuid, livekit-server-sdk) and trip ts-jest. close()
@@ -8,7 +9,7 @@ jest.mock('../message-recorder/room-monitor.service', () => ({ RoomMonitorServic
 jest.mock('livekit-server-sdk', () => ({ TokenVerifier: class {}, AccessToken: class {} }));
 
 import { NotFoundException } from '@nestjs/common';
-import { SessionsService } from './sessions.service';
+import { SessionsService } from './sessions.service.js';
 
 type SessionStatus = 'ACTIVE' | 'CLOSING' | 'CLOSED';
 type SessionRow = {

@@ -1,7 +1,7 @@
 import { Controller, Post, Body } from '@nestjs/common';
 import { IsString, IsNotEmpty, IsOptional, MaxLength } from 'class-validator';
-import { LiveKitService } from './livekit.service';
-import { Public } from '../common/decorators/public.decorator';
+import { LiveKitService } from './livekit.service.js';
+import { Public } from '../common/decorators/public.decorator.js';
 
 export class CreateTokenDto {
   @IsString()

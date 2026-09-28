@@ -1,5 +1,6 @@
-import { PrismaService } from '../prisma/prisma.service';
-import { AgentConfigurationsService } from './agent-configurations.service';
+import { jest } from '@jest/globals';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { AgentConfigurationsService } from './agent-configurations.service.js';
 
 type ConfigRow = {
   id: string;

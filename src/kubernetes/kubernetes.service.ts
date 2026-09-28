@@ -1,14 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as k8s from '@kubernetes/client-node';
-import { AgentImageService } from '../agent-image/agent-image.service';
-import { buildPodEnvVars, buildSecretStringData } from './utils/agent-config-injection.util';
+import { AgentImageService } from '../agent-image/agent-image.service.js';
+import { buildPodEnvVars, buildSecretStringData } from './utils/agent-config-injection.util.js';
 import {
   clampCpuLimit,
   clampMemoryLimit,
   DEFAULT_CPU_LIMIT,
   DEFAULT_MEMORY_LIMIT,
-} from './utils/resource-clamping.util';
+} from './utils/resource-clamping.util.js';
 
 export interface AgentPodConfig {
   agentId: string;

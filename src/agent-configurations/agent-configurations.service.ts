@@ -1,16 +1,16 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { Prisma, ConfigCompatibility } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateAgentConfigurationDto } from './dto/create-agent-configuration.dto';
-import { UpdateAgentConfigurationDto } from './dto/update-agent-configuration.dto';
-import { sanitizeAgentConfig } from '../common/utils/sanitize-config';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { CreateAgentConfigurationDto } from './dto/create-agent-configuration.dto.js';
+import { UpdateAgentConfigurationDto } from './dto/update-agent-configuration.dto.js';
+import { sanitizeAgentConfig } from '../common/utils/sanitize-config.js';
 import {
   validateConfigurationAgainstSchema,
   pruneRemovedOverrides,
   satisfiesMinCompilerVersion,
   type PipelineSchema,
-} from './configuration-compat.util';
-import { deriveEffectiveAgentConfig } from '../kubernetes/utils/agent-config-injection.util';
+} from './configuration-compat.util.js';
+import { deriveEffectiveAgentConfig } from '../kubernetes/utils/agent-config-injection.util.js';
 
 @Injectable()
 export class AgentConfigurationsService {

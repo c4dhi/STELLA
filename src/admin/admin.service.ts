@@ -1,9 +1,9 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Observable, interval, ReplaySubject, merge } from 'rxjs';
 import { map, switchMap, startWith, finalize } from 'rxjs/operators';
-import { PrismaService } from '../prisma/prisma.service';
-import { ServerMetricsService, ServerMetrics } from './services/server-metrics.service';
-import { KubernetesService } from '../kubernetes/kubernetes.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { ServerMetricsService, ServerMetrics } from './services/server-metrics.service.js';
+import { KubernetesService } from '../kubernetes/kubernetes.service.js';
 
 interface MessageEvent {
   data: string;

@@ -1,8 +1,8 @@
 import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreatePlanTemplateDto } from './dto/create-plan-template.dto';
-import { UpdatePlanTemplateDto } from './dto/update-plan-template.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { CreatePlanTemplateDto } from './dto/create-plan-template.dto.js';
+import { UpdatePlanTemplateDto } from './dto/update-plan-template.dto.js';
 
 @Injectable()
 export class PlanTemplatesService {

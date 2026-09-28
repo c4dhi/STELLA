@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseAgentManifestYaml } from './agent-manifest.schema';
+import { fileURLToPath } from 'url';
+import { parseAgentManifestYaml } from './agent-manifest.schema.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Guards the stella-light-agent manifest after it was made configurable (ticket #240

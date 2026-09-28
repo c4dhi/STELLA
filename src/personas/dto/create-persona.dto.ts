@@ -7,7 +7,7 @@ import {
   MaxLength,
   Validate,
 } from 'class-validator';
-import { IsPersonaVariableMap } from './persona-variables.validator';
+import { IsPersonaVariableMap } from './persona-variables.validator.js';
 
 export class CreatePersonaDto {
   @IsString()

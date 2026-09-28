@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common'
-import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module'
-import { BackupController } from './backup.controller'
-import { BackupService } from './backup.service'
-import { AuditService } from './audit.service'
+import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js'
+import { BackupController } from './backup.controller.js'
+import { BackupService } from './backup.service.js'
+import { AuditService } from './audit.service.js'
 
 /**
  * Full-system data export/import (#378).

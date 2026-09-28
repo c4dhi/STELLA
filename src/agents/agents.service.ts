@@ -1,11 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { PrismaService } from '../prisma/prisma.service';
-import { KubernetesService } from '../kubernetes/kubernetes.service';
-import { AgentServerService } from '../agent-server/agent-server.service';
-import { SessionsService } from '../sessions/sessions.service';
-import { CreateAgentDto } from './dto/create-agent.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { KubernetesService } from '../kubernetes/kubernetes.service.js';
+import { AgentServerService } from '../agent-server/agent-server.service.js';
+import { SessionsService } from '../sessions/sessions.service.js';
+import { CreateAgentDto } from './dto/create-agent.dto.js';
 import {
   AgentMetricsResponseDto,
   StageLatencyDto,
@@ -16,13 +16,13 @@ import {
   SessionAnalyticsResponseDto,
   MetricsSummaryDto,
   PlanCompletionSessionDto,
-} from './dto/agent-metrics.dto';
+} from './dto/agent-metrics.dto.js';
 import { AgentStatus, Prisma } from '@prisma/client';
-import { sanitizeAgentConfig } from '../common/utils/sanitize-config';
-import { EncryptionService } from '../env-var-templates/encryption.service';
-import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service';
-import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service';
-import { PersonasService } from '../personas/personas.service';
+import { sanitizeAgentConfig } from '../common/utils/sanitize-config.js';
+import { EncryptionService } from '../env-var-templates/encryption.service.js';
+import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service.js';
+import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
+import { PersonasService } from '../personas/personas.service.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -35,6 +35,7 @@ import { PersonasService } from '../personas/personas.service';
 @Injectable()
 export class AgentsService {
   private readonly logger = new Logger(AgentsService.name);
+  private sessionsService?: SessionsService;
 
   constructor(
     private prisma: PrismaService,
@@ -50,8 +51,13 @@ export class AgentsService {
     private readonly personasService: PersonasService,
     private readonly eventEmitter: EventEmitter2,
     @Optional() private agentServerService?: AgentServerService,
-    @Optional() @Inject(forwardRef(() => SessionsService)) private sessionsService?: SessionsService,
+    // See the matching comment in SessionsService: typed `any` here (and
+    // assigned to the class field below) so TS's emitDecoratorMetadata
+    // doesn't reference SessionsService eagerly and trip a TDZ error on the
+    // circular import under ESM.
+    @Optional() @Inject(forwardRef(() => SessionsService)) sessionsService?: any,
   ) {
+    this.sessionsService = sessionsService;
     // Validate OpenAI API key on startup
     this.validateOpenAIKey();
   }

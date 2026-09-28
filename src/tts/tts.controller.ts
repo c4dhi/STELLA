@@ -1,6 +1,6 @@
 import { Controller, Get, Header } from '@nestjs/common';
-import { TtsService } from './tts.service';
-import { TtsCapabilities } from './grpc/tts-capabilities.client';
+import { TtsService } from './tts.service.js';
+import { TtsCapabilities } from './grpc/tts-capabilities.client.js';
 
 @Controller('tts')
 export class TtsController {

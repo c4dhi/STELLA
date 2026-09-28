@@ -1,7 +1,8 @@
+import { jest } from '@jest/globals';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
-import { CapacityService } from './capacity.service';
-import { RecordCapacityDto } from '../dto/capacity.dto';
+import { CapacityService } from './capacity.service.js';
+import { RecordCapacityDto } from '../dto/capacity.dto.js';
 
 const payload = {
   measuredAt: '2026-09-26T12:00:00+00:00',

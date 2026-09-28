@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import {
   TranscriptProcessor,
   TranscriptProcessorResult,
-} from './transcript-processor.interface';
+} from './transcript-processor.interface.js';
 
 /**
  * PassthroughProcessor - Testing/Demo Implementation

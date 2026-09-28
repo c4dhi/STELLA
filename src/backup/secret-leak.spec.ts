@@ -1,11 +1,12 @@
+import { jest } from '@jest/globals';
 import { Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { EncryptionService } from '../env-var-templates/encryption.service'
-import { decryptBundle, encryptBundle } from './bundle-crypto'
-import { BACKUP_FORMAT_VERSION, BackupManifest, validateForImport } from './manifest'
+import { EncryptionService } from '../env-var-templates/encryption.service.js'
+import { decryptBundle, encryptBundle } from './bundle-crypto.js'
+import { BACKUP_FORMAT_VERSION, BackupManifest, validateForImport } from './manifest.js'
 
 /**
  * Secret-leak regression guard (#380).

@@ -1,11 +1,11 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { SessionsService } from './sessions.service';
-import { SessionTimeoutService } from './session-timeout.service';
-import { SessionsController } from './sessions.controller';
-import { LiveKitModule } from '../livekit/livekit.module';
-import { AgentsModule } from '../agents/agents.module';
-import { MessageRecorderModule } from '../message-recorder/message-recorder.module';
-import { AuthModule } from '../auth/auth.module';
+import { SessionsService } from './sessions.service.js';
+import { SessionTimeoutService } from './session-timeout.service.js';
+import { SessionsController } from './sessions.controller.js';
+import { LiveKitModule } from '../livekit/livekit.module.js';
+import { AgentsModule } from '../agents/agents.module.js';
+import { MessageRecorderModule } from '../message-recorder/message-recorder.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
   imports: [LiveKitModule, forwardRef(() => AgentsModule), MessageRecorderModule, AuthModule],

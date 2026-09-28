@@ -1,14 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from '../prisma/prisma.service';
-import { LiveKitService } from '../livekit/livekit.service';
-import { checkSttHealth, checkTtsHealth } from './grpc/grpc-health.client';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { LiveKitService } from '../livekit/livekit.service.js';
+import { checkSttHealth, checkTtsHealth } from './grpc/grpc-health.client.js';
 import {
   ComponentId,
   ComponentStatus,
   PublicHealthComponent,
   PublicHealthResponse,
-} from './dto/public-health.dto';
+} from './dto/public-health.dto.js';
 
 const PER_CHECK_TIMEOUT_MS = 1500;
 const DEFAULT_CACHE_TTL_MS = 15_000;

@@ -4,7 +4,7 @@ import {
   buildSecretStringData,
   deriveEffectiveAgentConfig,
   resolveAgentEnvVarsFromConfigSchema,
-} from './agent-config-injection.util'
+} from './agent-config-injection.util.js'
 
 describe('agent-config-injection util', () => {
   const podEnvInput = {

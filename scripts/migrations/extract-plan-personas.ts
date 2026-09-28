@@ -11,7 +11,7 @@
  * read by a human before anything is stripped. Safe to re-run.
  */
 import { PrismaClient } from '@prisma/client';
-import { extractPlanPersonas } from '../../src/personas/persona-extraction';
+import { extractPlanPersonas } from '../../src/personas/persona-extraction.js';
 
 const prisma = new PrismaClient();
 

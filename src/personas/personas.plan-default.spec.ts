@@ -1,5 +1,6 @@
-import { PrismaService } from '../prisma/prisma.service';
-import { PersonasService } from './personas.service';
+import { jest } from '@jest/globals';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { PersonasService } from './personas.service.js';
 
 const persona = (over: Record<string, unknown>) => ({
   id: 'p',

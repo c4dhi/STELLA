@@ -1,9 +1,9 @@
 import { Injectable, Logger, OnModuleDestroy, Inject, forwardRef, Optional } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import * as grpc from '@grpc/grpc-js';
-import { PrismaService } from '../prisma/prisma.service';
-import { SessionsService } from '../sessions/sessions.service';
-import { AgentSessionStream } from './agent-session-stream';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { SessionsService } from '../sessions/sessions.service.js';
+import { AgentSessionStream } from './agent-session-stream.js';
 import {
   AgentInput,
   AgentOutput,
@@ -12,7 +12,7 @@ import {
   OutputType,
   RegisterAgentRequest,
   RegisterAgentResponse,
-} from './agent.types';
+} from './agent.types.js';
 
 /**
  * AgentServerService - Core gRPC server for agent connections.
@@ -36,11 +36,20 @@ export class AgentServerService implements OnModuleDestroy {
     createdAt: Date;
   }> = new Map();
 
+  // Typed `any` on the constructor parameter (assigned to the field above) so
+  // TS's emitDecoratorMetadata doesn't reference the still-circularly-importing
+  // class eagerly in design:paramtypes, which throws a TDZ ReferenceError under
+  // ESM depending on module evaluation order. forwardRef already handles the
+  // actual lazy DI resolution.
+  private sessionsService?: SessionsService;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
-    @Optional() @Inject(forwardRef(() => SessionsService)) private sessionsService?: SessionsService,
-  ) {}
+    @Optional() @Inject(forwardRef(() => SessionsService)) sessionsService?: any,
+  ) {
+    this.sessionsService = sessionsService;
+  }
 
   /**
    * Register a pending session that needs an agent.

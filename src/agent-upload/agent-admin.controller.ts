@@ -10,7 +10,7 @@ import {
   Req,
 } from '@nestjs/common'
 import { Request } from 'express'
-import { PrismaService } from '../prisma/prisma.service'
+import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentValidationStatus } from '@prisma/client'
 
 interface AuthenticatedRequest extends Request {

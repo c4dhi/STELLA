@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 /**
  * A persona snapshot in agentConfig is a record of a past deployment, not a
  * request for today's default (#467).

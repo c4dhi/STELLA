@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 // SessionTimeoutService imports SessionsService (for the forwardRef token), which
 // drags in the ESM-only collaborator subtrees. Cut them at the boundary so ts-jest
 // doesn't choke — see sessions.service.spec.ts for the same rationale.
@@ -6,7 +7,7 @@ jest.mock('../livekit/livekit.service', () => ({ LiveKitService: class {} }));
 jest.mock('../message-recorder/room-monitor.service', () => ({ RoomMonitorService: class {} }));
 jest.mock('livekit-server-sdk', () => ({ TokenVerifier: class {}, AccessToken: class {} }));
 
-import { SessionTimeoutService } from './session-timeout.service';
+import { SessionTimeoutService } from './session-timeout.service.js';
 
 type SessionRow = {
   status: 'ACTIVE' | 'CLOSING' | 'CLOSED';

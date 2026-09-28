@@ -2,17 +2,17 @@ import { Injectable, NotFoundException, UnauthorizedException, ForbiddenExceptio
 import { Observable, Subject, ReplaySubject, filter, map, finalize } from 'rxjs';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
 import { TokenVerifier } from 'livekit-server-sdk';
-import { PrismaService } from '../prisma/prisma.service';
-import { LiveKitService } from '../livekit/livekit.service';
-import { AgentsService } from '../agents/agents.service';
-import { RoomMonitorService, type LogEntry } from '../message-recorder/room-monitor.service';
-import { AuthService } from '../auth/auth.service';
-import { CreateSessionDto } from './dto/create-session.dto';
-import { UpdateSessionDto } from './dto/update-session.dto';
-import { CreateTokenDto } from './dto/create-token.dto';
-import { QuerySessionsDto } from './dto/query-sessions.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { LiveKitService } from '../livekit/livekit.service.js';
+import { AgentsService } from '../agents/agents.service.js';
+import { RoomMonitorService, type LogEntry } from '../message-recorder/room-monitor.service.js';
+import { AuthService } from '../auth/auth.service.js';
+import { CreateSessionDto } from './dto/create-session.dto.js';
+import { UpdateSessionDto } from './dto/update-session.dto.js';
+import { CreateTokenDto } from './dto/create-token.dto.js';
+import { QuerySessionsDto } from './dto/query-sessions.dto.js';
 import { Prisma } from '@prisma/client';
-import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service';
+import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service.js';
 
 /** Deliverable entry in the transcript summary section */
 interface TranscriptDeliverableSummaryEntry {
@@ -90,15 +90,26 @@ export class SessionsService {
   private projectEventSubjects: Map<string, ReplaySubject<SessionEvent>> = new Map();
   private projectSubscriberCounts: Map<string, number> = new Map();
 
+  // Typed separately from the constructor parameter below: under ESM,
+  // TypeScript's emitDecoratorMetadata would otherwise reference the (still
+  // circularly-importing) AgentsService class eagerly in this class's
+  // design:paramtypes array, which throws "Cannot access 'AgentsService'
+  // before initialization" depending on module evaluation order. Typing the
+  // parameter itself as `any` makes TS emit `Object` there instead; forwardRef
+  // already handles the actual lazy DI resolution.
+  private agentsService: AgentsService;
+
   constructor(
     private prisma: PrismaService,
     private livekit: LiveKitService,
     @Inject(forwardRef(() => AgentsService))
-    private agentsService: AgentsService,
+    agentsService: any,
     private roomMonitor: RoomMonitorService,
     private authService: AuthService,
     private readonly eventEmitter: EventEmitter2,
-  ) {}
+  ) {
+    this.agentsService = agentsService;
+  }
 
   async create(projectId: string, createSessionDto: CreateSessionDto) {
     // Generate unique room name

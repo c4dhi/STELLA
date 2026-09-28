@@ -5,9 +5,9 @@ import { createReadStream } from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'crypto'
-import { PrismaService } from '../prisma/prisma.service'
-import { StorageService } from '../storage/storage.service'
-import { EncryptionService } from '../env-var-templates/encryption.service'
+import { PrismaService } from '../prisma/prisma.service.js'
+import { StorageService } from '../storage/storage.service.js'
+import { EncryptionService } from '../env-var-templates/encryption.service.js'
 import {
   buildManifest,
   countTables,
@@ -20,14 +20,14 @@ import {
   BackupManifest,
   PackageEntry,
   EXPORT_CHUNK_ROWS,
-} from './manifest'
+} from './manifest.js'
 import {
   encryptBundle,
   decryptBundle,
   isEncryptedBundle,
-} from './bundle-crypto'
-import { ZipReader, ZipWriter } from './bundle-zip'
-import { AuditActor, AuditService } from './audit.service'
+} from './bundle-crypto.js'
+import { ZipReader, ZipWriter } from './bundle-zip.js'
+import { AuditActor, AuditService } from './audit.service.js'
 
 /**
  * Every table name we will ever trust from an (untrusted) uploaded manifest.
