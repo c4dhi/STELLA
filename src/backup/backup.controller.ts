@@ -14,7 +14,14 @@ import { diskStorage } from 'multer'
 import { tmpdir } from 'os'
 import { randomBytes } from 'crypto'
 import { SystemAdminGuard } from '../auth/guards/system-admin.guard'
+import { CurrentUser } from '../common/decorators/current-user.decorator'
 import { BackupService, BackupImportReport } from './backup.service'
+
+/** The fields of the JWT user this controller needs for the audit trail. */
+interface AdminUser {
+  userId?: string
+  email?: string
+}
 
 /**
  * Full-system backup import endpoint (#378). SystemAdmin-only.
@@ -60,18 +67,29 @@ export class BackupController {
     @Query('confirmOverwrite') confirmOverwrite: string | undefined,
     @Query('allowKeyMismatch') allowKeyMismatch: string | undefined,
     @Headers('x-backup-passphrase') passphrase: string | undefined,
+    @CurrentUser() user: AdminUser | undefined,
   ): Promise<BackupImportReport> {
     if (!file) {
       throw new BadRequestException('No backup bundle uploaded')
     }
+    // This endpoint needs only a SystemAdmin token — no cluster access — and it
+    // wipes the deployment, so the acting user is carried through to the audit
+    // trail (#380). Previously the log line below recorded the size and nothing
+    // about who.
     this.logger.warn(
-      `Backup import requested (${file.size} bytes) — overwriting deployment.`,
+      `Backup import requested by ${user?.email ?? 'unknown'} ` +
+        `(${file.size} bytes) — overwriting deployment.`,
     )
     return this.backup.import({
       bundlePath: file.path,
       confirmOverwrite: confirmOverwrite === 'true',
       allowKeyMismatch: allowKeyMismatch === 'true',
       passphrase: passphrase || undefined,
+      actor: {
+        type: 'system-admin',
+        id: user?.userId ?? null,
+        label: user?.email ?? null,
+      },
     })
   }
 }
