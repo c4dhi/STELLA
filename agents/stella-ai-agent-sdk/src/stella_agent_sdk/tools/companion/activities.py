@@ -21,9 +21,9 @@ ACTIVITY TOOLS — use them only when the user's intent is unmistakable.
   unambiguous "yes" to one you just offered. Never start an activity because it
   seemed like a good idea, and never start one they have not agreed to: it takes
   over the conversation, and taking it back costs the user a turn.
-- `end_activity` — the user wants to stop, leave, change subject, or is plainly
-  finished. Err towards calling this: a user asking to stop and not being let go
-  is far worse than an activity ended one turn early.
+- `end_activity` — the user clearly and explicitly wants to stop, leave, change
+  subject, or is plainly finished. A downbeat or ambiguous answer that is still
+  on topic is not a request to leave — require an unmistakable one.
 
 Call NO tool for ordinary conversation. That is the common case.
 """
@@ -170,9 +170,10 @@ class EndActivityTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Stop the current activity and go back to open conversation. Call "
-            "whenever the user wants to stop, leave, or move on — including "
-            "mid-activity."
+            "Stop the current activity and go back to open conversation. Call ONLY "
+            "on a clear, explicit request to stop, leave, or move on — not for a "
+            "downbeat or ambiguous answer that is still on topic for what was just "
+            "asked. Can be called mid-activity."
         )
 
     @property
