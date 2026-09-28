@@ -10,6 +10,7 @@ The directive section tells the LLM:
 - Expert summary context
 """
 
+import re
 import uuid
 from typing import Dict, Any, List, AsyncIterator, Optional
 
@@ -26,6 +27,54 @@ from stella_v2_agent.prompts.response_prompt import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+# One or more leading "[tag]" markers (with surrounding space), e.g. "[happy] ".
+_LEADING_TAGS_RE = re.compile(r"^(?:\s*\[[a-zA-Z_]+\]\s*)+")
+# Punctuation/whitespace left dangling right after a stripped repeat, e.g. the
+# "!" and space between "...Sam!" and "[curious]...".
+_LEADING_PUNCT_RE = re.compile(r"^[\s.,!?;:]+")
+
+
+def _strip_repeated_opener(spoken_prefix: str, continuation: str) -> str:
+    """Drop a leading repeat of ``spoken_prefix`` from the model's continuation.
+
+    The response prompt tells the model to continue from the bridge/prepend it
+    already spoke and never repeat it, but it sometimes restarts with it anyway
+    — most often because the emotion-tag directive asks every reply to open
+    with a tag, and the untagged spoken prefix doesn't read as something it
+    already said (#627: "Nice to meet you, Sam!" spoken, then the model's own
+    continuation opened with "[happy] Nice to meet you, Sam!" again). Comparison
+    ignores case, punctuation and any leading emotion tag(s), since those are
+    exactly what differs between the two occurrences.
+    """
+    if not spoken_prefix or not continuation:
+        return continuation
+
+    tag_match = _LEADING_TAGS_RE.match(continuation)
+    body = continuation[tag_match.end():] if tag_match else continuation
+
+    prefix_chars = [c.lower() for c in spoken_prefix if c.isalnum()]
+    if not prefix_chars:
+        return continuation
+
+    pi = 0
+    ci = 0
+    while ci < len(body) and pi < len(prefix_chars):
+        c = body[ci]
+        if c.isalnum():
+            if c.lower() != prefix_chars[pi]:
+                return continuation
+            pi += 1
+        ci += 1
+
+    if pi < len(prefix_chars):
+        return continuation  # continuation ran out before the whole prefix matched
+
+    tail = body[ci:]
+    punct_match = _LEADING_PUNCT_RE.match(tail)
+    if punct_match:
+        tail = tail[punct_match.end():]
+    return tail
 
 
 class ResponseGenerator:
@@ -191,9 +240,10 @@ class ResponseGenerator:
             async for llm_text, is_final in stream_completion(
                 self._llm_service, messages, config, component_name="response_generator",
             ):
+                cleaned = _strip_repeated_opener(spoken_prefix, llm_text) if spoken_prefix else llm_text
                 yield AgentOutput.text_chunk(
                     session_id,
-                    (prefix + llm_text).strip(),
+                    (prefix + cleaned).strip(),
                     transcript_id=transcript_id,
                     is_final=is_final,
                 )
