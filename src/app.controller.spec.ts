@@ -1,9 +1,10 @@
+import { jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { HttpException, HttpStatus } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { LiveKitService } from './livekit/livekit.service';
-import { AgentImageService } from './agent-image/agent-image.service';
+import { AppController } from './app.controller.js';
+import { AppService } from './app.service.js';
+import { LiveKitService } from './livekit/livekit.service.js';
+import { AgentImageService } from './agent-image/agent-image.service.js';
 
 describe('AppController', () => {
   let appController: AppController;

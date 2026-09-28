@@ -1,12 +1,12 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common'
 import AdmZip from 'adm-zip'
-import { ManifestValidator } from './validators/manifest.validator'
-import { DockerfileValidator } from './validators/dockerfile.validator'
-import { StorageService } from '../storage/storage.service'
+import { ManifestValidator } from './validators/manifest.validator.js'
+import { DockerfileValidator } from './validators/dockerfile.validator.js'
+import { StorageService } from '../storage/storage.service.js'
 import {
   AgentManifest,
   PackageValidationResult,
-} from './agent-manifest.types'
+} from './agent-manifest.types.js'
 
 const REQUIRED_FILES = ['agent.yaml']
 const MIN_SDK_VERSION = '0.4.0'

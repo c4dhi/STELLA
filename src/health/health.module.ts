@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
-import { HealthController } from './health.controller';
-import { HealthService } from './health.service';
-import { MediaTestService } from './media-test.service';
-import { PrismaModule } from '../prisma/prisma.module';
-import { LiveKitModule } from '../livekit/livekit.module';
+import { HealthController } from './health.controller.js';
+import { HealthService } from './health.service.js';
+import { MediaTestService } from './media-test.service.js';
+import { PrismaModule } from '../prisma/prisma.module.js';
+import { LiveKitModule } from '../livekit/livekit.module.js';
 
 @Module({
   imports: [PrismaModule, LiveKitModule],

@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
-import { InvitationsService } from './invitations.service';
-import { InvitationsController } from './invitations.controller';
-import { LiveKitModule } from '../livekit/livekit.module';
-import { AuthModule } from '../auth/auth.module';
+import { InvitationsService } from './invitations.service.js';
+import { InvitationsController } from './invitations.controller.js';
+import { LiveKitModule } from '../livekit/livekit.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 @Module({
   imports: [LiveKitModule, AuthModule],

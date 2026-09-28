@@ -1,10 +1,10 @@
 import { Controller, Get, Header, Logger, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
-import { Public } from '../common/decorators/public.decorator';
-import { HealthService } from './health.service';
-import { MediaTestService } from './media-test.service';
-import { PublicHealthResponse } from './dto/public-health.dto';
-import { MediaTestSession } from './dto/media-test.dto';
+import { Public } from '../common/decorators/public.decorator.js';
+import { HealthService } from './health.service.js';
+import { MediaTestService } from './media-test.service.js';
+import { PublicHealthResponse } from './dto/public-health.dto.js';
+import { MediaTestSession } from './dto/media-test.dto.js';
 
 @Controller('health')
 export class HealthController {

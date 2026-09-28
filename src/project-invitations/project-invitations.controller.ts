@@ -10,9 +10,9 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { ProjectInvitationsService } from './project-invitations.service';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { InviteCollaboratorDto } from './dto/project-invitation.dto';
+import { ProjectInvitationsService } from './project-invitations.service.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
+import { InviteCollaboratorDto } from './dto/project-invitation.dto.js';
 
 @Controller()
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))

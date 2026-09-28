@@ -8,7 +8,7 @@ import {
   MaxLength,
 } from 'class-validator';
 import { Prisma } from '@prisma/client';
-import { IsPlanContent } from './plan-content.validator';
+import { IsPlanContent } from './plan-content.validator.js';
 
 export class CreatePlanTemplateDto {
   @IsString()

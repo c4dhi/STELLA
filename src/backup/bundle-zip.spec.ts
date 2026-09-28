@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { ZipWriter, ZipReader, copyZipAdding } from './bundle-zip'
+import { ZipWriter, ZipReader, copyZipAdding } from './bundle-zip.js'
 
 /**
  * Streaming zip writer/reader round-trip (#378). Covers buffer entries, a

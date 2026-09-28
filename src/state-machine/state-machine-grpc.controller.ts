@@ -1,6 +1,6 @@
 import { Controller, Logger } from '@nestjs/common';
 import { GrpcMethod } from '@nestjs/microservices';
-import { StateMachineService, END_STATE_ID } from './state-machine.service';
+import { StateMachineService, END_STATE_ID } from './state-machine.service.js';
 
 /**
  * StateMachineGrpcController - gRPC endpoints for state machine operations.

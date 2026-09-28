@@ -1,10 +1,14 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
-import { join } from 'path';
-import { AppModule } from './app.module';
-import { AllExceptionsFilter } from './common/filters/http-exception.filter';
+import { join, dirname } from 'path';
+import { existsSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { AppModule } from './app.module.js';
+import { AllExceptionsFilter } from './common/filters/http-exception.filter.js';
 import * as express from 'express';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -34,7 +38,7 @@ async function bootstrap() {
   const localProtoPath = join(__dirname, '../../proto');
   const protoDir =
     process.env.PROTO_PATH ||
-    (require('fs').existsSync(join(dockerProtoPath, 'agent.proto'))
+    (existsSync(join(dockerProtoPath, 'agent.proto'))
       ? dockerProtoPath
       : localProtoPath);
 

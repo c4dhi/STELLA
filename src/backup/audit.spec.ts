@@ -1,13 +1,14 @@
+import { jest } from '@jest/globals';
 import { Logger } from '@nestjs/common'
-import { PrismaService } from '../prisma/prisma.service'
-import { AuditService } from './audit.service'
+import { PrismaService } from '../prisma/prisma.service.js'
+import { AuditService } from './audit.service.js'
 import {
   NEVER_RESTORE_MODELS,
   allTableNames,
   neverRestoreTableNames,
   tablesForExport,
   tablesForImport,
-} from './manifest'
+} from './manifest.js'
 
 /**
  * Import audit trail (#380).

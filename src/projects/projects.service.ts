@@ -1,21 +1,29 @@
 import { Injectable, NotFoundException, Logger, Inject, forwardRef } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreateProjectDto } from './dto/create-project.dto';
-import { UpdateProjectDto } from './dto/update-project.dto';
-import { ProjectStatsDto } from './dto/project-stats.dto';
-import { UpdatePublicConfigDto } from './dto/update-public-config.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { CreateProjectDto } from './dto/create-project.dto.js';
+import { UpdateProjectDto } from './dto/update-project.dto.js';
+import { ProjectStatsDto } from './dto/project-stats.dto.js';
+import { UpdatePublicConfigDto } from './dto/update-public-config.dto.js';
 import { SessionStatus, AgentStatus } from '@prisma/client';
-import { AgentsService } from '../agents/agents.service';
+import { AgentsService } from '../agents/agents.service.js';
 
 @Injectable()
 export class ProjectsService {
   private readonly logger = new Logger(ProjectsService.name);
+  // Typed `any` on the constructor parameter (assigned to the field above) so
+  // TS's emitDecoratorMetadata doesn't reference the still-circularly-importing
+  // class eagerly in design:paramtypes, which throws a TDZ ReferenceError under
+  // ESM depending on module evaluation order. forwardRef already handles the
+  // actual lazy DI resolution.
+  private agentsService: AgentsService;
 
   constructor(
     private prisma: PrismaService,
     @Inject(forwardRef(() => AgentsService))
-    private agentsService: AgentsService,
-  ) {}
+    agentsService: any,
+  ) {
+    this.agentsService = agentsService;
+  }
 
   async create(createProjectDto: CreateProjectDto, userId: string) {
     // Create project with owner membership in a transaction

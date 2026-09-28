@@ -1,8 +1,8 @@
 import { Controller, Get, HttpException, HttpStatus } from '@nestjs/common';
-import { AppService } from './app.service';
-import { Public } from './common/decorators/public.decorator';
-import { LiveKitService } from './livekit/livekit.service';
-import { AgentImageService } from './agent-image/agent-image.service';
+import { AppService } from './app.service.js';
+import { Public } from './common/decorators/public.decorator.js';
+import { LiveKitService } from './livekit/livekit.service.js';
+import { AgentImageService } from './agent-image/agent-image.service.js';
 import * as os from 'os';
 
 @Controller()

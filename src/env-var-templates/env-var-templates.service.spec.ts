@@ -1,7 +1,8 @@
+import { jest } from '@jest/globals';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { EncryptionService } from './encryption.service';
-import { EnvVarTemplatesService } from './env-var-templates.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { EncryptionService } from './encryption.service.js';
+import { EnvVarTemplatesService } from './env-var-templates.service.js';
 
 type TemplateRow = {
   id: string;

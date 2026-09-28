@@ -5,9 +5,9 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Persona } from '@prisma/client';
-import { PrismaService } from '../prisma/prisma.service';
-import { CreatePersonaDto } from './dto/create-persona.dto';
-import { UpdatePersonaDto } from './dto/update-persona.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { CreatePersonaDto } from './dto/create-persona.dto.js';
+import { UpdatePersonaDto } from './dto/update-persona.dto.js';
 
 /**
  * Personas — agent identity, separate from what the agent does (PlanTemplate) and

@@ -1,5 +1,6 @@
+import { jest } from '@jest/globals';
 import { PrismaClient } from '@prisma/client';
-import { reconcileAgentTypeConfigurations } from './configuration-reconciliation';
+import { reconcileAgentTypeConfigurations } from './configuration-reconciliation.js';
 
 type ConfigRow = {
   id: string;

@@ -1,7 +1,7 @@
 import { Controller, INestApplication, Module, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
-import { AllExceptionsFilter } from './http-exception.filter';
+import { AllExceptionsFilter } from './http-exception.filter.js';
 
 /**
  * End to end with the real multer: a wrong upload field name must stay a 400 and

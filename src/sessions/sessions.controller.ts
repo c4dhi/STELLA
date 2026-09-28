@@ -20,15 +20,15 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { Observable } from 'rxjs';
-import { SessionsService } from './sessions.service';
-import { CreateSessionDto } from './dto/create-session.dto';
-import { UpdateSessionDto } from './dto/update-session.dto';
-import { CreateTokenDto } from './dto/create-token.dto';
-import { QuerySessionsDto } from './dto/query-sessions.dto';
-import { BatchListenerStatusDto } from './dto/batch-listener-status.dto';
-import { PrismaService } from '../prisma/prisma.service';
-import { Public } from '../common/decorators/public.decorator';
-import type { LogEntry } from '../message-recorder/room-monitor.service';
+import { SessionsService } from './sessions.service.js';
+import { CreateSessionDto } from './dto/create-session.dto.js';
+import { UpdateSessionDto } from './dto/update-session.dto.js';
+import { CreateTokenDto } from './dto/create-token.dto.js';
+import { QuerySessionsDto } from './dto/query-sessions.dto.js';
+import { BatchListenerStatusDto } from './dto/batch-listener-status.dto.js';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { Public } from '../common/decorators/public.decorator.js';
+import type { LogEntry } from '../message-recorder/room-monitor.service.js';
 
 interface MessageEvent {
   data: string;

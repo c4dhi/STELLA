@@ -7,8 +7,8 @@ import {
   Inject,
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { PrismaService } from '../prisma/prisma.service';
-import { SessionsService } from './sessions.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { SessionsService } from './sessions.service.js';
 
 /**
  * Issue #198 — backend-authoritative **max-duration cap**.
@@ -50,11 +50,20 @@ export class SessionTimeoutService implements OnModuleInit, OnModuleDestroy {
    */
   private static readonly STUCK_CLOSING_MARGIN_MS = 120_000;
 
+  // Typed `any` on the constructor parameter (assigned to the field above) so
+  // TS's emitDecoratorMetadata doesn't reference the still-circularly-importing
+  // class eagerly in design:paramtypes, which throws a TDZ ReferenceError under
+  // ESM depending on module evaluation order. forwardRef already handles the
+  // actual lazy DI resolution.
+  private readonly sessionsService: SessionsService;
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(forwardRef(() => SessionsService))
-    private readonly sessionsService: SessionsService,
-  ) {}
+    sessionsService: any,
+  ) {
+    this.sessionsService = sessionsService;
+  }
 
   async onModuleInit(): Promise<void> {
     await this.reconcile();

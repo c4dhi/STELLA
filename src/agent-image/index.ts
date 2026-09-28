@@ -1,2 +1,2 @@
-export * from './agent-image.module';
-export * from './agent-image.service';
+export * from './agent-image.module.js';
+export * from './agent-image.service.js';

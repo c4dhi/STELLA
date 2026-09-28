@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client'
-import { PrismaService } from '../prisma/prisma.service'
+import { PrismaService } from '../prisma/prisma.service.js'
 
 /**
  * The subset of the Prisma client these helpers need. Declared structurally so

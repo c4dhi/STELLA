@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { PrismaService } from '../prisma/prisma.service'
+import { PrismaService } from '../prisma/prisma.service.js'
 
 /**
  * Audit trail for privileged, destructive operations (#380).

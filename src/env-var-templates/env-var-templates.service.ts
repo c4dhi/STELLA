@@ -5,10 +5,10 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { EncryptionService } from './encryption.service';
-import { CreateEnvVarTemplateDto } from './dto/create-env-var-template.dto';
-import { UpdateEnvVarTemplateDto } from './dto/update-env-var-template.dto';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { EncryptionService } from './encryption.service.js';
+import { CreateEnvVarTemplateDto } from './dto/create-env-var-template.dto.js';
+import { UpdateEnvVarTemplateDto } from './dto/update-env-var-template.dto.js';
 
 /**
  * Response type for env var templates (without sensitive values)

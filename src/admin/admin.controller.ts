@@ -13,11 +13,11 @@ import {
   DefaultValuePipe,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { AdminService, DashboardMetrics, SessionActivityDay, HistoricalUsageData, UserListItem, SessionStatusItem } from './admin.service';
-import { SystemAdminGuard } from '../auth/guards/system-admin.guard';
-import { ServerMetrics } from './services/server-metrics.service';
-import { CapacityService, CapacityMeasurementView } from './services/capacity.service';
-import { RecordCapacityDto } from './dto/capacity.dto';
+import { AdminService, DashboardMetrics, SessionActivityDay, HistoricalUsageData, UserListItem, SessionStatusItem } from './admin.service.js';
+import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js';
+import { ServerMetrics } from './services/server-metrics.service.js';
+import { CapacityService, CapacityMeasurementView } from './services/capacity.service.js';
+import { RecordCapacityDto } from './dto/capacity.dto.js';
 
 interface MessageEvent {
   data: string;

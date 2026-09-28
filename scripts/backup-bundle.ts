@@ -28,8 +28,8 @@ import {
   encryptBundle,
   decryptBundle,
   isEncryptedBundle,
-} from '../src/backup/bundle-crypto'
-import { ZipReader, copyZipAdding } from '../src/backup/bundle-zip'
+} from '../src/backup/bundle-crypto.js'
+import { ZipReader, copyZipAdding } from '../src/backup/bundle-zip.js'
 
 // Where the deployment .env is parked inside the bundle.
 const CONFIG_ENTRY = 'config/deployment.env'

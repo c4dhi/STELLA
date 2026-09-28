@@ -1,7 +1,7 @@
 import { Controller, Get, Param, Sse, Logger } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { MetricsService } from './metrics.service';
-import { ProjectMetricsDto } from './dto/project-metrics.dto';
+import { MetricsService } from './metrics.service.js';
+import { ProjectMetricsDto } from './dto/project-metrics.dto.js';
 
 interface MessageEvent {
   data: string;

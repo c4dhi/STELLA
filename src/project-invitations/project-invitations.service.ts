@@ -6,8 +6,8 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { UserMessagesService } from '../user-messages/user-messages.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { UserMessagesService } from '../user-messages/user-messages.service.js';
 import { ProjectInvitationStatus, MemberRole } from '@prisma/client';
 import {
   InviteCollaboratorDto,
@@ -15,7 +15,7 @@ import {
   CollaboratorResponseDto,
   PendingInvitationResponseDto,
   ProjectInvitationResponseDto,
-} from './dto/project-invitation.dto';
+} from './dto/project-invitation.dto.js';
 
 @Injectable()
 export class ProjectInvitationsService {

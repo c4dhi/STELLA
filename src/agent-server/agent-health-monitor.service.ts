@@ -1,8 +1,8 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
-import { PrismaService } from '../prisma/prisma.service';
-import { AgentServerService } from './agent-server.service';
-import { AgentHealthStatus, AgentState } from './agent.types';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { AgentServerService } from './agent-server.service.js';
+import { AgentHealthStatus, AgentState } from './agent.types.js';
 
 /**
  * AgentHealthMonitorService - User-presence-aware health monitoring.

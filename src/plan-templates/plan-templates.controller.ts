@@ -9,12 +9,12 @@ import {
   ValidationPipe,
   UsePipes,
 } from '@nestjs/common';
-import { PlanTemplatesService } from './plan-templates.service';
-import { PlanGeneratorService } from './plan-generator.service';
-import { CreatePlanTemplateDto } from './dto/create-plan-template.dto';
-import { UpdatePlanTemplateDto } from './dto/update-plan-template.dto';
-import { GeneratePlanTemplateDto } from './dto/generate-plan-template.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { PlanTemplatesService } from './plan-templates.service.js';
+import { PlanGeneratorService } from './plan-generator.service.js';
+import { CreatePlanTemplateDto } from './dto/create-plan-template.dto.js';
+import { UpdatePlanTemplateDto } from './dto/update-plan-template.dto.js';
+import { GeneratePlanTemplateDto } from './dto/generate-plan-template.dto.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 
 @Controller('plan-templates')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))

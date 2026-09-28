@@ -1,12 +1,12 @@
 import * as yaml from 'js-yaml'
-import Ajv from 'ajv'
+import { Ajv } from 'ajv'
 import { z } from 'zod'
 import {
   MANIFEST_SCHEMA_VERSION,
   RESOURCE_LIMITS,
   SLUG_REGEX,
   VERSION_REGEX,
-} from '../agent-manifest.types'
+} from '../agent-manifest.types.js'
 
 const VALID_CAPABILITIES = ['voice', 'text', 'progress', 'plans', 'experts'] as const
 const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives'] as const

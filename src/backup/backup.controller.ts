@@ -13,9 +13,9 @@ import { FileInterceptor } from '@nestjs/platform-express'
 import { diskStorage } from 'multer'
 import { tmpdir } from 'os'
 import { randomBytes } from 'crypto'
-import { SystemAdminGuard } from '../auth/guards/system-admin.guard'
-import { CurrentUser } from '../common/decorators/current-user.decorator'
-import { BackupService, BackupImportReport } from './backup.service'
+import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js'
+import { CurrentUser } from '../common/decorators/current-user.decorator.js'
+import { BackupService, BackupImportReport } from './backup.service.js'
 
 /** The fields of the JWT user this controller needs for the audit trail. */
 interface AdminUser {

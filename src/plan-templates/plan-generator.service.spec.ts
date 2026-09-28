@@ -1,9 +1,10 @@
+import { jest } from '@jest/globals';
 let n = 0;
 jest.mock('uuid', () => ({ v4: () => `id-${++n}` }));
 jest.mock('openai', () => ({ __esModule: true, default: class {} }));
 
 import { ConfigService } from '@nestjs/config';
-import { PlanGeneratorService } from './plan-generator.service';
+import { PlanGeneratorService } from './plan-generator.service.js';
 
 describe('PlanGeneratorService — plans end after the last state (#452)', () => {
   const service = new PlanGeneratorService({ get: () => undefined } as unknown as ConfigService);

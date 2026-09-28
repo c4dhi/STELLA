@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common'
 import * as fs from 'fs'
 import * as path from 'path'
-import { ManifestValidator } from '../agent-package/validators/manifest.validator'
-import { AgentManifest } from '../agent-package/agent-manifest.types'
+import { fileURLToPath } from 'url'
+import { ManifestValidator } from '../agent-package/validators/manifest.validator.js'
+import { AgentManifest } from '../agent-package/agent-manifest.types.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export interface BuiltinAgentInfo {
   manifest: AgentManifest

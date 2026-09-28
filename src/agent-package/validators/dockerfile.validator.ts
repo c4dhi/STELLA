@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { SUPPORTED_BASE_IMAGES } from '../agent-manifest.types'
+import { SUPPORTED_BASE_IMAGES } from '../agent-manifest.types.js'
 
 export interface DockerfileValidationResult {
   valid: boolean

@@ -13,9 +13,9 @@ import {
   MessageEvent,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { UserMessagesService } from './user-messages.service';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { QueryMessagesDto } from './dto/user-message.dto';
+import { UserMessagesService } from './user-messages.service.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
+import { QueryMessagesDto } from './dto/user-message.dto.js';
 
 @Controller('user/messages')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))

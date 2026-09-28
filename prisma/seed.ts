@@ -2,9 +2,12 @@ import { PrismaClient, Prisma } from '@prisma/client'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as dotenv from 'dotenv'
-import { parseAgentManifestYaml, type CanonicalAgentManifest } from '../src/agent-package/schemas/agent-manifest.schema'
-import { reconcileAgentTypeConfigurations } from '../src/agent-configurations/configuration-reconciliation'
-import { hashPipelineSchema } from '../src/agent-configurations/configuration-compat.util'
+import { fileURLToPath } from 'url'
+import { parseAgentManifestYaml, type CanonicalAgentManifest } from '../src/agent-package/schemas/agent-manifest.schema.js'
+import { reconcileAgentTypeConfigurations } from '../src/agent-configurations/configuration-reconciliation.js'
+import { hashPipelineSchema } from '../src/agent-configurations/configuration-compat.util.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 function resolveWorkspaceRoot(): string {
   if (process.env.AGENT_WORKSPACE_ROOT) {

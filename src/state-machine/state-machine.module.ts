@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { StateMachineService } from './state-machine.service';
-import { StateMachineGrpcController } from './state-machine-grpc.controller';
-import { PrismaModule } from '../prisma/prisma.module';
+import { StateMachineService } from './state-machine.service.js';
+import { StateMachineGrpcController } from './state-machine-grpc.controller.js';
+import { PrismaModule } from '../prisma/prisma.module.js';
 
 @Module({
   imports: [PrismaModule],

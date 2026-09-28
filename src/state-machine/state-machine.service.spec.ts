@@ -1,5 +1,6 @@
-import { PrismaService } from '../prisma/prisma.service';
-import { PlanData, StateMachineService } from './state-machine.service';
+import { jest } from '@jest/globals';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { PlanData, StateMachineService } from './state-machine.service.js';
 
 // Minimal in-memory shape for SessionState rows used by this spec.
 // We only model the fields that StateMachineService reads/writes.
@@ -733,7 +734,7 @@ describe('goal_achieved condition', () => {
 // required:false so their absence doesn't block all_tasks_complete evaluation.
 // ---------------------------------------------------------------------------
 function buildTwoStatePlan(
-  transition: import('./state-machine.service').StateTransition,
+  transition: import('./state-machine.service.js').StateTransition,
   deliverableKeys: string[] = [],
 ): PlanData {
   return {
