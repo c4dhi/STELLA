@@ -9,7 +9,10 @@ We test:
 """
 
 from stella_v2_agent.models.arbitration_result import ResponseDirective
-from stella_v2_agent.pipeline.response_generator import ResponseGenerator
+from stella_v2_agent.pipeline.response_generator import (
+    ResponseGenerator,
+    _strip_repeated_opener,
+)
 from stella_v2_agent.prompts.response_prompt import (
     build_response_system_prompt,
     _state_machine_section,
@@ -506,10 +509,56 @@ def test_no_unconfirmed_block_when_there_are_none():
 
 
 # ---------------------------------------------------------------------------
-# generate() end to end — the model sometimes restarts a continuation with
+# _strip_repeated_opener() — the model sometimes restarts a continuation with
 # the bridge it just spoke, usually tagged (#627: "Nice to meet you, Sam!"
-# spoken, then the model's own continuation opened with "[happy] Nice to meet
-# you, Sam! [curious] What type..." — heard twice by the participant).
+# spoken, then "[happy] Nice to meet you, Sam! [curious] What type...").
+# ---------------------------------------------------------------------------
+
+def test_tagged_repeat_of_the_opener_is_dropped():
+    result = _strip_repeated_opener(
+        "Nice to meet you, Sam!",
+        "[happy] Nice to meet you, Sam! [curious] What type of exercise do you enjoy?",
+    )
+    assert result == "[curious] What type of exercise do you enjoy?"
+
+
+def test_untagged_repeat_of_the_opener_is_dropped():
+    result = _strip_repeated_opener(
+        "Got it, being healthier is the goal.",
+        "Got it, being healthier is the goal. What does a typical week look like?",
+    )
+    assert result == "What does a typical week look like?"
+
+
+def test_repeat_is_matched_ignoring_case_and_punctuation():
+    result = _strip_repeated_opener(
+        "Got it, being healthier is the goal.",
+        "[happy] got it being healthier is the goal! So where do we start?",
+    )
+    assert result == "So where do we start?"
+
+
+def test_genuine_continuation_is_left_untouched():
+    # No repeat here — the guard must not eat real content that happens to
+    # share an early word or two with the opener.
+    continuation = "[curious] What type of exercise do you enjoy the most?"
+    assert _strip_repeated_opener("Nice to meet you, Sam!", continuation) == continuation
+
+
+def test_partial_overlap_is_not_treated_as_a_repeat():
+    # Streaming mid-token: the accumulated text so far only partly overlaps
+    # the opener. Must not strip until the whole opener has actually repeated.
+    continuation = "[happy] Nice to meet"
+    assert _strip_repeated_opener("Nice to meet you, Sam!", continuation) == continuation
+
+
+def test_empty_opener_or_continuation_is_a_no_op():
+    assert _strip_repeated_opener("", "[happy] hello") == "[happy] hello"
+    assert _strip_repeated_opener("hello", "") == ""
+
+
+# ---------------------------------------------------------------------------
+# generate() end to end — the guard must apply to what actually reaches TTS.
 # ---------------------------------------------------------------------------
 
 class _RespondingLLMService:
