@@ -148,6 +148,7 @@ class ExpertConfig:
             trigger_criteria=data.get("trigger_criteria", ""),
             history_limit=data.get("history_limit", 0),
             min_confidence=data.get("min_confidence", 0.0),
+            tools=list(data.get("tools") or []),
             verdict_directives=data.get("verdict_directives", {}),
         )
 
@@ -167,6 +168,7 @@ class ExpertConfig:
             "trigger_criteria": self.trigger_criteria,
             "history_limit": self.history_limit,
             "min_confidence": self.min_confidence,
+            "tools": list(self.tools),
             "verdict_directives": {
                 k: v.to_dict() for k, v in self.verdict_directives.items()
             },

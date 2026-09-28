@@ -123,3 +123,28 @@ def test_as_map_exposes_registry():
     mapping = registry.as_map()
     assert "medical" in mapping
     assert mapping["medical"].name == "medical"
+
+
+# ---------------------------------------------------------------------------
+# Tool allow-list must survive loading from JSON
+# ---------------------------------------------------------------------------
+
+def test_from_dict_keeps_tool_allowlist():
+    cfg = ExpertConfig.from_dict({"name": "x", "tools": ["a", "b"]})
+    assert cfg.tools == ["a", "b"]
+    assert ExpertConfig.from_dict(cfg.to_dict()).tools == ["a", "b"]
+
+
+def test_shipped_experts_only_get_their_own_tools():
+    # from_dict used to drop "tools", so every tool-calling expert was handed every
+    # registered tool: task_extraction could start and end activities.
+    from pathlib import Path
+
+    from stella_v2_agent.experts.registry import ExpertRegistry
+
+    config_dir = Path(__file__).parent.parent / "config" / "experts"
+    registry = ExpertRegistry(experts_dir=str(config_dir))
+    activity_tools = {"list_activities", "start_activity", "end_activity"}
+    assert set(registry.get("companion_router").tools) == activity_tools
+    assert not activity_tools & set(registry.get("task_extraction").tools)
+    assert registry.get("task_extraction").tools

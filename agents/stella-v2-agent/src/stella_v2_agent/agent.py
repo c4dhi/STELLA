@@ -26,7 +26,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Dict, Any, List, Optional
 
@@ -51,6 +51,11 @@ from stella_v2_agent.pipeline.bridge_generator import (
 from stella_v2_agent.pipeline.expert_pool import ExpertPool
 from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
+from stella_v2_agent.pipeline.history_scope import (
+    ActivitySegment,
+    parse_timestamp,
+    scope_history,
+)
 from stella_agent_sdk.language import LanguageResolver
 from stella_agent_sdk.agent import BargeInEvaluator
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
@@ -195,6 +200,13 @@ class StellaV2Agent(BaseAgent):
         self._available_plans: List[Dict[str, Any]] = []
         # Title of the activity currently running, for logs and the reply's context.
         self._active_activity: Optional[str] = None
+        # When the running activity started, and the runs that already ended, so the
+        # history the model sees can be scoped to the current mode (history_scope).
+        self._activity_started_at: Optional[datetime] = None
+        self._activity_segments: List[ActivitySegment] = []
+        # What the running activity has collected, as of the last turn start. Read
+        # before the plan is cleared, since clearing takes the deliverables with it.
+        self._activity_collected: Dict[str, Any] = {}
         self._custom_history_limit: int = 20  # overridable via pipeline_config thresholds
         self._last_known_state_id: Optional[str] = None
         self._last_state_id: Optional[str] = None  # for detecting state transitions between turns
@@ -263,6 +275,10 @@ class StellaV2Agent(BaseAgent):
             sm_context = {}
             if self.sm_client:
                 sm_context = await self._fetch_sm_context()
+                if self._activity_started_at is not None:
+                    collected_now = sm_context.get("collected_deliverables")
+                    if isinstance(collected_now, dict):
+                        self._activity_collected = dict(collected_now)
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
@@ -594,6 +610,20 @@ class StellaV2Agent(BaseAgent):
                     session_completed=bool(te_raw.get("session_completed")),
                 )
                 response_sm_context["_collected_keys"] = collected_keys
+                # Which step the reply is written against and how much history it
+                # gets. Names and counts only, never prompt text.
+                logger.info(
+                    "Reply anchor: activity=%r state=%r task=%r pending_tasks=%d "
+                    "history_turns=%d directive=%s",
+                    self._active_activity,
+                    (response_sm_context.get("state") or {}).get("title"),
+                    (response_sm_context.get("current_task") or {}).get("id")
+                    if isinstance(response_sm_context.get("current_task"), dict)
+                    else response_sm_context.get("current_task"),
+                    len(response_sm_context.get("available_tasks") or []),
+                    len(history or []),
+                    getattr(arb_result.directive, "action", None),
+                )
 
                 prepend_text = directive.resolved_response if directive.action == "prepend" else ""
 
@@ -1369,10 +1399,29 @@ class StellaV2Agent(BaseAgent):
         """
         if self.sm_client:
             await self.sm_client.clear_plan()
+        self._close_activity_segment(self._active_activity)
         self._plan_config = None
         self._active_activity = None
         self._last_known_state_id = None
         logger.info("Back to companion mode (%s)", reason)
+
+    def _open_activity_segment(self) -> None:
+        self._activity_started_at = datetime.now(timezone.utc)
+        self._activity_collected = {}
+
+    def _close_activity_segment(self, title: Optional[str]) -> None:
+        """Remember that an activity ran, so free conversation sees one line for it."""
+        if self._activity_started_at is not None:
+            self._activity_segments.append(
+                ActivitySegment(
+                    title=title or "activity",
+                    started_at=self._activity_started_at,
+                    ended_at=datetime.now(timezone.utc),
+                    collected=dict(self._activity_collected),
+                )
+            )
+        self._activity_started_at = None
+        self._activity_collected = {}
 
     def _apply_companion_tool_results(self, verdicts: List[Any]) -> Dict[str, Any]:
         """Read what the router did this turn, and reconcile the agent to it.
@@ -1392,6 +1441,7 @@ class StellaV2Agent(BaseAgent):
                     outcome["activities"] = data.get("activities", [])
                 if data.get("activity_started"):
                     self._active_activity = data.get("activity_title")
+                    self._open_activity_segment()
                     # The plan was loaded backend-side by the tool; adopt it locally
                     # so farewell/voice/language lookups resolve against it.
                     for activity in self._available_plans:
@@ -1402,7 +1452,11 @@ class StellaV2Agent(BaseAgent):
                     # Where LoadPlan left the state machine. The response for THIS
                     # turn must be authored against it — see _resolve_response_context.
                     outcome["started_state_id"] = data.get("current_state_id")
-                if data.get("activity_ended"):
+                # Only leave something that is running: the router can call
+                # end_activity again once the activity is already gone.
+                if data.get("activity_ended") and (
+                    self._active_activity or self._plan_config
+                ):
                     # Capture the title BEFORE clearing it — the decision tag and
                     # the sidebar both need to name what was just left, and by the
                     # next line there is nothing left to name it with.
@@ -1410,6 +1464,7 @@ class StellaV2Agent(BaseAgent):
                     outcome["ended_title"] = (
                         self._active_activity or data.get("activity_title")
                     )
+                    self._close_activity_segment(outcome["ended_title"])
                     self._plan_config = None
                     self._active_activity = None
                     self._last_known_state_id = None
@@ -1787,12 +1842,22 @@ class StellaV2Agent(BaseAgent):
             return []
         try:
             messages = await self.get_chat_history(include_debug=False, limit=limit)
-            history = []
+            entries = []
             for msg in messages:
                 role = "user" if msg.role == "user" else "assistant"
                 if msg.content.strip():
-                    history.append({"role": role, "content": msg.content})
-            return history
+                    entries.append(
+                        {
+                            "role": role,
+                            "content": msg.content,
+                            "at": parse_timestamp(msg.timestamp),
+                        }
+                    )
+            if not self._companion_mode:
+                return [{"role": e["role"], "content": e["content"]} for e in entries]
+            return scope_history(
+                entries, self._activity_segments, self._activity_started_at
+            )
         except Exception as e:
             logger.error(f"Failed to fetch history: {e}")
             return []
