@@ -41,6 +41,7 @@ def _agent(companion=True):
     agent._companion_mode = companion
     agent._available_plans = ACTIVITIES
     agent._active_activity = None
+    agent._pending_end_confirmation = None
     agent._plan_config = None
     agent._last_known_state_id = None
     agent._activity_started_at = None
@@ -77,16 +78,22 @@ def test_starting_an_activity_adopts_its_plan():
     assert agent._active_activity == "Memory Game"
 
 
-def test_ending_an_activity_drops_the_plan():
+def test_ending_an_activity_proposes_it_without_dropping_the_plan():
+    # end_activity no longer ends immediately (Felix, 29 Sep): a single
+    # misjudged call used to throw the user out with no way back. It now only
+    # proposes leaving; the plan stays until a separate, narrow check confirms
+    # the user's answer to "shall we stop X?" (see _resolve_pending_end_confirmation).
     agent = _agent()
     agent._plan_config = ACTIVITIES[0]["plan"]
     agent._active_activity = "Memory Game"
 
-    out = agent._apply_companion_tool_results([_verdict(activity_ended=True)])
+    out = agent._apply_companion_tool_results([_verdict(activity_end_proposed=True)])
 
-    assert out["ended"] is True
-    assert agent._plan_config is None
-    assert agent._active_activity is None
+    assert out["confirm_end"] is True
+    assert out["confirm_end_title"] == "Memory Game"
+    assert agent._plan_config is not None
+    assert agent._active_activity == "Memory Game"
+    assert agent._pending_end_confirmation == "Memory Game"
 
 
 def test_ending_when_nothing_is_running_is_a_no_op():
@@ -95,10 +102,23 @@ def test_ending_when_nothing_is_running_is_a_no_op():
     agent = _agent()
     assert agent._active_activity is None and agent._plan_config is None
 
-    out = agent._apply_companion_tool_results([_verdict(activity_ended=True)])
+    out = agent._apply_companion_tool_results([_verdict(activity_end_proposed=True)])
 
-    assert "ended" not in out
+    assert "confirm_end" not in out
     assert agent._companion_decisions("s1", out) == []
+
+
+def test_proposing_to_end_again_while_one_is_already_pending_is_a_no_op():
+    # The router does not run at all while a confirmation is pending (see
+    # process()), but this guards the method itself against a stray second call.
+    agent = _agent()
+    agent._plan_config = ACTIVITIES[0]["plan"]
+    agent._active_activity = "Memory Game"
+    agent._pending_end_confirmation = "Memory Game"
+
+    out = agent._apply_companion_tool_results([_verdict(activity_end_proposed=True)])
+
+    assert "confirm_end" not in out
 
 
 def test_listing_activities_surfaces_them_for_the_reply():
@@ -124,7 +144,7 @@ def test_other_experts_tool_results_are_ignored():
     agent._plan_config = ACTIVITIES[0]["plan"]
     other = ExpertVerdict(
         expert_name="task_extraction",
-        raw_output={"tool_results": [{"name": "x", "data": {"activity_ended": True}}]},
+        raw_output={"tool_results": [{"name": "x", "data": {"activity_end_proposed": True}}]},
     )
     assert agent._apply_companion_tool_results([other]) == {}
     assert agent._plan_config is not None
@@ -176,9 +196,24 @@ def test_started_directive_tells_the_reply_not_to_re_ask():
     assert "do not re-ask" in directive.lower()
 
 
+def test_confirm_end_directive_asks_a_direct_question_and_nothing_else():
+    directive = StellaV2Agent._companion_directive(
+        {"confirm_end": True, "confirm_end_title": "Memory Game"}
+    )
+    assert "Memory Game" in directive
+    assert "do nothing else this turn" in directive.lower()
+    assert "do not end it yet" in directive.lower()
+
+
 def test_ended_directive_forbids_resuming():
     directive = StellaV2Agent._companion_directive({"ended": True})
     assert "do not try to resume" in directive.lower()
+
+
+def test_end_declined_directive_says_to_stay():
+    directive = StellaV2Agent._companion_directive({"end_declined": True})
+    assert "did not confirm" in directive.lower()
+    assert "do not ask again" in directive.lower()
 
 
 def test_no_routing_produces_no_directive():
@@ -226,17 +261,30 @@ def test_starting_an_activity_names_it():
     assert "Memory Game" in _decision_meta(tag)["label"]
 
 
-def test_ending_an_activity_names_what_was_left():
-    # Regression: the title lives ONLY on the agent until the tool clears it, so
-    # reading it after _apply_companion_tool_results would always yield "the
-    # activity" and the tag would never say which one the user stopped.
+def test_proposing_to_end_an_activity_names_it():
+    # Regression: the title lives ONLY on the agent until confirmed, so reading
+    # it after _apply_companion_tool_results would always yield "the activity"
+    # and the tag would never say which one is up for leaving.
     agent = _agent()
     agent._active_activity = "Memory Game"
-    outcome = agent._apply_companion_tool_results([_verdict(activity_ended=True)])
+    outcome = agent._apply_companion_tool_results([_verdict(activity_end_proposed=True)])
 
-    assert outcome["ended_title"] == "Memory Game"
+    assert outcome["confirm_end_title"] == "Memory Game"
     (tag,) = agent._companion_decisions("s1", outcome)
+    assert _decision_meta(tag)["kind"] == "activity_end_proposed"
+    assert "Memory Game" in _decision_meta(tag)["label"]
+
+
+def test_ended_and_end_declined_tags():
+    agent = _agent()
+    (tag,) = agent._companion_decisions("s1", {"ended": True, "ended_title": "Memory Game"})
     assert _decision_meta(tag)["kind"] == "activity_ended"
+    assert "Memory Game" in _decision_meta(tag)["label"]
+
+    (tag,) = agent._companion_decisions(
+        "s1", {"end_declined": True, "declined_title": "Memory Game"}
+    )
+    assert _decision_meta(tag)["kind"] == "activity_end_declined"
     assert "Memory Game" in _decision_meta(tag)["label"]
 
 
@@ -536,8 +584,8 @@ def _with_history(agent, messages):
     agent.get_chat_history = get_chat_history
 
 
-def test_history_after_leaving_an_activity_is_one_line():
-    import asyncio
+@pytest.mark.asyncio
+async def test_history_after_leaving_an_activity_is_one_line():
     from datetime import datetime, timedelta, timezone
 
     agent = _agent()
@@ -546,7 +594,10 @@ def test_history_after_leaving_an_activity_is_one_line():
     )
     agent._activity_collected = {"nickname": "Fee"}
     started = agent._activity_started_at
-    agent._apply_companion_tool_results([_verdict(activity_ended=True)])
+    # Propose, then confirm — leaving is a two-step now (Felix, 29 Sep).
+    agent._apply_companion_tool_results([_verdict(activity_end_proposed=True)])
+    agent.llm_service = _FixedLLMService("YES")
+    await agent._resolve_pending_end_confirmation("yes")
     ended = agent._activity_segments[-1].ended_at
 
     def iso(dt):
@@ -558,7 +609,7 @@ def test_history_after_leaving_an_activity_is_one_line():
         ("user", "Fee", iso(started + timedelta(microseconds=2))),
         ("assistant", "back to chatting", iso(ended + timedelta(seconds=1))),
     ])
-    history, full = asyncio.run(agent._fetch_conversation_history())
+    history, full = await agent._fetch_conversation_history()
 
     assert [m["content"] for m in history] == [
         "hi",
@@ -621,3 +672,88 @@ def test_active_activity_fact_does_not_mutate_the_input_list():
     history = [{"role": "user", "content": "hi"}]
     _with_active_activity_fact(history, "Memory Game")
     assert history == [{"role": "user", "content": "hi"}]
+
+
+# ---------------------------------------------------------------------------
+# Confirming before actually leaving (Felix, 29 Sep): a single misjudged
+# end_activity call used to throw the user out of an activity with no way
+# back — a downbeat but on-topic reply (e.g. a physical complaint) mistaken
+# for a stop request. end_activity now only proposes leaving; a separate,
+# narrow yes/no check on the NEXT reply decides whether to actually clear the
+# plan, deliberately not trusting companion_router's own broad judgment to
+# also grade its own question.
+# ---------------------------------------------------------------------------
+
+class _FixedLLMService:
+    """Returns ``content`` for every generate() call, regardless of input."""
+
+    def __init__(self, content: str):
+        self._content = content
+        self.last_messages = None
+
+    async def generate(self, messages, config=None, callback=None, component_name="unknown"):
+        from stella_agent_sdk.llm import LLMResponse
+        self.last_messages = messages
+        return LLMResponse(content=self._content, model="test", provider="test")
+
+
+@pytest.mark.asyncio
+async def test_confirm_pending_end_true_on_a_clear_yes():
+    agent = _agent()
+    agent.llm_service = _FixedLLMService("YES")
+    assert await agent._confirm_pending_end("yes, let's stop") is True
+
+
+@pytest.mark.asyncio
+async def test_confirm_pending_end_false_on_anything_else():
+    agent = _agent()
+    for reply in ["no", "not really", "my knees hurt", "what were we doing again?"]:
+        agent.llm_service = _FixedLLMService("NO")
+        assert await agent._confirm_pending_end(reply) is False
+
+
+@pytest.mark.asyncio
+async def test_confirm_pending_end_defaults_to_false_on_failure():
+    # A parse/network failure must never accidentally end the activity.
+    agent = _agent()
+
+    class _BrokenLLMService:
+        async def generate(self, *a, **k):
+            raise RuntimeError("boom")
+
+    agent.llm_service = _BrokenLLMService()
+    assert await agent._confirm_pending_end("yes") is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_pending_end_confirmation_clears_the_plan_on_yes():
+    agent = _agent()
+    agent._plan_config = ACTIVITIES[0]["plan"]
+    agent._active_activity = "Memory Game"
+    agent._pending_end_confirmation = "Memory Game"
+    agent.llm_service = _FixedLLMService("YES")
+
+    outcome = await agent._resolve_pending_end_confirmation("yes please")
+
+    assert outcome == {"ended": True, "ended_title": "Memory Game"}
+    assert agent.sm_client.cleared is True
+    assert agent._plan_config is None
+    assert agent._active_activity is None
+    assert agent._pending_end_confirmation is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_pending_end_confirmation_stays_on_no():
+    agent = _agent()
+    agent._plan_config = ACTIVITIES[0]["plan"]
+    agent._active_activity = "Memory Game"
+    agent._pending_end_confirmation = "Memory Game"
+    agent.llm_service = _FixedLLMService("NO")
+
+    outcome = await agent._resolve_pending_end_confirmation("no, keep going")
+
+    assert outcome == {"end_declined": True, "declined_title": "Memory Game"}
+    assert agent.sm_client.cleared is False
+    assert agent._plan_config is not None
+    assert agent._active_activity == "Memory Game"
+    assert agent._pending_end_confirmation is None

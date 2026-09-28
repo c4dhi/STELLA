@@ -39,7 +39,7 @@ from stella_agent_sdk.tools import ToolRegistry
 from stella_agent_sdk.tools.state_machine import create_state_machine_tools
 from stella_agent_sdk.tools.companion import create_companion_tools
 
-from stella_agent_sdk.llm import LLMService
+from stella_agent_sdk.llm import LLMService, LLMConfig, LLMMessage, LLMProvider
 from stella_v2_agent.experts.registry import ExpertRegistry
 from stella_agent_sdk.env import env_bool
 from stella_v2_agent.pipeline.bridge_generator import (
@@ -219,6 +219,12 @@ class StellaV2Agent(BaseAgent):
         self._available_plans: List[Dict[str, Any]] = []
         # Title of the activity currently running, for logs and the reply's context.
         self._active_activity: Optional[str] = None
+        # Set when the router has proposed leaving the running activity and the
+        # user has not yet answered "shall we stop X?" — the title of what is
+        # pending, or None. While set, companion_router does not run (see
+        # process()); the reply is judged by _confirm_pending_end instead, a
+        # narrow yes/no check separate from the router's own broad judgment.
+        self._pending_end_confirmation: Optional[str] = None
         # When the running activity started, and the runs that already ended, so the
         # history the model sees can be scoped to the current mode (history_scope).
         self._activity_started_at: Optional[datetime] = None
@@ -368,6 +374,10 @@ class StellaV2Agent(BaseAgent):
             # expert_task` below: do not mutate `sm_context` or `expert_history`,
             # the pool is reading them concurrently.
             experts_to_run = self.expert_registry.get_enabled_names()
+            if self._pending_end_confirmation:
+                # This turn answers "shall we stop X?" — judged deterministically
+                # below, not by the router's own broad (and biased) judgment.
+                experts_to_run = [e for e in experts_to_run if e != "companion_router"]
             logger.info(f"Stage 2: Expert Pool (started, runs alongside bridge) — {experts_to_run}")
             expert_task = asyncio.create_task(
                 self.expert_pool.run(experts_to_run, input.text, expert_history, sm_context)
@@ -521,6 +531,10 @@ class StellaV2Agent(BaseAgent):
                 if self._companion_mode
                 else {}
             )
+            if self._companion_mode and self._pending_end_confirmation:
+                # companion_router did not run this turn (excluded above); this
+                # reply answers "shall we stop X?" instead, judged narrowly.
+                companion = await self._resolve_pending_end_confirmation(input.text)
             directive = arb_result.directive
             if companion:
                 sm_context["companion"] = companion
@@ -1313,10 +1327,24 @@ class StellaV2Agent(BaseAgent):
                 "instructs — do not re-ask which activity they want, and do not "
                 "invent an opening question of your own."
             )
+        if companion.get("confirm_end"):
+            title = companion.get("confirm_end_title") or "this activity"
+            return (
+                f"Ask clearly and briefly whether they want to stop \"{title}\" — a "
+                "direct yes/no question, e.g. \"Shall we stop the "
+                f"{title}?\" — and do nothing else this turn: do not continue the "
+                "activity's own content, and do not end it yet."
+            )
         if companion.get("ended"):
             return (
-                "The activity has just been stopped at the user's request. Close it "
-                "warmly, do not try to resume it, and return to open conversation."
+                "The activity has just been stopped, confirmed by the user. Close "
+                "it warmly, do not try to resume it, and return to open conversation."
+            )
+        if companion.get("end_declined"):
+            return (
+                "The user did not confirm stopping. Stay in the activity and pick "
+                "up naturally from where it left off — do not ask again unless "
+                "they bring it up themselves."
             )
         return ""
 
@@ -1349,6 +1377,14 @@ class StellaV2Agent(BaseAgent):
                 f"Started “{companion['started']}”",
                 component="companion_router",
             ))
+        if companion.get("confirm_end"):
+            title = companion.get("confirm_end_title")
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activity_end_proposed",
+                f"Asked to confirm leaving “{title}”" if title else "Asked to confirm leaving the activity",
+                component="companion_router",
+            ))
         if companion.get("ended"):
             title = companion.get("ended_title")
             decisions.append(AgentOutput.decision(
@@ -1356,6 +1392,14 @@ class StellaV2Agent(BaseAgent):
                 "activity_ended",
                 f"Left “{title}”" if title else "Left the activity",
                 detail="Back to free conversation",
+                component="companion_router",
+            ))
+        if companion.get("end_declined"):
+            title = companion.get("declined_title")
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activity_end_declined",
+                f"Staying in “{title}”" if title else "Staying in the activity",
                 component="companion_router",
             ))
         return decisions
@@ -1479,23 +1523,73 @@ class StellaV2Agent(BaseAgent):
                     # Where LoadPlan left the state machine. The response for THIS
                     # turn must be authored against it — see _resolve_response_context.
                     outcome["started_state_id"] = data.get("current_state_id")
-                # Only leave something that is running: the router can call
-                # end_activity again once the activity is already gone.
-                if data.get("activity_ended") and (
-                    self._active_activity or self._plan_config
+                # Only propose leaving something that is running: the router can
+                # call end_activity again once the activity is already gone, or
+                # while a previous proposal is still awaiting confirmation.
+                if (
+                    data.get("activity_end_proposed")
+                    and (self._active_activity or self._plan_config)
+                    and not self._pending_end_confirmation
                 ):
-                    # Capture the title BEFORE clearing it — the decision tag and
-                    # the sidebar both need to name what was just left, and by the
-                    # next line there is nothing left to name it with.
-                    outcome["ended"] = True
-                    outcome["ended_title"] = (
+                    outcome["confirm_end"] = True
+                    outcome["confirm_end_title"] = (
                         self._active_activity or data.get("activity_title")
                     )
-                    self._close_activity_segment(outcome["ended_title"])
-                    self._plan_config = None
-                    self._active_activity = None
-                    self._last_known_state_id = None
+                    self._pending_end_confirmation = outcome["confirm_end_title"]
         return outcome
+
+    async def _resolve_pending_end_confirmation(self, user_input: str) -> Dict[str, Any]:
+        """Judge the reply to "shall we stop X?" and act on it deterministically.
+
+        Companion_router does not run on this turn (see process()) — its own
+        broad, "lean towards ending" judgment is exactly what proposed leaving
+        in the first place, and is not trusted to also grade its own question.
+        """
+        title = self._pending_end_confirmation
+        self._pending_end_confirmation = None
+        if await self._confirm_pending_end(user_input):
+            if self.sm_client:
+                await self.sm_client.clear_plan()
+            self._close_activity_segment(title)
+            self._plan_config = None
+            self._active_activity = None
+            self._last_known_state_id = None
+            return {"ended": True, "ended_title": title}
+        return {"end_declined": True, "declined_title": title}
+
+    async def _confirm_pending_end(self, user_input: str) -> bool:
+        """Is ``user_input`` a clear YES to "shall we stop X?" — narrowly judged.
+
+        Deliberately separate from companion_router's own prompt: a single
+        small, temperature-0 call with nothing else to weigh. Anything but an
+        unambiguous yes — a different answer, silence, genuine uncertainty, or
+        this call failing outright — defaults to NO (stay), the same
+        ambiguity-means-stay precedent as "sure" not silently restarting an
+        activity.
+        """
+        try:
+            response = await self.llm_service.generate(
+                messages=[
+                    LLMMessage(role="system", content=(
+                        "You just asked the user, in your last reply, a direct "
+                        "yes/no question about whether to stop the current "
+                        "activity. Decide ONLY whether this reply is a clear YES "
+                        "(stop) — anything else, including a different answer, "
+                        "silence, or genuine uncertainty, is NO. Respond with "
+                        "exactly one word: YES or NO."
+                    )),
+                    LLMMessage(role="user", content=user_input),
+                ],
+                config=LLMConfig(
+                    model="gpt-4o-mini", temperature=0.0, max_tokens=3,
+                    provider=LLMProvider.OPENAI_LANGCHAIN,
+                ),
+                component_name="end_activity_confirm",
+            )
+            return response.content.strip().upper().startswith("Y")
+        except Exception as e:
+            logger.warning(f"end_activity confirmation check failed ({e}); defaulting to NO (stay)")
+            return False
 
     def _plan_farewell_message(self) -> Optional[str]:
         """Resolve the configured farewell from plan metadata, if any.
