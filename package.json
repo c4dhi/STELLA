@@ -66,7 +66,7 @@
     "@nestjs/platform-express": "^11.2.6",
     "@nestjs/platform-socket.io": "^11.1.6",
     "@nestjs/schedule": "^6.1.0",
-    "@nestjs/websockets": "^11.1.6",
+    "@nestjs/websockets": "^12.1.0",
     "@prisma/client": "^6.19.0",
     "@types/uuid": "^11.0.0",
     "adm-zip": "^0.6.1",
