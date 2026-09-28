@@ -14,4 +14,4 @@ faster-qwen3-tts>=0.1.0
 # AttributeError; tts-service then starts anyway with "Provider: none" and
 # every session is silent. Production loads the model on 5.16.1 with the same
 # qwen-tts-hf. Lift this only after loading the model on a GPU host.
-transformers>=5.0,<5.17
+transformers>=5.17.0,<5.18
