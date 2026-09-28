@@ -294,8 +294,11 @@ def _roles_and_contents(messages):
 
 def test_bridge_continuation_guidance_lives_in_the_system_prompt():
     # The "continue from the opener, don't re-greet" guidance is rendered into the
-    # system prompt around {{bridge}} (editable, visible) — NOT a hidden code-only
-    # system message. The bridge is also replayed as the assistant's in-progress turn.
+    # system prompt around {{bridge}} (editable, visible), AND a hardcoded rule is
+    # always inserted on top (#627 follow-up: an operator's custom guidelines can
+    # under-specify this, and prose alone didn't stop a paraphrased
+    # re-acknowledgment Felix hit in practice). The bridge is also replayed as the
+    # assistant's in-progress turn.
     svc = _CapturingLLMService()
     gen = ResponseGenerator(llm_service=svc)
     _run_generate(
@@ -308,12 +311,16 @@ def test_bridge_continuation_guidance_lives_in_the_system_prompt():
         bridge="Bodyweight exercises are great!",
     )
     rc = _roles_and_contents(svc.captured_messages)
-    # Exactly ONE system message (the rendered prompt) — no extra hidden injection.
+    # The rendered prompt PLUS the hardcoded rule — never fewer, never a
+    # replacement of the editable prose.
     system_msgs = [c for r, c in rc if r == "system"]
-    assert len(system_msgs) == 1
-    # That single system prompt carries both the bridge text and the prose guidance.
+    assert len(system_msgs) == 2
+    # The rendered prompt carries the bridge text and the prose guidance.
     assert "Bodyweight exercises are great!" in system_msgs[0]
     assert "CONTINUE FROM" in system_msgs[0].upper()
+    # The hardcoded rule explicitly forbids a re-acknowledgment in OTHER words,
+    # not just a literal repeat.
+    assert "not even in different words" in system_msgs[1]
     # The bridge is replayed as the assistant's own in-progress turn (the mechanism).
     assert ("assistant", "Bodyweight exercises are great!") in rc
 
@@ -335,6 +342,52 @@ def test_no_bridge_has_no_continuation_guidance_or_replay():
     rc = _roles_and_contents(svc.captured_messages)
     assert not any("CONTINUE FROM" in c.upper() for _, c in rc)
     assert not any(r == "assistant" for r, _ in rc)
+
+
+def test_prepend_and_bridge_together_get_the_hardcoded_rule_and_are_both_replayed():
+    svc = _CapturingLLMService()
+    gen = ResponseGenerator(llm_service=svc)
+    _run_generate(
+        gen,
+        session_id="s1",
+        user_input="I ran 5k",
+        directive=ResponseDirective(),
+        conversation_history=[],
+        sm_context={},
+        bridge="Nice one!",
+        prepend="If this ever feels unsafe, please stop and consult a doctor.",
+    )
+    rc = _roles_and_contents(svc.captured_messages)
+    system_msgs = [c for r, c in rc if r == "system"]
+    assert len(system_msgs) == 2
+    assert 'you said "Nice one!"' in system_msgs[1]
+    assert 'the user was told, verbatim: "If this ever feels unsafe, please stop and consult a doctor."' in system_msgs[1]
+    # Both pieces replayed together as one assistant turn.
+    assert (
+        "assistant",
+        "Nice one! If this ever feels unsafe, please stop and consult a doctor.",
+    ) in rc
+
+
+def test_prepend_alone_still_gets_the_hardcoded_rule():
+    svc = _CapturingLLMService()
+    gen = ResponseGenerator(llm_service=svc)
+    _run_generate(
+        gen,
+        session_id="s1",
+        user_input="I ran 5k",
+        directive=ResponseDirective(),
+        conversation_history=[],
+        sm_context={},
+        bridge="",
+        prepend="Safety note.",
+    )
+    rc = _roles_and_contents(svc.captured_messages)
+    system_msgs = [c for r, c in rc if r == "system"]
+    assert len(system_msgs) == 2
+    assert 'the user was told, verbatim: "Safety note."' in system_msgs[1]
+    assert "you said" not in system_msgs[1]
+    assert ("assistant", "Safety note.") in rc
 
 
 # ---------------------------------------------------------------------------
@@ -608,3 +661,30 @@ def test_generate_leaves_a_genuine_continuation_untouched():
     )
     final_text = outputs[-1].content
     assert final_text == "Nice to meet you, Sam! [curious] What type of exercise do you enjoy?"
+
+
+def test_paraphrased_reacknowledgment_is_explicitly_forbidden_in_the_request():
+    # Felix's dev example (#627 follow-up): bridge "Glad to hear that! It sounds
+    # like it's been a pretty good day for you." was followed by a continuation
+    # that opened with "That's great to hear!" — a re-acknowledgment in DIFFERENT
+    # words, not a literal repeat, so _strip_repeated_opener() can't catch it (no
+    # matching substring exists to strip). The hardcoded rule is what has to stop
+    # this at the source, on every deployment regardless of custom guidelines:
+    # assert it is actually sent and names this exact class of violation.
+    svc = _CapturingLLMService()
+    gen = ResponseGenerator(llm_service=svc)
+    _run_generate(
+        gen,
+        session_id="s1",
+        user_input="My day is fine",
+        directive=ResponseDirective(),
+        conversation_history=[],
+        sm_context={},
+        bridge="Glad to hear that! It sounds like it's been a pretty good day for you.",
+    )
+    rc = _roles_and_contents(svc.captured_messages)
+    system_msgs = [c for r, c in rc if r == "system"]
+    assert len(system_msgs) == 2
+    rule = system_msgs[1]
+    assert "add another acknowledgment or reaction to your own words" in rule
+    assert "not even in different words" in rule
