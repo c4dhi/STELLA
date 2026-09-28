@@ -92,6 +92,25 @@ def _turn_speed(bridge_mode) -> float:
     return _TURN_SPEED_BY_BRIDGE_MODE.get(bridge_mode, 1.0)
 
 
+def _with_active_activity_fact(
+    expert_history: List[Dict[str, str]], active_activity: Optional[str]
+) -> List[Dict[str, str]]:
+    """State a running activity as a FACT for the Expert Pool, not something to
+    infer from the transcript (#36 follow-up, Felix).
+
+    companion_router's own history window is short (history_limit: 6), and a
+    few turns into an activity the turn that started it can already have
+    scrolled out of it — appended LAST so it survives any expert's own
+    trailing slice of this list. A no-op when there is nothing running.
+    """
+    if not active_activity:
+        return expert_history
+    return expert_history + [{
+        "role": "system",
+        "content": f'Activity "{active_activity}" is currently running.',
+    }]
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -274,6 +293,8 @@ class StellaV2Agent(BaseAgent):
             # slice (see _fetch_conversation_history).
             history_limit = self._custom_history_limit
             history, expert_history = await self._fetch_conversation_history(limit=history_limit)
+            if self._companion_mode:
+                expert_history = _with_active_activity_fact(expert_history, self._active_activity)
 
             # Fetch state from gRPC backend (parallel calls for performance)
             sm_context = {}

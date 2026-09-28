@@ -7,7 +7,7 @@ reply when an activity starts, finishes, or is abandoned mid-way.
 
 import pytest
 
-from stella_v2_agent.agent import StellaV2Agent
+from stella_v2_agent.agent import StellaV2Agent, _with_active_activity_fact
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 
 
@@ -593,3 +593,31 @@ def test_history_inside_an_activity_starts_at_the_activity():
     # Unscoped copy for the Expert Pool keeps the turn before the activity
     # started too — that's exactly the context the router lost (#627).
     assert [m["content"] for m in full] == ["earlier chat", "step one question"]
+
+
+# ---------------------------------------------------------------------------
+# _with_active_activity_fact() — companion_router gets told an activity is
+# running as a FACT, not left to infer it from a (possibly short) history
+# window (#36 follow-up: it kept re-offering/re-starting an already-running
+# activity even with the full, unscoped history).
+# ---------------------------------------------------------------------------
+
+def test_active_activity_is_stated_as_a_fact_appended_last():
+    history = [{"role": "user", "content": "twice a week"}]
+    result = _with_active_activity_fact(history, "Prolific Fitness Check-in")
+    assert result == [
+        {"role": "user", "content": "twice a week"},
+        {"role": "system", "content": 'Activity "Prolific Fitness Check-in" is currently running.'},
+    ]
+
+
+def test_no_active_activity_is_a_no_op():
+    history = [{"role": "user", "content": "hi"}]
+    assert _with_active_activity_fact(history, None) == history
+    assert _with_active_activity_fact(history, "") == history
+
+
+def test_active_activity_fact_does_not_mutate_the_input_list():
+    history = [{"role": "user", "content": "hi"}]
+    _with_active_activity_fact(history, "Memory Game")
+    assert history == [{"role": "user", "content": "hi"}]
