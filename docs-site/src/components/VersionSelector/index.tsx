@@ -20,7 +20,7 @@ try {
   useDocsPreferredVersion = () => ({ savePreferredVersionName: () => {} });
 }
 
-export default function VersionSelector(): JSX.Element {
+export default function VersionSelector(): React.JSX.Element {
   const location = useLocation();
   const history = useHistory();
 
