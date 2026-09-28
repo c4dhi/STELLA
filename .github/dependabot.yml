@@ -37,6 +37,15 @@ updates:
           - "*"
 
   # ---------------------------------------------------------------- pip ----
+  # `pip-minor-and-patch` below only groups a manifest's dependency if
+  # Dependabot can classify the bump as a real "version update" (major/minor/
+  # patch). A requirements.txt line left as a floor (`grpcio>=1.83.0`) instead
+  # produces a "requirement update" — Dependabot just raises the bound — which
+  # this filter can't see, so each one still lands as its own PR regardless of
+  # the group. That's what happened in #625: message-recorder-python pins
+  # exactly (`==`) and grouped correctly; stt-service and tts-service used
+  # floors and got 9 separate PRs in one week. Pin a package exactly once
+  # Dependabot has bumped it here, and its future bumps join the group.
   - package-ecosystem: "pip"
     target-branch: "development"
     directories:
