@@ -1,5 +1,5 @@
 # Multi-stage build for session-management-server
-FROM node:20-slim AS builder
+FROM node:26-slim AS builder
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ RUN npm run build
 RUN npx tsc prisma/seed.ts --outDir dist/prisma --esModuleInterop --resolveJsonModule --module nodenext --moduleResolution nodenext --target ES2023 --skipLibCheck
 
 # Production stage
-FROM node:20-slim
+FROM node:26-slim
 
 WORKDIR /app
 

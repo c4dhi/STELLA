@@ -5,7 +5,8 @@ import AgentGalleryCard from '../agents/AgentGalleryCard'
 import { AgentUploadCard, MyAgentsSection } from '../agents'
 import { apiClient } from '../../services/ApiClient'
 import { useThemeStore } from '../../store/themeStore'
-import { PlanSelectionStep } from '../shared'
+import { PlanSelectionStep, PersonaSelectionStep, ModeSelectionStep, ActivitySelectionStep } from '../shared'
+import type { AgentMode } from '../shared'
 import type {
   AgentType,
   CustomAgentType,
@@ -14,20 +15,22 @@ import type {
   EnvVarTemplate,
   AgentConfiguration,
   TtsCapabilities,
+  Persona,
 } from '../../lib/api-types'
 import { parseAgentRequirements } from '../../lib/api-types'
 import ConfigurationSelectionStep from '../shared/ConfigurationSelectionStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
+import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import { useEnvVarListEditor } from '../shared/EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
 
 interface DeployAgentModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string) => Promise<void>
+  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[]) => Promise<void>
 }
 
-type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'voice' | 'plan' | 'envvars'
+type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'voice' | 'plan' | 'envvars'
 type GalleryTab = 'builtin' | 'myagents'
 type EnvVarsView = 'select' | 'edit'  // select=choose template, edit=manual entry
 
@@ -61,11 +64,15 @@ export default function DeployAgentModal({
   const [envVars, setEnvVars] = useState<Record<string, string>>({})  // Current env vars being edited (mirrors the shared editor)
 
   // Agent configuration state (pipeline configurator)
+  const [mode, setMode] = useState<AgentMode>('plan')
+  const [activityPlanIds, setActivityPlanIds] = useState<string[]>([])
+  const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null)
+  const [personas, setPersonas] = useState<Persona[]>([])
   const [selectedConfiguration, setSelectedConfiguration] = useState<AgentConfiguration | null>(null)
 
-  // TTS voice/language selection. '' = provider default voice / Auto language.
+  // Voice/language selection. '' = provider default voice / Auto language.
   // Surfaced from the active provider's capabilities; persisted as the
-  // TTS_VOICE / TTS_LANGUAGE env vars the agent SDK already reads.
+  // TTS_VOICE / TTS_LANGUAGE / STELLA_LANGUAGE env vars the agent SDK reads.
   const [ttsCapabilities, setTtsCapabilities] = useState<TtsCapabilities | null>(null)
   const [isLoadingTtsCaps, setIsLoadingTtsCaps] = useState(false)
   const [ttsVoice, setTtsVoice] = useState('')
@@ -89,26 +96,41 @@ export default function DeployAgentModal({
   // Show the voice step only when the active TTS provider actually exposes
   // something to choose — a selectable voice or at least a language. Providers
   // that report an empty catalog (no per-agent voice support) skip the step.
-  const supportsVoiceSelection = useMemo(() => {
-    if (!ttsCapabilities || ttsCapabilities.voices.length === 0) return false
-    return ttsCapabilities.supportsVoiceSelection || ttsCapabilities.languages.length > 0
-  }, [ttsCapabilities])
+  // The language the selected plan declares, if it declares one. A plan written
+  // in German is German wherever it is deployed, so it — not the operator —
+  // decides the session language, and the picker is skipped.
+  // A companion has no plan at start, so no plan declares the language and the
+  // operator's pick is the only signal. Reading it off a plan they selected
+  // before switching mode would silently pin the wrong language.
+  const planLanguage = mode === 'companion' ? '' : planDeclaredLanguage(selectedPlan)
+
+  const supportsVoiceSelection = useMemo(
+    () => showsVoiceStep(ttsCapabilities, planLanguage),
+    [ttsCapabilities, planLanguage],
+  )
 
   const dynamicSteps = useMemo((): Step[] => {
     const steps: Step[] = ['gallery', 'configure']
     if (agentRequirements.supportsConfigurator && selectedType?.pipelineSchema) {
       steps.push('configuration')
     }
+    // Persona BEFORE plan: who the agent is, then the task it carries out. Every
+    // agent gets one (omitting it means the system default), so unlike the plan
+    // step this is not gated on a capability.
+    steps.push('persona')
+    // Mode decides what comes next: a companion picks a MENU of activities, a
+    // plan-follower picks the single plan it runs.
+    if (agentRequirements.requiresPlan) {
+      steps.push('mode')
+      steps.push(mode === 'companion' ? 'activities' : 'plan')
+    }
     if (supportsVoiceSelection) {
       steps.push('voice')
-    }
-    if (agentRequirements.requiresPlan) {
-      steps.push('plan')
     }
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
     return steps
-  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection])
+  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode])
 
   // Reset state when modal opens
   useEffect(() => {
@@ -120,6 +142,9 @@ export default function DeployAgentModal({
       setIcon('🤖')
       setError(null)
       setSelectedPlan(null)
+      setSelectedPersona(null)
+      setMode('plan')
+      setActivityPlanIds([])
       setSelectedEnvVarTemplate(null)
       setEnvVarsView('select')
       setEnvVars({})
@@ -299,7 +324,7 @@ export default function DeployAgentModal({
 
     // Merge plan content into config if a plan is selected
     // Map PlanTemplate fields to canonical SDK Plan fields
-    if (selectedPlan) {
+    if (selectedPlan && mode !== 'companion') {
       config = {
         ...config,
         plan: {
@@ -337,9 +362,7 @@ export default function DeployAgentModal({
       if (ttsVoice) {
         filteredEnvVars['TTS_VOICE'] = ttsVoice
       }
-      if (ttsLanguage) {
-        filteredEnvVars['TTS_LANGUAGE'] = ttsLanguage
-      }
+      Object.assign(filteredEnvVars, languageEnvVars(ttsLanguage, planLanguage))
 
       await onSubmit(
         name.trim(),
@@ -348,7 +371,10 @@ export default function DeployAgentModal({
         selectedType.slug,
         selectedEnvVarTemplate?.id,
         Object.keys(filteredEnvVars).length > 0 ? filteredEnvVars : undefined,
-        selectedConfiguration?.id
+        selectedConfiguration?.id,
+        selectedPersona?.id,
+        mode,
+        mode === 'companion' ? activityPlanIds : undefined,
       )
       onClose()
     } catch (err) {
@@ -372,6 +398,9 @@ export default function DeployAgentModal({
       case 'configure': return 'Customize Agent'
       case 'configuration': return 'Pipeline Configuration'
       case 'voice': return 'Voice & Language'
+      case 'persona': return 'Choose a Persona'
+      case 'mode': return 'How should it run?'
+      case 'activities': return 'Available Activities'
       case 'plan': return 'Select a Plan'
       case 'envvars': return envVarsView === 'select' ? 'Environment Variables' : 'Configure Variables'
     }
@@ -384,6 +413,9 @@ export default function DeployAgentModal({
       case 'configure': return `Set a name and icon for your ${selectedType?.name || 'agent'}`
       case 'configuration': return `Customize the pipeline configuration for ${selectedType?.name || 'the agent'}`
       case 'voice': return `Choose the voice and language for ${selectedType?.name || 'the agent'}`
+      case 'persona': return 'Who the agent is — its character and voice, independent of the plan'
+      case 'mode': return 'Follow one plan from the start, or talk freely and run activities on request'
+      case 'activities': return 'Plans the companion can offer when the user asks what they can do'
       case 'plan': return `Choose a conversation plan for ${selectedType?.name || 'the agent'}`
       case 'envvars': return envVarsView === 'select'
         ? 'Select a template or enter variables manually'
@@ -743,8 +775,50 @@ export default function DeployAgentModal({
                     loading={isLoadingTtsCaps}
                     voice={ttsVoice}
                     language={ttsLanguage}
+                    planLanguage={planLanguage}
                     onVoiceChange={setTtsVoice}
                     onLanguageChange={setTtsLanguage}
+                  />
+                </motion.div>
+              ) : step === 'persona' ? (
+                <motion.div
+                  key="persona"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <PersonaSelectionStep
+                    selectedPersona={selectedPersona}
+                    onSelectPersona={setSelectedPersona}
+                    personas={personas}
+                    onPersonasChange={setPersonas}
+                  />
+                </motion.div>
+              ) : step === 'mode' ? (
+                <motion.div
+                  key="mode"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <ModeSelectionStep mode={mode} onSelectMode={setMode} />
+                </motion.div>
+              ) : step === 'activities' ? (
+                <motion.div
+                  key="activities"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <ActivitySelectionStep
+                    selectedPlanIds={activityPlanIds}
+                    onChange={setActivityPlanIds}
                   />
                 </motion.div>
               ) : step === 'plan' ? (

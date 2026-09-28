@@ -10,6 +10,9 @@ export interface AgentTypeInfo {
   icon: string | null
   version: string
   isBuiltIn: boolean
+  /** Superseded but still deployable; the gallery demotes it. */
+  deprecated: boolean
+  deprecationNote: string | null
   capabilities: string[]
   defaultConfig: Record<string, unknown>  // Default config for this agent type
   configSchema: Record<string, unknown> | null  // JSON Schema for agent config (includes x-stella-* extensions)
@@ -30,7 +33,10 @@ export class AgentTypeService {
   async findAll(): Promise<AgentType[]> {
     return this.prisma.agentType.findMany({
       where: { validationStatus: AgentValidationStatus.APPROVED },
-      orderBy: [{ isBuiltIn: 'desc' }, { name: 'asc' }],
+      // Deprecated last: the gallery should lead with what to pick, not with
+      // what is being retired. Still returned — existing deployments reference
+      // these rows and must stay reproducible.
+      orderBy: [{ deprecated: 'asc' }, { isBuiltIn: 'desc' }, { name: 'asc' }],
     })
   }
 
@@ -62,6 +68,8 @@ export class AgentTypeService {
       icon: t.icon,
       version: t.version,
       isBuiltIn: t.isBuiltIn,
+      deprecated: t.deprecated,
+      deprecationNote: t.deprecationNote,
       capabilities: (t.capabilities as string[]) || [],
       defaultConfig: (t.defaultConfig as Record<string, unknown>) || {},
       configSchema: (t.configSchema as Record<string, unknown>) || null,

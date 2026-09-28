@@ -107,11 +107,11 @@ export default function PipelineView({ schema, configuration, selectedNodeId, on
       focusable: false,
     })
 
-    // Barge-in evaluator's own endpoints — it lives on a separate runtime path
-    // (SDK interrupt detection), not in the turn pipeline. Give it a dedicated
-    // input endpoint (the SDK-detected interruption) and output endpoint (the
-    // commit/resume decision), styled like the Input/Output Message annotations
-    // and aligned on the barge-in node's row above the pipeline.
+    // This evaluator's own endpoints — it lives on a separate runtime path, not
+    // in the turn pipeline. Its input is a message TYPED mid-turn; spoken
+    // interruptions bypass it entirely and are decided from VAD speech duration
+    // in the SDK. Styled like the Input/Output Message annotations and aligned
+    // on the node's row above the pipeline.
     const bargeInNode = schema.nodes.find((n) => n.id === 'barge_in')
     if (bargeInNode) {
       const bargeInY = Y_OFFSET + bargeInNode.position.row * ROW_SPACING
@@ -120,7 +120,7 @@ export default function PipelineView({ schema, configuration, selectedNodeId, on
         type: 'pipeline',
         position: { x: INPUT_ANNOTATION_X, y: bargeInY },
         data: {
-          label: 'Interruption',
+          label: 'Typed interruption',
           isAnnotation: true,
           annotationType: 'input',
           isDark,

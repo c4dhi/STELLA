@@ -30,12 +30,14 @@ const VisualizerRenderer: React.FC<VisualizerRendererProps> = ({
           exit={{ opacity: 0, scale: 0.8 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
         >
+          {/* No emotion props: StellaFace derives them from the live emotion
+              cue (#face-emotions), falling back to exactly these resting values
+              when there is no cue. Passing them here would pin the face and
+              override every cue. */}
           <StellaFace
             isUserSpeaking={isUserSpeaking}
             isRemoteSpeaking={isRemoteSpeaking}
             audioLevel={audioLevel}
-            eyeEmotion="listening"
-            mouthEmotion={isRemoteSpeaking ? 'speaking' : 'smile'}
           />
         </motion.div>
       );

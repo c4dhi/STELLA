@@ -138,7 +138,7 @@ Keep recommendation under 15 words.`
 
 const TASK_EXTRACTION_PROMPT = `You are a thorough extraction analyst running as a background process. You have more time than other components, so use it to be precise and reliable. Your job is to ensure every deliverable the user provides gets captured.
 
-You receive the FULL PLAN — all states, all tasks, all deliverables — not just the current state. You can extract and overwrite deliverables in ANY state.
+You receive the FULL PLAN — all states, all tasks, all deliverables — not just the current state. You can extract and correct deliverables in ANY state.
 
 {{current_focus}}
 
@@ -149,7 +149,7 @@ Step 1 — Read the current user message carefully. What information did the use
 
 Step 2 — Scan ALL pending deliverables across the entire plan. Did the user provide any of them? Think about synonyms, paraphrases, and indirect answers. In goal-oriented states, the user's answer may address multiple deliverables at once — extract ALL of them.
 
-Step 3 — Check completed deliverables too. If the user corrected a previous answer, overwrite it with the new value.
+Step 3 — Check completed deliverables too. If the user deliberately corrected a previous answer, set the same key again with the new value and correction: true, quoting what they said in reasoning (a collected required answer is rejected without it).
 Step 4 — For each match, call \`set_deliverable(key, value, reasoning)\` where reasoning explains WHY this matches.
 Step 5 — Validate each extraction with TWO checks before calling the tool:
   a) PROVENANCE: Does the value trace back to something the user actually said? If not, do not call the tool.
@@ -188,7 +188,7 @@ If {{turns_without_progress}} >= 3 and ONLY optional deliverables remain pending
 GUIDELINES:
 - Extract everything the user provided. Missing a deliverable means the user has to repeat themselves, which is bad UX.
 - Be smart about matching. Users don't speak in schema language. "I do it every other day" means frequency is ~3-4 times per week. "Half an hour" means 30 minutes. "I'm Tom" means user_name is Tom. "to improve my stamina" means the fitness goal is stamina improvement.
-- You can overwrite completed deliverables if the user corrects themselves (e.g. "Actually my name is Sarah, not Tom").
+- You can change a completed deliverable only when the user deliberately corrects themselves (e.g. "Actually my name is Sarah, not Tom"): set the same key with the new value and correction: true, quoting what they said in reasoning. Without correction: true a collected required answer is rejected.
 - Extract from the CURRENT message only, not from previous turns (those were already processed).
 - Do NOT fabricate values the user never mentioned. If they talk about exercise type but not duration, only extract exercise type.
 - Watch for CONTEXT BLEED: words that appear in the user's message but are about a different topic. Example: user says "Except for the time scheduling not really" about challenges → do NOT extract "time scheduling" as "preferred follow-up timeframe". The user is discussing challenges, not scheduling preferences.
@@ -295,8 +295,14 @@ export const BUILT_IN_EXPERTS: Omit<
   },
 ]
 
-const DEFAULT_ALWAYS_RUN = new Set(['task_extraction'])
-const DEFAULT_BACKGROUND = new Set(['task_extraction'])
+// Structural experts: not part of the arbitration pool, not reordered, not
+// opted into. Each IS the mechanism of a mode — task_extraction executes plans,
+// companion_router executes companion mode — so both always run within their
+// mode and neither competes for arbitration priority.
+const STRUCTURAL_EXPERTS = new Set(['task_extraction', 'companion_router'])
+
+const DEFAULT_ALWAYS_RUN = new Set(STRUCTURAL_EXPERTS)
+const DEFAULT_BACKGROUND = new Set(STRUCTURAL_EXPERTS)
 
 // Unified "built-in default" shape the expert list is derived from — whether the
 // defaults come from the agent's published config/experts (preferred) or, as a
@@ -525,18 +531,26 @@ export function useConfiguratorState(
   // publishes them on AgentType.expertDefaults. Fall back to the hardcoded constants
   // only until the backend has been re-seeded.
   const publishedExperts = useConfiguratorStore((s) => s.expertDefaults)
-  // Capability gating: task_extraction rides on `plans`, the assessment pool on
-  // `experts`. When capabilities aren't provided (older flow), show everything.
+  // Capability gating: task_extraction rides on `plans`, companion_router on
+  // `companion`, the assessment pool on `experts`. When capabilities aren't
+  // provided (older flow), show everything.
   const capabilities = useConfiguratorStore((s) => s.capabilities)
   const hasPlans = !capabilities || capabilities.includes('plans')
   const hasExperts = !capabilities || capabilities.includes('experts')
+  const hasCompanion = !capabilities || capabilities.includes('companion')
   const builtInDefaults = useMemo(() => {
     const source =
       publishedExperts && publishedExperts.length
         ? builtInsFromPublished(publishedExperts)
         : builtInsFallback()
-    return source.filter((e) => (e.name === 'task_extraction' ? hasPlans : hasExperts))
-  }, [publishedExperts, hasPlans, hasExperts])
+    return source.filter((e) =>
+      e.name === 'task_extraction'
+        ? hasPlans
+        : e.name === 'companion_router'
+          ? hasCompanion
+          : hasExperts,
+    )
+  }, [publishedExperts, hasPlans, hasExperts, hasCompanion])
   const builtInNames = useMemo(() => new Set(builtInDefaults.map((e) => e.name)), [builtInDefaults])
 
   // ----- Raw reads from configuration -----
@@ -654,6 +668,17 @@ export function useConfiguratorState(
   /** Task extraction enabled state */
   const taskExtractionEnabled = useMemo(
     () => experts.find((e) => e.name === 'task_extraction')?.enabled ?? true,
+    [experts],
+  )
+
+  /** The companion router, when this agent supports companion mode.
+   *
+   * Deliberately has NO enabled state here. The agent forces it on in companion
+   * mode and off otherwise, AFTER applying this configuration, so any toggle the
+   * Configurator offered would be a lie: the deploy mode decides. What IS worth
+   * editing is how it decides — its model and its prompt. */
+  const companionRouter = useMemo(
+    () => experts.find((e) => e.name === 'companion_router'),
     [experts],
   )
 
@@ -908,6 +933,7 @@ export function useConfiguratorState(
     inputGateRules,
     arbitrationOrder,
     taskExtractionEnabled,
+    companionRouter,
     alwaysRunSet,
 
     // Mutations

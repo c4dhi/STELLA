@@ -33,12 +33,19 @@ import type { ExpertDefinition } from './useConfiguratorState'
 import { PromptComposer, buildExpertBlocks } from './PromptComposer'
 import { useConfiguratorStore } from '../../store/configuratorStore'
 
+/** Experts that ARE a mode's mechanism rather than assessment. Each has its own
+ *  section above, so neither belongs in the pool, background or disabled lists —
+ *  showing one twice would imply it can be reordered or opted out of. */
+const STRUCTURAL_EXPERT_NAMES = new Set(['task_extraction', 'companion_router'])
+
 interface ExpertSidebarProps {
   experts: ExpertDefinition[]
   poolExperts: ExpertDefinition[]
   bgExperts: ExpertDefinition[]
   disabledExperts: ExpertDefinition[]
   taskExtractionEnabled: boolean
+  /** Present only when the agent declares the `companion` capability. */
+  companionRouter?: ExpertDefinition
   onUpdateExpert: (name: string, updates: Partial<ExpertDefinition>) => void
   onReorderExperts: (orderedNames: string[]) => void
   onAddCustomExpert: (expert: {
@@ -61,6 +68,7 @@ export default function ExpertSidebar({
   poolExperts,
   bgExperts,
   disabledExperts,
+  companionRouter,
   taskExtractionEnabled,
   onUpdateExpert,
   onReorderExperts,
@@ -73,6 +81,7 @@ export default function ExpertSidebar({
   const [activeId, setActiveId] = useState<string | null>(null)
   const [showAddCustom, setShowAddCustom] = useState(false)
   const [taskExtractionExpanded, setTaskExtractionExpanded] = useState(false)
+  const [companionRouterExpanded, setCompanionRouterExpanded] = useState(false)
 
   // Assessment pool (+ custom experts) is gated on the `experts` capability.
   // When capabilities aren't provided (older flow), show everything.
@@ -334,6 +343,120 @@ export default function ExpertSidebar({
         </div>
         )}
 
+        {/* Companion Router — gated on `companion`. Sits beside Task Extraction
+            because it is the same KIND of thing: the mechanism a mode is made
+            of, not an assessment expert. Deliberately has no enable toggle —
+            the agent forces it on in companion mode and off otherwise, after
+            this configuration is applied, so a toggle here would be a lie. */}
+        {companionRouter && (
+        <div>
+          <div className="flex items-center gap-2.5 mb-3">
+            <div className={`w-2.5 h-2.5 rounded-full ${isDark ? 'bg-primary-400' : 'bg-primary-500'}`} />
+            <span className={`text-xs font-semibold tracking-wide uppercase ${isDark ? 'text-zinc-300' : 'text-neutral-600'}`}>
+              Companion Router
+            </span>
+            <span className={`text-[11px] font-light ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+              — companion mode only
+            </span>
+          </div>
+
+          <p className={`text-[11px] font-light leading-relaxed mb-3 ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
+            Runs only when this agent is deployed in <strong>Companion</strong> mode, where it
+            notices that the user wants to see, start or stop an activity. In Plan mode it never
+            runs and costs nothing.
+          </p>
+
+          <div
+            className={`rounded-xl border ${isDark ? 'border-zinc-700/60 bg-zinc-800/30' : 'border-neutral-200/60 bg-neutral-50/30'}`}
+          >
+            <button
+              onClick={() => setCompanionRouterExpanded(!companionRouterExpanded)}
+              className="w-full text-left px-4 py-3"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className={`text-[13px] font-medium ${isDark ? 'text-zinc-100' : 'text-neutral-800'}`}>
+                    {companionRouter.name}
+                  </p>
+                  <p className={`text-[11px] font-light mt-0.5 ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+                    {companionRouter.description}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-md font-mono ${
+                      isDark ? 'bg-zinc-700 text-zinc-400' : 'bg-neutral-100 text-neutral-500'
+                    }`}
+                  >
+                    {companionRouter.model}
+                  </span>
+                  <svg
+                    width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+                    className={`transition-transform duration-200 ${companionRouterExpanded ? 'rotate-90' : ''} ${isDark ? 'text-zinc-600' : 'text-neutral-400'}`}
+                  >
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
+                </div>
+              </div>
+            </button>
+
+            <AnimatePresence>
+              {companionRouterExpanded && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden"
+                >
+                  <div className={`px-4 pb-4 pt-3 space-y-5 border-t ${isDark ? 'border-zinc-700/50' : 'border-neutral-200/50'}`}>
+                    <CollapsibleModelSettings isDark={isDark}>
+                      <div>
+                        <label className={labelClass}>Model</label>
+                        <select
+                          value={companionRouter.model}
+                          onChange={(e) => onUpdateExpert('companion_router', { model: e.target.value })}
+                          className={inputClass}
+                        >
+                          {['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'].map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Temperature</label>
+                        <input
+                          type="number"
+                          value={companionRouter.temperature}
+                          onChange={(e) => onUpdateExpert('companion_router', { temperature: parseFloat(e.target.value) || 0 })}
+                          min={0} max={1} step={0.1}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Max Tokens</label>
+                        <input
+                          type="number"
+                          value={companionRouter.maxTokens}
+                          onChange={(e) => onUpdateExpert('companion_router', { maxTokens: parseInt(e.target.value) || 200 })}
+                          min={50} max={2000}
+                          className={inputClass}
+                        />
+                      </div>
+                    </CollapsibleModelSettings>
+                    <PromptComposer
+                      blocks={buildExpertBlocks(companionRouter, (updates) => onUpdateExpert('companion_router', updates))}
+                      isDark={isDark}
+                      compact
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+        )}
+
         {/* Expert Pool Section — gated on `experts` */}
         {hasExperts && (
         <div>
@@ -404,7 +527,7 @@ export default function ExpertSidebar({
         )}
 
         {/* Background experts (if any non-task_extraction) */}
-        {bgExperts.filter((e) => e.name !== 'task_extraction').length > 0 && (
+        {bgExperts.filter((e) => !STRUCTURAL_EXPERT_NAMES.has(e.name)).length > 0 && (
           <div>
             <SectionHeader
               color={isDark ? 'bg-indigo-400' : 'bg-indigo-500'}
@@ -412,7 +535,7 @@ export default function ExpertSidebar({
             />
             <div className="space-y-2">
               {bgExperts
-                .filter((e) => e.name !== 'task_extraction')
+                .filter((e) => !STRUCTURAL_EXPERT_NAMES.has(e.name))
                 .map((expert, index) => (
                   <ExpertCard
                     key={expert.name}
@@ -432,14 +555,14 @@ export default function ExpertSidebar({
         )}
 
         {/* Disabled experts */}
-        {disabledExperts.length > 0 && (
+        {disabledExperts.filter((e) => !STRUCTURAL_EXPERT_NAMES.has(e.name)).length > 0 && (
           <div>
             <SectionHeader
               color={isDark ? 'bg-zinc-600' : 'bg-neutral-300'}
               title="Disabled"
             />
             <div className="flex flex-wrap gap-2">
-              {disabledExperts.map((expert) => (
+              {disabledExperts.filter((e) => !STRUCTURAL_EXPERT_NAMES.has(e.name)).map((expert) => (
                 <button
                   key={expert.name}
                   onClick={() => onUpdateExpert(expert.name, { enabled: true })}

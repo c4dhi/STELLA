@@ -1,0 +1,130 @@
+name: Deploy to Development
+
+# development deploys to the development server. Deliberately NOT pull_request: STELLA
+# is public, and a fork PR must never execute on a self-hosted runner.
+
+on:
+  push:
+    branches: [development]
+    paths-ignore:
+      - '**.md'
+      - 'docs-site/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time on this cluster, and never cancel one mid-rollout.
+concurrency:
+  group: deploy-development
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'c4dhi/STELLA'
+    runs-on: [self-hosted, stella-development]
+    environment: development
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stamp the build identity
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          echo "IMAGE_TAG=${VER}-${{ github.run_number }}-g$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Link deploy config
+        # Gitignored, lives on the box, never in the repo. Symlink rather than
+        # copy so the secret exists in exactly one place. /etc/stella is the
+        # intended home; the legacy checkout is accepted as a fallback so this
+        # works before the file has been relocated.
+        run: |
+          for candidate in /etc/stella/.env.production "$HOME/STELLA/.env.production" /mnt/grace_ai_backend/.env.production; do
+            if [ -f "$candidate" ]; then
+              ln -sfn "$candidate" .env.production
+              echo "linked $candidate ($(wc -l < .env.production) lines)"
+              exit 0
+            fi
+          done
+          echo "::error::No .env.production found. Stage it at /etc/stella/.env.production (chmod 600, owned by the runner user)."
+          exit 1
+
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Deploy
+        # -d exits after the deploy instead of blocking on the Ctrl+C wait loop.
+        # </dev/null so the setup wizard can never prompt on a non-TTY.
+        run: ./scripts/start-k8s.sh --production --daemon </dev/null
+
+      - name: Wait for rollout
+        run: |
+          for d in session-management-server frontend-ui message-recorder stt-service tts-service; do
+            echo "--- $d"
+            sudo k3s kubectl rollout status "deployment/$d" -n ai-agents --timeout=600s
+          done
+
+      - name: Verify text-to-speech loaded a voice model
+        # tts-service passes its probes even when the model failed to load: it
+        # starts the gRPC server anyway with "Provider: none" and every session
+        # is silent. transformers 5.17.0 did exactly that on the development
+        # server on 2026-09-10, behind a green run. Read the provider it chose.
+        run: |
+          LOGS=$(sudo k3s kubectl logs -n ai-agents deploy/tts-service -c tts-service 2>/dev/null)
+          PROVIDER=$(printf '%s\n' "$LOGS" | sed -n 's/.*\[TTS Service\] Provider: //p' | tail -1)
+          echo "tts provider=${PROVIDER:-<not reported>}"
+          if [ -z "$PROVIDER" ] || [ "$PROVIDER" = "none" ]; then
+            echo "::error::tts-service is running without a voice model (provider '${PROVIDER:-<not reported>}') - sessions would be silent"
+            printf '%s\n' "$LOGS" | grep -E "load failed|Error" | tail -5
+            exit 1
+          fi
+
+      - name: Verify the running version is the one we just built
+        # Asks the service itself rather than trusting the rollout. Uses node
+        # (always in the image) so this needs no curl and no port-forward.
+        run: |
+          for i in $(seq 1 30); do
+            RUNNING=$(sudo k3s kubectl exec -n ai-agents deploy/session-management-server -- \
+              node -e "fetch('http://localhost:3000/version').then(r=>r.json()).then(v=>console.log(v.version)).catch(()=>process.exit(1))" 2>/dev/null) && break
+            sleep 5
+          done
+          echo "running=$RUNNING expected=$IMAGE_TAG"
+          if [ "$RUNNING" != "$IMAGE_TAG" ]; then
+            echo "::error::Deployed version mismatch - rollout did not take effect"
+            exit 1
+          fi
+
+
+      - name: Verify the deployment is publicly reachable
+        # The check above asks the pod directly, so it passes even when nothing
+        # is routing traffic in -- which is exactly how production sat
+        # unreachable from 1 to 5 Sept behind four consecutive green runs.
+        # This one goes through the real path: DNS, Caddy, TLS, the
+        # port-forward, then the pod. Retries because the forwards take a
+        # moment to come up after a rollout.
+        env:
+          PUBLIC_FRONTEND: https://frontend.c4dhi.moserfelix.com
+          PUBLIC_BACKEND: https://backend.c4dhi.moserfelix.com
+        run: |
+          PUB=""
+          for i in $(seq 1 12); do
+            PUB=$(curl -fsS --max-time 10 "$PUBLIC_BACKEND/version" 2>/dev/null \
+                  | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+            [ -n "$PUB" ] && break
+            sleep 5
+          done
+          echo "public=$PUB expected=$IMAGE_TAG"
+          if [ "$PUB" != "$IMAGE_TAG" ]; then
+            echo "::error::$PUBLIC_BACKEND reports '"'"'$PUB'"'"', expected '"'"'$IMAGE_TAG'"'"' - deployed but not reachable through Caddy/port-forwards"
+            exit 1
+          fi
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$PUBLIC_FRONTEND")
+          if [ "$CODE" != "200" ]; then
+            echo "::error::$PUBLIC_FRONTEND returned $CODE"
+            exit 1
+          fi
+          echo "public endpoints OK: $PUBLIC_FRONTEND and $PUBLIC_BACKEND"
+
+      - name: Report what landed
+        if: always()
+        run: sudo k3s kubectl get pods -n ai-agents -o wide

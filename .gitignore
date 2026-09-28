@@ -3,6 +3,7 @@
 # compiled output
 /dist
 **/node_modules/
+**/node_modules
 /build
 
 # Python compiled files
@@ -104,3 +105,6 @@ stella-backup-*.zip.enc
 # EXACT match, so it does not cover `.env.production.pre-restore.<epoch>`.
 .env.*.pre-restore.*
 *.pre-restore.*
+
+# Compiled output of the prisma seed script (npm run db:seed)
+.seed-dist/

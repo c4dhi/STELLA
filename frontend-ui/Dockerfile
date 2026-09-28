@@ -2,7 +2,7 @@
 
 # Stage 1: Build the React app
 # Note: Vite 7.x requires Node.js 20.19+ or 22.12+
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 
 # Build argument for app version (passed from parent package.json)
 ARG APP_VERSION=0.0.0

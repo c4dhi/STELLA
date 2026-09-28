@@ -5,7 +5,7 @@ import warnings
 
 import stt_pb2 as stt__pb2
 
-GRPC_GENERATED_VERSION = '1.76.0'
+GRPC_GENERATED_VERSION = '1.83.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class SpeechToTextStub(object):
+class SpeechToTextStub:
     """Speech-to-Text gRPC Service
     Provides real-time streaming transcription using Sherpa-ONNX
     """
@@ -53,7 +53,7 @@ class SpeechToTextStub(object):
                 _registered_method=True)
 
 
-class SpeechToTextServicer(object):
+class SpeechToTextServicer:
     """Speech-to-Text gRPC Service
     Provides real-time streaming transcription using Sherpa-ONNX
     """
@@ -105,7 +105,7 @@ def add_SpeechToTextServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class SpeechToText(object):
+class SpeechToText:
     """Speech-to-Text gRPC Service
     Provides real-time streaming transcription using Sherpa-ONNX
     """

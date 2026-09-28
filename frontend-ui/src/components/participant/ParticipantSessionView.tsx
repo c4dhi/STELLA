@@ -18,6 +18,8 @@ import TranscriptOverlay from '../face/TranscriptOverlay'
 import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
 import VisualizerRenderer from '../face/VisualizerRenderer'
+import { useSleepMicrophone } from '../face/hooks/useSleepMicrophone'
+import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
@@ -173,9 +175,29 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     spokenText: teleprompterText,
     applyProgress: applySpeechProgress,
     noteAgentText: noteTeleprompterText,
+    noteEmotionCues,
+    faceExpression,
+    faceGesture,
+    faceState,
     clearSpoken: clearTeleprompterText,
   } = useTeleprompter()
   const [messages, setMessages] = useState<ParticipantMessage[]>([])
+
+  // Emotion tags (#face-emotions): publish what the cursor resolves to the
+  // store, which is where StellaFace reads it from — the same path the
+  // organizer takes, so one face implementation serves both surfaces.
+  const setFaceExpression = useStore(s => s.setFaceExpression)
+  const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
+  const triggerFaceState = useStore(s => s.triggerFaceState)
+  useEffect(() => {
+    setFaceExpression(faceExpression)
+  }, [faceExpression, setFaceExpression])
+  useEffect(() => {
+    if (faceGesture) triggerFaceGesture(faceGesture.tag)
+  }, [faceGesture, triggerFaceGesture])
+  useEffect(() => {
+    if (faceState) triggerFaceState(faceState.tag)
+  }, [faceState, triggerFaceState])
 
   // Close the transcript-settings menu (#343) on outside click or Escape.
   useEffect(() => {
@@ -574,6 +596,13 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           return
         }
 
+        // Emotion tags (#face-emotions): face cues for the reply being spoken.
+        if (envelope.type === 'agent_emotion_cues') {
+          const data = envelope.data || {}
+          noteEmotionCues(data.transcript_id || '', data.cues || [])
+          return
+        }
+
         // Start session timer on first agent message (only if a max duration is configured)
         if (
           !sessionTimerStartedRef.current &&
@@ -792,7 +821,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         console.error('Error parsing data:', error)
       }
     },
-    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, clearTeleprompterText]
+    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, noteEmotionCues, clearTeleprompterText]
   )
 
   // Handle room disconnection
@@ -969,7 +998,24 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     }
   }, [audioEnabled, resumeAudioContext])
 
-  // Toggle microphone - explicitly publish/unpublish audio track (matching session screen approach)
+  // Tell the agent the participant muted or unmuted on purpose (same envelope as
+  // PeerTransport.sendMuteSignal). The agent pads STT with silence on mute.
+  const sendMuteSignal = useCallback((muted: boolean) => {
+    if (!room || room.state !== 'connected') return
+    const envelope = {
+      type: muted ? 'audio_stream_mute' : 'audio_stream_unmute',
+      data: { timestamp: Date.now(), reason: muted ? 'user_muted' : 'user_unmuted' },
+    }
+    try {
+      room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(envelope)), { reliable: true })
+    } catch (error) {
+      console.error('[Participant] Error sending mute signal:', error)
+    }
+  }, [room])
+
+  // Toggle microphone. The first unmute acquires and publishes the mic; after that
+  // mute/unmute is soft: the track stays published and just goes silent, so the
+  // agent's STT is not torn down and restarted on every mute (#362).
   const toggleMicrophone = useCallback(async () => {
     if (!room || room.state !== 'connected') {
       console.warn('[Participant] Cannot toggle microphone - room not connected')
@@ -980,7 +1026,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     await enableAudio()
 
     try {
-      if (isMuted) {
+      if (isMuted && publishedAudioTrackRef.current) {
+        // Soft unmute of the still-published track
+        sendMuteSignal(false)
+        await publishedAudioTrackRef.current.unmute()
+        setIsMuted(false)
+      } else if (isMuted) {
         // Unmute: Get microphone and publish audio track
         console.log('[Participant] 🎤 Starting microphone...')
 
@@ -1018,34 +1069,24 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
 
         setIsMuted(false)
       } else {
-        // Mute: Unpublish audio track and stop stream
-        console.log('[Participant] 🔇 Stopping microphone...')
-
-        // Unpublish the audio track
-        if (publishedAudioTrackRef.current) {
-          const track = publishedAudioTrackRef.current.track
-          if (track) {
-            await room.localParticipant.unpublishTrack(track)
-            console.log('[Participant] ✓ Audio track unpublished')
-          }
-          publishedAudioTrackRef.current = null
-        }
-
-        // Stop the media stream
-        if (localStreamRef.current) {
-          localStreamRef.current.getTracks().forEach(track => {
-            track.stop()
-            console.log('[Participant] ✓ Stopped track:', track.label)
-          })
-          localStreamRef.current = null
-        }
+        // Soft mute: keep the track published and the mic acquired, go silent
+        console.log('[Participant] 🔇 Muting microphone...')
+        await publishedAudioTrackRef.current?.mute()
+        sendMuteSignal(true)
 
         setIsMuted(true)
       }
     } catch (error) {
       console.error('[Participant] ✗ Error toggling microphone:', error)
     }
-  }, [room, isMuted, enableAudio])
+  }, [room, isMuted, enableAudio, sendMuteSignal])
+
+  // Sleeping mutes the mic; waking gives it back if sleep is what took it.
+  useSleepMicrophone({
+    isMuted,
+    toggleMute: toggleMicrophone,
+    enabled: room?.state === 'connected'
+  })
 
   // Cleanup audio resources
   const cleanupAudio = () => {
@@ -1081,7 +1122,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
 
   // Mute microphone when session completes or times out
   useEffect(() => {
-    if ((sessionCompleted || sessionTimedOut) && !isMuted && room) {
+    if ((sessionCompleted || sessionTimedOut) && (!isMuted || publishedAudioTrackRef.current) && room) {
       // Unpublish audio track
       if (publishedAudioTrackRef.current?.track) {
         room.localParticipant.unpublishTrack(publishedAudioTrackRef.current.track)
@@ -1277,7 +1318,11 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           type={currentVisualizer}
           audioLevel={audioLevel}
           isRemoteSpeaking={isRemoteSpeaking}
-          isUserSpeaking={!isMuted}
+          // NOT `!isMuted`: an open mic is not someone talking. Passing it meant
+          // every unmuted participant read as permanently speaking, which pinned
+          // the eye-widen on and — worse — reset the idle timer on every frame,
+          // so this face could never idle at all. There is no local VAD on this
+          // surface yet, so say nothing rather than say something false.
         />
       </div>
 

@@ -12,7 +12,7 @@ ARG ENABLE_GPU=false
 # ============================================================================
 # CPU-only base image
 # ============================================================================
-FROM python:3.11-slim AS base-cpu
+FROM python:3.14-slim AS base-cpu
 
 WORKDIR /app
 
@@ -26,9 +26,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# GPU base image (NVIDIA CUDA 12.6 - compatible with driver 13.0+)
+# GPU base image
 # ============================================================================
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 AS base-gpu
+# PINNED, AND NOT SAFELY BUMPABLE. The CUDA version here must be supported by
+# the GPU node's *driver*. The torch wheel installed below is unpinned and
+# bundles its own CUDA runtime, so the base only has to satisfy the driver.
+#
+# Dependabot bumped this to 13.3.1 on 2026-07-30. When it was first rebuilt on
+# 2026-08-25 every pod failed in the NVIDIA prestart hook before the container
+# process even started:
+#
+#   nvidia-container-cli: requirement error: unsatisfied condition: cuda>=13.3
+#
+# Measured 2026-09-01: production (L4) runs driver 565.57.01 -> max CUDA 12.7;
+# test (T4) runs 580.173.02 -> max CUDA 13.0. 13.3.1 is unrunnable on BOTH.
+# Bump this only together with the node drivers, and only after actually
+# starting the image on a GPU host. See .github/dependabot.yml.
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base-gpu
 
 WORKDIR /app
 
@@ -37,10 +51,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install Python 3.11 and system dependencies
+# The deadsnakes PPA is fetched with retries: add-apt-repository resolves the
+# signing key through Launchpad's API, which intermittently answers
+# GPGKeyTemporarilyNotFoundError and would otherwise fail the whole build
+# ~20 minutes in (seen 2026-08-25). It still fails loudly after five attempts —
+# that matters, because without the PPA python3.11 resolves to jammy's own
+# 3.11.0~rc1, a release candidate we must never ship.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     tzdata \
-    && add-apt-repository ppa:deadsnakes/ppa \
+    && (for i in 1 2 3 4 5; do add-apt-repository -y ppa:deadsnakes/ppa && exit 0; sleep 10; done; exit 1) \
     && apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
@@ -94,14 +114,9 @@ RUN if [ "$ENABLE_GPU" = "true" ]; then \
     fi
 
 # ============================================================================
-# Proto compilation
+# Proto sources (compiled AFTER the app code is copied — see below)
 # ============================================================================
 COPY proto/ ./proto/
-RUN python -m grpc_tools.protoc \
-    -I./proto \
-    --python_out=. \
-    --grpc_python_out=. \
-    proto/stt.proto
 
 # ============================================================================
 # Model download scripts (models are downloaded at runtime via init container)
@@ -120,6 +135,32 @@ ENV SILERO_VAD_CACHE_DIR=/root/.cache/silero-vad
 # Application code
 # ============================================================================
 COPY src/ ./src/
+
+# ============================================================================
+# Proto compilation — INTO src/, and AFTER copying it
+# ============================================================================
+# Both parts of that matter.
+#
+# CMD runs `python src/stt_server.py`, which puts /app/src at the head of
+# sys.path — so `import stt_pb2` resolves to src/stt_pb2.py, never to /app.
+# This step used to emit into /app, where nothing could import it, while the
+# service quietly ran on the stubs committed under src/. Adding a proto field
+# then built and shipped an image that did not have it, and the mismatch only
+# showed up at runtime as:
+#
+#   ValueError: Protocol message TranscriptEvent has no "decode_diagnostics" field
+#
+# Generating into src/ after the COPY means the build output always wins over
+# whatever is committed, so the two cannot drift again. The committed stubs
+# stay in git for local runs and tests, which have no build step.
+RUN python -m grpc_tools.protoc \
+    -I./proto \
+    --python_out=./src \
+    --grpc_python_out=./src \
+    proto/stt.proto \
+ && python -c "import sys; sys.path.insert(0, './src'); import stt_pb2; \
+    assert hasattr(stt_pb2.TranscriptEvent(), 'decode_diagnostics'); \
+    print('[STT] proto stubs regenerated and importable')"
 
 # ============================================================================
 # Environment defaults
@@ -179,7 +220,17 @@ ENV VAD_AUDIO_INACTIVITY_TIMEOUT_MS=1500
 # ============================================================================
 ENV SHERPA_SILENCE_THRESHOLD=1.5
 ENV SHERPA_SPEECH_TIMEOUT=10.0
+# 0.001 (-60dB), i.e. wide open. Tried 0.008 to stop room noise ducking the
+# agent; it cost transcription accuracy, because on this provider the same gate
+# also decides what counts as silence for endpointing. False barge-ins are
+# handled by the duck watchdog in the SDK instead. Note this ENV overrides the
+# Python default, so this line is the one that actually takes effect.
 ENV SHERPA_RMS_THRESHOLD=0.001
+# Silence before speech_ended fires (the agent stops ducking). The remaining
+# wait before the transcript is finalised is derived from
+# SHERPA_SILENCE_THRESHOLD, so endpointing timing is unchanged — this only
+# splits "they stopped" from "they are done", which used to be one event.
+ENV SHERPA_SILENCE_DURATION_MS=500
 ENV SHERPA_PRE_BUFFER_SAMPLES=8000
 ENV SHERPA_MIN_TRANSCRIPT_CHARS=3
 

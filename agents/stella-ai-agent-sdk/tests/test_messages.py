@@ -169,3 +169,82 @@ class TestAgentOutput:
         assert output.type == OutputType.METADATA
         assert output.metadata_subtype == MetadataSubtype.PROGRESS
         assert output.metadata.get("percentage") == 0.75  # Normalized to 0-1
+
+
+class TestDecisionAndToolCallOutputs:
+    """Decisions and tool calls both ride the DEBUG channel deliberately.
+
+    Reusing DEBUG means they persist, replay and transport with no new envelope
+    type and no backend change — so what these tests pin down is that the extra
+    structure survives ``to_data_payload`` intact, since that is the only path
+    to the frontend.
+    """
+
+    def test_decision_is_a_debug_output_carrying_a_decision_block(self):
+        output = AgentOutput.decision(
+            "s1",
+            "activity_started",
+            "Started “Memory Game”",
+            component="companion_router",
+        )
+        assert output.type == OutputType.DEBUG
+        assert output.metadata["component"] == "companion_router"
+        assert output.metadata["decision"] == {
+            "kind": "activity_started",
+            "label": "Started “Memory Game”",
+        }
+
+    def test_decision_detail_and_options_reach_the_frontend(self):
+        payload = AgentOutput.decision(
+            "s1",
+            "activities_offered",
+            "Offered 2 activities",
+            detail="Ask to pick one",
+            options=["Memory Game", "Fitness Check-in"],
+        ).to_data_payload()
+
+        assert payload["type"] == "debug"
+        decision = payload["data"]["metadata"]["decision"]
+        assert decision["options"] == ["Memory Game", "Fitness Check-in"]
+        assert decision["detail"] == "Ask to pick one"
+        # The message still reads correctly for anything that only knows debug.
+        assert payload["data"]["content"] == "Offered 2 activities — Ask to pick one"
+
+    def test_decision_omits_absent_optional_fields(self):
+        # An empty `options: []` means "offered nothing", which is a real and
+        # different statement from "this decision was not an offer at all".
+        assert "options" not in AgentOutput.decision("s1", "k", "l").metadata["decision"]
+        assert AgentOutput.decision("s1", "k", "l", options=[]).metadata["decision"]["options"] == []
+
+    def test_tool_call_reports_what_the_agent_actually_did(self):
+        output = AgentOutput.tool_call(
+            "s1",
+            "set_deliverable",
+            caller="task_extraction",
+            arguments={"key": "user_name", "value": "Sam"},
+            data={"success": True},
+        )
+        assert output.type == OutputType.DEBUG
+        assert output.metadata["component"] == "tool:set_deliverable"
+        assert output.metadata["caller"] == "task_extraction"
+        assert output.metadata["arguments"] == {"key": "user_name", "value": "Sam"}
+        assert "set_deliverable(" in output.content
+
+    def test_failed_tool_call_is_a_warning_and_says_why(self):
+        output = AgentOutput.tool_call(
+            "s1", "complete_task", caller="task_extraction",
+            success=False, error="unknown task id",
+        )
+        assert output.metadata["level"] == "warn"
+        assert output.metadata["error"] == "unknown task id"
+        assert "unknown task id" in output.content
+
+    def test_tool_call_argument_preview_is_bounded(self):
+        # Arguments can carry a whole extracted transcript; the content line is
+        # rendered in a chat list, so it must not become the message.
+        output = AgentOutput.tool_call(
+            "s1", "batch_update", arguments={"blob": "x" * 5000},
+        )
+        assert len(output.content) < 300
+        # The full value is still there for anyone who opens the metadata.
+        assert len(output.metadata["arguments"]["blob"]) == 5000

@@ -55,12 +55,40 @@ class SetDeliverableTool(BaseTool):
                 "reasoning": {
                     "type": "string",
                     "description": "Explanation of why this value matches the deliverable"
-                }
+                },
+                "unconfirmed": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true when the user mentioned this in passing rather than "
+                        "answering a question about it — a detail volunteered while "
+                        "talking about something else, or one you inferred rather than "
+                        "were told. It is recorded either way, but an unconfirmed value "
+                        "is checked back with the user in conversation instead of being "
+                        "treated as settled. Use false when they answered directly."
+                    ),
+                },
+                "correction": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true ONLY when the participant deliberately changes an "
+                        "answer that is already recorded (\"actually, it is Sarah, not "
+                        "Tom\"). A required answer that is already collected is rejected "
+                        "without this, so a passing or worse mention cannot replace it. "
+                        "Put what they said in reasoning. Leave false for a first answer."
+                    ),
+                },
             },
             "required": ["key", "value", "reasoning"]
         }
 
-    async def execute(self, key: str, value: str, reasoning: str) -> ToolResult:
+    async def execute(
+        self,
+        key: str,
+        value: str,
+        reasoning: str,
+        unconfirmed: bool = False,
+        correction: bool = False,
+    ) -> ToolResult:
         """
         Execute the tool to set a deliverable.
 
@@ -68,11 +96,15 @@ class SetDeliverableTool(BaseTool):
             key: The deliverable key
             value: The value to set
             reasoning: Explanation for the value
+            unconfirmed: Mentioned in passing, not settled
+            correction: Deliberate change of an already-collected answer
 
         Returns:
             ToolResult with success status and any state changes
         """
-        result = await self._client.set_deliverable(key, value, reasoning)
+        result = await self._client.set_deliverable(
+            key, value, reasoning, unconfirmed, correction
+        )
 
         if not result["success"]:
             return ToolResult(
@@ -84,6 +116,8 @@ class SetDeliverableTool(BaseTool):
             success=True,
             data={
                 "key": key,
+                "unconfirmed": unconfirmed,
+                "correction": correction,
                 "value": value,
                 "task_completed": result.get("task_completed"),
                 **state_transition_data(result),

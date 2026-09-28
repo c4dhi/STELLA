@@ -103,6 +103,13 @@ spec:
         - configMapRef:
             name: stella-ai-config
         env:
+        # Stamped by deploy.sh with the IMAGE_TAG this rollout deployed, so the
+        # running service can report its own version at GET /version. Injected
+        # at runtime rather than baked in at build time: an unchanged service is
+        # not rebuilt, so a baked value would report whichever build last
+        # happened to compile it rather than what is actually deployed.
+        - name: STELLA_VERSION
+          value: "__IMAGE_TAG_PLACEHOLDER__"
         # K3S: # explicit runtime flag for the readiness probe so checkContainerdHealth()
         # K3S: # only gates on `k3s ctr version` when we are actually deployed onto k3s.
         # K3S: - name: CONTAINER_RUNTIME

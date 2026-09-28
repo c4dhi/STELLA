@@ -1,8 +1,24 @@
-"""Barge-in Evaluator — decides whether a user interruption is worth acting on.
+"""Barge-in Evaluator — decides whether an interruption is worth acting on.
 
-When barge-in is enabled, the SDK suspends playback the instant the user starts
-speaking, transcribes them, and hands the final transcript here. This stage uses
-a dedicated, configurable LLM prompt to classify the interruption:
+Both channels arrive here, but they arrive differently.
+
+VOICE is filtered twice before this stage sees anything, because acoustics
+answer most of the question for free and faster than any model can. The agent
+ducks its own volume on the VAD's first frame — reversible, so being wrong
+costs nothing — and goes silent once the user has been speaking for
+BARGE_IN_MIN_SPEECH_MS, which is what separates a cough from someone taking the
+floor. What duration cannot separate is "mhm" from "no, wait": both are short,
+and only meaning tells them apart. So the SDK suspends playback (reversibly,
+from the exact playhead) and asks this stage once, on the FINAL transcript.
+Never on a partial and never speculatively — that cost a decode before the
+judgement could even start, and the machinery built to hide that latency leaked
+state that silently swallowed real interruptions.
+
+TEXT has no acoustic signal at all — nothing about a typed message says whether
+the user meant to cut the agent off — so it comes straight here.
+
+Either way the SDK suspends playback, pauses generation, and hands the text on.
+This stage uses a dedicated, configurable LLM prompt to classify it:
 
 - COMMIT  → a real interruption (question/correction/stop/new request). The SDK
             discards the rest of the current reply and processes the transcript.
@@ -36,7 +52,7 @@ logger = logging.getLogger(__name__)
 # Minimal fallback only. The full, editable prompt — including where the
 # conversation context goes — lives in agent.yaml (barge_in → system_prompt) and
 # is what runs in production. The interruption itself arrives as the user message.
-BARGE_IN_SYSTEM_PROMPT = """Decide whether the user's interruption of the assistant is a real interruption to act on (COMMIT) or backchannel/noise to ignore so the assistant keeps talking (RESUME).
+BARGE_IN_SYSTEM_PROMPT = """You decide whether a user's interruption of the assistant's speech is a real interruption that should be acted on, or just a backchannel/noise that should be ignored so the assistant keeps talking.
 {{#if conversationHistory}}
 
 Conversation so far:
@@ -44,10 +60,21 @@ Conversation so far:
 {{/if}}
 {{#if interruptedReply}}
 
-The assistant was mid-sentence saying (the user cut in here): {{interruptedReply}}
+The assistant was in the middle of saying (the user cut in here):
+{{interruptedReply}}
 {{/if}}
 
-COMMIT if the words are meaningful in context — an answer to what was just asked, a question, a correction, a new request, "stop"/"wait", or a topic change. RESUME if it's just acknowledgement, thinking-aloud, or noise ("mhm", "yeah", "go on", a cough). When unsure, prefer COMMIT.
+The user's interruption (what they said while the assistant was speaking) is given as the user message. JUDGE IT IN CONTEXT.
+
+JUDGE THE WHOLE UTTERANCE, NEVER ITS OPENING WORDS. People begin real answers with agreement all the time. "Ja, absolut." on its own is a backchannel; "Ja, absolut. Pausen würden auch gehen, aber ich habe leider wenig Zeit." is an ANSWER that happens to start with agreement, and it is a real turn. Read to the end before deciding.
+
+THE TEST: strip the acknowledgement words from the front. Is anything left that the assistant would need to respond to — a fact about the user, an opinion, a qualification, a question, a refusal? If yes, COMMIT. If removing the filler leaves nothing, RESUME.
+
+Output COMMIT if the user's words are meaningful given the conversation — a relevant answer to what the assistant just asked, a question, a correction, a new request, a clear "stop"/"wait", or a change of topic. An on-topic answer (e.g. giving their name right after being asked for it) is a real turn and must COMMIT. If the assistant's last sentence was a question and these words could be an answer to it, COMMIT.
+
+Output RESUME only when the utterance is nothing BUT acknowledgement or noise and carries no information of its own — "mhm", "ja", "genau", "okay", "right", "go on", a cough, a few filler words.
+
+When unsure, prefer COMMIT — ignoring a real interruption is worse than briefly pausing.
 
 Output ONLY one word: COMMIT or RESUME."""
 

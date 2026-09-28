@@ -142,8 +142,9 @@ function discoverBuiltinAgents(): BuiltinAgentInfo[] {
  * Read an agent's declared default experts from config/experts/*.json.
  *
  * Capability-gated per expert: `task_extraction` rides on the "plans" capability
- * (its job is to fill the plan's deliverables), while the assessment experts ride
- * on the "experts" capability. The parsed array (each file = one expert:
+ * (its job is to fill the plan's deliverables) and `companion_router` on
+ * "companion" (its job is to drive activity transitions), while the assessment
+ * experts ride on the "experts" capability. The parsed array (each file = one expert:
  * name/model/prompt/verdict_directives/…) is stored on AgentType.expertDefaults so
  * the Configurator's Expert Module renders the agent's declared experts/verdicts/
  * actions instead of hardcoding them.
@@ -155,7 +156,8 @@ function readExpertDefaults(
   const caps = Array.isArray(capabilities) ? (capabilities as string[]) : []
   const hasExperts = caps.includes('experts')
   const hasPlans = caps.includes('plans')
-  if (!hasExperts && !hasPlans) return Prisma.DbNull
+  const hasCompanion = caps.includes('companion')
+  if (!hasExperts && !hasPlans && !hasCompanion) return Prisma.DbNull
 
   const expertsDir = path.join(directoryPath, 'config', 'experts')
   if (!fs.existsSync(expertsDir)) return Prisma.DbNull
@@ -171,7 +173,16 @@ function readExpertDefaults(
     }
     if (!parsed || typeof parsed !== 'object') continue
     const name = (parsed as Record<string, unknown>).name
-    const include = name === 'task_extraction' ? hasPlans : hasExperts
+    // Two experts are structural rather than assessment: task_extraction is how
+    // plans are executed, companion_router is how companion mode is executed.
+    // Each rides on the capability for the mode it implements, so an agent that
+    // does not support that mode never publishes it at all.
+    const include =
+      name === 'task_extraction'
+        ? hasPlans
+        : name === 'companion_router'
+          ? hasCompanion
+          : hasExperts
     if (include) experts.push(parsed as Record<string, unknown>)
   }
 
@@ -205,6 +216,8 @@ function mapManifestToDbFields(manifest: AgentManifest): Prisma.AgentTypeCreateI
     runtimeVariables: manifest.runtimeVariables ? (manifest.runtimeVariables as Prisma.InputJsonValue) : Prisma.DbNull,
     compilerVersion: manifest.promptCompiler?.version || null,
     sdkMinVersion: manifest.sdk?.minVersion || null,
+    deprecated: manifest.metadata.deprecated === true,
+    deprecationNote: manifest.metadata.deprecationNote || null,
   }
 }
 
@@ -412,6 +425,56 @@ async function deactivateRetiredBuiltins(discoveredSlugs: string[]): Promise<voi
   }
 }
 
+/**
+ * The system default persona (#467) — the terminus of the persona resolution
+ * chain, so it must always exist.
+ *
+ * The row is created by the add_persona migration; this keeps its TEXT current
+ * across deploys without ever clobbering ownership or resurrecting a row an
+ * operator repointed. Deliberately id-stable: agentConfig snapshots reference
+ * personas by id, so a fresh id each seed would orphan them.
+ */
+const SYSTEM_DEFAULT_PERSONA_ID = '00000000-0000-4000-8000-000000000001'
+
+const SYSTEM_DEFAULT_PERSONA_PROMPT = `You are STELLA — a warm, genuinely curious conversation partner with a personality of your own, working toward collecting specific information through real conversation, not a form.
+
+- Respond in the SAME LANGUAGE the user speaks (German if they speak German, English if English).
+- Keep responses to 30-50 words (this is a voice conversation).
+- NEVER mention internal systems, experts, deliverables, or technical metadata.
+- React to the specific thing the user said; never re-ask something they already answered.
+- Ask for missing information naturally, one thing at a time.`
+
+async function seedSystemDefaultPersona(): Promise<void> {
+  const existing = await prisma.persona.findFirst({ where: { isSystemDefault: true } })
+
+  if (existing) {
+    // Only the prompt text is refreshed. Name/icon are left alone so an operator
+    // can rename the default without the next seed undoing it.
+    if (existing.systemPrompt !== SYSTEM_DEFAULT_PERSONA_PROMPT) {
+      await prisma.persona.update({
+        where: { id: existing.id },
+        data: { systemPrompt: SYSTEM_DEFAULT_PERSONA_PROMPT },
+      })
+      console.log(`  - refreshed system default persona (${existing.id})`)
+    }
+    return
+  }
+
+  const created = await prisma.persona.create({
+    data: {
+      id: SYSTEM_DEFAULT_PERSONA_ID,
+      userId: null,
+      name: 'STELLA (default)',
+      description:
+        'Built-in fallback identity, used when a deployment names no persona. Copy it to make your own.',
+      icon: '🌟',
+      systemPrompt: SYSTEM_DEFAULT_PERSONA_PROMPT,
+      isSystemDefault: true,
+    },
+  })
+  console.log(`  - created system default persona (${created.id})`)
+}
+
 async function main() {
   console.log('Seeding agent types from manifests...')
 
@@ -458,6 +521,11 @@ async function main() {
         expertDefaults,
         compilerVersion: dbFields.compilerVersion,
         sdkMinVersion: dbFields.sdkMinVersion,
+        // The manifest is the source of truth for deprecation, so an UPDATE
+        // must carry it — otherwise marking an agent deprecated would only
+        // take effect on databases that had never seeded it.
+        deprecated: dbFields.deprecated,
+        deprecationNote: dbFields.deprecationNote,
         // Preserve isBuiltIn and validationStatus on update
       },
       create: {
@@ -495,6 +563,9 @@ async function main() {
   await deactivateRetiredBuiltins(agents.map(({ manifest }) => manifest.metadata.slug))
 
   await verifySeedRoundTrip(agents)
+
+  console.log('Seeding personas...')
+  await seedSystemDefaultPersona()
 
   console.log('Seeding complete!')
 }

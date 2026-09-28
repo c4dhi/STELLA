@@ -1,20 +1,43 @@
 ---
-sidebar_position: 3
-title: "💫 stella-light-agent"
+sidebar_position: 4
+title: "💫 stella-light-agent (deprecated)"
 ---
 
 # 💫 stella-light-agent
 
-A lightweight conversational AI agent optimized for fast responses and lower resource usage.
+:::danger Deprecated — use stella-v2
+This agent is superseded by [stella-v2](./stella-v2/index.md) and is no longer developed. Existing deployments keep running and their saved configurations stay valid, but **do not choose it for new work**.
+
+**If you came here for lower cost**, save a stella-v2 configuration with only the experts you need enabled (the Expert Pool node has a per-expert on/off). You get comparable per-turn cost and keep everything stella-light never grew.
+:::
+
+## Why it was deprecated
+
+Its pitch was "faster and cheaper". Only half of that survived.
+
+**Cheaper still holds** — roughly two LLM calls per turn against stella-v2's seven-plus — but that is now a stella-v2 *configuration*, not a reason for a second codebase.
+
+**Faster no longer holds.** stella-v2 gained a bridge generator: it starts speaking a short opening beat immediately, while the rest of the pipeline runs behind it. stella-light has no bridge, so it waits in silence for its single call to finish. On *perceived* latency — the only latency that matters in a spoken conversation — stella-light is now the slower of the two. It also emits no analytics, so that gap is invisible on the dashboard.
+
+Meanwhile the divergence cost was real. The two agents run the **same plans**, and features kept landing in stella-v2 only: the bridge, analytics, companion mode, persona token resolution. A plan authored with `{{persona.name}}` read correctly under stella-v2 and printed the raw token under stella-light — and plan prose is spoken aloud.
+
+## Migrating
+
+| You used stella-light for… | Do this instead |
+|---|---|
+| Lower per-turn cost | A stella-v2 configuration with only `task_extraction` and `noise_detection` enabled |
+| A simple agent to develop against | stella-v2 with its default configuration |
+| Faster replies | stella-v2 — the bridge makes it start speaking sooner |
+
+Nothing about your plans, personas or sessions changes: those are shared, and both agents drive the same state machine through the same SDK.
 
 ## Overview
 
 `stella-light-agent` provides a streamlined voice AI pipeline that sacrifices some advanced features for improved performance:
 
-- Faster response times
 - Lower memory footprint
 - Simpler configuration
-- Ideal for development and testing
+- Fewer LLM calls per turn
 
 ## Comparison with stella-agent
 
