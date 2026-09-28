@@ -98,7 +98,7 @@ def _make_agent(
     agent.tool_registry = None
 
     async def _fetch_history(limit=20):
-        return []
+        return [], []
 
     async def _fetch_sm():
         return {
