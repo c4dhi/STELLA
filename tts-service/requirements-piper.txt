@@ -9,4 +9,4 @@
 # Install via: pip install -r requirements-piper.txt
 # Or build the image with: --build-arg TTS_PROVIDER=piper
 
-piper-tts>=1.2.0
+piper-tts>=1.8.0
