@@ -596,6 +596,30 @@ model ServerMetricsSnapshot {
   @@index([timestamp])
 }
 
+// One run of the voice load test (scripts/load-test): how many simultaneous
+// sessions a server's GPU carried before the voice slowed or stuttered.
+model CapacityMeasurement {
+  id              String   @id @default(uuid())
+  measuredAt      DateTime
+  createdAt       DateTime @default(now())
+
+  gpuName         String
+  gpuMemoryMb     Int?
+  environment     String // which deployment was measured, e.g. "development"
+  sttProvider     String?
+  ttsProvider     String?
+  gitRevision     String?
+
+  maxSessions     Int
+  limitedBy       String[]
+  reachedTopLevel Boolean // true: the top level passed, so the real limit is higher
+  durationSeconds Int
+  criteria        Json
+  levels          Json
+
+  @@index([environment, gpuName, measuredAt])
+}
+
 // Compatibility of a saved AgentConfiguration with its AgentType's current pipelineSchema.
 // Computed by the reconciliation pass that runs when an AgentType version/schema changes.
 enum ConfigCompatibility {
@@ -631,6 +655,40 @@ model AgentConfiguration {
   @@index([agentTypeId])
   @@index([userId, agentTypeId])
   @@index([agentTypeId, compatibility])
+}
+
+// Audit trail for privileged, destructive operations (#380).
+//
+// Scope is deliberately narrow: backup IMPORT, which wipes and replaces the
+// entire deployment. That endpoint is reachable over HTTP by any SystemAdmin
+// (backup.controller.ts) with no cluster access, and until now left no record of
+// who ran it. Export is NOT audited here — it requires cluster access, and
+// anyone holding that can already read the secrets directly via
+// `kubectl get secret`, so a logbook of the polite route buys nothing.
+//
+// This table is excluded from backup restore (NEVER_RESTORE_MODELS in
+// manifest.ts): an import truncates every other table, so restoring this one
+// would let an import erase the evidence of itself.
+//
+// It records WHO and WHAT, never a secret VALUE.
+model AuditEvent {
+  id         String   @id @default(uuid())
+  action     String // e.g. 'backup.import'
+  outcome    String // 'success' | 'rejected' | 'failed'
+  occurredAt DateTime @default(now())
+
+  // Who acted. actorId/actorLabel are null for the in-pod CLI path, which has no
+  // authenticated user — actorType distinguishes the two.
+  actorType  String // 'system-admin' | 'cli'
+  actorId    String?
+  actorLabel String? // email for a user; "user@host" for the CLI
+
+  // Non-sensitive context: bundle filename/size, key FINGERPRINT (never the
+  // key), migration head, row/package counts, guard blockers.
+  detail Json?
+
+  @@index([occurredAt])
+  @@index([action])
 }
 
 // Agent identity — who the agent IS, separate from what it does (PlanTemplate)

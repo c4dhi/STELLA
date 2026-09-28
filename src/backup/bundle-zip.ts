@@ -11,7 +11,7 @@
  * wizard helper (scripts/backup-bundle.ts) so both ends speak the exact same
  * on-disk format.
  */
-import archiver from 'archiver'
+import type { Archiver as ArchiverInstance } from 'archiver'
 import * as yauzl from 'yauzl'
 import * as fs from 'fs'
 import { pipeline } from 'stream/promises'
@@ -27,11 +27,16 @@ const ZIP_LEVEL = 1
  * total archive size. Always `await finalize()` exactly once.
  */
 export class ZipWriter {
-  private readonly archive = archiver('zip', { zlib: { level: ZIP_LEVEL } })
   private readonly done: Promise<void>
 
-  constructor(outPath: string) {
-    const out = fs.createWriteStream(outPath)
+  private constructor(
+    private readonly archive: ArchiverInstance,
+    outPath: string,
+  ) {
+    // A bundle carries password hashes and (once the deploy layer folds in the
+    // .env) every deployment secret. Create it owner-only rather than inheriting
+    // the process umask, which on a typical host yields a world-readable 0644.
+    const out = fs.createWriteStream(outPath, { mode: 0o600 })
     this.done = new Promise<void>((resolve, reject) => {
       out.on('close', resolve)
       out.on('error', reject)
@@ -42,6 +47,13 @@ export class ZipWriter {
       })
     })
     this.archive.pipe(out)
+  }
+
+  /** archiver 8 ships ESM-only (no CJS build), so it has to be loaded with a
+   * dynamic `import()` even though the rest of this project is CommonJS. */
+  static async create(outPath: string): Promise<ZipWriter> {
+    const { ZipArchive } = await import('archiver')
+    return new ZipWriter(new ZipArchive({ zlib: { level: ZIP_LEVEL } }), outPath)
   }
 
   /** Add a small in-memory entry (manifest, a table chunk). */
@@ -179,7 +191,7 @@ export async function copyZipAdding(
   extra: Array<{ name: string; data: Buffer }>,
 ): Promise<void> {
   const reader = await ZipReader.open(srcPath)
-  const writer = new ZipWriter(outPath)
+  const writer = await ZipWriter.create(outPath)
   try {
     for (const { name, isDirectory } of reader.entries()) {
       if (isDirectory) continue

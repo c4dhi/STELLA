@@ -1,14 +1,17 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts'
 import { useThemeStore } from '../../../store/themeStore'
 import { parseMemoryValue, formatBytes } from '../../../hooks/useServerMetrics'
-import type { ServerMetrics, GpuDeviceMetrics } from '../../../lib/api-types'
+import type { ServerMetrics, GpuDeviceMetrics, CapacityMeasurement } from '../../../lib/api-types'
+import { CapacityModal } from './CapacityCard'
 
 interface GpuMonitorProps {
   currentMetrics: ServerMetrics | null
   metricsHistory: ServerMetrics[]
   isConnected: boolean
+  /** Measured voice capacity; shown in a modal behind the info icon next to the title. */
+  capacity?: { measurements: CapacityMeasurement[]; isLoading: boolean }
 }
 
 const GPU_COLORS = ['#A855F7', '#EC4899', '#F97316', '#06B6D4', '#84CC16', '#EAB308']
@@ -221,7 +224,9 @@ export default function GpuMonitor({
   currentMetrics,
   metricsHistory,
   isConnected,
+  capacity,
 }: GpuMonitorProps) {
+  const [capacityOpen, setCapacityOpen] = useState(false)
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
 
@@ -368,6 +373,23 @@ export default function GpuMonitor({
           }`}
         >
           GPU Performance
+          {capacity && (
+            <button
+              type="button"
+              onClick={() => setCapacityOpen(true)}
+              aria-label="How many conversations this GPU carries"
+              title="How many conversations this GPU carries"
+              data-testid="capacity-info"
+              className={`ml-2 inline-flex align-middle ${
+                isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'
+              }`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 16v-4M12 8h.01" />
+              </svg>
+            </button>
+          )}
         </h3>
         <div className="flex items-center gap-2">
           <div
@@ -459,6 +481,13 @@ export default function GpuMonitor({
           {chart}
           {legend}
         </>
+      )}
+      {capacity && capacityOpen && (
+        <CapacityModal
+          measurements={capacity.measurements}
+          isLoading={capacity.isLoading}
+          onClose={() => setCapacityOpen(false)}
+        />
       )}
     </div>
   )

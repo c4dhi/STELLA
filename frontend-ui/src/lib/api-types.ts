@@ -1489,6 +1489,36 @@ export interface MetricsTimelineResponse {
 // Admin Dashboard Types
 // ============================================================================
 
+/** One row of the load test's per-level results (scripts/load-test). */
+export interface CapacityLevel {
+  sessions: number
+  stt_final_p95_ms: number | null
+  tts_ttfa_p95_ms: number | null
+  tts_starved_pct: number | null
+  gpu_util_max_pct: number | null
+  errors: number
+}
+
+/** How many simultaneous sessions a server's GPU carried, and where it was measured. */
+export interface CapacityMeasurement {
+  id: string
+  measuredAt: string
+  gpuName: string
+  gpuMemoryMb: number | null
+  environment: string
+  sttProvider: string | null
+  ttsProvider: string | null
+  gitRevision: string | null
+  maxSessions: number
+  limitedBy: string[]
+  /** True when the highest level tried still passed: the real limit is higher. */
+  reachedTopLevel: boolean
+  durationSeconds: number
+  /** The limits the run was judged by (preroll_ms, max_tts_starved_pct, latency slacks). */
+  criteria: Record<string, number>
+  levels: CapacityLevel[]
+}
+
 export interface AdminDashboardMetrics {
   timestamp: string
   activeParticipants: number

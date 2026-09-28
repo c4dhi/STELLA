@@ -339,11 +339,11 @@ export default function PersonaSelectionStep({
                 {persona.voice && <span>Voice: {persona.voice}</span>}
                 {persona.language && <span>{persona.language.toUpperCase()}</span>}
                 {Object.keys(persona.variables || {}).length > 0 && (
-                  <span className="font-mono">
-                    {Object.keys(persona.variables || {})
+                  <span>
+                    {Object.entries(persona.variables || {})
                       .slice(0, 3)
-                      .map((k) => `{{persona.${k}}}`)
-                      .join(' ')}
+                      .map(([k, v]) => `${k}: ${v.length > 30 ? `${v.slice(0, 30)}…` : v}`)
+                      .join(' · ')}
                   </span>
                 )}
               </div>

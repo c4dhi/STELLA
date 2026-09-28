@@ -4,16 +4,18 @@
 # arg, so each built image contains only one provider's deps.
 
 # gRPC server
-grpcio>=1.83.0
-grpcio-tools>=1.83.1
+grpcio==1.84.0
+grpcio-tools==1.84.0
 
 # Shared audio handling (numpy is also pulled in by every provider, pinned
 # here so the floor is consistent across single-provider builds).
 # numpy 2.5 raised its floor to Python >=3.12, but the GPU stage below installs
-# python3.11, so `numpy>=2.5.1` makes `pip install -r requirements.txt` fail
-# outright with "No matching distribution found". Lift this bound only together
-# with the interpreter, never on its own. See .github/dependabot.yml.
-numpy>=2.0.0,<2.5
+# python3.11, so numpy>=2.5.1 makes `pip install -r requirements.txt` fail
+# outright with "No matching distribution found". Pinned exactly (rather than
+# left as a floor) so Dependabot can classify its bumps as minor/patch and
+# group them; the ignore rule in .github/dependabot.yml still blocks 2.5+.
+# Lift together with the interpreter, never on its own.
+numpy==2.4.6
 soundfile>=0.12.0
 # scipy 1.18 raised its floor to Python >=3.12 as well; same rule as numpy.
 scipy>=1.11.0,<1.18

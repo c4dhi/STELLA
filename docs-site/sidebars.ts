@@ -136,6 +136,7 @@ const sidebars: SidebarsConfig = {
         'deployment/message-recording',
         'deployment/production-checklist',
         'deployment/monitoring',
+        'deployment/capacity',
         'deployment/agent-validation',
         'deployment/backup-restore',
       ],
