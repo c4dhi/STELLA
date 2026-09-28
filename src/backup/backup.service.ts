@@ -133,7 +133,7 @@ export class BackupService {
     let filename = `stella-backup-${appVersion}-${stamp}.zip`
     let bundlePath = path.join(outDir, filename)
 
-    const zip = new ZipWriter(bundlePath)
+    const zip = await ZipWriter.create(bundlePath)
 
     // 1. Agent-package files — streamed straight from disk into the archive.
     const packages = await this.addPackagesToZip(zip)
