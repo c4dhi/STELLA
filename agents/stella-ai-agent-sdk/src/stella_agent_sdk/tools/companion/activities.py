@@ -158,10 +158,17 @@ class StartActivityTool(BaseTool):
 
 
 class EndActivityTool(BaseTool):
-    """Abandon the running plan and return to free conversation."""
+    """Propose leaving the running plan — does not clear it.
 
-    def __init__(self, sm_client):
-        self._sm_client = sm_client
+    Ending used to be immediate, which meant a single misjudged call by the
+    router (a downbeat but on-topic reply, mistaken for a stop request) threw
+    the user out of the activity with no way back. It now only PROPOSES
+    leaving; the agent turns that into a direct yes/no question, and a
+    separate, narrowly-scoped check on the reply decides whether to actually
+    clear the plan. The router keeps its own judgment for deciding SOMETHING
+    stop-shaped happened; it no longer gets the last word on whether it really
+    was one.
+    """
 
     @property
     def name(self) -> str:
@@ -170,10 +177,11 @@ class EndActivityTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Stop the current activity and go back to open conversation. Call ONLY "
-            "on a clear, explicit request to stop, leave, or move on — not for a "
-            "downbeat or ambiguous answer that is still on topic for what was just "
-            "asked. Can be called mid-activity."
+            "Propose stopping the current activity — does not end it immediately, "
+            "the user is asked to confirm first. Call ONLY on a clear, explicit "
+            "request to stop, leave, or move on — not for a downbeat or ambiguous "
+            "answer that is still on topic for what was just asked. Can be called "
+            "mid-activity."
         )
 
     @property
@@ -189,18 +197,8 @@ class EndActivityTool(BaseTool):
         }
 
     async def execute(self, reason: str = "", **_kwargs) -> ToolResult:
-        if not self._sm_client:
-            return ToolResult(success=False, error="No state machine available")
-
-        result = await self._sm_client.clear_plan()
-        if not result or not result.get("success"):
-            return ToolResult(
-                success=False,
-                error=(result or {}).get("error") or "Failed to end the activity",
-            )
-
-        logger.info("Ended activity (%s)", reason or "no reason given")
-        return ToolResult(success=True, data={"activity_ended": True, "reason": reason})
+        logger.info("Proposed ending activity (%s)", reason or "no reason given")
+        return ToolResult(success=True, data={"activity_end_proposed": True, "reason": reason})
 
 
 def create_companion_tools(
@@ -211,5 +209,5 @@ def create_companion_tools(
     return [
         ListActivitiesTool(activities),
         StartActivityTool(activities, sm_client),
-        EndActivityTool(sm_client),
+        EndActivityTool(),
     ]

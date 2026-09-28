@@ -64,6 +64,7 @@ def _make_agent(
     agent._audio_pipeline = None  # has_audio is a property → _elapsed_ms returns 0.0
     agent._is_processing = False
     agent._active_activity = None
+    agent._pending_end_confirmation = None
     agent._activity_started_at = None
     agent._activity_segments = []
     agent._activity_collected = {}
