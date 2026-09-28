@@ -28,7 +28,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, Dict, Any, List, Optional
+from typing import AsyncIterator, Dict, Any, List, Optional, Tuple
 
 from stella_agent_sdk import BaseAgent
 from stella_agent_sdk import AgentInput
@@ -267,9 +267,13 @@ class StellaV2Agent(BaseAgent):
         expert_task: Optional[asyncio.Task] = None
 
         try:
-            # Fetch context
+            # Fetch context. `history` (mode-scoped) feeds the bridge and the
+            # response — what gets SAID. `expert_history` (full, unscoped)
+            # feeds the Expert Pool — what happens NEXT, which needs the
+            # actual recent trajectory rather than just the current mode's
+            # slice (see _fetch_conversation_history).
             history_limit = self._custom_history_limit
-            history = await self._fetch_conversation_history(limit=history_limit)
+            history, expert_history = await self._fetch_conversation_history(limit=history_limit)
 
             # Fetch state from gRPC backend (parallel calls for performance)
             sm_context = {}
@@ -340,12 +344,12 @@ class StellaV2Agent(BaseAgent):
             # critical path max(bridge, experts) instead of bridge + experts.
             #
             # Contract for anything added between this line and the `await
-            # expert_task` below: do not mutate `sm_context` or `history`, the
-            # pool is reading them concurrently.
+            # expert_task` below: do not mutate `sm_context` or `expert_history`,
+            # the pool is reading them concurrently.
             experts_to_run = self.expert_registry.get_enabled_names()
             logger.info(f"Stage 2: Expert Pool (started, runs alongside bridge) — {experts_to_run}")
             expert_task = asyncio.create_task(
-                self.expert_pool.run(experts_to_run, input.text, history, sm_context)
+                self.expert_pool.run(experts_to_run, input.text, expert_history, sm_context)
             )
             # Emitted next to bridge_start on purpose: the two elapsed_ms values
             # being equal IS the property this change buys, and drift between
@@ -1224,7 +1228,9 @@ class StellaV2Agent(BaseAgent):
         """
         logger.info(f"Evaluating barge-in: '{transcript[:50]}'")
         try:
-            history = await self._fetch_conversation_history(
+            # Scoped: judging whether this is on-topic with the assistant's
+            # last question is a current-mode question, same as the response.
+            history, _ = await self._fetch_conversation_history(
                 limit=self.barge_in_evaluator.history_limit
             )
         except Exception as e:
@@ -1836,10 +1842,31 @@ class StellaV2Agent(BaseAgent):
             "collected_deliverables": collected,
         }
 
-    async def _fetch_conversation_history(self, limit: int = 20) -> List[Dict[str, str]]:
-        """Fetch conversation history from database via SDK."""
+    async def _fetch_conversation_history(
+        self, limit: int = 20
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        """Fetch conversation history from database via SDK.
+
+        Returns ``(scoped, full)``:
+
+        - ``scoped`` is trimmed to the current mode (#36/#627) — inside an
+          activity, only that activity's own turns; in free conversation, a
+          finished activity collapses to one line. This is what the spoken
+          reply is built from, so a finished activity's turns don't bleed
+          into free conversation and vice versa.
+        - ``full`` is the plain last-``limit`` turns, unscoped. The Expert
+          Pool (companion_router in particular) decides what should happen
+          NEXT — start, stop, or leave an activity alone — and doing that
+          well needs the actual recent trajectory, not just the current
+          mode's slice: ``scoped`` was, for a while, the only history experts
+          got too, which read as the start of a fresh conversation moments
+          after an activity began and made the router re-offer or re-start it
+          out of nowhere (Felix, dev session 29 Sep).
+
+        Identical when not in companion mode, since there is no mode to scope.
+        """
         if not self.has_history:
-            return []
+            return [], []
         try:
             messages = await self.get_chat_history(include_debug=False, limit=limit)
             entries = []
@@ -1853,11 +1880,13 @@ class StellaV2Agent(BaseAgent):
                             "at": parse_timestamp(msg.timestamp),
                         }
                     )
+            full = [{"role": e["role"], "content": e["content"]} for e in entries]
             if not self._companion_mode:
-                return [{"role": e["role"], "content": e["content"]} for e in entries]
-            return scope_history(
+                return full, full
+            scoped = scope_history(
                 entries, self._activity_segments, self._activity_started_at
             )
+            return scoped, full
         except Exception as e:
             logger.error(f"Failed to fetch history: {e}")
-            return []
+            return [], []

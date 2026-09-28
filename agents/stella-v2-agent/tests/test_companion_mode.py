@@ -558,11 +558,19 @@ def test_history_after_leaving_an_activity_is_one_line():
         ("user", "Fee", iso(started + timedelta(microseconds=2))),
         ("assistant", "back to chatting", iso(ended + timedelta(seconds=1))),
     ])
-    history = asyncio.run(agent._fetch_conversation_history())
+    history, full = asyncio.run(agent._fetch_conversation_history())
 
     assert [m["content"] for m in history] == [
         "hi",
         'Activity "Memory Game" ended. Collected: nickname = Fee.',
+        "back to chatting",
+    ]
+    # The Expert Pool's copy is never scoped — a router deciding what happens
+    # NEXT needs the actual turns, not the collapsed summary line (#627).
+    assert [m["content"] for m in full] == [
+        "hi",
+        "what is your nickname?",
+        "Fee",
         "back to chatting",
     ]
 
@@ -580,5 +588,8 @@ def test_history_inside_an_activity_starts_at_the_activity():
         ("user", "earlier chat", (started - timedelta(minutes=1)).isoformat()),
         ("assistant", "step one question", (started + timedelta(seconds=1)).isoformat()),
     ])
-    history = asyncio.run(agent._fetch_conversation_history())
+    history, full = asyncio.run(agent._fetch_conversation_history())
     assert [m["content"] for m in history] == ["step one question"]
+    # Unscoped copy for the Expert Pool keeps the turn before the activity
+    # started too — that's exactly the context the router lost (#627).
+    assert [m["content"] for m in full] == ["earlier chat", "step one question"]
