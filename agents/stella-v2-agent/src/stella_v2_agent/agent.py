@@ -28,7 +28,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import AsyncIterator, Dict, Any, List, Optional, Tuple
+from typing import AsyncIterator, Dict, Any, List, Optional
 
 from stella_agent_sdk import BaseAgent
 from stella_agent_sdk import AgentInput
@@ -51,11 +51,6 @@ from stella_v2_agent.pipeline.bridge_generator import (
 from stella_v2_agent.pipeline.expert_pool import ExpertPool
 from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
-from stella_v2_agent.pipeline.history_scope import (
-    ActivitySegment,
-    parse_timestamp,
-    scope_history,
-)
 from stella_agent_sdk.language import LanguageResolver
 from stella_agent_sdk.agent import BargeInEvaluator
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
@@ -219,13 +214,6 @@ class StellaV2Agent(BaseAgent):
         self._available_plans: List[Dict[str, Any]] = []
         # Title of the activity currently running, for logs and the reply's context.
         self._active_activity: Optional[str] = None
-        # When the running activity started, and the runs that already ended, so the
-        # history the model sees can be scoped to the current mode (history_scope).
-        self._activity_started_at: Optional[datetime] = None
-        self._activity_segments: List[ActivitySegment] = []
-        # What the running activity has collected, as of the last turn start. Read
-        # before the plan is cleared, since clearing takes the deliverables with it.
-        self._activity_collected: Dict[str, Any] = {}
         self._custom_history_limit: int = 20  # overridable via pipeline_config thresholds
         self._last_known_state_id: Optional[str] = None
         self._last_state_id: Optional[str] = None  # for detecting state transitions between turns
@@ -286,13 +274,13 @@ class StellaV2Agent(BaseAgent):
         expert_task: Optional[asyncio.Task] = None
 
         try:
-            # Fetch context. `history` (mode-scoped) feeds the bridge and the
-            # response — what gets SAID. `expert_history` (full, unscoped)
-            # feeds the Expert Pool — what happens NEXT, which needs the
-            # actual recent trajectory rather than just the current mode's
-            # slice (see _fetch_conversation_history).
+            # Fetch context. The Expert Pool additionally gets an explicit fact
+            # when an activity is running (companion_router's own history_limit
+            # is short enough that the turn which started it can scroll out of
+            # what it sees) — see _with_active_activity_fact.
             history_limit = self._custom_history_limit
-            history, expert_history = await self._fetch_conversation_history(limit=history_limit)
+            history = await self._fetch_conversation_history(limit=history_limit)
+            expert_history = history
             if self._companion_mode:
                 expert_history = _with_active_activity_fact(expert_history, self._active_activity)
 
@@ -300,10 +288,6 @@ class StellaV2Agent(BaseAgent):
             sm_context = {}
             if self.sm_client:
                 sm_context = await self._fetch_sm_context()
-                if self._activity_started_at is not None:
-                    collected_now = sm_context.get("collected_deliverables")
-                    if isinstance(collected_now, dict):
-                        self._activity_collected = dict(collected_now)
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
@@ -1249,9 +1233,7 @@ class StellaV2Agent(BaseAgent):
         """
         logger.info(f"Evaluating barge-in: '{transcript[:50]}'")
         try:
-            # Scoped: judging whether this is on-topic with the assistant's
-            # last question is a current-mode question, same as the response.
-            history, _ = await self._fetch_conversation_history(
+            history = await self._fetch_conversation_history(
                 limit=self.barge_in_evaluator.history_limit
             )
         except Exception as e:
@@ -1426,29 +1408,10 @@ class StellaV2Agent(BaseAgent):
         """
         if self.sm_client:
             await self.sm_client.clear_plan()
-        self._close_activity_segment(self._active_activity)
         self._plan_config = None
         self._active_activity = None
         self._last_known_state_id = None
         logger.info("Back to companion mode (%s)", reason)
-
-    def _open_activity_segment(self) -> None:
-        self._activity_started_at = datetime.now(timezone.utc)
-        self._activity_collected = {}
-
-    def _close_activity_segment(self, title: Optional[str]) -> None:
-        """Remember that an activity ran, so free conversation sees one line for it."""
-        if self._activity_started_at is not None:
-            self._activity_segments.append(
-                ActivitySegment(
-                    title=title or "activity",
-                    started_at=self._activity_started_at,
-                    ended_at=datetime.now(timezone.utc),
-                    collected=dict(self._activity_collected),
-                )
-            )
-        self._activity_started_at = None
-        self._activity_collected = {}
 
     def _apply_companion_tool_results(self, verdicts: List[Any]) -> Dict[str, Any]:
         """Read what the router did this turn, and reconcile the agent to it.
@@ -1468,7 +1431,6 @@ class StellaV2Agent(BaseAgent):
                     outcome["activities"] = data.get("activities", [])
                 if data.get("activity_started"):
                     self._active_activity = data.get("activity_title")
-                    self._open_activity_segment()
                     # The plan was loaded backend-side by the tool; adopt it locally
                     # so farewell/voice/language lookups resolve against it.
                     for activity in self._available_plans:
@@ -1491,7 +1453,6 @@ class StellaV2Agent(BaseAgent):
                     outcome["ended_title"] = (
                         self._active_activity or data.get("activity_title")
                     )
-                    self._close_activity_segment(outcome["ended_title"])
                     self._plan_config = None
                     self._active_activity = None
                     self._last_known_state_id = None
@@ -1863,51 +1824,29 @@ class StellaV2Agent(BaseAgent):
             "collected_deliverables": collected,
         }
 
-    async def _fetch_conversation_history(
-        self, limit: int = 20
-    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    async def _fetch_conversation_history(self, limit: int = 20) -> List[Dict[str, str]]:
         """Fetch conversation history from database via SDK.
 
-        Returns ``(scoped, full)``:
-
-        - ``scoped`` is trimmed to the current mode (#36/#627) — inside an
-          activity, only that activity's own turns; in free conversation, a
-          finished activity collapses to one line. This is what the spoken
-          reply is built from, so a finished activity's turns don't bleed
-          into free conversation and vice versa.
-        - ``full`` is the plain last-``limit`` turns, unscoped. The Expert
-          Pool (companion_router in particular) decides what should happen
-          NEXT — start, stop, or leave an activity alone — and doing that
-          well needs the actual recent trajectory, not just the current
-          mode's slice: ``scoped`` was, for a while, the only history experts
-          got too, which read as the start of a fresh conversation moments
-          after an activity began and made the router re-offer or re-start it
-          out of nowhere (Felix, dev session 29 Sep).
-
-        Identical when not in companion mode, since there is no mode to scope.
+        Plain last-``limit`` turns, unscoped, for both the response generator
+        and the Expert Pool. This used to be trimmed to the current mode in
+        companion mode (#36: only an activity's own turns while it runs; one
+        summary line for a finished one) — reverted (Felix, 29 Sep): the
+        trimming starved companion_router of the context it needs to know an
+        activity is already running (made it re-offer/re-restart out of
+        nowhere) and, separately, didn't reliably fix what it was FOR either
+        (the response generator drifting off a task's actual instruction).
+        Neither problem is solved by scoping history, so there is no reason to
+        keep the mode-bleed risk it was meant to trade against.
         """
         if not self.has_history:
-            return [], []
+            return []
         try:
             messages = await self.get_chat_history(include_debug=False, limit=limit)
-            entries = []
-            for msg in messages:
-                role = "user" if msg.role == "user" else "assistant"
-                if msg.content.strip():
-                    entries.append(
-                        {
-                            "role": role,
-                            "content": msg.content,
-                            "at": parse_timestamp(msg.timestamp),
-                        }
-                    )
-            full = [{"role": e["role"], "content": e["content"]} for e in entries]
-            if not self._companion_mode:
-                return full, full
-            scoped = scope_history(
-                entries, self._activity_segments, self._activity_started_at
-            )
-            return scoped, full
+            return [
+                {"role": "user" if msg.role == "user" else "assistant", "content": msg.content}
+                for msg in messages
+                if msg.content.strip()
+            ]
         except Exception as e:
             logger.error(f"Failed to fetch history: {e}")
-            return [], []
+            return []

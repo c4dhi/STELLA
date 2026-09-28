@@ -64,9 +64,6 @@ def _make_agent(
     agent._audio_pipeline = None  # has_audio is a property → _elapsed_ms returns 0.0
     agent._is_processing = False
     agent._active_activity = None
-    agent._activity_started_at = None
-    agent._activity_segments = []
-    agent._activity_collected = {}
     agent._turn_counter = 0
     agent._last_reply_text = ""
     agent._session_language = None
@@ -98,7 +95,7 @@ def _make_agent(
     agent.tool_registry = None
 
     async def _fetch_history(limit=20):
-        return [], []
+        return []
 
     async def _fetch_sm():
         return {
