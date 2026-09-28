@@ -8,4 +8,4 @@ sherpa-onnx>=1.13.8
 numpy>=2.0.0,<2.5
 # scipy 1.18 raised its floor to Python >=3.12 as well; same rule as numpy.
 scipy>=1.11.0,<1.18
-python-dotenv>=1.2.2
+python-dotenv>=1.2.3
