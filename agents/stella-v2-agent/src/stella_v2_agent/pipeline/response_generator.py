@@ -185,12 +185,27 @@ class ResponseGenerator:
         # without repeating: the early acknowledgment "bridge" and/or a deterministic
         # "prepend" safety line. They share the response transcript, so the LLM
         # output is appended after them into one seamless utterance.
-        if prepend:
-            spoken_prefix = f"{bridge} {prepend}".strip() if bridge else prepend
+        #
+        # The "continue from the opener, don't repeat it" guidance also lives as
+        # PROSE in the editable response prompt, around the {{bridge}} injection —
+        # visible to operators, not hidden in the background (build_response_system_prompt
+        # renders {{#if bridge}} / {{bridge}}). That prose is the only place this
+        # guidance lived until #627's follow-up: an operator's custom guidelines can
+        # under-specify or omit it, and even the default wording doesn't stop every
+        # paraphrase — Felix hit a deployed agent whose bridge "Glad to hear that!
+        # It sounds like it's been a pretty good day for you." was followed by "That's
+        # great to hear!", a re-acknowledgment in different words, not a literal
+        # repeat, so neither the prose nor _strip_repeated_opener() caught it. The
+        # rule below is now ALWAYS injected here — on top of the prose, never
+        # instead of it — so the guidance has a floor no custom prompt can drop
+        # below.
+        spoken_prefix = " ".join(p for p in (bridge, prepend) if p)
+        if spoken_prefix:
             already_said = []
             if bridge:
                 already_said.append(f'you said "{bridge}" as a natural acknowledgment')
-            already_said.append(f'the user was told, verbatim: "{prepend}"')
+            if prepend:
+                already_said.append(f'the user was told, verbatim: "{prepend}"')
             messages.insert(1, LLMMessage(
                 role="system",
                 content=(
@@ -200,21 +215,15 @@ class ResponseGenerator:
                     "utterance, so it MUST flow naturally as a single conversation turn.\n\n"
                     "Rules:\n"
                     "- Do NOT repeat, rephrase, or contradict anything already spoken above\n"
-                    "- Do NOT comment on it or add another greeting/acknowledgment\n"
+                    "- Do NOT comment on it, agree with it, or add another acknowledgment or "
+                    "reaction to your own words — not even in different words\n"
                     "- Pick up right where it left off — your continuation should feel like the same person kept talking"
                 ),
             ))
+            # Replay the spoken prefix as the assistant's own in-progress turn so
+            # the model literally continues it. Shares one transcript_id with the
+            # bridge/prepend chunk(s) already sent → one seamless utterance.
             messages.append(LLMMessage(role="assistant", content=spoken_prefix))
-        elif bridge:
-            # The "continue from the opener, don't repeat it" guidance is PROSE, so
-            # it lives in the editable response prompt right around the {{bridge}}
-            # injection (build_response_system_prompt renders {{#if bridge}} /
-            # {{bridge}}) — visible to operators, not hidden in the background.
-            # The only thing auto-injected here is the crucial, non-prose mechanism:
-            # replay the bridge as the assistant's own in-progress turn so the model
-            # literally continues it. The two share one transcript_id → one seamless
-            # utterance.
-            messages.append(LLMMessage(role="assistant", content=bridge))
 
         config = LLMConfig(
             model=self.response_model,
@@ -228,10 +237,9 @@ class ResponseGenerator:
             transcript_id = f"response_{uuid.uuid4().hex[:8]}"
 
         # Prepend the already-spoken prefix (bridge and/or deterministic safety
-        # line) so TTS speaks prefix + response as one seamless utterance. The LLM
-        # streams just its own continuation; we put the prefix back in front of
-        # each accumulated chunk.
-        spoken_prefix = " ".join(p for p in (bridge, prepend) if p)
+        # line, computed above) so TTS speaks prefix + response as one seamless
+        # utterance. The LLM streams just its own continuation; we put the prefix
+        # back in front of each accumulated chunk.
         prefix = (spoken_prefix + " ") if spoken_prefix else ""
 
         # Consume the stream through the shared SDK adapter (single source of
