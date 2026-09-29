@@ -94,12 +94,20 @@ class StartActivityTool(BaseTool):
 
     @property
     def parameters_schema(self) -> Dict[str, Any]:
+        # The enum alone is opaque ids with nothing pairing one to its title —
+        # confirmed empirically (Felix, 29 Sep) that this is why the model
+        # picks the wrong activity when it does decide to call this: labeling
+        # the description with id = title pairs took targeting accuracy on
+        # the reproduction case from 0/20 to 20/20.
+        pairs = "; ".join(
+            f'{a.get("id")} = "{a.get("title")}"' for a in self._activities if a.get("id")
+        )
         return {
             "type": "object",
             "properties": {
                 "activity_id": {
                     "type": "string",
-                    "description": "id of the activity, from list_activities",
+                    "description": f"id of the activity the user chose. Mapping of id to title: {pairs}",
                     "enum": [a.get("id") for a in self._activities if a.get("id")],
                 },
             },
