@@ -1,0 +1,209 @@
+{
+  "_readme": "Diverse companion_router scenarios for Felix to review (29 Sep). Not wired into pytest yet — a reviewable set first. Each entry has a conversation history, the user's turn, and what the router SHOULD do. 'verified' scenarios were actually run against the real LLM tonight (n=20 each, see #36's record); 'untested' ones are proposed additions covering gaps in tonight's coverage. Once reviewed, this becomes the seed for an automated replay suite so a future prompt change can be checked against the whole set at once instead of one case at a time.",
+
+  "scenarios": [
+    {
+      "id": "start-01-explicit-choice",
+      "category": "start_activity",
+      "description": "User names an activity outright.",
+      "user_input": "I want to do the Extended Fitness Check-in",
+      "expect": "start_activity",
+      "status": "verified (base case, used throughout tonight's replays)"
+    },
+    {
+      "id": "start-02-clear-yes-to-offer",
+      "category": "start_activity",
+      "description": "Unambiguous yes right after the router listed activities.",
+      "prior_assistant": "There are a few things we could do together: the Fitness Check-in or a focus group. What interests you?",
+      "user_input": "the fitness one",
+      "expect": "start_activity",
+      "status": "untested"
+    },
+    {
+      "id": "start-03-mid-activity-continuation (REPRODUCES #36)",
+      "category": "start_activity",
+      "description": "User answers the question the running activity just asked. The router should NOT re-fire — currently it does, 20/20, across 4 prompt variants (buried-in-history, more-history+brief, dedicated-line+full, dedicated-line+brief). Root cause writeup on #36's record.",
+      "prior_assistant": "Okay. I'm Grace... May I ask what you're called?",
+      "activity_running": "Conditional GRACE Focus Group",
+      "user_input": "My name is Felix",
+      "expect": "no tool",
+      "status": "verified failing — 80/80 trials wrongly called start_activity"
+    },
+    {
+      "id": "start-04-explicit-restart",
+      "category": "start_activity",
+      "description": "User explicitly asks to redo the activity that's already running — this SHOULD fire, per the router's own stated rule ('only call start_activity again if they clearly ask to restart').",
+      "activity_running": "Extended Fitness Check-in",
+      "user_input": "actually can we start that over from the beginning",
+      "expect": "start_activity",
+      "status": "untested — no replay has checked the 'restart' carve-out actually works, only that the ordinary continuation case wrongly fires"
+    },
+    {
+      "id": "start-05-switch-activities-mid-run",
+      "category": "start_activity",
+      "description": "User asks for a DIFFERENT activity while one is already running. Undefined behavior today — should this end the current one and start the new one, or refuse until they explicitly leave first? Worth deciding before it comes up live.",
+      "activity_running": "Extended Fitness Check-in",
+      "user_input": "actually let's do the memory game instead",
+      "expect": "UNDECIDED — flagging for review, not a bug report",
+      "status": "untested, open design question"
+    },
+    {
+      "id": "start-06-passing-mention-not-a-choice",
+      "category": "start_activity",
+      "description": "Activity name appears in the sentence but isn't a request.",
+      "user_input": "my neighbor said she liked the fitness check-in thing you do",
+      "expect": "no tool",
+      "status": "untested"
+    },
+    {
+      "id": "start-07-bare-agreement-no-antecedent",
+      "category": "start_activity",
+      "description": "A bare 'sure' with nothing offered this session yet — must not start anything (mirrors the existing 'sure doesn't silently restart' precedent).",
+      "user_input": "sure",
+      "expect": "no tool",
+      "status": "untested"
+    },
+    {
+      "id": "end-01-clear-stop",
+      "category": "end_activity",
+      "description": "Unambiguous stop request.",
+      "user_input": "actually let's stop this",
+      "expect": "end_activity (proposes)",
+      "status": "verified 20/20 correct"
+    },
+    {
+      "id": "end-02-downbeat-on-topic",
+      "category": "end_activity",
+      "description": "Mood word that answers the question just asked, not a stop request.",
+      "prior_assistant": "How have you been feeling about your fitness routine?",
+      "user_input": "not so good",
+      "expect": "no tool",
+      "status": "verified 0/20 (correct) after the priming-bug fix"
+    },
+    {
+      "id": "end-03-on-topic-complaint",
+      "category": "end_activity",
+      "description": "A real, on-topic reason someone might want to stop, but not an explicit request to.",
+      "user_input": "my knees have been bothering me",
+      "expect": "no tool (borderline — currently abstains after tonight's tool-description change; flagged to Felix as a judgment call, not settled)",
+      "status": "verified 0/20 in the latest build, was 20/20 before a wording change — worth re-checking after any future prompt edit"
+    },
+    {
+      "id": "end-04-off-topic-stop-word",
+      "category": "end_activity",
+      "description": "'Stop' used about something other than the activity.",
+      "user_input": "can you stop asking so many questions at once",
+      "expect": "no tool",
+      "status": "untested — plausible false-positive on the word 'stop' alone"
+    },
+    {
+      "id": "end-05-silence-or-short-nonanswer",
+      "category": "end_activity",
+      "description": "Very short, ambiguous reply with no content.",
+      "user_input": "hm",
+      "expect": "no tool",
+      "status": "untested"
+    },
+    {
+      "id": "end-06-stop-as-a-question",
+      "category": "end_activity",
+      "description": "Stop request phrased as a question rather than a statement.",
+      "user_input": "could we maybe stop for today?",
+      "expect": "end_activity (proposes)",
+      "status": "untested"
+    },
+    {
+      "id": "end-07-stop-buried-in-longer-reply",
+      "category": "end_activity",
+      "description": "The stop request is real but embedded in an otherwise on-topic answer.",
+      "prior_assistant": "How often do you exercise per week?",
+      "user_input": "usually three times, but honestly I'd rather stop for today",
+      "expect": "end_activity (proposes)",
+      "status": "untested"
+    },
+    {
+      "id": "list-01-explicit-ask",
+      "category": "list_activities",
+      "description": "Direct question about what's available.",
+      "user_input": "what could we do?",
+      "expect": "list_activities",
+      "status": "verified (used as the base offer case throughout tonight)"
+    },
+    {
+      "id": "list-02-vague-boredom",
+      "category": "list_activities",
+      "description": "Indirect signal of wanting something to do.",
+      "user_input": "I don't know, I'm a bit bored",
+      "expect": "list_activities",
+      "status": "untested"
+    },
+    {
+      "id": "list-03-stop-and-ask-in-one-turn",
+      "category": "list_activities / end_activity",
+      "description": "Two intents in one turn: leave this one AND see what else there is. Router can only call one tool — which should win, and does the reply's own wording cover the other half?",
+      "activity_running": "Extended Fitness Check-in",
+      "user_input": "I don't want to do this anymore, what else is there?",
+      "expect": "UNDECIDED — likely end_activity first (leaving takes priority), reply should offer to list afterward",
+      "status": "untested, open design question"
+    },
+    {
+      "id": "confirm-01-clear-yes",
+      "category": "confirmation_check",
+      "description": "Clear yes to 'Shall we stop X?'",
+      "user_input": "yes, let's stop",
+      "expect": "YES",
+      "status": "verified 20/20 correct"
+    },
+    {
+      "id": "confirm-02-clear-no",
+      "category": "confirmation_check",
+      "description": "Clear no.",
+      "user_input": "no, let's keep going",
+      "expect": "NO",
+      "status": "verified 20/20 correct"
+    },
+    {
+      "id": "confirm-03-unclear",
+      "category": "confirmation_check",
+      "description": "Off-topic / doesn't answer the yes-no question.",
+      "user_input": "what were we talking about again?",
+      "expect": "NO (ambiguity means stay)",
+      "status": "verified 20/20 correct"
+    },
+    {
+      "id": "confirm-04-trap-answers-a-different-question",
+      "category": "confirmation_check",
+      "description": "A bare 'yes' that reads naturally as answering something else entirely, not the stop question — checks whether the narrow check is actually reading the confirmation question in context or just pattern-matching 'yes'.",
+      "prior_assistant": "Shall we stop the fitness check-in? By the way, did you want water after this?",
+      "user_input": "yes please",
+      "expect": "genuinely ambiguous — worth seeing what it does, not a known-good answer",
+      "status": "untested, adversarial case"
+    },
+    {
+      "id": "lang-01-german-mid-activity-continuation",
+      "category": "start_activity",
+      "description": "The exact #36 reproduction, but in German — checks whether the bug is language-specific or general (Felix's live test that found it WAS in German).",
+      "prior_assistant": "Okay. Ich bin Grace... Darf ich erfahren, wie du heißt?",
+      "activity_running": "Conditional GRACE Focus Group",
+      "user_input": "Ich heiße Felix",
+      "expect": "no tool",
+      "status": "verified failing — this is the literal turn from Felix's live test tonight"
+    },
+    {
+      "id": "lang-02-code-switch",
+      "category": "end_activity",
+      "description": "Mid-sentence language switch — checks the router isn't thrown by it.",
+      "user_input": "ich möchte eigentlich just stop for now",
+      "expect": "end_activity (proposes)",
+      "status": "untested"
+    },
+    {
+      "id": "start-08-near-miss-title",
+      "category": "start_activity",
+      "description": "User says something close to but not exactly an activity's title — checks the router resolves to the right one rather than guessing wrong or refusing.",
+      "user_input": "let's do the grace group thing",
+      "expect": "start_activity (Conditional GRACE Focus Group)",
+      "status": "untested"
+    }
+  ]
+}
