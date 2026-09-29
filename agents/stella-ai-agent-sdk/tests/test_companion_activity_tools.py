@@ -105,6 +105,20 @@ async def test_start_activity_after_the_running_one_is_actually_cleared_loads_no
     assert result.data["activity_id"] == "act-2"
 
 
+def test_start_activity_schema_labels_each_id_with_its_title():
+    # The model has nothing else pairing an opaque id to what it means (#36
+    # follow-up, 29 Sep) — confirmed empirically that a bare-uuid enum is why
+    # it picks the wrong activity when it does call this tool. The enum
+    # itself stays ids-only (still the field the tool call needs); the
+    # description is where the pairing lives.
+    tool = StartActivityTool(ACTIVITIES, _sm_client())
+    schema = tool.parameters_schema
+    description = schema["properties"]["activity_id"]["description"]
+    assert 'act-1 = "Fitness Check-in"' in description
+    assert 'act-2 = "Memory Game"' in description
+    assert schema["properties"]["activity_id"]["enum"] == ["act-1", "act-2"]
+
+
 async def test_start_activity_no_full_state_loads_the_plan():
     # get_full_state() returning None (no plan row yet) must not crash the guard.
     sm_client = _sm_client(full_state=None)
