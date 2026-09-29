@@ -78,6 +78,22 @@ def test_starting_an_activity_adopts_its_plan():
     assert agent._active_activity == "Memory Game"
 
 
+def test_restart_ignored_by_the_tool_changes_nothing_locally():
+    # The tool itself already caught this and didn't reload the plan (#36):
+    # nothing to reconcile, just surface it for visibility.
+    agent = _agent()
+    agent._plan_config = ACTIVITIES[1]["plan"]
+    agent._active_activity = "Fitness Check-in"
+
+    out = agent._apply_companion_tool_results(
+        [_verdict(activity_already_running=True, activity_id="checkin", activity_title="Fitness Check-in")]
+    )
+
+    assert out["restart_ignored"] == "Fitness Check-in"
+    assert agent._plan_config is ACTIVITIES[1]["plan"]
+    assert agent._active_activity == "Fitness Check-in"
+
+
 def test_ending_an_activity_proposes_it_without_dropping_the_plan():
     # end_activity no longer ends immediately (Felix, 29 Sep): a single
     # misjudged call used to throw the user out with no way back. It now only
@@ -220,6 +236,12 @@ def test_no_routing_produces_no_directive():
     assert StellaV2Agent._companion_directive({}) == ""
 
 
+def test_restart_ignored_directive_is_a_deliberate_no_op():
+    # Nothing happened backend-side, so the turn is authored exactly as if the
+    # router had abstained — no special instruction.
+    assert StellaV2Agent._companion_directive({"restart_ignored": "Memory Game"}) == ""
+
+
 # ---------------------------------------------------------------------------
 # Decision tags: what the user sees the agent decide (#467 follow-up)
 # ---------------------------------------------------------------------------
@@ -259,6 +281,16 @@ def test_starting_an_activity_names_it():
     (tag,) = agent._companion_decisions("s1", outcome)
     assert _decision_meta(tag)["kind"] == "activity_started"
     assert "Memory Game" in _decision_meta(tag)["label"]
+
+
+def test_restart_ignored_tags_which_activity():
+    agent = _agent()
+    outcome = agent._apply_companion_tool_results(
+        [_verdict(activity_already_running=True, activity_id="checkin", activity_title="Fitness Check-in")]
+    )
+    (tag,) = agent._companion_decisions("s1", outcome)
+    assert _decision_meta(tag)["kind"] == "activity_restart_ignored"
+    assert "Fitness Check-in" in _decision_meta(tag)["label"]
 
 
 def test_proposing_to_end_an_activity_names_it():

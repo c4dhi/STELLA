@@ -1327,6 +1327,11 @@ class StellaV2Agent(BaseAgent):
                 "instructs — do not re-ask which activity they want, and do not "
                 "invent an opening question of your own."
             )
+        if companion.get("restart_ignored"):
+            # Deliberately no override: nothing actually happened backend-side,
+            # so the turn should be authored exactly as if the router had
+            # abstained — normal arbitration/response, not a special directive.
+            return ""
         if companion.get("confirm_end"):
             title = companion.get("confirm_end_title") or "this activity"
             return (
@@ -1375,6 +1380,15 @@ class StellaV2Agent(BaseAgent):
                 session_id,
                 "activity_started",
                 f"Started “{companion['started']}”",
+                component="companion_router",
+            ))
+        if companion.get("restart_ignored"):
+            title = companion.get("restart_ignored")
+            decisions.append(AgentOutput.decision(
+                session_id,
+                "activity_restart_ignored",
+                f"Ignored a repeat start of “{title}”" if title else "Ignored a repeat activity start",
+                detail="Already running — plan was not reloaded",
                 component="companion_router",
             ))
         if companion.get("confirm_end"):
@@ -1523,6 +1537,13 @@ class StellaV2Agent(BaseAgent):
                     # Where LoadPlan left the state machine. The response for THIS
                     # turn must be authored against it — see _resolve_response_context.
                     outcome["started_state_id"] = data.get("current_state_id")
+                if data.get("activity_already_running"):
+                    # The tool itself caught this and didn't reload anything (#36:
+                    # the router isn't reliable at telling a fresh choice from an
+                    # ordinary in-activity answer). Nothing to reconcile locally —
+                    # state didn't change — just surface it so it's visible how
+                    # often this fires (see _companion_decisions).
+                    outcome["restart_ignored"] = data.get("activity_title")
                 # Only propose leaving something that is running: the router can
                 # call end_activity again once the activity is already gone, or
                 # while a previous proposal is still awaiting confirmation.

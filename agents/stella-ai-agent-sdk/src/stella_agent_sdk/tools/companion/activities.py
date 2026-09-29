@@ -136,6 +136,40 @@ class StartActivityTool(BaseTool):
         if not self._sm_client:
             return ToolResult(success=False, error="No state machine available")
 
+        # The router isn't reliable at telling "the user just chose this" from
+        # "the user is answering the question this activity already asked"
+        # (#36) — confirmed empirically, prompt wording doesn't fix it. So this
+        # checks the actual running state rather than trusting the call.
+        #
+        # Blocks on ANY activity already being active, not just a repeat of the
+        # SAME one: a same-id-only check was tried first and gave 0% protection
+        # on the actual reproduction case — the model doesn't reliably repeat
+        # the running activity's own id, it calls start_activity with a
+        # DIFFERENT (wrong) one instead (Felix, 29 Sep — confirmed 20/20 trials
+        # requested a different id, never the running one). Reloading on ANY of
+        # these resets the plan to its first state and discards whatever it
+        # already collected, for a call that reflects no real new choice either
+        # way. To switch activities deliberately, the router has to end the
+        # running one first (already gated behind its own confirmation step) —
+        # not jump straight from one to another in a single call.
+        full_state = await self._sm_client.get_full_state()
+        running_plan_id = full_state.get("plan_id") if full_state else None
+        if running_plan_id:
+            running = self._find(running_plan_id) or {}
+            running_title = running.get("title") or running_plan_id
+            logger.info(
+                "start_activity('%s') called while '%s' is already running — ignored",
+                activity.get("title"), running_title,
+            )
+            return ToolResult(
+                success=True,
+                data={
+                    "activity_already_running": True,
+                    "activity_id": running_plan_id,
+                    "activity_title": running_title,
+                },
+            )
+
         result = await self._sm_client.load_plan(plan)
         if not result or not result.get("success"):
             return ToolResult(
