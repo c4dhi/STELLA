@@ -532,6 +532,15 @@ class StellaV2Agent(BaseAgent):
                 or directive.redirect_message
                 or self.arbitration.gate_failure_message_for(resolved_language)
             )
+            # The bridge is already streaming under this transcript_id, and every
+            # TEXT_CHUNK carries the FULL text so far. Emitting the template alone
+            # replaced the bridge mid-playout: the chat bubble and teleprompter
+            # jumped to the template while the bridge was still being spoken, and
+            # the TTS diff saw a non-extending chunk and reset its buffer. Carry
+            # the bridge as the prefix, exactly as the Response Generator does.
+            deterministic_text = (
+                f"{bridge} {deterministic_response}" if bridge else deterministic_response
+            )
             if directive.action == "short_circuit":
                 # Replace the response AND skip downstream processing entirely
                 # (e.g. noise_detection "unclear" — nothing actionable this turn).
@@ -541,12 +550,14 @@ class StellaV2Agent(BaseAgent):
                 # safety line is spoken as a separate, ungrouped TTS chunk.
                 logger.info(f"Arbitration short_circuit by '{directive.directive_source}'")
                 short_circuit_output = AgentOutput.text_chunk(
-                    input.session_id, deterministic_response,
+                    input.session_id, deterministic_text,
                     transcript_id=transcript_id, is_final=True,
                 )
                 short_circuit_output.metadata["language"] = resolved_language
                 if resolved_voice:
                     short_circuit_output.metadata["voice"] = resolved_voice
+                # Same rate as the bridge — one turn, one voice setting.
+                short_circuit_output.metadata["speed"] = turn_speed
                 yield short_circuit_output
                 return
             if directive.action == "override":
@@ -557,12 +568,13 @@ class StellaV2Agent(BaseAgent):
                 # utterance (see short_circuit above).
                 logger.info(f"Arbitration override by '{directive.directive_source}'")
                 override_output = AgentOutput.text_chunk(
-                    input.session_id, deterministic_response,
+                    input.session_id, deterministic_text,
                     transcript_id=transcript_id, is_final=True,
                 )
                 override_output.metadata["language"] = resolved_language
                 if resolved_voice:
                     override_output.metadata["voice"] = resolved_voice
+                override_output.metadata["speed"] = turn_speed
                 yield override_output
 
             # ── Stage 4: Response Generator (original context + collected keys filtered) ──
