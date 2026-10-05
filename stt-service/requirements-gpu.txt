@@ -6,7 +6,7 @@ faster-whisper>=1.2.1
 
 # PyTorch for Silero VAD (CPU version is sufficient for VAD)
 # The ONNX backend handles GPU inference
-torch==2.14.0
+torch==2.14.1
 torchaudio>=2.11.0
 
 # CTranslate2 - CUDA-optimized inference engine
