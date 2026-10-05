@@ -10,6 +10,7 @@ import TranscriptOverlay from './TranscriptOverlay';
 import VisualizerGallery from './VisualizerGallery';
 import VisualizerRenderer from './VisualizerRenderer';
 import { useSleepMicrophone } from './hooks/useSleepMicrophone';
+import { useSleepEvents } from './hooks/useSleepEvents';
 import { VisualizerType } from './types';
 import { useStore } from '../../store';
 import { startMicWithVu } from '../../services/audio/capture';
@@ -233,6 +234,12 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
 
   // Sleeping mutes the mic; waking gives it back if sleep is what took it.
   useSleepMicrophone({ isMuted, toggleMute, enabled: status === 'connected' });
+  // And the agent is told, so it knows the conversation is over or back.
+  const sendClientEvent = useCallback(
+    (event: string) => transport?.sendClientEvent(event),
+    [transport]
+  );
+  useSleepEvents({ send: sendClientEvent, enabled: status === 'connected' });
 
   // Handle spacebar to toggle mute
   useEffect(() => {
