@@ -943,3 +943,69 @@ async def test_going_to_sleep_is_shown_after_the_goodbye_it_follows():
     ]
     order = [step for step in order if step]
     assert order == ["reply", "tag", "command"]
+
+
+# ── Woken by the user: she speaks first ─────────────────────────────────────
+
+
+async def _woken(session):
+    """The device reports the wake; the SDK then runs the turn she asked for."""
+    asked = []
+    session.agent.start_turn = lambda **metadata: asked.append(metadata)
+    await session.agent.on_client_event("s", "wake", {})
+    assert asked == [{"event": "wake"}]
+    from stella_agent_sdk import AgentInput
+    turn = AgentInput.text_input("s", "", agent_initiated=asked[0])
+    return [o async for o in session.agent.process(turn)]
+
+
+@pytest.mark.asyncio
+async def test_woken_she_speaks_first_and_the_transcript_says_she_was_woken():
+    session = Session(companion=True, sm=FakeStateMachine())
+    outputs = await _woken(session)
+
+    assert _kinds(outputs)[0] == "woken_up"
+    assert "ask how they are doing" in session.reply["guidance"]
+    assert session.reply["guidelines"] == session.agent.companion.settings.free_conversation_guidelines
+    # No bridge and no experts: nothing was said for them to work on.
+    assert session.pool_inputs == []
+
+    # Their answer is then followed by the offer, as after a spoken hello.
+    await session.turn("fine, thanks")
+    assert "what you could do together" in session.reply["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_a_wake_inside_an_activity_or_in_plan_mode_does_nothing():
+    in_activity = await _companion_in_activity()
+    in_activity.agent.start_turn = lambda **m: (_ for _ in ()).throw(AssertionError("no turn"))
+    await in_activity.agent.on_client_event("s", "wake", {})
+
+    plan_mode = Session(companion=False, sm=FakeStateMachine(plan=PLAN))
+    plan_mode.agent.start_turn = lambda **m: (_ for _ in ()).throw(AssertionError("no turn"))
+    await plan_mode.agent.on_client_event("s", "wake", {})
+
+
+@pytest.mark.asyncio
+async def test_asleep_she_is_not_sent_to_sleep_a_second_time():
+    session = Session(companion=True, sm=FakeStateMachine())
+    sent = _record_sleep_signals(session)
+    await session.agent.on_client_event("s", "sleep", {})
+    await session.agent.on_idle("s", 60.0)
+    assert sent == []
+
+    await _woken(session)
+    await session.agent.on_idle("s", 60.0)
+    assert [c for c, _ in sent] == ["sleep"]
+
+
+@pytest.mark.asyncio
+async def test_an_opener_already_spoken_is_not_greeted_or_reacted_to_again():
+    """Session 0e80ab74: "Hey there! Oh, hello! How are you doing today?" —
+    told to greet, she greeted on top of the opener that already had."""
+    session = Session(companion=True, sm=FakeStateMachine(), woken=True)
+    await session.turn("Hallo!")
+
+    guidance = session.reply["guidance"]
+    assert 'already greeted them aloud with "Okay."' in guidance
+    assert "Greet them in a few words" not in guidance

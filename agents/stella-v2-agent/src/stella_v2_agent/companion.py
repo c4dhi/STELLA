@@ -132,6 +132,8 @@ class Companion:
     # activities? Both are done once, then she leaves the talking to them.
     greeted: bool = False
     offered: bool = False
+    # She has been sent to sleep and nothing has happened since.
+    asleep: bool = False
     settings: CompanionSettings = field(default_factory=load_settings)
     # When the running activity started (None if unknown, e.g. resumed after a
     # restart), what it has collected so far, and the runs that already ended —
@@ -313,6 +315,7 @@ class Companion:
         if transition.change is Change.DISMISSED:
             self.rest()
             return
+        self.asleep = False
         self.greeted = True
         if transition.change in (Change.OFFERED, Change.STARTED, Change.START_ASKED):
             self.offered = True
@@ -321,13 +324,18 @@ class Companion:
         """She went to sleep; the next conversation opens afresh."""
         self.greeted = False
         self.offered = False
+        self.asleep = True
 
-    def instruction(self, transition: Transition) -> str:
-        """What the reply is told this turn, after the transition was applied."""
-        text = directive(transition, self.settings)
+    def instruction(self, transition: Transition, bridge: str = "") -> str:
+        """What the reply is told this turn, after the transition was applied.
+
+        ``bridge`` is the opener already spoken this turn: an instruction to
+        greet or react must not make her do it a second time."""
+        text = directive(transition, self.settings, bridge=bridge)
         if not text and not self.active:
             text = render_prompt(
-                self.settings.instruction("free"), {"activities": _listed(self.activities)},
+                self.settings.instruction("free"),
+                {"activities": _listed(self.activities), "bridge": bridge},
             ).strip()
         return text
 
@@ -380,7 +388,9 @@ _INSTRUCTION_KEYS = {
 }
 
 
-def directive(transition: Transition, settings: Optional[CompanionSettings] = None) -> str:
+def directive(
+    transition: Transition, settings: Optional[CompanionSettings] = None, bridge: str = "",
+) -> str:
     """The one instruction the reply gets about what just happened.
 
     Only for transitions the reply has to act on. Inside an activity the plan
@@ -403,6 +413,7 @@ def directive(transition: Transition, settings: Optional[CompanionSettings] = No
         "title": transition.title,
         "description": (transition.activity or {}).get("description") or "",
         "activities": _listed(transition.offered),
+        "bridge": bridge,
     }).strip()
 
 
@@ -423,6 +434,14 @@ _DECISIONS = {
     Change.START_ASKED: ("activity_start_proposed", "Asked to confirm starting “{title}”", None),
     Change.START_DECLINED: ("activity_start_declined", "Not starting “{title}”", None),
 }
+
+
+def woken_tag(session_id: str) -> AgentOutput:
+    """The transcript's note that the user woke her, the counterpart of
+    "Going to sleep"."""
+    return AgentOutput.decision(
+        session_id, "woken_up", "Woken up", detail="The user woke her", component=ROUTER,
+    )
 
 
 def decision(session_id: str, transition: Transition) -> Optional[AgentOutput]:

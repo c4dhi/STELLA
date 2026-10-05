@@ -152,7 +152,13 @@ export function stepSleep(state: SleepState, input: SleepInput, now: number): Sl
       if (input.sleepRequested && !input.isBusy) {
         return { phase: 'asleep', lastPresenceAt, wakingSince: state.wakingSince };
       }
-      if (!present && now - lastPresenceAt >= input.sleepAfterMs) {
+      // There is no timer of her own in a session: only the agent sends her
+      // to sleep, because only it knows whether the conversation is over. A
+      // face that dozed off by itself could do so while the agent was waiting
+      // for an answer, and the agent would not know she was gone. The
+      // countdown survives for the preview page alone (`force`), which has no
+      // agent to ask.
+      if (input.force && !present && now - lastPresenceAt >= input.sleepAfterMs) {
         return { phase: 'asleep', lastPresenceAt, wakingSince: state.wakingSince };
       }
       return { ...state, lastPresenceAt };
