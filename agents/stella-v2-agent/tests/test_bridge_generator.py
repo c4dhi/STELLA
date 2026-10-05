@@ -6,6 +6,7 @@ referred to anything the user had said. There is one LLM bridge now, and the
 mode tells it what this turn needs.
 """
 
+import asyncio
 import os
 
 import pytest
@@ -540,3 +541,35 @@ class TestGenerateStream:
         gen.bridge_timeout_s = 5.0
         full = await gen.generate(_ORDINARY_TURN, [], language="en")
         assert full == "Right, that makes sense. Thanks for sharing."
+
+
+class TestTheTimeoutNeverReachesTheCaller:
+    """Session 3bde6b95: the bridge arrived right at its time limit, the limit
+    fired while the agent was publishing it, and the agent's whole turn loop
+    was cancelled. It left the room mid-reply without logging anything."""
+
+    @pytest.mark.asyncio
+    async def test_a_caller_still_busy_when_the_limit_passes_is_not_cancelled(self):
+        gen = BridgeGenerator(llm_service=_FakeStreamingLLM("Okay, I hear you. That sounds really draining."))
+        gen.bridge_timeout_s = 0.05
+
+        heard = []
+        async for chunk in gen.generate_stream("I force myself to work out", [], language="en"):
+            heard.append(chunk)
+            # What the agent does with a chunk: publish it, which takes time.
+            await asyncio.sleep(0.2)
+
+        assert heard and heard[0] == "Okay, I hear you."
+
+    @pytest.mark.asyncio
+    async def test_a_model_that_never_answers_is_still_cut_off(self):
+        class _Silent:
+            async def generate(self, messages, config, callback, component_name="unknown"):
+                await asyncio.sleep(30)
+
+        gen = BridgeGenerator(llm_service=_Silent())
+        gen.bridge_timeout_s = 0.05
+
+        started = asyncio.get_running_loop().time()
+        await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
+        assert asyncio.get_running_loop().time() - started < 2
