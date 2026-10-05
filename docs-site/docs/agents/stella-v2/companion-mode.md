@@ -128,6 +128,8 @@ The code decides *when* something happens: one judge per mode, one transition pe
 | Sleep After Silence | Seconds of quiet before she sleeps (45; 0 = never). |
 | Minimum Transcript Confidence | Below this a message cannot change the mode (0.4; 0 = off). |
 
+Nothing in companion mode overrules a setting out of sight. The reply instruction for a turn is passed on as written, introduced only by "For this turn:". The free-conversation guide replaces the Response Generator's guidelines outside an activity, and both nodes say so. The one hidden predecessor, `nodes.exit_dialogue.model`, is read only when the configuration does not set *Judge Model*.
+
 A saved configuration overrides these one value at a time, and reply instructions one entry at a time. When and what the router proposes is the router expert's own prompt, in the Structural section.
 
 ### It is structural, not an expert you opt into
@@ -163,5 +165,5 @@ This matters more than it sounds. "What can we do together?" is also a probing c
 ## Interaction with other features
 
 - **Auto-pause / wake.** A companion that is paused mid-activity resumes into it: the state-machine row outlives the pod, and the agent re-adopts the running plan on ready. If a redeploy removed that plan from the allow-list, the plan is cleared and the session drops back to free conversation rather than running a plan the deployment no longer offers. Two things do not survive a restart yet: an open "shall we stop?" question, and where the resumed activity's history begins.
-- **Persona.** Unchanged and orthogonal. Identity comes from the persona; activities are structure. The same persona can front any set of activities.
+- **Persona.** Identity comes from the persona; activities are structure, and the same persona can front any set of them. There are two built-in personas: *STELLA (default)*, written for plans, and *STELLA Companion (default)*, which keeps company and asks nothing to keep a conversation going. The deploy flow asks for the mode first and preselects the matching one; a deployment that names no persona gets the one for its mode. A persona you chose is never swapped. A persona written for interviewing will pull against the free-conversation guide, so give a companion one written for company.
 - **Language.** A loaded plan may declare a language, which pins the session for as long as it is running.

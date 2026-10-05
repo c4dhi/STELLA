@@ -1246,9 +1246,14 @@ class StellaV2Agent(BaseAgent):
         companion_config = nodes.get("companion")
         if isinstance(companion_config, dict):
             self.companion.settings.apply(companion_config)
-        # Where the judge model lived before the companion node existed.
+        # Where the judge model lived before the companion node existed. It
+        # only fills in for a configuration that has not set the visible one:
+        # a value the operator can see must not lose to one they cannot.
         exit_config = nodes.get("exit_dialogue")
-        if isinstance(exit_config, dict) and exit_config.get("model"):
+        if (
+            isinstance(exit_config, dict) and exit_config.get("model")
+            and not (isinstance(companion_config, dict) and companion_config.get("judge_model"))
+        ):
             self.companion.settings.judge_model = exit_config["model"]
         if self._companion_mode:
             # 0 switches the idle sleep off.

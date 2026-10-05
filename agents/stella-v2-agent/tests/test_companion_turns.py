@@ -912,3 +912,17 @@ async def test_a_deployment_can_reword_what_she_is_told_and_retime_her_sleep():
     assert "Hum a tune." in session.reply["guidance"]
     assert session.agent.idle_timeout_seconds == 120
     assert session.agent.companion.settings.judge_model == "gpt-other"
+
+
+@pytest.mark.asyncio
+async def test_the_visible_judge_model_is_not_overridden_by_the_old_hidden_key():
+    """nodes.exit_dialogue.model is where the judge model lived before the
+    Companion node. A configuration that sets the visible one keeps it."""
+    session = Session(companion=True, sm=FakeStateMachine())
+    session.agent.barge_in_evaluator = None
+    session.agent._apply_pipeline_config({"nodes": {
+        "companion": {"judge_model": "gpt-visible"},
+        "exit_dialogue": {"model": "gpt-hidden"},
+    }})
+
+    assert session.agent.companion.settings.judge_model == "gpt-visible"
