@@ -26,7 +26,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator, Dict, Any, List, Optional, Tuple
 
@@ -39,7 +39,7 @@ from stella_agent_sdk.tools import ToolRegistry
 from stella_agent_sdk.tools.state_machine import create_state_machine_tools
 from stella_agent_sdk.tools.companion import create_companion_tools
 
-from stella_agent_sdk.llm import LLMService, LLMConfig, LLMMessage, LLMProvider
+from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
 from stella_agent_sdk.env import env_bool
 from stella_v2_agent.pipeline.bridge_generator import (
@@ -51,10 +51,17 @@ from stella_v2_agent.pipeline.bridge_generator import (
 from stella_v2_agent.pipeline.expert_pool import ExpertPool
 from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
-from stella_v2_agent.pipeline.history_scope import (
-    ActivitySegment,
-    parse_timestamp,
-    scope_history,
+from stella_v2_agent.pipeline.history_scope import parse_timestamp, scope_history
+from stella_v2_agent.companion import (
+    Change,
+    Companion,
+    NO_CHANGE,
+    Transition,
+    ExitStep,
+    commands_from,
+    decision as companion_decision,
+    directive as companion_directive,
+    exit_dialogue,
 )
 from stella_agent_sdk.language import LanguageResolver
 from stella_agent_sdk.agent import BargeInEvaluator
@@ -90,25 +97,6 @@ def _turn_speed(bridge_mode) -> float:
     if not env_bool("STELLA_TTS_RATE_VARIATION", True):
         return 1.0
     return _TURN_SPEED_BY_BRIDGE_MODE.get(bridge_mode, 1.0)
-
-
-def _with_active_activity_fact(
-    expert_history: List[Dict[str, str]], active_activity: Optional[str]
-) -> List[Dict[str, str]]:
-    """State a running activity as a FACT for the Expert Pool, not something to
-    infer from the transcript (#36 follow-up, Felix).
-
-    companion_router's own history window is short (history_limit: 6), and a
-    few turns into an activity the turn that started it can already have
-    scrolled out of it — appended LAST so it survives any expert's own
-    trailing slice of this list. A no-op when there is nothing running.
-    """
-    if not active_activity:
-        return expert_history
-    return expert_history + [{
-        "role": "system",
-        "content": f'Activity "{active_activity}" is currently running.',
-    }]
 
 
 logger = logging.getLogger(__name__)
@@ -216,26 +204,14 @@ class StellaV2Agent(BaseAgent):
         # allow-listed activities when the user picks it, instead of running a
         # single plan from the start. Absent config = plan-following, unchanged.
         self._companion_mode: bool = False
-        self._available_plans: List[Dict[str, Any]] = []
-        # Title of the activity currently running, for logs and the reply's context.
-        self._active_activity: Optional[str] = None
-        # Set when the router has proposed leaving the running activity and the
-        # user has not yet answered "shall we stop X?" — the title of what is
-        # pending, or None. While set, companion_router does not run (see
-        # process()); the reply is judged by _confirm_pending_end instead, a
-        # narrow yes/no check separate from the router's own broad judgment.
-        self._pending_end_confirmation: Optional[str] = None
-        # When the running activity started, and the runs that already ended, so the
-        # history the model sees can be scoped to the current mode (history_scope).
-        self._activity_started_at: Optional[datetime] = None
-        self._activity_segments: List[ActivitySegment] = []
-        # What the running activity has collected, as of the last turn start. Read
-        # before the plan is cleared, since clearing takes the deliverables with it.
-        self._activity_collected: Dict[str, Any] = {}
+        # Which mode a companion session is in, and every rule for changing it.
+        self.companion = Companion()
+        # Newest message timestamp seen by the last history fetch; an activity's
+        # history never starts before it (see Companion.enter).
+        self._newest_history_at: Optional[datetime] = None
         self._custom_history_limit: int = 20  # overridable via pipeline_config thresholds
         self._last_known_state_id: Optional[str] = None
         self._last_state_id: Optional[str] = None  # for detecting state transitions between turns
-        self._last_post_response_state_id: Optional[str] = None  # for analytics emission
         self._turn_counter: int = 0  # monotonic turn counter for analytics
         # The reply currently being spoken, accumulated as it streams. On a
         # barge-in this is the "half-committed" message the user interrupted —
@@ -290,26 +266,25 @@ class StellaV2Agent(BaseAgent):
         # here so the `finally` below can always reap it, including when the
         # bridge raises or a barge-in closes this generator mid-stream.
         expert_task: Optional[asyncio.Task] = None
+        exit_task: Optional[asyncio.Task] = None
 
         try:
-            # Fetch context. `history` (mode-scoped) feeds the bridge and the
-            # response — what gets SAID. `expert_history` (full, unscoped)
-            # feeds the Expert Pool — what happens NEXT, which needs the
-            # actual recent trajectory rather than just the current mode's
-            # slice (see _fetch_conversation_history).
+            # Fetch context. The history is scoped to the current mode (#36):
+            # inside an activity it starts where the activity started, exactly
+            # as a plan-mode session starts with nothing before it. Bridge,
+            # experts and response all read the same scoped history.
             history_limit = self._custom_history_limit
-            history, expert_history = await self._fetch_conversation_history(limit=history_limit)
-            if self._companion_mode:
-                expert_history = _with_active_activity_fact(expert_history, self._active_activity)
+            history = await self._fetch_conversation_history(limit=history_limit)
 
             # Fetch state from gRPC backend (parallel calls for performance)
             sm_context = {}
             if self.sm_client:
                 sm_context = await self._fetch_sm_context()
-                if self._activity_started_at is not None:
+                if self.companion.active:
                     collected_now = sm_context.get("collected_deliverables")
                     if isinstance(collected_now, dict):
-                        self._activity_collected = dict(collected_now)
+                        # Read now: clearing the plan takes its deliverables with it.
+                        self.companion.collected = dict(collected_now)
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
@@ -371,16 +346,12 @@ class StellaV2Agent(BaseAgent):
             # critical path max(bridge, experts) instead of bridge + experts.
             #
             # Contract for anything added between this line and the `await
-            # expert_task` below: do not mutate `sm_context` or `expert_history`,
+            # expert_task` below: do not mutate `sm_context` or `history`,
             # the pool is reading them concurrently.
             experts_to_run = self.expert_registry.get_enabled_names()
-            if self._pending_end_confirmation:
-                # This turn answers "shall we stop X?" — judged deterministically
-                # below, not by the router's own broad (and biased) judgment.
-                experts_to_run = [e for e in experts_to_run if e != "companion_router"]
             logger.info(f"Stage 2: Expert Pool (started, runs alongside bridge) — {experts_to_run}")
             expert_task = asyncio.create_task(
-                self.expert_pool.run(experts_to_run, input.text, expert_history, sm_context)
+                self.expert_pool.run(experts_to_run, input.text, history, sm_context)
             )
             # Emitted next to bridge_start on purpose: the two elapsed_ms values
             # being equal IS the property this change buys, and drift between
@@ -443,6 +414,14 @@ class StellaV2Agent(BaseAgent):
 
             # Covers the silent turn too, where the loop above never ran.
             turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_mode", None))
+
+            # A question "shall we stop X?" is open from the previous turn: this
+            # turn's text answers it. Judged alongside the pool (it needs the
+            # bridge, which is now spoken), not after it.
+            if self._companion_mode and self.companion.pending_exit:
+                exit_task = asyncio.create_task(self._exit_step(
+                    input.text, history, bridge, resolved_language, awaiting_answer=True,
+                ))
 
             if bridge:
                 logger.info(
@@ -521,29 +500,45 @@ class StellaV2Agent(BaseAgent):
                 user_input=input.text,
             )
 
-            # Companion routing (#467): the router's tools have already acted on the
-            # state machine; this reconciles the agent's own view and tells the
-            # reply what just happened. Folded in BEFORE the arbitration debug is
-            # published so that debug line reports the directive the response is
-            # actually written from, not a pre-companion draft of it.
-            companion = (
-                self._apply_companion_tool_results(all_verdicts)
-                if self._companion_mode
-                else {}
-            )
-            if self._companion_mode and self._pending_end_confirmation:
-                # companion_router did not run this turn (excluded above); this
-                # reply answers "shall we stop X?" instead, judged narrowly.
-                companion = await self._resolve_pending_end_confirmation(input.text)
+            # Companion mode (#36): the router only proposed; the one transition
+            # this turn makes is decided and applied HERE, after every expert
+            # has finished. Folded in BEFORE the arbitration debug is published
+            # so that line reports the directive the response is written from.
+            transition = NO_CHANGE
+            if self._companion_mode:
+                commands = commands_from(all_verdicts)
+                exit_step: Optional[ExitStep] = None
+                if exit_task is not None:
+                    exit_step = await exit_task
+                    exit_task = None
+                elif self.companion.needs_exit_step(commands):
+                    # The router noticed something stop-shaped; what it was is
+                    # the exit dialogue's call.
+                    exit_step = await self._exit_step(
+                        input.text, history, bridge, resolved_language, awaiting_answer=False,
+                    )
+                transition = await self._apply_transition(
+                    self.companion.decide(commands, exit_step)
+                )
             directive = arb_result.directive
-            if companion:
-                sm_context["companion"] = companion
-                # Its OWN field, not primary_action: primary_action loses to any
-                # expert follow-up question, and probing reliably produces one on
-                # exactly the turns the router fires — "what can we do?" is a
-                # probing cue too. Grace then spoke probing's question and invented
-                # household chores while the real activity list sat unread.
-                directive.routing_directive = self._companion_directive(companion)
+            # Its OWN field, not primary_action: primary_action loses to any
+            # expert follow-up question, and probing reliably produces one on
+            # exactly the turns the router fires — "what can we do?" is a
+            # probing cue too. Grace then spoke probing's question and invented
+            # household chores while the real activity list sat unread.
+            directive.routing_directive = companion_directive(transition)
+            if (
+                transition.change is Change.EXIT_ASKED
+                and transition.say
+                and directive.action != "override"
+            ):
+                # The exit dialogue wrote the question; it is spoken as written,
+                # through the override path, not rewritten by the reply model —
+                # which followed the plan instead (session 5d10b334). A safety
+                # override that already won keeps the turn.
+                directive.action = "override"
+                directive.resolved_response = transition.say
+                directive.directive_source = "exit_dialogue"
 
             yield AgentOutput.debug(
                 input.session_id,
@@ -560,9 +555,9 @@ class StellaV2Agent(BaseAgent):
                 turn_id=turn_id,
             )
 
-            if companion:
-                for decision in self._companion_decisions(input.session_id, companion):
-                    yield decision
+            tag = companion_decision(input.session_id, transition)
+            if tag:
+                yield tag
 
             # Deterministic verdict directive: a flagging expert can replace the
             # generated response with a literature-informed template.
@@ -633,28 +628,33 @@ class StellaV2Agent(BaseAgent):
                     ),
                     {},
                 )
-                # Starting an activity is the SAME class of event as a mid-turn
-                # phase advance: the state machine changed after `sm_context` was
-                # read, so the turn-start snapshot no longer describes reality.
-                # Here it describes a session with no plan at all, and the reply
-                # would be improvised — the agent opened the fitness check-in by
-                # inventing a frequency question while the plan sat waiting on
-                # "greet and ask for name".
-                started_state_id = companion.get("started_state_id")
-                response_sm_context = await self._resolve_response_context(
-                    sm_context,
-                    resolved_language,
-                    transitioned=bool(te_raw.get("transitioned")) or bool(started_state_id),
-                    new_state_id=te_raw.get("new_state_id") or started_state_id,
-                    session_completed=bool(te_raw.get("session_completed")),
-                )
+                # Entering or leaving an activity changed the mode after the
+                # turn-start snapshot was read, so the reply is authored against
+                # the NEW mode, context and history alike — entering, exactly as
+                # a plan-mode session authors its first turn. Authored against
+                # the old snapshot, the agent opened the fitness check-in with
+                # the free-flow chat's "fitness goals" while the plan waited on
+                # "greet and ask for name", and closed activities by asking their
+                # next question.
+                if transition.change in (Change.STARTED, Change.EXITED):
+                    response_sm_context, history = await self._context_for_new_mode(
+                        sm_context, history_limit
+                    )
+                else:
+                    response_sm_context = await self._resolve_response_context(
+                        sm_context,
+                        resolved_language,
+                        transitioned=bool(te_raw.get("transitioned")),
+                        new_state_id=te_raw.get("new_state_id"),
+                        session_completed=bool(te_raw.get("session_completed")),
+                    )
                 response_sm_context["_collected_keys"] = collected_keys
                 # Which step the reply is written against and how much history it
                 # gets. Names and counts only, never prompt text.
                 logger.info(
                     "Reply anchor: activity=%r state=%r task=%r pending_tasks=%d "
                     "history_turns=%d directive=%s",
-                    self._active_activity,
+                    self.companion.running_title,
                     (response_sm_context.get("state") or {}).get("title"),
                     (response_sm_context.get("current_task") or {}).get("id")
                     if isinstance(response_sm_context.get("current_task"), dict)
@@ -734,6 +734,12 @@ class StellaV2Agent(BaseAgent):
                 expert_task.add_done_callback(
                     lambda t: t.cancelled() or t.exception()
                 )
+            if exit_task is not None:
+                # Same reaping for an exit judgment this turn never reached.
+                # The question stays open, so the next turn answers it instead.
+                if not exit_task.done():
+                    exit_task.cancel()
+                exit_task.add_done_callback(lambda t: t.cancelled() or t.exception())
 
     # ─────────────────────────────────────────────────────────────────────
     # Post-response processing
@@ -755,6 +761,13 @@ class StellaV2Agent(BaseAgent):
         """
         if not self.sm_client:
             return
+        if self._companion_mode and not self.companion.active:
+            # Free conversation: no plan to record progress against, or to count
+            # turns on — only what the panel shows about the companion itself.
+            progress = self._progress_output(session_id, {})
+            if progress:
+                yield progress
+            return
 
         deliverables_found = False
         tasks_completed = False
@@ -770,7 +783,9 @@ class StellaV2Agent(BaseAgent):
             # Session termination: backend transitioned to __end__.
             # Emit the farewell before the progress update, then flag the agent
             # to stop accepting new turns (run_audio_loop checks _session_completed).
-            if raw.get("session_completed"):
+            # In companion mode the plan's end is the ACTIVITY's end, handled by
+            # the fallback below — it must not end the conversation.
+            if raw.get("session_completed") and not self._companion_mode:
                 farewell = raw.get("farewell_message")
                 if farewell:
                     yield AgentOutput.text_final(session_id, farewell)
@@ -836,15 +851,9 @@ class StellaV2Agent(BaseAgent):
                 # takes the floor back and keeps talking, so __end__ means "pop",
                 # not "hang up" — the plan's own farewell still plays as the
                 # hand-back line.
-                finished = self._active_activity
-                await self._return_to_companion(reason="activity reached its end")
-                yield AgentOutput.decision(
-                    session_id,
-                    "activity_completed",
-                    f"Finished “{finished}”" if finished else "Finished the activity",
-                    detail="Back to free conversation",
-                    component="companion_router",
-                )
+                tag = await self._finish_activity(session_id)
+                if tag:
+                    yield tag
             else:
                 self._session_completed = True
                 logger.info(
@@ -874,17 +883,9 @@ class StellaV2Agent(BaseAgent):
                     # Same "pop, don't hang up" rule as the path above. An authored
                     # turn_count_exceeded -> __end__ route reaches the end HERE, so
                     # without this a stalled activity would end the whole session.
-                    finished = self._active_activity
-                    await self._return_to_companion(
-                        reason="activity reached its end via turn increment"
-                    )
-                    yield AgentOutput.decision(
-                        session_id,
-                        "activity_completed",
-                        f"Finished “{finished}”" if finished else "Finished the activity",
-                        detail="Back to free conversation",
-                        component="companion_router",
-                    )
+                    tag = await self._finish_activity(session_id)
+                    if tag:
+                        yield tag
                 else:
                     self._session_completed = True
                 logger.info(
@@ -892,23 +893,9 @@ class StellaV2Agent(BaseAgent):
                     "fallback completion applied"
                 )
 
-        # ── Analytics emissions ──
-        last_transition = None
+        # Analytics: plan completion snapshot (emitted each turn for dashboard);
+        # progress is int 0-100 from gRPC, converted to a 0-1 ratio.
         if full_state:
-            current_state_id = full_state.get("current_state_id")
-            previous_state_id = self._last_post_response_state_id
-
-            # Build transition metadata if the state changed during this turn.
-            if current_state_id and current_state_id != previous_state_id:
-                last_transition = self._build_last_transition_metadata(
-                    previous_state_id, current_state_id
-                )
-
-            # Update tracker AFTER comparison so the next turn sees this turn's end state.
-            self._last_post_response_state_id = current_state_id
-
-            # Analytics: plan completion snapshot (emitted each turn for dashboard)
-            # progress is int 0-100 from gRPC; convert to 0-1 ratio
             yield AgentOutput.analytics(
                 session_id, stage="plan_completion", timing_ms=0,
                 completion_rate=full_state.get("progress", 0) / 100,
@@ -916,14 +903,19 @@ class StellaV2Agent(BaseAgent):
                 plan_id=full_state.get("plan_id"),
             )
 
-        # Emit final progress for this turn.
+        progress = self._progress_output(session_id, full_state or {})
+        if progress:
+            yield progress
+
+    def _progress_output(
+        self, session_id: str, full_state: Dict[str, Any]
+    ) -> Optional[AgentOutput]:
+        """This turn's progress update, or None when there is nothing to show."""
         companion_meta = self._companion_progress_metadata()
-        full_state = full_state or {}
-        if self._companion_mode and not self._plan_config:
-            # The activity can have been dropped mid-turn — stopped by the user,
-            # or reached its end — AFTER full_state was fetched. Trust the agent's
-            # own view over that stale snapshot: publishing it would leave a
-            # finished plan on the panel with nothing left to advance it.
+        if self._companion_mode and not self.companion.active:
+            # The activity can have ended mid-turn AFTER full_state was fetched.
+            # Trust the agent's own view over that stale snapshot: publishing it
+            # would leave a finished plan on the panel with nothing to advance it.
             full_state = {}
         if full_state or companion_meta:
             current_state_id = full_state.get("current_state_id")
@@ -947,13 +939,14 @@ class StellaV2Agent(BaseAgent):
                     **({"companion": companion_meta} if companion_meta else {}),
                 },
             )
-            yield AgentOutput.progress_update(
+            return AgentOutput.progress_update(
                 session_id,
                 progress_state,
                 update_trigger="turn_completion",
                 agent_name=self.agent_name,
                 agent_icon="🧠",
             )
+        return None
 
     # ─────────────────────────────────────────────────────────────────────
     # Session lifecycle
@@ -992,13 +985,12 @@ class StellaV2Agent(BaseAgent):
         # NO plan — it converses until the user picks an activity — so the state
         # machine connection cannot be gated on having one up front.
         self._companion_mode = config.get("mode") == "companion"
-        self._available_plans = config.get("available_plans") or []
-        self._active_activity = None
+        self.companion = Companion(activities=config.get("available_plans") or [])
         if self._companion_mode:
             logger.info(
                 "Companion mode: %d activit%s available",
-                len(self._available_plans),
-                "y" if len(self._available_plans) == 1 else "ies",
+                len(self.companion.activities),
+                "y" if len(self.companion.activities) == 1 else "ies",
             )
 
         if plan or self._companion_mode:
@@ -1025,7 +1017,10 @@ class StellaV2Agent(BaseAgent):
                 self.tool_registry.register(tool)
 
             if self._companion_mode:
-                for tool in create_companion_tools(self._available_plans, self.sm_client):
+                tools = create_companion_tools(
+                    self.companion.activities, lambda: self.companion.running_title
+                )
+                for tool in tools:
                     self.tool_registry.register(tool)
 
             # Wire tool registry into expert pool
@@ -1110,7 +1105,9 @@ class StellaV2Agent(BaseAgent):
             full_state = await self.sm_client.get_full_state() or {}
             # Before anything reads companion state: the session may already be in
             # an activity this pod knows nothing about.
-            self._rehydrate_active_activity(full_state)
+            await self._rehydrate_active_activity(full_state)
+            if self._companion_mode and not self.companion.active:
+                full_state = {}
             # A companion joins with no plan at all, so gating on full_state alone
             # would publish nothing and the panel would have no way to learn what
             # this session can offer until the user happened to ask.
@@ -1265,7 +1262,7 @@ class StellaV2Agent(BaseAgent):
         try:
             # Scoped: judging whether this is on-topic with the assistant's
             # last question is a current-mode question, same as the response.
-            history, _ = await self._fetch_conversation_history(
+            history = await self._fetch_conversation_history(
                 limit=self.barge_in_evaluator.history_limit
             )
         except Exception as e:
@@ -1296,321 +1293,133 @@ class StellaV2Agent(BaseAgent):
     # Helper methods
     # ─────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _companion_directive(companion: Dict[str, Any]) -> str:
-        """Turn what the router did into one instruction for the reply.
-
-        Naming the options explicitly matters: without them the model happily
-        invents plausible-sounding activities that do not exist, which reads as a
-        broken promise the moment the user picks one.
-        """
-        if companion.get("activities") is not None:
-            activities = companion["activities"]
-            if not activities:
-                return (
-                    "The user asked what you can do together, but no activities are "
-                    "available. Say so plainly and keep the conversation going."
-                )
-            listed = "; ".join(
-                f"{a.get('title')}" + (f" ({a.get('description')})" if a.get("description") else "")
-                for a in activities
-            )
-            return (
-                "The user asked what you can do together. Offer exactly these, in "
-                f"your own words, and invite them to pick one: {listed}. "
-                "Do not invent any others."
-            )
-        if companion.get("started"):
-            return (
-                f"The user just chose '{companion['started']}' and it is now starting. "
-                "Acknowledge briefly, then do exactly what the current step below "
-                "instructs — do not re-ask which activity they want, and do not "
-                "invent an opening question of your own."
-            )
-        if companion.get("restart_ignored"):
-            # Deliberately no override: nothing actually happened backend-side,
-            # so the turn should be authored exactly as if the router had
-            # abstained — normal arbitration/response, not a special directive.
-            return ""
-        if companion.get("confirm_end"):
-            title = companion.get("confirm_end_title") or "this activity"
-            return (
-                f"Ask clearly and briefly whether they want to stop \"{title}\" — a "
-                "direct yes/no question, e.g. \"Shall we stop the "
-                f"{title}?\" — and do nothing else this turn: do not continue the "
-                "activity's own content, and do not end it yet."
-            )
-        if companion.get("ended"):
-            return (
-                "The activity has just been stopped, confirmed by the user. Close "
-                "it warmly, do not try to resume it, and return to open conversation."
-            )
-        if companion.get("end_declined"):
-            return (
-                "The user did not confirm stopping. Stay in the activity and pick "
-                "up naturally from where it left off — do not ask again unless "
-                "they bring it up themselves."
-            )
-        return ""
-
-    @staticmethod
-    def _companion_decisions(
-        session_id: str, companion: Dict[str, Any]
-    ) -> List[AgentOutput]:
-        """Turn this turn's routing outcome into user-visible decision tags.
-
-        One outcome can only be one of these — the router calls a single tool
-        per turn — but returning a list keeps the caller a plain loop rather
-        than a chain of conditionals it would have to keep in sync.
-        """
-        decisions: List[AgentOutput] = []
-        activities = companion.get("activities")
-        if activities is not None:
-            titles = [a.get("title", "") for a in activities if a.get("title")]
-            decisions.append(AgentOutput.decision(
-                session_id,
-                "activities_offered",
-                f"Offered {len(titles)} activit{'y' if len(titles) == 1 else 'ies'}"
-                if titles else "No activities available",
-                options=titles,
-                component="companion_router",
-            ))
-        if companion.get("started"):
-            decisions.append(AgentOutput.decision(
-                session_id,
-                "activity_started",
-                f"Started “{companion['started']}”",
-                component="companion_router",
-            ))
-        if companion.get("restart_ignored"):
-            title = companion.get("restart_ignored")
-            decisions.append(AgentOutput.decision(
-                session_id,
-                "activity_restart_ignored",
-                f"Ignored a repeat start of “{title}”" if title else "Ignored a repeat activity start",
-                detail="Already running — plan was not reloaded",
-                component="companion_router",
-            ))
-        if companion.get("confirm_end"):
-            title = companion.get("confirm_end_title")
-            decisions.append(AgentOutput.decision(
-                session_id,
-                "activity_end_proposed",
-                f"Asked to confirm leaving “{title}”" if title else "Asked to confirm leaving the activity",
-                component="companion_router",
-            ))
-        if companion.get("ended"):
-            title = companion.get("ended_title")
-            decisions.append(AgentOutput.decision(
-                session_id,
-                "activity_ended",
-                f"Left “{title}”" if title else "Left the activity",
-                detail="Back to free conversation",
-                component="companion_router",
-            ))
-        if companion.get("end_declined"):
-            title = companion.get("declined_title")
-            decisions.append(AgentOutput.decision(
-                session_id,
-                "activity_end_declined",
-                f"Staying in “{title}”" if title else "Staying in the activity",
-                component="companion_router",
-            ))
-        return decisions
-
-    def _rehydrate_active_activity(self, full_state: Dict[str, Any]) -> None:
+    async def _rehydrate_active_activity(self, full_state: Dict[str, Any]) -> None:
         """A companion that restarts mid-activity must remember it.
 
         on_session_start builds companion state from the DEPLOY config, which by
         definition carries no plan — but the state-machine row outlives the pod,
         so after a crash, a restart, or an auto-pause wake the session IS still
-        in an activity while the agent believes it is not. Left unfixed the agent
-        blanks the live plan off the panel on its first turn and authors replies
-        with no plan context at all — the same failure as starting an activity
-        without re-anchoring, arrived at from the other direction.
+        in an activity while the agent believes it is not.
         """
-        if not self._companion_mode or self._plan_config:
+        if not self._companion_mode or self.companion.active:
             return
         plan_id = full_state.get("plan_id")
         if not plan_id:
             return
-        for activity in self._available_plans:
-            if activity.get("id") == plan_id:
-                self._plan_config = activity.get("plan")
-                self._active_activity = activity.get("title")
-                self._resolve_persona_in_plan_text(self._plan_config)
-                logger.info(
-                    "Resumed mid-activity after restart: %s", self._active_activity
-                )
-                return
+        activity = self.companion.find(plan_id)
+        if activity and activity.get("plan"):
+            self.companion.resume(activity)
+            self._plan_config = activity["plan"]
+            self._resolve_persona_in_plan_text(self._plan_config)
+            logger.info("Resumed mid-activity after restart: %s", self.companion.running_title)
+            return
         # The allow-list changed under a running activity (redeploy with a
-        # different selection). Nothing to resume onto, so drop back to free
-        # flow rather than running a plan the deployment no longer offers.
+        # different selection). Clear it, so the backend agrees with the free
+        # conversation this agent is now in — left in place, it blocked every
+        # later start and swallowed every stop.
         logger.warning(
             "Session is in activity %s, which this deployment no longer offers — "
             "returning to free conversation",
             plan_id,
         )
+        if self.sm_client and not await self._cleared():
+            logger.error("Could not clear the stale activity %s", plan_id)
 
     def _companion_progress_metadata(self) -> Optional[Dict[str, Any]]:
-        """What the progress panel needs to know about companion state.
+        """What the progress panel needs to know about companion state, on every
+        progress update — or None for a plan-following agent."""
+        return self.companion.progress_metadata() if self._companion_mode else None
 
-        Rides on every progress update so the panel can answer "is an activity
-        running right now, and if not what can I pick?" from one payload,
-        instead of the UI inferring it from a deploy-time snapshot that cannot
-        know what happened mid-session.
+    async def _cleared(self) -> bool:
+        """Clear the running plan in the backend; True if it is gone."""
+        result = await self.sm_client.clear_plan()
+        return bool(result and result.get("success", True))
+
+    async def _apply_transition(self, transition: Transition) -> Transition:
+        """Make the state machine match ``transition``, then the agent.
+
+        The agent's own view changes only once the backend has, so the two
+        cannot disagree: a failed load or clear leaves the mode as it was and
+        the turn as a no-change.
         """
-        if not self._companion_mode:
-            return None
-        return {
-            "active_activity": self._active_activity,
-            "activities": [
-                {
-                    "id": a.get("id"),
-                    "title": a.get("title"),
-                    "description": a.get("description"),
-                }
-                for a in self._available_plans
-            ],
-        }
-
-    async def _return_to_companion(self, reason: str) -> None:
-        """Drop the running activity and go back to free-flow conversation.
-
-        Clears the state machine so every "no plan" path — prompts, progress,
-        experts — applies unchanged, which is exactly the state a companion turn
-        should be in. Leaves the session open: in companion mode the conversation
-        outlives any single activity.
-        """
-        if self.sm_client:
-            await self.sm_client.clear_plan()
-        self._close_activity_segment(self._active_activity)
-        self._plan_config = None
-        self._active_activity = None
-        self._last_known_state_id = None
-        logger.info("Back to companion mode (%s)", reason)
-
-    def _open_activity_segment(self) -> None:
-        self._activity_started_at = datetime.now(timezone.utc)
-        self._activity_collected = {}
-
-    def _close_activity_segment(self, title: Optional[str]) -> None:
-        """Remember that an activity ran, so free conversation sees one line for it."""
-        if self._activity_started_at is not None:
-            self._activity_segments.append(
-                ActivitySegment(
-                    title=title or "activity",
-                    started_at=self._activity_started_at,
-                    ended_at=datetime.now(timezone.utc),
-                    collected=dict(self._activity_collected),
+        change = transition.change
+        if change is Change.STARTED:
+            result = await self.sm_client.load_plan(transition.activity["plan"]) if self.sm_client else None
+            if not (result and result.get("success")):
+                logger.error(
+                    "Could not start %r: %s", transition.title, (result or {}).get("error")
                 )
-            )
-        self._activity_started_at = None
-        self._activity_collected = {}
-
-    def _apply_companion_tool_results(self, verdicts: List[Any]) -> Dict[str, Any]:
-        """Read what the router did this turn, and reconcile the agent to it.
-
-        The tools already performed their side effects against the state machine;
-        this only syncs the agent's own view and returns what the reply needs to
-        know. Returns a dict that is empty on the common turn where the router
-        abstained.
-        """
-        outcome: Dict[str, Any] = {}
-        for verdict in verdicts or []:
-            if getattr(verdict, "expert_name", "") != "companion_router":
-                continue
-            for result in (verdict.raw_output or {}).get("tool_results", []) or []:
-                data = result.get("data") or {}
-                if data.get("offer_activities"):
-                    outcome["activities"] = data.get("activities", [])
-                if data.get("activity_started"):
-                    self._active_activity = data.get("activity_title")
-                    self._open_activity_segment()
-                    # The plan was loaded backend-side by the tool; adopt it locally
-                    # so farewell/voice/language lookups resolve against it.
-                    for activity in self._available_plans:
-                        if activity.get("id") == data.get("activity_id"):
-                            self._plan_config = activity.get("plan")
-                            break
-                    outcome["started"] = self._active_activity
-                    # Where LoadPlan left the state machine. The response for THIS
-                    # turn must be authored against it — see _resolve_response_context.
-                    outcome["started_state_id"] = data.get("current_state_id")
-                if data.get("activity_already_running"):
-                    # The tool itself caught this and didn't reload anything (#36:
-                    # the router isn't reliable at telling a fresh choice from an
-                    # ordinary in-activity answer). Nothing to reconcile locally —
-                    # state didn't change — just surface it so it's visible how
-                    # often this fires (see _companion_decisions).
-                    outcome["restart_ignored"] = data.get("activity_title")
-                # Only propose leaving something that is running: the router can
-                # call end_activity again once the activity is already gone, or
-                # while a previous proposal is still awaiting confirmation.
-                if (
-                    data.get("activity_end_proposed")
-                    and (self._active_activity or self._plan_config)
-                    and not self._pending_end_confirmation
-                ):
-                    outcome["confirm_end"] = True
-                    outcome["confirm_end_title"] = (
-                        self._active_activity or data.get("activity_title")
-                    )
-                    self._pending_end_confirmation = outcome["confirm_end_title"]
-        return outcome
-
-    async def _resolve_pending_end_confirmation(self, user_input: str) -> Dict[str, Any]:
-        """Judge the reply to "shall we stop X?" and act on it deterministically.
-
-        Companion_router does not run on this turn (see process()) — its own
-        broad, "lean towards ending" judgment is exactly what proposed leaving
-        in the first place, and is not trusted to also grade its own question.
-        """
-        title = self._pending_end_confirmation
-        self._pending_end_confirmation = None
-        if await self._confirm_pending_end(user_input):
-            if self.sm_client:
-                await self.sm_client.clear_plan()
-            self._close_activity_segment(title)
-            self._plan_config = None
-            self._active_activity = None
+                return NO_CHANGE
+            self.companion.enter(transition.activity, not_before=self._newest_history_at)
+            self._plan_config = transition.activity["plan"]
+            self._resolve_persona_in_plan_text(self._plan_config)
             self._last_known_state_id = None
-            return {"ended": True, "ended_title": title}
-        return {"end_declined": True, "declined_title": title}
+        elif change is Change.EXITED:
+            if self.sm_client and not await self._cleared():
+                logger.error("Could not stop %r; staying in it", transition.title)
+                self.companion.stay()
+                return NO_CHANGE
+            self._leave_activity()
+        elif change is Change.EXIT_ASKED:
+            self.companion.ask_exit()
+        elif change is Change.EXIT_DECLINED:
+            self.companion.stay()
+        logger.info("Companion: %s %s", change.value, transition.title if transition.activity else "")
+        return transition
 
-    async def _confirm_pending_end(self, user_input: str) -> bool:
-        """Is ``user_input`` a clear YES to "shall we stop X?" — narrowly judged.
+    async def _exit_step(
+        self,
+        user_input: str,
+        history: List[Dict[str, str]],
+        bridge: str,
+        language: Optional[str],
+        awaiting_answer: bool,
+    ) -> Optional[ExitStep]:
+        """Run the exit dialogue for this turn, in the reply's model and voice."""
+        return await exit_dialogue(
+            self.llm_service,
+            model=self.response_generator.response_model,
+            title=self.companion.running_title or "the activity",
+            user_input=user_input,
+            history=history,
+            awaiting_answer=awaiting_answer,
+            language=language,
+            bridge=bridge,
+            persona=(self._persona_config or {}).get("system_prompt"),
+        )
 
-        Deliberately separate from companion_router's own prompt: a single
-        small, temperature-0 call with nothing else to weigh. Anything but an
-        unambiguous yes — a different answer, silence, genuine uncertainty, or
-        this call failing outright — defaults to NO (stay), the same
-        ambiguity-means-stay precedent as "sure" not silently restarting an
-        activity.
+    def _leave_activity(self) -> None:
+        self.companion.leave()
+        self._plan_config = None
+        self._last_known_state_id = None
+
+    async def _finish_activity(self, session_id: str) -> Optional[AgentOutput]:
+        """The running activity reached its end: back to free conversation."""
+        finished = Transition(Change.FINISHED, activity=self.companion.active)
+        if self.sm_client and not await self._cleared():
+            logger.error("Could not clear the finished activity %r", finished.title)
+        self._leave_activity()
+        return companion_decision(session_id, finished)
+
+    async def _context_for_new_mode(
+        self, turn_start: Dict[str, Any], history_limit: int
+    ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
+        """Plan context and history for a reply authored in the mode just entered.
+
+        Entering an activity: its plan's first step and its own (empty) history —
+        what a plan-mode session sees on its first turn. Leaving one: no plan,
+        and the free conversation with the activity folded into one line.
         """
-        try:
-            response = await self.llm_service.generate(
-                messages=[
-                    LLMMessage(role="system", content=(
-                        "You just asked the user, in your last reply, a direct "
-                        "yes/no question about whether to stop the current "
-                        "activity. Decide ONLY whether this reply is a clear YES "
-                        "(stop) — anything else, including a different answer, "
-                        "silence, or genuine uncertainty, is NO. Respond with "
-                        "exactly one word: YES or NO."
-                    )),
-                    LLMMessage(role="user", content=user_input),
-                ],
-                config=LLMConfig(
-                    model="gpt-4o-mini", temperature=0.0, max_tokens=3,
-                    provider=LLMProvider.OPENAI_LANGCHAIN,
-                ),
-                component_name="end_activity_confirm",
-            )
-            return response.content.strip().upper().startswith("Y")
-        except Exception as e:
-            logger.warning(f"end_activity confirmation check failed ({e}); defaulting to NO (stay)")
-            return False
+        if self.companion.active:
+            context = await self._fetch_sm_context() or {}
+            context["state_just_changed"] = False
+        else:
+            context = {}
+        for key in ("language", "language_pinned", "persona"):
+            if key in turn_start:
+                context[key] = turn_start[key]
+        history = await self._fetch_conversation_history(limit=history_limit)
+        return context, history
 
     def _plan_farewell_message(self) -> Optional[str]:
         """Resolve the configured farewell from plan metadata, if any.
@@ -1978,31 +1787,23 @@ class StellaV2Agent(BaseAgent):
             "collected_deliverables": collected,
         }
 
-    async def _fetch_conversation_history(
-        self, limit: int = 20
-    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-        """Fetch conversation history from database via SDK.
+    async def _fetch_conversation_history(self, limit: int = 20) -> List[Dict[str, str]]:
+        """Fetch conversation history, scoped to the current mode (#36, #627).
 
-        Returns ``(scoped, full)``:
+        Inside an activity, only that activity's own turns — what a plan-mode
+        session of that plan would have. In free conversation, a finished
+        activity collapses to one line. Every stage reads this one view.
 
-        - ``scoped`` is trimmed to the current mode (#36/#627) — inside an
-          activity, only that activity's own turns; in free conversation, a
-          finished activity collapses to one line. This is what the spoken
-          reply is built from, so a finished activity's turns don't bleed
-          into free conversation and vice versa.
-        - ``full`` is the plain last-``limit`` turns, unscoped. The Expert
-          Pool (companion_router in particular) decides what should happen
-          NEXT — start, stop, or leave an activity alone — and doing that
-          well needs the actual recent trajectory, not just the current
-          mode's slice: ``scoped`` was, for a while, the only history experts
-          got too, which read as the start of a fresh conversation moments
-          after an activity began and made the router re-offer or re-start it
-          out of nowhere (Felix, dev session 29 Sep).
+        The Expert Pool used to get an unscoped copy, so that the router would
+        not mistake a fresh activity for a fresh conversation and start it
+        again. That is now handled where it belongs: the router's tools say
+        whether an activity is running, and a start proposed mid-activity is
+        ignored (Companion.decide) instead of reloading the plan.
 
-        Identical when not in companion mode, since there is no mode to scope.
+        Identical to the plain history when not in companion mode.
         """
         if not self.has_history:
-            return [], []
+            return []
         try:
             messages = await self.get_chat_history(include_debug=False, limit=limit)
             entries = []
@@ -2016,13 +1817,12 @@ class StellaV2Agent(BaseAgent):
                             "at": parse_timestamp(msg.timestamp),
                         }
                     )
-            full = [{"role": e["role"], "content": e["content"]} for e in entries]
+            stamps = [e["at"] for e in entries if e["at"] is not None]
+            if stamps:
+                self._newest_history_at = max(stamps)
             if not self._companion_mode:
-                return full, full
-            scoped = scope_history(
-                entries, self._activity_segments, self._activity_started_at
-            )
-            return scoped, full
+                return [{"role": e["role"], "content": e["content"]} for e in entries]
+            return scope_history(entries, self.companion.segments, self.companion.started_at)
         except Exception as e:
             logger.error(f"Failed to fetch history: {e}")
-            return [], []
+            return []

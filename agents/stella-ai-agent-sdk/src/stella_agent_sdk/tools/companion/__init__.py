@@ -4,15 +4,14 @@ In companion mode the agent has no plan of its own. It talks freely and, when th
 user wants to do something, loads one of the plans the operator allow-listed at
 deploy time. It can also drop a running plan at any point and go back to talking.
 
-Three tools, deliberately small:
+Three tools, deliberately small, and all three only PROPOSE:
 
   list_activities()          what can we do?
-  start_activity(id)         load that plan and run it
-  end_activity()             stop, whatever we were doing, and talk again
+  start_activity(id)         run that plan
+  end_activity()             stop the running one (the user confirms first)
 
-The allow-list is snapshotted into the deploy config, so ``list_activities``
-answers locally with no round trip — it runs on the same turn as the reply and
-must not add latency. Only starting and ending touch the state machine.
+Each returns a ``command``; the agent applies it against the session's mode. No
+tool touches the state machine.
 """
 
 from stella_agent_sdk.tools.companion.activities import (

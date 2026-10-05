@@ -3,6 +3,7 @@
 from typing import Any, Dict, List
 
 from stella_agent_sdk.tools.base import BaseTool, ToolResult
+from stella_agent_sdk.tools.state_machine.guidance import STATE_MACHINE_TOOL_GUIDANCE
 from stella_agent_sdk.services.state_machine_client import StateMachineClient
 
 
@@ -13,6 +14,8 @@ class BatchUpdateTool(BaseTool):
     Use this instead of calling set_deliverable/complete_task repeatedly.
     Include every deliverable and task you found — current message and history.
     """
+
+    guidance = STATE_MACHINE_TOOL_GUIDANCE
 
     def __init__(self, client: StateMachineClient):
         self._client = client
@@ -141,12 +144,23 @@ class BatchUpdateTool(BaseTool):
             "tasks_failed": [],
             "tasks_skipped": [],
             "skips_failed": [],
+            # Tasks this batch's own deliverables already satisfied. The backend
+            # counts a task whose deliverables are all in as addressed (#291), so
+            # completing it afterwards finds nothing pending — that is not a failure.
+            "tasks_addressed": [],
             # Forward end-node completion metadata so the expert runner can emit
             # farewell and stop the session cleanly.
             "session_completed": False,
             "farewell_message": None,
             "summary_behavior": None,
         }
+
+        # Which tasks were open before this batch wrote anything, so a task its
+        # own deliverables satisfied can be told apart from a wrong task_id.
+        pending_before = (
+            {t.get("id") for t in await self._client.get_pending_tasks() if t.get("id")}
+            if deliverables and tasks else set()
+        )
 
         # Process deliverables — stop if a state transition occurs
         transitioned = False
@@ -180,7 +194,7 @@ class BatchUpdateTool(BaseTool):
                 else:
                     results["deliverables_failed"].append({
                         "key": d["key"],
-                        "error": result.get("error", "unknown"),
+                        "error": result.get("error") or "unknown",
                     })
             except Exception as e:
                 results["deliverables_failed"].append({
@@ -222,6 +236,9 @@ class BatchUpdateTool(BaseTool):
                 try:
                     raw_task_id = t["task_id"]
                     resolved_task_id = raw_task_id
+                    if raw_task_id not in pending_ids and raw_task_id in pending_before:
+                        results["tasks_addressed"].append({"task_id": raw_task_id})
+                        continue
                     if resolved_task_id not in pending_ids:
                         resolved_task_id = pending_by_description.get(raw_task_id, "")
                         if not resolved_task_id:
@@ -258,7 +275,7 @@ class BatchUpdateTool(BaseTool):
                     else:
                         results["tasks_failed"].append({
                             "task_id": t["task_id"],
-                            "error": result.get("error", "unknown"),
+                            "error": result.get("error") or "unknown",
                         })
                 except Exception as e:
                     results["tasks_failed"].append({
@@ -267,6 +284,10 @@ class BatchUpdateTool(BaseTool):
                     })
         else:
             for t in tasks:
+                if t["task_id"] in pending_before:
+                    # Its phase completed on this batch's deliverables.
+                    results["tasks_addressed"].append({"task_id": t["task_id"]})
+                    continue
                 results["tasks_failed"].append({
                     "task_id": t["task_id"],
                     "error": "skipped: state transitioned during deliverable processing",
@@ -313,7 +334,7 @@ class BatchUpdateTool(BaseTool):
                 else:
                     results["skips_failed"].append({
                         "task_id": s["task_id"],
-                        "error": result.get("error", "unknown"),
+                        "error": result.get("error") or "unknown",
                     })
             except Exception as e:
                 results["skips_failed"].append({
@@ -321,9 +342,15 @@ class BatchUpdateTool(BaseTool):
                     "error": str(e),
                 })
 
-        all_success = (
-            not results["deliverables_failed"]
-            and not results["tasks_failed"]
-            and not results["skips_failed"]
+        failures = [
+            f"{item.get('key') or item.get('task_id')}: {item.get('error')}"
+            for bucket in ("deliverables_failed", "tasks_failed", "skips_failed")
+            for item in results[bucket]
+        ]
+        # The per-item reasons stay in `data`; `error` is the one line that
+        # debug output shows, and without it a failure read "failed: None".
+        return ToolResult(
+            success=not failures,
+            data=results,
+            error="; ".join(failures) if failures else None,
         )
-        return ToolResult(success=all_success, data=results)
