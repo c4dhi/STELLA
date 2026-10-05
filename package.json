@@ -3,7 +3,7 @@
   "version": "1.2.0",
   "description": "",
   "type": "module",
-  "author": "Universit\u00e4t St. Gallen (HSG) & University of Zurich (UZH)",
+  "author": "Universität St. Gallen (HSG) & University of Zurich (UZH)",
   "private": true,
   "license": "MIT",
   "scripts": {
@@ -87,7 +87,6 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.4",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.3",
     "uuid": "^14.0.2",
     "yauzl": "^3.4.0",
     "zod": "^4.6.5"
@@ -121,6 +120,7 @@
     "ts-jest": "^29.4.14",
     "ts-loader": "^9.6.2",
     "tsconfig-paths": "^4.2.0",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.0"
   },
   "jest": {
