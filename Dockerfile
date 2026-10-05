@@ -27,7 +27,7 @@ RUN npm run build
 
 # Compile prisma seed script separately (NestJS only builds src/, not prisma/)
 # This ensures the seed runs reliably in Node.js 20 ESM mode
-RUN npx tsc prisma/seed.ts --outDir dist/prisma --esModuleInterop --resolveJsonModule --module nodenext --moduleResolution nodenext --target ES2023 --skipLibCheck
+RUN npx tsc --ignoreConfig prisma/seed.ts --outDir dist/prisma --esModuleInterop --resolveJsonModule --module nodenext --moduleResolution nodenext --target ES2023 --skipLibCheck
 
 # Production stage
 FROM node:26-slim
