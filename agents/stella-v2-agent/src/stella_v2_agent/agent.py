@@ -37,7 +37,7 @@ from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.tools import ToolRegistry
 from stella_agent_sdk.tools.state_machine import create_state_machine_tools
-from stella_agent_sdk.tools.companion import create_companion_tools
+from stella_v2_agent.companion_tools import create_companion_tools
 
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from stella_agent_sdk.llm import LLMService
-from stella_agent_sdk.tools.companion import create_companion_tools
+from stella_v2_agent.companion_tools import create_companion_tools
 
 from stella_v2_agent.agent import PROMPT_COMPILER_VERSION
 from stella_v2_agent.companion import (
