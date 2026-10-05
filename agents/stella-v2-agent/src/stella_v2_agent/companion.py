@@ -239,6 +239,10 @@ class Companion:
             if activity and activity.get("plan"):
                 if not doubtful and self._named(activity, said):
                     return Transition(Change.STARTED, activity=activity)
+                # The router proposing the one just asked about is not a yes,
+                # and asking again is bounded like every other question.
+                if activity is asked and self.start_asks >= self.settings.max_start_asks:
+                    return Transition(Change.START_DECLINED, activity=activity)
                 return Transition(Change.START_ASKED, activity=activity)
             logger.warning("start_activity for unknown or plan-less activity %r", command)
         return Transition(Change.NONE, ignored=kind)

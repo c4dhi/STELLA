@@ -211,6 +211,17 @@ def test_a_poorly_heard_yes_is_asked_again_then_dropped():
     assert dropped.change is Change.START_DECLINED
 
 
+def test_the_router_proposing_it_again_does_not_ask_without_end():
+    # Not a yes, and the router proposes the same one again: asked once more,
+    # then the question is dropped like any other.
+    companion = _asked()
+    again = companion.decide([START_CHECKIN], start_confirmed=False, said="maybe that one")
+    assert again.change is Change.START_ASKED
+    companion.ask_start(ACTIVITIES[1])
+    dropped = companion.decide([START_CHECKIN], start_confirmed=False, said="maybe that one")
+    assert dropped.change is Change.START_DECLINED
+
+
 def test_entering_an_activity_closes_the_open_question():
     companion = _asked()
     companion.enter(ACTIVITIES[1])
