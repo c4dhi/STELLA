@@ -376,9 +376,10 @@ def directive(transition: Transition) -> str:
         )
     if change is Change.EXITED:
         return (
-            f"\"{transition.title}\" has just been stopped, confirmed by the user. Close "
-            "it warmly in a sentence, do not continue or resume it, and return to "
-            "open conversation."
+            f"\"{transition.title}\" has just been stopped because the user asked. "
+            "Tell them in ONE short, natural sentence that you have stopped it and that this is "
+            "fine, then say nothing more: no question, no offer of what to do "
+            "next, no comment on how they feel. Do not continue or resume it."
         )
     if change is Change.START_ASKED:
         description = (transition.activity or {}).get("description")

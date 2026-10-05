@@ -688,3 +688,54 @@ def test_paraphrased_reacknowledgment_is_explicitly_forbidden_in_the_request():
     rule = system_msgs[1]
     assert "add another acknowledgment or reaction to your own words" in rule
     assert "not even in different words" in rule
+
+
+# ---------------------------------------------------------------------------
+# A routing directive is the last instruction the model reads
+# ---------------------------------------------------------------------------
+
+async def _messages_sent(monkeypatch, directive, bridge=""):
+    from stella_v2_agent.pipeline import response_generator as module
+
+    sent = {}
+
+    async def fake_stream(_service, messages, _config, component_name=""):
+        sent["messages"] = messages
+        yield "Sleep well.", True
+
+    monkeypatch.setattr(module, "stream_completion", fake_stream)
+    generator = ResponseGenerator(llm_service=None)
+    async for _ in generator.generate("s", "nothing", directive, [], {}, bridge=bridge):
+        pass
+    return sent["messages"]
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_a_routing_directive_is_repeated_after_the_user_message(monkeypatch):
+    # Session ba70e570: told inside the system prompt to say goodbye and sleep,
+    # the reply asked a follow-up question instead, every time.
+    directive = ResponseDirective(routing_directive="Say goodbye in one sentence.")
+    messages = await _messages_sent(monkeypatch, directive)
+
+    assert messages[-2].role == "user"
+    assert messages[-1].role == "system"
+    assert "Say goodbye in one sentence." in messages[-1].content
+
+
+@pytest.mark.asyncio
+async def test_the_spoken_opener_still_comes_last_so_the_reply_continues_it(monkeypatch):
+    directive = ResponseDirective(routing_directive="Say goodbye in one sentence.")
+    messages = await _messages_sent(monkeypatch, directive, bridge="Got it.")
+
+    assert (messages[-1].role, messages[-1].content) == ("assistant", "Got it.")
+    assert "Say goodbye in one sentence." in messages[-2].content
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_turn_gets_no_extra_instruction(monkeypatch):
+    messages = await _messages_sent(monkeypatch, ResponseDirective(primary_action="x"))
+
+    assert [m.role for m in messages] == ["system", "user"]

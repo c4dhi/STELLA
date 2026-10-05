@@ -29,7 +29,7 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 | "Let's do the memory game." | That plan is loaded and starts from its first step. |
 | "The fitness one." | She asks which she understood — "Do you mean the Extended Fitness Check-in?" — and starts it on a yes. |
 | "Actually, stop." | The agent asks whether to stop it (or, if the request was unmistakable, stops right away). |
-| "Yes." | The plan is dropped; the conversation continues. "No", and the activity carries on; unclear, and it asks once more. |
+| "Yes." | The plan is dropped and she says so in a sentence, without a question: what happens next is the user's to say. "No", and the activity carries on; unclear, and it asks once more. |
 | *(the plan reaches its end)* | The plan's farewell plays as a hand-back line, and free conversation resumes. |
 | "Good night." / "Go to sleep." | She says goodbye in a sentence and goes to sleep until tapped awake. |
 | *(nothing, for 45 seconds, outside an activity)* | She goes to sleep without a word. |
@@ -119,6 +119,8 @@ Both are checked against a fixed set of transcripts before a prompt or model cha
 ### Routing outranks expert suggestions
 
 What the router did is a **fact about the session**, not advice. It is delivered to the response prompt as a `routing_directive`, which ranks above every expert suggestion and below the safety boundaries.
+
+It is also given to the reply model twice: in the system prompt, and again as the last instruction after the user's message. Inside the system prompt it is followed by the history, the emotion-tag examples and the rules for continuing the spoken opener, all of which model a reply that ends in a question. Told only there to say goodbye and sleep, `gpt-4o-mini` asked a follow-up question ten times out of ten; with the instruction repeated last, never.
 
 This matters more than it sounds. "What can we do together?" is also a probing cue, so the probing expert reliably produces a follow-up question on precisely the turns the router fires. When the routing outcome was ranked as an ordinary suggestion, probing won — the agent asked *"which tasks would you like to do?"* and invented activities, while the real list sat unread.
 

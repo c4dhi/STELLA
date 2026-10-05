@@ -388,7 +388,11 @@ def test_asking_falls_back_to_a_directive_only_when_the_dialogue_failed():
 
 
 def test_leaving_forbids_continuing():
-    assert "do not continue" in directive(Transition(Change.EXITED, activity=ACTIVITIES[0]))
+    said = directive(Transition(Change.EXITED, activity=ACTIVITIES[0]))
+    assert "Do not continue" in said
+    # She stops talking too: the reply used to end in "what would you like to
+    # do instead?", which keeps a conversation going that the user just ended.
+    assert "no question" in said
 
 
 def test_declining_stays_in_the_activity():

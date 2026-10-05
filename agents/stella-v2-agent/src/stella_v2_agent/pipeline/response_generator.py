@@ -225,6 +225,27 @@ class ResponseGenerator:
             # bridge/prepend chunk(s) already sent → one seamless utterance.
             messages.append(LLMMessage(role="assistant", content=spoken_prefix))
 
+        # A routing directive reports something the session has ALREADY done
+        # (an activity started or stopped, she is about to sleep), so it is
+        # repeated as the last instruction the model reads. Inside the system
+        # prompt it sits ahead of the history, the tag examples and the
+        # "continue from your opener" rules, all of which model a reply that
+        # ends in a question — and gpt-4o-mini followed those: told to say
+        # goodbye and sleep, it asked a follow-up question 10 times out of 10
+        # (session ba70e570).
+        if directive and directive.routing_directive:
+            messages.insert(
+                len(messages) - (1 if spoken_prefix else 0),
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "THIS TURN ONLY — this overrides every style rule above, "
+                        "including any rule about asking a question or moving the "
+                        "conversation forward:\n" + directive.routing_directive
+                    ),
+                ),
+            )
+
         config = LLMConfig(
             model=self.response_model,
             temperature=self.response_temperature,
