@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from '@prisma/client'
+import { PrismaPg } from '@prisma/adapter-pg'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as dotenv from 'dotenv'
@@ -48,7 +49,7 @@ function loadSeedEnv(): void {
 
 loadSeedEnv()
 
-const prisma = new PrismaClient()
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) })
 
 // Directories to skip when scanning for agents
 const SKIP_DIRS = ['stella-ai-agent-sdk']
