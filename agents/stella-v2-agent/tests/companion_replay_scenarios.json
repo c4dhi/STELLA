@@ -158,7 +158,7 @@
 
     {"id": "ordinary-14-no-to-another-round", "tags": ["ordinary", "in_activity", "review"], "in_activity": "memory", "history": [{"role": "assistant", "content": "Perfect, all three! Ready for a harder round?"}], "turns": [{"user": "no", "expect": ["exit_asked", "none"]}], "note": "A no to more of the game: asking is right, carrying on is tolerable, leaving unasked is not."},
 
-    {"id": "transcript-01-offer-pick-play-stop", "tags": ["transcript"], "turns": [{"user": "what can we do together?", "expect": "offered", "assistant": "We could do a longer fitness check-in, a quick study chat, a focus group, or a memory game. What sounds good?"}, {"user": "the memory game", "expect": "started:memory", "assistant": "Lovely. I'll say three words: apple, river, chair. Can you say them back to me?"}, {"user": "apple, river and chair", "expect": "none", "assistant": "Perfect, all three! Ready for a harder round?"}, {"user": "no, I'd rather stop now", "expect": ["exit_asked", "exited"]}, {"only_if": "awaiting_exit", "user": "yes", "expect": "exited", "assistant": "Of course. That was fun."}, {"only_if": "free", "user": "that was nice, thank you", "expect": "none"}]},
+    {"id": "transcript-01-offer-pick-play-stop", "tags": ["transcript"], "turns": [{"user": "what can we do together?", "expect": "offered", "assistant": "We could do a longer fitness check-in, a quick study chat, a focus group, or a memory game. What sounds good?"}, {"user": "the memory game", "expect": "started:memory", "assistant": "Lovely. I'll say three words: apple, river, chair. Can you say them back to me?"}, {"user": "apple, river and chair", "expect": "none", "assistant": "Perfect, all three! Ready for a harder round?"}, {"user": "no, I'd rather stop now", "expect": ["exit_asked", "exited"]}, {"only_if": "awaiting_exit", "user": "yes", "expect": "exited", "assistant": "Of course. That was fun."}, {"only_if": "free", "user": "that was nice, thank you", "expect": ["none", "dismissed"]}], "note": "Last turn: thanks right after stopping an activity. Since 5 Oct the router steps away here; staying is equally fine."},
 
     {"id": "transcript-02-ask-to-stop-then-change-mind", "tags": ["transcript"], "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "ugh, can we stop?", "expect": ["exit_asked", "exited"]}, {"only_if": "awaiting_exit", "user": "oh no wait, let's finish it", "expect": "exit_declined", "assistant": "Sure, we'll carry on. How often do you exercise in a typical week?"}, {"only_if": "activity", "user": "about three times a week", "expect": "none"}]},
 
@@ -236,6 +236,34 @@
 
     {"id": "confirm-start-06-yes-to-a-spoken-offer", "tags": ["start", "confirm_start", "review"], "note": "A yes names nothing, and her offer may have listed several, so she asks which she understood. One extra turn when the offer was of one alone.", "history": [{"role": "assistant", "content": "Shall we play the Memory Game?"}], "turns": [{"user": "yes please", "expect": "start_asked:memory", "assistant": "The Memory Game, yes?"}, {"user": "yes", "expect": "started:memory"}]},
 
-    {"id": "confirm-start-07-german-yes", "tags": ["start", "confirm_start", "lang"], "history": [{"role": "assistant", "content": "Wir könnten ein Gedächtnisspiel machen oder über Ihre Bewegung sprechen. Worauf haben Sie Lust?"}], "turns": [{"user": "das Gedächtnisspiel bitte", "expect": "start_asked:memory", "assistant": "Meinen Sie das Memory Game?"}, {"user": "ja genau", "expect": "started:memory"}]}
+    {"id": "confirm-start-07-german-yes", "tags": ["start", "confirm_start", "lang"], "history": [{"role": "assistant", "content": "Wir könnten ein Gedächtnisspiel machen oder über Ihre Bewegung sprechen. Worauf haben Sie Lust?"}], "turns": [{"user": "das Gedächtnisspiel bitte", "expect": "start_asked:memory", "assistant": "Meinen Sie das Memory Game?"}, {"user": "ja genau", "expect": "started:memory"}]},
+
+    {"id": "lull-01-not-much", "tags": ["lull"], "note": "Session 565dad95 (T2): she asked a follow-up question instead of proposing anything.", "history": [{"role": "user", "content": "Hi Grace"}, {"role": "assistant", "content": "Okay. So, what's on your mind today?"}], "turns": [{"user": "not much", "expect": "offered"}]},
+
+    {"id": "lull-02-not-working-on-anything", "tags": ["lull"], "note": "T2.", "history": [{"role": "user", "content": "not much"}, {"role": "assistant", "content": "Just taking it easy, then. Are you working on anything interesting or just enjoying some downtime?"}], "turns": [{"user": "I am not working on anything", "expect": "offered"}]},
+
+    {"id": "lull-03-bored", "tags": ["lull"], "turns": [{"user": "I'm a bit bored to be honest", "expect": "offered"}]},
+
+    {"id": "lull-04-nothing-really", "tags": ["lull"], "history": [{"role": "assistant", "content": "Hello! How is your day going?"}], "turns": [{"user": "oh, nothing really going on", "expect": "offered"}]},
+
+    {"id": "lull-05-greeting-is-not-a-lull", "tags": ["lull"], "turns": [{"user": "Hi Grace", "expect": "none"}]},
+
+    {"id": "lull-06-has-something-to-say", "tags": ["lull"], "history": [{"role": "assistant", "content": "Hello! What's on your mind today?"}], "turns": [{"user": "not much, but my daughter called this morning", "expect": "none"}]},
+
+    {"id": "lull-07-declines-but-wants-to-chat", "tags": ["lull"], "history": [{"role": "assistant", "content": "There are a few things we could do together: an Extended Fitness Check-in, a Prolific Study, a focus group, or a Memory Game. Or we just sit. What do you fancy?"}], "turns": [{"user": "no thanks, let's just chat a bit", "expect": "none"}]},
+
+    {"id": "lull-08-telling-about-their-day", "tags": ["lull"], "history": [{"role": "assistant", "content": "Hello! How is your day going?"}], "turns": [{"user": "I went for a walk this morning, it was lovely", "expect": "none"}]},
+
+    {"id": "lull-09-wants-none-of-them", "tags": ["lull"], "history": [{"role": "user", "content": "not much"}, {"role": "assistant", "content": "There are a few things we could do together: an Extended Fitness Check-in, a Prolific Study, a focus group, or a Memory Game. Or we just sit. What do you fancy?"}], "turns": [{"user": "no, none of them", "expect": "dismissed"}]},
+
+    {"id": "lull-10-nothing-after-offer", "tags": ["lull"], "note": "T1: 'nothing' after being asked what to do instead.", "history": [{"role": "user", "content": "not much"}, {"role": "assistant", "content": "There are a few things we could do together: an Extended Fitness Check-in, a Prolific Study, a focus group, or a Memory Game. Or we just sit. What do you fancy?"}], "turns": [{"user": "nothing", "expect": "dismissed"}]},
+
+    {"id": "lull-11-not-right-now", "tags": ["lull"], "history": [{"role": "user", "content": "not much"}, {"role": "assistant", "content": "There are a few things we could do together: an Extended Fitness Check-in, a Prolific Study, a focus group, or a Memory Game. Or we just sit. What do you fancy?"}], "turns": [{"user": "not right now", "expect": "dismissed"}]},
+
+    {"id": "lull-12-offer-then-step-away", "tags": ["lull"], "history": [{"role": "assistant", "content": "Hello! What's on your mind today?"}], "turns": [{"user": "not much", "expect": "offered"}, {"user": "no", "expect": "dismissed"}]},
+
+    {"id": "lull-13-later-but-asks-something", "tags": ["lull"], "history": [{"role": "user", "content": "not much"}, {"role": "assistant", "content": "There are a few things we could do together: an Extended Fitness Check-in, a Prolific Study, a focus group, or a Memory Game. Or we just sit. What do you fancy?"}], "turns": [{"user": "maybe later. what's the weather like today?", "expect": "none"}]},
+
+    {"id": "lull-14-already-offered-do-not-repeat", "tags": ["lull"], "history": [{"role": "user", "content": "not much"}, {"role": "assistant", "content": "There are a few things we could do together: an Extended Fitness Check-in, a Prolific Study, a focus group, or a Memory Game. Or we just sit. What do you fancy?"}, {"role": "user", "content": "no thanks, let's just chat"}, {"role": "assistant", "content": "Of course. It's a grey day here."}], "turns": [{"user": "yeah, same here", "expect": "none"}]}
   ]
 }

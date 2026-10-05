@@ -254,6 +254,7 @@ class Session:
                 "history": list(kwargs["conversation_history"]),
                 "sm_context": dict(kwargs["sm_context"]),
                 "guidance": kwargs["directive"].to_prompt_section(),
+                "guidelines": kwargs.get("guidelines"),
             })
             from stella_agent_sdk import AgentOutput
             yield AgentOutput.text_chunk(
@@ -629,7 +630,7 @@ async def test_a_failed_load_stays_in_free_flow():
     await session.turn("let's do the Extended Fitness Check-in", router=_start("extended"))
     assert session.agent.companion.active is None
     assert session.agent._plan_config is None
-    assert session.reply["guidance"] == ""
+    assert "starts now" not in session.reply["guidance"]
 
 
 @pytest.mark.asyncio
@@ -828,3 +829,46 @@ async def test_naming_the_other_one_in_reply_starts_that_one():
     await session.turn("the fitness one", router=_start("extended"))
     await session.turn("no, the Prolific Study", router=_start("prolific"))
     assert session.agent.companion.running_title == "Prolific Study"
+
+
+# ── Free conversation: company, not an interview ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_free_conversation_is_written_from_its_own_style_guide():
+    """Session 565dad95: outside an activity the reply was written from the
+    plan guidelines, a curious interviewer, and asked a question every turn."""
+    session = Session(companion=True, sm=FakeStateMachine())
+    await session.turn("I went for a walk this morning")
+
+    assert session.reply["guidelines"] == session.agent.companion.free_guidelines
+    assert "no question" in session.reply["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_inside_an_activity_the_configured_guidelines_apply():
+    session = await _companion_in_activity()
+    await session.turn("I'm Felix")
+
+    assert session.reply["guidelines"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_plan_mode_agent_keeps_its_configured_guidelines():
+    session = Session(companion=False, sm=FakeStateMachine(plan=PLAN))
+    await session.turn("I'm Felix")
+
+    assert session.reply["guidelines"] is None
+    assert "no question" not in session.reply["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_can_replace_the_free_conversation_guide():
+    session = Session(companion=True, sm=FakeStateMachine())
+    session.agent.barge_in_evaluator = None
+    session.agent._apply_pipeline_config(
+        {"nodes": {"companion": {"free_conversation_guidelines": "Be brief. {{directive}}"}}}
+    )
+    await session.turn("hello")
+
+    assert session.reply["guidelines"] == "Be brief. {{directive}}"
