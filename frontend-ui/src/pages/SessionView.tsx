@@ -121,6 +121,12 @@ export default function SessionView() {
     connectionId: 0
   })
 
+  // What one session's agent told the face must not carry into the next one
+  // opened in the same page load.
+  useEffect(() => {
+    useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
+  }, [sessionId])
+
   // Load session details, then participants (serialized to avoid connection burst)
   useEffect(() => {
     const loadSession = async () => {

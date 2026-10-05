@@ -190,6 +190,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const triggerFaceState = useStore(s => s.triggerFaceState)
+  // What one session's agent told the face must not carry into the next one
+  // opened in the same page load.
+  useEffect(() => {
+    useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
+  }, [sessionData.sessionId])
+
   useEffect(() => {
     setFaceExpression(faceExpression)
   }, [faceExpression, setFaceExpression])
