@@ -606,7 +606,7 @@ function HighlightedEditor({
   const backdropRef = useRef<HTMLDivElement>(null)
   const hoverLayerRef = useRef<HTMLDivElement>(null)
   const [hoveredPh, setHoveredPh] = useState<{ def: PlaceholderDef; x: number; y: number } | null>(null)
-  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const { defs, map } = useContext(PaletteContext)
 
   const syncScroll = useCallback(() => {
@@ -798,7 +798,7 @@ function FullscreenPromptModal({
 
   const [showPopover, setShowPopover] = useState(false)
   const infoButtonRef = useRef<HTMLButtonElement>(null)
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const outputFormat = block.outputFormat
     ?? (block.expertName
@@ -1009,7 +1009,7 @@ function EditableBlock({ block, isDark, compact }: { block: PromptBlock; isDark:
   const [showPopover, setShowPopover] = useState(false)
   const [showFullscreen, setShowFullscreen] = useState(false)
   const infoButtonRef = useRef<HTMLButtonElement>(null)
-  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const handleMouseEnterInfo = useCallback(() => {
     clearTimeout(hideTimeoutRef.current)
