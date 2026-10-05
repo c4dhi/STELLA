@@ -586,12 +586,17 @@ class StellaV2Agent(BaseAgent):
             )
 
             tag = companion_decision(input.session_id, transition)
-            if tag:
-                yield tag
+            # Going to sleep is what happens AFTER her goodbye, so its tag and
+            # its command follow the reply; in the transcript the tag used to
+            # sit above the goodbye it comes after. (The SDK holds the command
+            # itself until the goodbye has been heard.)
+            after_reply: List[AgentOutput] = []
             if transition.change is Change.DISMISSED:
-                # Delivered by the SDK once the goodbye has been heard.
-                yield AgentOutput.client_command(input.session_id, "sleep")
-            elif transition.change is Change.STARTED:
+                after_reply = [t for t in (tag,) if t]
+                after_reply.append(AgentOutput.client_command(input.session_id, "sleep"))
+            elif tag:
+                yield tag
+            if transition.change is Change.STARTED:
                 await self._set_sleep_allowed(False)
             elif transition.change is Change.EXITED:
                 await self._set_sleep_allowed(True)
@@ -737,6 +742,9 @@ class StellaV2Agent(BaseAgent):
                 yield AgentOutput.analytics_event(
                     input.session_id, "response_done", turn_id, self._elapsed_ms(),
                 )
+
+            for output in after_reply:
+                yield output
 
             # ── Stage 5: Post-response processing ──
             # Surface the extraction expert's tool-driven state changes (deliverables

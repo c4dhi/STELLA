@@ -926,3 +926,20 @@ async def test_the_visible_judge_model_is_not_overridden_by_the_old_hidden_key()
     }})
 
     assert session.agent.companion.settings.judge_model == "gpt-visible"
+
+
+@pytest.mark.asyncio
+async def test_going_to_sleep_is_shown_after_the_goodbye_it_follows():
+    """In the transcript the tag sat above her goodbye, as if she slept first."""
+    session = Session(companion=True, sm=FakeStateMachine())
+    outputs = await session.turn("good night", router=SLEEP)
+
+    order = [
+        "reply" if o.type.value == "text_chunk" and o.is_final
+        else "tag" if (o.metadata or {}).get("decision", {}).get("kind") == "going_to_sleep"
+        else "command" if o.type.value == "client_command"
+        else None
+        for o in outputs
+    ]
+    order = [step for step in order if step]
+    assert order == ["reply", "tag", "command"]
