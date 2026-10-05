@@ -34,8 +34,9 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 | "Let's do the memory game." | That plan is loaded and starts from its first step. |
 | "The fitness one." | She asks which she understood — "Do you mean the Extended Fitness Check-in?" — and starts it on a yes. |
 | "Actually, stop." | The agent asks whether to stop it (or, if the request was unmistakable, stops right away). |
-| "Yes." | The plan is dropped and she says so in a sentence, without a question: what happens next is the user's to say. "No", and the activity carries on; unclear, and it asks once more. |
-| *(the plan reaches its end)* | The plan's farewell plays as a hand-back line, and free conversation resumes. |
+| "Yes." | The plan is dropped; she says so in a sentence and asks whether they would like to do one of the other activities instead. "No", and the activity carries on; unclear, and it asks once more. |
+| *(the plan reaches its end)* | The plan's farewell plays, then she thanks them and asks whether they would like to do one of the other activities. |
+| "No thanks." *(to that)* | She winds down: that is fine, and they can wake her whenever they want to talk again. Then she sleeps. |
 | "Good night." / "Go to sleep." | She says goodbye in a sentence and goes to sleep until tapped awake. |
 | *(nothing, for 45 seconds, outside an activity)* | She goes to sleep without a word. |
 
@@ -126,7 +127,7 @@ The code decides *when* something happens: one judge per mode, one transition pe
 | Setting | What it holds |
 |---|---|
 | Free Conversation Guidelines | The reply's style guide outside an activity. |
-| Reply Instructions | One instruction per situation: `greeting`, `offered_unasked`, `offered`, `offered_none`, `free`, `started`, `start_asked`, `start_declined`, `exit_asked`, `exit_declined`, `exited`, `unheard`, `dismissed`. Each is the last thing the reply model reads on that turn, and can use `{{bridge}}`, the opener already spoken, so she does not greet or react twice. |
+| Reply Instructions | One instruction per situation: `greeting`, `offered_unasked`, `offered`, `offered_none`, `free`, `started`, `start_asked`, `start_declined`, `exit_asked`, `exit_declined`, `exited`, `finished`, `unheard`, `dismissed`. Each is the last thing the reply model reads on that turn, and can use `{{bridge}}`, the opener already spoken, so she does not greet or react twice, and `{{other_activities}}` for the hand-back after an activity. Clearing `finished` removes that line; rewording `exited` or `finished` without the question removes the off-boarding offer. |
 | Leaving / Starting an Activity: Judge Instructions | What the two judges are told. The answer format is appended by the agent and is not editable, so an edit cannot break the parsing. |
 | Judge Model | The model for both judges. |
 | Stop / Start Questions in a Row | How often she asks again before letting it go (2). |

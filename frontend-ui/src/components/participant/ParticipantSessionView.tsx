@@ -1107,6 +1107,9 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     }
   }, [room])
   useSleepEvents({ send: sendClientEvent, enabled: room?.state === 'connected' })
+  // Captions go when she falls asleep: the last thing she said should not
+  // stay on screen under a sleeping face.
+  const isAsleep = useStore((s) => s.faceSleepPhase === 'asleep')
 
   // Cleanup audio resources
   const cleanupAudio = () => {
@@ -1549,14 +1552,14 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         text={teleprompterText}
         spokenChar={teleprompterSpokenChar}
         theme={currentVisualizer}
-        isVisible={showAgentTranscript && !isChatOpen && (sessionTimeUp || !userTranscript.trim())}
+        isVisible={showAgentTranscript && !isChatOpen && !isAsleep && (sessionTimeUp || !userTranscript.trim())}
       />
 
       {/* Transcript Overlay — hidden once time is up so it can't mask the farewell. */}
       <TranscriptOverlay
         transcript={userTranscript}
         theme={currentVisualizer}
-        isVisible={showUserTranscript && !sessionTimeUp}
+        isVisible={showUserTranscript && !sessionTimeUp && !isAsleep}
       />
 
       {/* Bottom hint */}
