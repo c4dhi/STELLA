@@ -52,6 +52,7 @@ from stella_v2_agent.pipeline.expert_pool import ExpertPool
 from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 from stella_v2_agent.pipeline.history_scope import parse_timestamp, scope_history
+from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.companion import (
     Change,
     Companion,
@@ -61,6 +62,7 @@ from stella_v2_agent.companion import (
     ExitStep,
     commands_from,
     decision as companion_decision,
+    woken_tag,
     exit_dialogue,
     start_dialogue,
 )
@@ -108,6 +110,10 @@ logger = logging.getLogger(__name__)
 # agent's expert prompts compile. Bump deliberately when adopting a new compiler
 # version. Can be overridden per deployment via config["compiler_version"].
 PROMPT_COMPILER_VERSION = "1.1.0"
+
+# Stands in for the user's message on a turn she opens herself after being
+# woken: the reply model needs something to answer, and nothing was said.
+WOKEN_INPUT = "(The user has just woken you. They have not said anything yet.)"
 
 
 class StellaV2Agent(BaseAgent):
@@ -244,6 +250,13 @@ class StellaV2Agent(BaseAgent):
         Yields AgentOutput messages: status updates, text chunks, debug info,
         deliverables, progress updates.
         """
+        if (input.metadata or {}).get("agent_initiated") is not None:
+            # A turn she opened herself (start_turn): nothing was said, so
+            # there is nothing for the bridge or the experts to work on.
+            async for output in self._opening_turn(input):
+                yield output
+            return
+
         self._is_processing = True
         self._turn_counter += 1
         # Prefer the STT transcript_id forwarded via metadata so audio-stage and
@@ -555,7 +568,8 @@ class StellaV2Agent(BaseAgent):
             # steer it, the reply follows the experts' follow-up questions,
             # which were written for plans, and she interviews (session 565dad95).
             directive.routing_directive = (
-                self.companion.instruction(transition) if self._companion_mode else ""
+                self.companion.instruction(transition, bridge=bridge)
+                if self._companion_mode else ""
             )
             if (
                 transition.change is Change.EXIT_ASKED
@@ -1487,6 +1501,53 @@ class StellaV2Agent(BaseAgent):
         except Exception as e:
             logger.warning(f"Could not send sleep_allowed={allowed}: {e}")
 
+    async def on_client_event(self, session_id: str, event: str, data: Dict[str, Any]) -> None:
+        """What the device reports: she fell asleep, or the user woke her.
+
+        Woken, she speaks first. Inside an activity she is never asleep, so
+        neither event means anything there."""
+        if not self._companion_mode or self.companion.active:
+            return
+        if event == "sleep":
+            self.companion.rest()
+        elif event == "wake":
+            self.companion.rest()       # the opening starts over
+            self.start_turn(event="wake")
+
+    async def _opening_turn(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
+        """She was woken and nothing has been said yet: note it in the
+        transcript and run her own opening (greet, ask how they are)."""
+        if not self._companion_mode or self.companion.active:
+            return
+        yield woken_tag(input.session_id)
+        transition = self.companion.decide([])
+        self.companion.note(transition)
+        if transition.change is Change.NONE:
+            return                      # the opening is switched off: stay quiet
+        tag = companion_decision(input.session_id, transition)
+        if tag:
+            yield tag
+        history = await self._fetch_conversation_history(limit=self._custom_history_limit)
+        sm_context = await self._fetch_sm_context() if self.sm_client else {}
+        language = self.language_resolver.forced or getattr(self, "_session_language", None)
+        sm_context["language"] = language
+        sm_context["language_pinned"] = bool(self.language_resolver.forced)
+        voice = (self._persona_config or {}).get("voice") or None
+        async for output in self.response_generator.generate(
+            session_id=input.session_id,
+            user_input=WOKEN_INPUT,
+            directive=ResponseDirective(routing_directive=self.companion.instruction(transition)),
+            conversation_history=history,
+            sm_context=sm_context,
+            guidelines=self._free_guidelines(),
+        ):
+            if output.type.value == "text_chunk":
+                if language:
+                    output.metadata["language"] = language
+                if voice:
+                    output.metadata["voice"] = voice
+            yield output
+
     def _free_guidelines(self) -> Optional[str]:
         """The reply's style guide outside an activity; None inside one and in
         plan mode, where the configured guidelines apply unchanged."""
@@ -1497,7 +1558,7 @@ class StellaV2Agent(BaseAgent):
     async def on_idle(self, session_id: str, idle_seconds: float) -> None:
         """Free conversation has gone quiet: go to sleep without a word. An
         activity is never slept through; it waits for the user."""
-        if not self._companion_mode or self.companion.active:
+        if not self._companion_mode or self.companion.active or self.companion.asleep:
             return
         logger.info("Companion: idle for %.0fs in free conversation, going to sleep", idle_seconds)
         self.companion.rest()

@@ -26,7 +26,8 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 | They say | What happens |
 |---|---|
 | "What can we do together?" | The agent names the allow-listed activities and invites a choice. |
-| *(woken, or "Hi Grace")* | She greets them and asks how they are doing. |
+| *(tapped awake)* | "Woken up" appears in the transcript, and she greets them and asks how they are doing, without waiting to be spoken to. |
+| "Hi Grace" *(first thing said)* | The same greeting. |
 | *(their answer)* | She reacts in a few words and offers the activities, once. |
 | "No." *(to that offer)* | She says she is there when wanted, and goes to sleep. "No thanks, let's just chat" keeps her awake. |
 | *(anything else in free conversation)* | A sentence or two about what they said, and no follow-up question. Only when they bring up an activity themselves does she ask whether they want to do it. |
@@ -94,10 +95,14 @@ Stepping away is the router's decision, not the reply's, so it is in the replay 
 
 A companion is not meant to keep a conversation going. It ends one in two ways, both only in free conversation:
 
+**Only the agent sends her to sleep.** The face has no timer of its own in a session: only the agent knows whether a conversation is over, and a face that dozed off by itself could do so while the agent was waiting for an answer.
+
+**Woken, she speaks first.** When the user taps her awake, the device tells the agent (`client_event: wake`). The agent notes "Woken up" in the transcript and opens the turn itself: she greets them and asks how they are, without waiting to be spoken to. The device also reports when she has fallen asleep, so a sleeping face is not sent to sleep a second time by the idle timer.
+
 - **Asked, or nothing left to do.** The router proposes `go_to_sleep` on a goodbye, a good night, or "go to sleep", and when the user wants none of the activities she just offered. The reply is one short goodbye, and the agent sends the device a `sleep` command, which the SDK delivers once the goodbye has finished playing.
 - **Unasked.** After 45 seconds with no turn, no speech and nothing done on the device, the agent sends `sleep` without saying anything. *Sleep After Silence* changes it; `0` switches it off.
 
-**She never sleeps inside an activity.** When one starts, the agent tells the device `sleep_allowed: false`, and the face then ignores its own presence timer, any `[sleep]` tag in a reply and any sleep command until the activity ends or is left. A goodbye said mid-activity is the exit dialogue's to judge: it leaves or asks, and she can be sent to sleep from free conversation afterwards.
+**She never sleeps inside an activity.** When one starts, the agent tells the device `sleep_allowed: false`, and the face then ignores any `[sleep]` tag in a reply and any sleep command until the activity ends or is left. A goodbye said mid-activity is the exit dialogue's to judge: it leaves or asks, and she can be sent to sleep from free conversation afterwards.
 
 ### A poorly heard message never changes the mode
 
@@ -121,7 +126,7 @@ The code decides *when* something happens: one judge per mode, one transition pe
 | Setting | What it holds |
 |---|---|
 | Free Conversation Guidelines | The reply's style guide outside an activity. |
-| Reply Instructions | One instruction per situation: `greeting`, `offered_unasked`, `offered`, `offered_none`, `free`, `started`, `start_asked`, `start_declined`, `exit_asked`, `exit_declined`, `exited`, `unheard`, `dismissed`. Each is the last thing the reply model reads on that turn. |
+| Reply Instructions | One instruction per situation: `greeting`, `offered_unasked`, `offered`, `offered_none`, `free`, `started`, `start_asked`, `start_declined`, `exit_asked`, `exit_declined`, `exited`, `unheard`, `dismissed`. Each is the last thing the reply model reads on that turn, and can use `{{bridge}}`, the opener already spoken, so she does not greet or react twice. |
 | Leaving / Starting an Activity: Judge Instructions | What the two judges are told. The answer format is appended by the agent and is not editable, so an edit cannot break the parsing. |
 | Judge Model | The model for both judges. |
 | Stop / Start Questions in a Row | How often she asks again before letting it go (2). |

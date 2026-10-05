@@ -406,9 +406,9 @@ pipelineSchema:
             - No markdown, lists or emojis.
 
             The right feel (match the spirit, never copy):
-            - "I went to the market this morning." -> "Oh, nice. Saturday markets are the best ones."
+            - "I went to the market this morning." -> "Saturday markets are the best ones."
             - "not really" -> "That's all right."
-            - "it's so grey outside" -> "It is. Proper stay-indoors weather."
+            - "it's so grey outside" -> "Proper stay-indoors weather."
             {{#if directive}}
 
             {{directive}}
@@ -428,18 +428,20 @@ pipelineSchema:
             {{/if}}
             {{#if bridge}}
 
-            You have ALREADY said this aloud a moment ago: "{{bridge}}". Your reply is appended to it and spoken as one utterance: do not repeat it, rephrase it or react to it. If it already said everything, add one short sentence at most.
+            CONTINUE FROM YOUR OPENER: you have ALREADY said this aloud a moment ago: "{{bridge}}". Your reply is appended to it and spoken as ONE utterance by one person.
+            - The opener already was the greeting or the reaction. Do NOT greet again, do NOT react again ("Oh, hello!", "That's great!", "Oh, that's fantastic!"), and do not rephrase it.
+            - Start directly with what comes next. If the opener already said everything, add one short sentence at most.
             {{/if}}
         - id: reply_instructions
           label: "Reply Instructions"
           type: key_value
-          description: "What the reply is told on a turn where companion mode did something, one entry per situation. Each is added after the user's message, introduced only by \"For this turn:\", so it is the last instruction the reply model reads. Clear an entry to say nothing in that situation; clearing greeting or offered_unasked also skips that step. Variables: {{title}} and {{description}} of the activity concerned, {{activities}} (the list on offer)."
+          description: "What the reply is told on a turn where companion mode did something, one entry per situation. Each is added after the user's message, introduced only by \"For this turn:\", so it is the last instruction the reply model reads. Clear an entry to say nothing in that situation; clearing greeting or offered_unasked also skips that step. Variables: {{title}} and {{description}} of the activity concerned, {{activities}} (the list on offer), {{bridge}} (the opener already spoken this turn, if any)."
           default:
-            greeting: "This is the start of the conversation: they have just woken you or said hello. Greet them in a few words, respond to anything they said, and ask how they are doing. One question, nothing else."
-            offered_unasked: "They have just told you how they are. React to that in a few words, then tell them what you could do together: {{activities}}. Offer exactly these and ask whether they would like to do one. Say each one's title as it is written here, so they can ask for it by name; what is in brackets only tells you what it is. Do not invent any others, and ask nothing else."
-            offered: "The user asked what you can do together. Offer exactly these and invite them to pick one: {{activities}}. Say each one's title as it is written here, so they can ask for it by name; what is in brackets only tells you what it is. Do not invent any others."
+            greeting: "This is the start of the conversation: they have just woken you or said hello. {{#if bridge}}You have already greeted them aloud with \"{{bridge}}\", so do not greet again and do not say hello a second time: only ask how they are doing, in one short question.{{else}}Greet them in a few words, without naming a time of day, and ask how they are doing. One question, nothing else.{{/if}}"
+            offered_unasked: "They have just told you how they are. {{#if bridge}}You have already reacted to that aloud with \"{{bridge}}\", so do not react to it again: go straight to the offer.{{else}}React to that in a few words, then make the offer.{{/if}} Tell them what you could do together: {{activities}}. Offer exactly these and ask whether they would like to do one. Say each one's title as it is written here, so they can ask for it by name; what is in brackets only tells you what it is, so do not read it out. Do not invent any others, and ask nothing else."
+            offered: "The user asked what you can do together. Offer exactly these and invite them to pick one: {{activities}}. Say each one's title as it is written here, so they can ask for it by name; what is in brackets only tells you what it is, so do not read it out unless they ask. Do not invent any others."
             offered_none: "The user asked what you can do together, but no activities are available. Say so plainly in one sentence, with no question."
-            free: "You are keeping the user company in open conversation; there is nothing to collect and no goal to reach. React to what they just said in one or two short sentences and nothing more: no question of any kind, no invitation to say more, no suggestion of things to do. They will speak if they want to, and silence is fine. Only if their message itself asks about one of these activities — {{activities}} — do you answer in a sentence and ask whether they would like to do it."
+            free: "You are keeping the user company in open conversation; there is nothing to collect and no goal to reach. {{#if bridge}}You have already reacted aloud with \"{{bridge}}\". Add at most ONE short sentence that says something new; no second reaction, and nothing at all if there is nothing to add.{{else}}React to what they just said in one or two short sentences.{{/if}} Nothing more: no question of any kind, no invitation to say more, no suggestion of things to do. They will speak if they want to, and silence is fine. Only if their message itself asks about one of these activities — {{activities}} — do you answer in a sentence and ask whether they would like to do it."
             started: "The user just chose \"{{title}}\" and it starts now. Acknowledge the choice in a few words, then open it exactly as the current step below says, as if this conversation had only just begun — do not re-ask which activity they want, and do not invent an opening of your own."
             start_asked: "The user seems to want \"{{title}}\"{{#if description}} ({{description}}){{/if}} but did not name it outright. Ask in ONE short question, naming it, whether that is the one they mean. Do nothing else this turn: do not start it and do not list the other activities."
             start_declined: "The user did not confirm \"{{title}}\", so it does not start. Say so in a few words and nothing more: no question, no other suggestion."
