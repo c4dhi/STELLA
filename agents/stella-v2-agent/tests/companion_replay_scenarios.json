@@ -284,6 +284,18 @@
 
     {"id": "open-09-woken-says-good-night", "opening": "woken", "tags": ["lull", "opening"], "turns": [{"user": "oh, sorry, go back to sleep", "expect": "dismissed"}]},
 
-    {"id": "open-10-after-the-offer-she-only-answers", "tags": ["lull", "opening"], "history": [{"role": "assistant", "content": "We could do a fitness check-in or a memory game. Would you like to?"}, {"role": "user", "content": "no, let's just sit"}, {"role": "assistant", "content": "Happy to."}], "turns": [{"user": "my knee hurts a bit today", "expect": "none"}, {"user": "the weather is turning", "expect": "none"}]}
+    {"id": "open-10-after-the-offer-she-only-answers", "tags": ["lull", "opening"], "history": [{"role": "assistant", "content": "We could do a fitness check-in or a memory game. Would you like to?"}, {"role": "user", "content": "no, let's just sit"}, {"role": "assistant", "content": "Happy to."}], "turns": [{"user": "my knee hurts a bit today", "expect": "none"}, {"user": "the weather is turning", "expect": "none"}]},
+
+    {"id": "offboard-01-no-thanks-after-a-stop", "tags": ["offboard", "wind_down"], "note": "Felix, 5 Oct: after an activity she offers another; a no to that winds the conversation down.", "history": [{"role": "assistant", "content": "I've stopped the Memory Game, and that's fine. Would you like to do something else instead: an Extended Fitness Check-in, a Prolific Study or a Conditional GRACE Focus Group?"}], "turns": [{"user": "no thanks", "expect": "dismissed"}]},
+
+    {"id": "offboard-02-enough-for-today", "tags": ["offboard", "wind_down"], "history": [{"role": "assistant", "content": "I've stopped the Memory Game, and that's fine. Would you like to do something else instead: an Extended Fitness Check-in, a Prolific Study or a Conditional GRACE Focus Group?"}], "turns": [{"user": "no, that's enough for today", "expect": "dismissed"}]},
+
+    {"id": "offboard-03-not-now-after-finishing", "tags": ["offboard", "wind_down"], "history": [{"role": "assistant", "content": "Thank you for doing that with me. Would you like to do something else: an Extended Fitness Check-in, a Prolific Study or a Memory Game?"}], "turns": [{"user": "not now", "expect": "dismissed"}]},
+
+    {"id": "offboard-04-takes-another", "tags": ["offboard"], "history": [{"role": "assistant", "content": "I've stopped the Memory Game, and that's fine. Would you like to do something else instead: an Extended Fitness Check-in, a Prolific Study or a Conditional GRACE Focus Group?"}], "turns": [{"user": "yes, the Prolific Study", "expect": "started:prolific"}]},
+
+    {"id": "offboard-05-declines-but-keeps-talking", "tags": ["offboard"], "history": [{"role": "assistant", "content": "Thank you for doing that with me. Would you like to do something else: an Extended Fitness Check-in, a Prolific Study or a Memory Game?"}], "turns": [{"user": "no, but tell me, how is the weather today?", "expect": "none"}]},
+
+    {"id": "offboard-06-stop-then-decline", "tags": ["offboard", "wind_down"], "in_activity": "memory", "history": [{"role": "assistant", "content": "I'll say three words: apple, river, chair. Can you say them back to me?"}], "turns": [{"user": "please stop the game now", "expect": ["exited", "exit_asked"], "assistant": "I've stopped the Memory Game, and that's fine. Would you like to do something else instead: an Extended Fitness Check-in, a Prolific Study or a Conditional GRACE Focus Group?"}, {"only_if": "awaiting_exit", "user": "yes", "expect": "exited", "assistant": "I've stopped the Memory Game, and that's fine. Would you like to do something else instead: an Extended Fitness Check-in, a Prolific Study or a Conditional GRACE Focus Group?"}, {"only_if": "free", "user": "no", "expect": "dismissed"}]}
   ]
 }

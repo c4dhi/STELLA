@@ -326,13 +326,15 @@ class Companion:
         self.offered = False
         self.asleep = True
 
-    def instruction(self, transition: Transition, bridge: str = "") -> str:
+    def instruction(self, transition: Transition, bridge: str = "", fallback: bool = True) -> str:
         """What the reply is told this turn, after the transition was applied.
 
         ``bridge`` is the opener already spoken this turn: an instruction to
-        greet or react must not make her do it a second time."""
-        text = directive(transition, self.settings, bridge=bridge)
-        if not text and not self.active:
+        greet or react must not make her do it a second time. ``fallback``
+        off is for a line she would say of her own accord: with no instruction
+        for it she says nothing, where a reply would get the "free" one."""
+        text = directive(transition, self.settings, bridge=bridge, available=self.activities)
+        if not text and not self.active and fallback:
             text = render_prompt(
                 self.settings.instruction("free"),
                 {"activities": _listed(self.activities), "bridge": bridge},
@@ -380,6 +382,7 @@ _INSTRUCTION_KEYS = {
     Change.STARTED: "started",
     Change.EXIT_ASKED: "exit_asked",   # only when the exit dialogue wrote no question
     Change.EXITED: "exited",
+    Change.FINISHED: "finished",
     Change.EXIT_DECLINED: "exit_declined",
     Change.START_ASKED: "start_asked",
     Change.START_DECLINED: "start_declined",
@@ -390,6 +393,7 @@ _INSTRUCTION_KEYS = {
 
 def directive(
     transition: Transition, settings: Optional[CompanionSettings] = None, bridge: str = "",
+    available: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """The one instruction the reply gets about what just happened.
 
@@ -413,6 +417,11 @@ def directive(
         "title": transition.title,
         "description": (transition.activity or {}).get("description") or "",
         "activities": _listed(transition.offered),
+        # What else there is to do, for the hand-back after an activity.
+        "other_activities": _listed([
+            a for a in (available or [])
+            if a.get("id") != (transition.activity or {}).get("id")
+        ]),
         "bridge": bridge,
     }).strip()
 

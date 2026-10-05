@@ -240,6 +240,9 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
     [transport]
   );
   useSleepEvents({ send: sendClientEvent, enabled: status === 'connected' });
+  // Captions go when she falls asleep: the last thing she said should not
+  // stay on screen under a sleeping face.
+  const isAsleep = useStore((s) => s.faceSleepPhase === 'asleep');
 
   // Handle spacebar to toggle mute
   useEffect(() => {
@@ -408,7 +411,7 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
           <TranscriptOverlay
             transcript={userPartialTranscript}
             theme={currentVisualizer}
-            isVisible={showSubtitles}
+            isVisible={showSubtitles && !isAsleep}
           />
 
           {/* Bottom-right ESC hint (also fade on inactivity, hidden when gallery is open) */}

@@ -77,7 +77,7 @@ def test_free_flow_offers_starts_and_ignores_a_stop():
 def test_being_done_for_now_is_a_dismissal_and_only_in_free_conversation():
     dismissed = _free().decide([{"command": "sleep"}])
     assert dismissed.change is Change.DISMISSED
-    assert "one short, warm sentence" in directive(dismissed)
+    assert "wake you whenever they want to talk again" in directive(dismissed)
     assert decision("s1", dismissed).metadata["decision"]["kind"] == "going_to_sleep"
     # She never sleeps mid-activity, whatever was proposed.
     assert _running().decide([{"command": "sleep"}], ExitStep(STAY)) is NO_CHANGE
@@ -392,10 +392,20 @@ def test_asking_falls_back_to_a_directive_only_when_the_dialogue_failed():
 
 def test_leaving_forbids_continuing():
     said = directive(Transition(Change.EXITED, activity=ACTIVITIES[0]))
-    assert "Do not continue" in said
-    # She stops talking too: the reply used to end in "what would you like to
-    # do instead?", which keeps a conversation going that the user just ended.
+    assert "do not continue" in said
+    # With nothing else to offer she stops talking too.
     assert "no question" in said
+
+
+def test_after_an_activity_she_offers_the_other_ones_by_name():
+    """The off-boarding: stopped or finished, she asks once whether they want
+    to do something else. A no to that is the router's cue to wind down."""
+    companion = _free()
+    for change in (Change.EXITED, Change.FINISHED):
+        said = companion.instruction(Transition(change, activity=ACTIVITIES[0]))
+        assert "something else" in said
+        assert ACTIVITIES[1]["title"] in said
+        assert f'name what there is by title: {ACTIVITIES[0]["title"]}' not in said
 
 
 def test_declining_stays_in_the_activity():

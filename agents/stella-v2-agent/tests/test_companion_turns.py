@@ -1009,3 +1009,48 @@ async def test_an_opener_already_spoken_is_not_greeted_or_reacted_to_again():
     guidance = session.reply["guidance"]
     assert 'already greeted them aloud with "Okay."' in guidance
     assert "Greet them in a few words" not in guidance
+
+
+# ── Off-boarding: after an activity she offers another, once ────────────────
+
+
+async def _finish(session):
+    async def full_state_at_end():
+        return {"plan_id": PLAN["id"], "current_state_id": "__end__", "states": []}
+
+    session.sm.get_full_state = full_state_at_end
+    session.extraction = {"session_completed": True, "farewell_message": "Thanks, that's all!"}
+    return await session.turn("my goal is a 10k")
+
+
+@pytest.mark.asyncio
+async def test_a_finished_activity_is_followed_by_her_hand_back_line():
+    session = await _companion_in_activity()
+    before = len(session.replies)
+    outputs = await _finish(session)
+
+    # The activity's own reply, then the hand-back written in free conversation.
+    assert len(session.replies) == before + 2
+    hand_back = session.replies[-1]
+    assert "is finished" in hand_back["guidance"] and "something else" in hand_back["guidance"]
+    assert hand_back["guidelines"] == session.agent.companion.settings.free_conversation_guidelines
+    kinds = _kinds(outputs)
+    assert "activity_completed" in kinds
+
+
+@pytest.mark.asyncio
+async def test_clearing_the_instruction_switches_the_hand_back_off():
+    session = await _companion_in_activity()
+    session.agent.companion.settings.apply({"reply_instructions": {"finished": ""}})
+    before = len(session.replies)
+    await _finish(session)
+
+    assert len(session.replies) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_leaving_an_activity_offers_the_others():
+    session = await _companion_in_activity(exits=[LEAVE])
+    await session.turn("stop")
+
+    assert "something else" in session.reply["guidance"]

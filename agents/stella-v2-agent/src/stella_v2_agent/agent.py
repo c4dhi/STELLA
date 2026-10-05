@@ -114,6 +114,7 @@ PROMPT_COMPILER_VERSION = "1.1.0"
 # Stands in for the user's message on a turn she opens herself after being
 # woken: the reply model needs something to answer, and nothing was said.
 WOKEN_INPUT = "(The user has just woken you. They have not said anything yet.)"
+FINISHED_INPUT = "(The activity has just finished. The user has not said anything since.)"
 
 
 class StellaV2Agent(BaseAgent):
@@ -916,9 +917,8 @@ class StellaV2Agent(BaseAgent):
                 # takes the floor back and keeps talking, so __end__ means "pop",
                 # not "hang up" — the plan's own farewell still plays as the
                 # hand-back line.
-                tag = await self._finish_activity(session_id)
-                if tag:
-                    yield tag
+                async for output in self._finish_activity(session_id):
+                    yield output
             else:
                 self._session_completed = True
                 logger.info(
@@ -948,9 +948,8 @@ class StellaV2Agent(BaseAgent):
                     # Same "pop, don't hang up" rule as the path above. An authored
                     # turn_count_exceeded -> __end__ route reaches the end HERE, so
                     # without this a stalled activity would end the whole session.
-                    tag = await self._finish_activity(session_id)
-                    if tag:
-                        yield tag
+                    async for output in self._finish_activity(session_id):
+                        yield output
                 else:
                     self._session_completed = True
                 logger.info(
@@ -1482,14 +1481,21 @@ class StellaV2Agent(BaseAgent):
         self._plan_config = None
         self._last_known_state_id = None
 
-    async def _finish_activity(self, session_id: str) -> Optional[AgentOutput]:
-        """The running activity reached its end: back to free conversation."""
+    async def _finish_activity(self, session_id: str) -> AsyncIterator[AgentOutput]:
+        """The running activity reached its end: back to free conversation,
+        with the hand-back line the "finished" reply instruction asks for."""
         finished = Transition(Change.FINISHED, activity=self.companion.active)
         if self.sm_client and not await self._cleared():
             logger.error("Could not clear the finished activity %r", finished.title)
         self._leave_activity()
         await self._set_sleep_allowed(True)
-        return companion_decision(session_id, finished)
+        tag = companion_decision(session_id, finished)
+        if tag:
+            yield tag
+        async for output in self._say_unprompted(
+            session_id, self.companion.instruction(finished, fallback=False), FINISHED_INPUT,
+        ):
+            yield output
 
     async def _set_sleep_allowed(self, allowed: bool) -> None:
         """Tell the device whether it may fall asleep. Never inside an activity:
@@ -1527,6 +1533,19 @@ class StellaV2Agent(BaseAgent):
         tag = companion_decision(input.session_id, transition)
         if tag:
             yield tag
+        async for output in self._say_unprompted(
+            input.session_id, self.companion.instruction(transition), WOKEN_INPUT,
+        ):
+            yield output
+
+    async def _say_unprompted(
+        self, session_id: str, instruction: str, standing_in_for_user: str,
+    ) -> AsyncIterator[AgentOutput]:
+        """A line she says of her own accord, written from one reply
+        instruction: no bridge and no experts, since nobody said anything.
+        Nothing is said when the instruction is empty (switched off)."""
+        if not instruction:
+            return
         history = await self._fetch_conversation_history(limit=self._custom_history_limit)
         sm_context = await self._fetch_sm_context() if self.sm_client else {}
         language = self.language_resolver.forced or getattr(self, "_session_language", None)
@@ -1534,9 +1553,9 @@ class StellaV2Agent(BaseAgent):
         sm_context["language_pinned"] = bool(self.language_resolver.forced)
         voice = (self._persona_config or {}).get("voice") or None
         async for output in self.response_generator.generate(
-            session_id=input.session_id,
-            user_input=WOKEN_INPUT,
-            directive=ResponseDirective(routing_directive=self.companion.instruction(transition)),
+            session_id=session_id,
+            user_input=standing_in_for_user,
+            directive=ResponseDirective(routing_directive=instruction),
             conversation_history=history,
             sm_context=sm_context,
             guidelines=self._free_guidelines(),
