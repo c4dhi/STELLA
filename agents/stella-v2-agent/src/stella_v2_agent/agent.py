@@ -301,6 +301,12 @@ class StellaV2Agent(BaseAgent):
             # Prefer STT's independent acoustic detection (voice); fall back to
             # the text classifier when absent (typed input / no signal, §8.3).
             meta = input.metadata or {}
+            # Logged on every turn so a threshold for "too doubtful to act on"
+            # can be set from real sessions rather than guessed.
+            logger.info(
+                "Transcript confidence %.2f for %r",
+                float(meta.get("stt_confidence") or 0.0), input.text[:60],
+            )
             detected_language = meta.get("detected_language") or None
             language_signal = (
                 (detected_language, float(meta.get("language_confidence") or 0.0))
