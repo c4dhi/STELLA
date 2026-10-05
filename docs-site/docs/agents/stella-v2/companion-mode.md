@@ -41,21 +41,34 @@ The only additions are the way out (asked, then confirmed) and the hand-back at 
 
 ## How it works
 
-The router is an ordinary expert — `companion_router` — with three tools, and all three only **propose**: `list_activities`, `start_activity` and `end_activity` each return a command and touch nothing.
+Each mode has **one judge**, asking one question:
+
+| Mode at turn start | Judge | Its question |
+|---|---|---|
+| Free conversation | `companion_router`, an ordinary expert with two tools | Do they want to see the activities, or start one? |
+| In an activity | the exit dialogue, on every turn | Do they want to leave? |
+| Asked to stop | the exit dialogue | Was that a yes? |
+
+The router's tools, `list_activities` and `start_activity`, only **propose**: each returns a command and touches nothing. The router does not run inside an activity, and there is no tool for leaving.
 
 The agent then makes at most one transition per turn, after every expert has finished, judged against the mode the turn started in (`stella_v2_agent/companion.py`):
 
-| Mode at turn start | Router proposes | What happens |
+| Mode at turn start | The judge says | What happens |
 |---|---|---|
 | Free conversation | list | The activities are offered. |
 | Free conversation | start | The plan is loaded (`LoadPlan`); the reply opens its first step. |
-| In an activity | stop | The exit dialogue judges the user's words: ask "shall we stop X?" (nothing ends yet), leave straight away if the request was unmistakable, or ignore it if it was not a stop request at all. |
-| Asked to stop | *(anything)* | The exit dialogue judges the answer: leave (`ClearPlan`), stay, or — if genuinely unclear — ask once more. |
-| In an activity | start or list | Ignored, and tagged as ignored. The router mistook an answer for a new choice. |
+| In an activity | stay | Nothing. The turn is an ordinary plan turn. |
+| In an activity | ask | "Shall we stop X?" is asked; nothing ends yet. |
+| In an activity | leave | The request was unmistakable: the plan is dropped (`ClearPlan`). |
+| Asked to stop | leave / stay / ask | Leave, carry on, or — if genuinely unclear — ask once more. |
 
-The **exit dialogue** is one scoped LLM call, separate from the router and from the reply model. It sees only the stop question, the user's words and the last few turns. It first states what it understands the user to want, checks that against their words, and only then decides. When it asks, it writes the question itself, in the session's language and the persona's voice, and that question is spoken as written. Given only an instruction to ask, the reply model followed the plan instead. Its reading of the user appears as the detail line of the decision tag. It runs on its own model (`EXIT_MODEL`, currently `gpt-5.4-mini`), not the reply model: with the stop question open, `gpt-4o-mini` left on almost any answer, including transcription noise. A deployment can change it with `nodes.exit_dialogue.model` in the pipeline configuration.
+The **exit dialogue** is one scoped LLM call, separate from the reply model. It sees only the user's words and the last few turns. It first states what it understands the user to want, checks that against their words, and only then decides. When it asks, it writes the question itself, in the session's language and the persona's voice, and that question is spoken as written. Given only an instruction to ask, the reply model followed the plan instead. Its reading of the user appears as the detail line of the decision tag. If the call fails, nothing changes.
 
-Because nothing is applied until the pool has finished, experts can all run every turn without racing each other or the plan loading. The router learns whether an activity is running from its own tool descriptions, which no other expert sees.
+It runs on its own model (`EXIT_MODEL`, currently `gpt-5.4-mini`), not the reply model: with the stop question open, `gpt-4o-mini` left on almost any answer, including transcription noise. A deployment can change it with `nodes.exit_dialogue.model` in the pipeline configuration.
+
+Leaving used to take two judges in a row: the router had to notice a stop before the exit dialogue was asked what it was, so a stop the router missed never reached the judge that would have understood it.
+
+Because nothing is applied until the pool has finished, the experts cannot race the plan loading or clearing.
 
 `LoadPlan` deliberately is **not** `Initialize`. `Initialize` resumes existing state so a paused agent restarts where it left off, which is wrong here: a user who runs an activity, stops, and picks it again expects it from the top. `ClearPlan` deletes the row rather than blanking it, so every existing "no plan" code path applies unchanged — which is exactly the state a free-flow turn is in.
 
@@ -67,11 +80,11 @@ So its enablement is a function of the **deploy mode**, not of the configuration
 
 It rides on the `companion` capability, so an agent that does not declare that capability never shows the router at all.
 
-### The router is asymmetric on purpose
+### Starting and leaving err in opposite directions
 
-Starting an activity takes over the conversation and costs the user a turn to undo, so it must never be a guess — the prompt leans hard on abstaining. Ending one errs the other way, because asking to stop and not being let go is the worse failure.
+Starting an activity takes over the conversation and costs the user a turn to undo, so it must never be a guess — the router's prompt leans hard on abstaining. Leaving errs the other way, because asking to stop and not being let go is the worse failure: the exit dialogue asks when someone seems to want out without saying so.
 
-If it starts activities too eagerly, tune the router prompt or raise its model in `config/experts/companion_router.json`. Both are one-line changes.
+Both are checked against a fixed set of transcripts before a prompt or model changes (`tests/companion_replay.py`). To tune them, edit the router prompt in `config/experts/companion_router.json` or the exit dialogue's model.
 
 ### Routing outranks expert suggestions
 

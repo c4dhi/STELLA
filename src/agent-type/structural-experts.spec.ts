@@ -44,7 +44,7 @@ describe('structural experts', () => {
   it('gives the router the tools companion mode is built from', () => {
     const router = expertConfig('stella-v2-agent', 'companion_router');
     expect(router.can_call_functions).toBe(true);
-    expect(router.tools).toEqual(['list_activities', 'start_activity', 'end_activity']);
+    expect(router.tools).toEqual(['list_activities', 'start_activity']);
   });
 
   it('lets the deploy mode, not the saved configuration, decide the router', () => {

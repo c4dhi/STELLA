@@ -162,7 +162,7 @@ class Session:
         self.replies: List[Dict[str, Any]] = []
         self.router_calls: List[Dict[str, Any]] = []   # per turn: {tool, args}
         self.extraction: Dict[str, Any] = {}           # task_extraction's raw_output
-        # What the exit dialogue answers, call by call (then: ask).
+        # What the exit dialogue answers on each activity turn (then: stay).
         self.exit_answers = list(exits or [])
         self.exit_calls: List[Any] = []
         self.exit_models: List[str] = []
@@ -195,13 +195,16 @@ class Session:
             forced=None,
         )
         agent.expert_registry = SimpleNamespace(
-            get_enabled_names=lambda: ["companion_router", "task_extraction"],
+            # The router is forced on in companion mode and off in plan mode.
+            get_enabled_names=lambda: (
+                ["companion_router", "task_extraction"] if companion else ["task_extraction"]
+            ),
             as_map=lambda: {},
         )
         agent.arbitration = Arbitration()
         tools = {
             t.name: t
-            for t in create_companion_tools(ACTIVITIES, lambda: agent.companion.running_title)
+            for t in create_companion_tools(ACTIVITIES)
         }
 
         session = self
@@ -212,12 +215,14 @@ class Session:
         agent.get_chat_history = get_chat_history
 
         async def pool_run(names, user_input, history, sm_context):
-            session.pool_inputs.append({"history": list(history), "sm_context": dict(sm_context)})
+            session.pool_inputs.append({
+                "names": list(names), "history": list(history), "sm_context": dict(sm_context),
+            })
             verdicts = [ExpertVerdict(
                 expert_name="task_extraction", verdict="no_tool_calls",
                 success=True, raw_output=dict(session.extraction),
             )]
-            if companion:
+            if "companion_router" in names:
                 results = []
                 for call in session.router_calls:
                     result = await tools[call["tool"]].execute(**call.get("args", {}))
@@ -256,7 +261,7 @@ class Session:
         async def llm_generate(messages, config=None, callback=None, component_name="unknown"):
             session.exit_calls.append(messages)
             session.exit_models.append(config.model)
-            answer = session.exit_answers.pop(0) if session.exit_answers else ASK
+            answer = session.exit_answers.pop(0) if session.exit_answers else STAY
             if isinstance(answer, Exception):
                 raise answer
             return LLMResponse(content=json.dumps(answer), model="t", provider="t")
@@ -286,9 +291,6 @@ class Session:
 
 def _start(activity_id):
     return [{"tool": "start_activity", "args": {"activity_id": activity_id}}]
-
-
-STOP = [{"tool": "end_activity", "args": {"reason": "user wants to stop"}}]
 
 
 def _kinds(outputs):
@@ -348,7 +350,7 @@ def test_the_router_picks_by_the_description_it_was_offered_in():
     # The reply offered "a quick check-in on your fitness goals" (Prolific
     # Study's description) and the router, seeing titles only, started the one
     # whose TITLE had "Fitness" in it (session f4cd9365).
-    tools = create_companion_tools(ACTIVITIES, lambda: None)
+    tools = create_companion_tools(ACTIVITIES)
     start = next(t for t in tools if t.name == "start_activity")
     description = start.parameters_schema["properties"]["activity_id"]["description"]
     assert 'prolific = "Prolific Study" (A quick check in on the user and their fitness goals)' in description
@@ -378,28 +380,37 @@ async def test_an_activity_turn_is_built_exactly_like_a_plan_mode_turn():
 @pytest.mark.asyncio
 async def test_experts_see_no_injected_activity_line():
     # The "Activity X is currently running" line went into EVERY expert's
-    # history; only the router needs it, and its tool descriptions carry it now.
+    # history. Nothing needs it: the router does not run inside an activity.
     session = await _companion_in_activity()
     await session.turn("I'm Felix")
     assert all(m["role"] != "system" for m in session.pool_inputs[-1]["history"])
-    tools = create_companion_tools(ACTIVITIES, lambda: session.agent.companion.running_title)
-    assert "already running" in next(t for t in tools if t.name == "start_activity").description
 
 
 @pytest.mark.asyncio
-async def test_a_repeat_start_mid_activity_keeps_its_progress():
+async def test_the_router_is_not_consulted_inside_an_activity():
     """Regression (session 92ad3f90): answering the name question re-started the
-    activity and reset it to its first state."""
+    activity and reset it to its first state. The router that made that mistake
+    no longer runs here: the exit dialogue is the activity's one judge."""
     session = await _companion_in_activity()
     session.sm.state = 1
     outputs = await session.turn("Ich heiße Felix", router=_start("prolific"))
 
+    assert "companion_router" not in session.pool_inputs[-1]["names"]
+    assert "task_extraction" in session.pool_inputs[-1]["names"]
     assert session.sm.calls.count("load:checkin-plan") == 1
-    assert not any(c.startswith("load:prolific") for c in session.sm.calls)
     assert session.sm.state == 1
-    assert "activity_command_ignored" in _kinds(outputs)
+    assert _kinds(outputs) == []
+    assert len(session.exit_calls) == 1
     # And the reply is written as an ordinary plan turn, with no directive.
-    assert "starts now" not in session.reply["guidance"]
+    assert session.reply["guidance"] == ""
+
+
+@pytest.mark.asyncio
+async def test_the_router_runs_in_free_conversation_and_the_exit_dialogue_does_not():
+    session = Session(companion=True, sm=FakeStateMachine())
+    await session.turn("hi Grace")
+    assert "companion_router" in session.pool_inputs[-1]["names"]
+    assert session.exit_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -414,9 +425,9 @@ def _spoken(outputs):
 async def test_a_stop_is_asked_first_and_nothing_ends():
     """Regression (session f4cd9365): the stop request was judged as its own
     confirmation, so the question was never asked."""
-    session = await _companion_in_activity()
+    session = await _companion_in_activity(exits=[ASK])
     replies_before = len(session.replies)
-    outputs = await session.turn("can we stop?", router=STOP)
+    outputs = await session.turn("can we stop?")
 
     assert "clear" not in session.sm.calls
     assert len(session.exit_calls) == 1
@@ -431,38 +442,40 @@ async def test_a_stop_is_asked_first_and_nothing_ends():
 @pytest.mark.asyncio
 async def test_an_unmistakable_stop_leaves_without_asking():
     session = await _companion_in_activity(exits=[LEAVE])
-    outputs = await session.turn("stop, I want to end this now", router=STOP)
+    outputs = await session.turn("stop, I want to end this now")
     assert session.sm.calls[-1] == "clear"
     assert "has just been stopped" in session.reply["guidance"]
     assert "activity_ended" in _kinds(outputs)
 
 
 @pytest.mark.asyncio
-async def test_a_complaint_the_router_took_for_a_stop_changes_nothing():
+async def test_a_complaint_is_not_a_stop_and_changes_nothing():
     """Regression (session f4cd9365): "the first question was not what the
     activity wanted" was taken as a stop request."""
     session = await _companion_in_activity(exits=[STAY])
-    outputs = await session.turn("that question was not what the activity wanted", router=STOP)
+    outputs = await session.turn("that question was not what the activity wanted")
     assert "clear" not in session.sm.calls
     assert session.agent.companion.pending_exit is False
-    assert "activity_command_ignored" in _kinds(outputs)
+    assert _kinds(outputs) == []
     assert session.reply["guidance"] == ""  # an ordinary plan turn
 
 
 @pytest.mark.asyncio
-async def test_a_failed_exit_dialogue_still_asks():
+async def test_a_failed_exit_dialogue_changes_nothing():
+    """It runs on every activity turn, so a failed call must not turn into
+    "shall we stop?" — that would interrupt the activity whenever the model
+    hiccups."""
     session = await _companion_in_activity(exits=[RuntimeError("timeout")])
-    replies_before = len(session.replies)
-    await session.turn("can we stop?", router=STOP)
-    assert session.agent.companion.pending_exit is True
-    assert len(session.replies) == replies_before + 1
-    assert "whether they want to stop" in session.reply["guidance"]
+    await session.turn("I'm Felix")
+    assert session.agent.companion.pending_exit is False
+    assert "clear" not in session.sm.calls
+    assert session.reply["guidance"] == ""
 
 
 @pytest.mark.asyncio
 async def test_the_exit_dialogue_runs_on_its_own_model_not_the_replys():
     session = await _companion_in_activity(exits=[ASK])
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
     assert session.exit_models == [EXIT_MODEL]
 
 
@@ -471,14 +484,14 @@ async def test_a_deployment_can_choose_the_exit_dialogues_model():
     session = await _companion_in_activity(exits=[ASK])
     session.agent.barge_in_evaluator = None
     session.agent._apply_pipeline_config({"nodes": {"exit_dialogue": {"model": "gpt-other"}}})
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
     assert session.exit_models == ["gpt-other"]
 
 
 @pytest.mark.asyncio
 async def test_the_answer_is_judged_with_the_question_in_view():
     session = await _companion_in_activity(exits=[ASK, STAY])
-    await session.turn("can we stop?", router=STOP, assistant_says=QUESTION)
+    await session.turn("can we stop?", assistant_says=QUESTION)
     await session.turn("hm, actually no")
     system, user = session.exit_calls[-1][0].content, session.exit_calls[-1][1].content
     assert "you asked whether they want to stop" in system
@@ -488,7 +501,7 @@ async def test_the_answer_is_judged_with_the_question_in_view():
 @pytest.mark.asyncio
 async def test_an_unclear_answer_is_asked_about_again():
     session = await _companion_in_activity(exits=[ASK, ASK])
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
     outputs = await session.turn("hmm")
     assert _spoken(outputs) == [QUESTION]
     assert session.agent.companion.pending_exit is True
@@ -499,10 +512,10 @@ async def test_the_question_is_asked_even_when_the_plan_moved_that_turn():
     """Regression (session 5d10b334): task_extraction skipped the open task on
     "can we stop here", the plan advanced, and the reply — told only to ASK —
     followed the new phase instead: "What are your main fitness goals?"."""
-    session = await _companion_in_activity()
+    session = await _companion_in_activity(exits=[ASK])
     session.extraction = {"transitioned": True, "new_state_id": "goals"}
     session.sm.state = 1
-    outputs = await session.turn("I don't know, but can we stop here", router=STOP)
+    outputs = await session.turn("I don't know, but can we stop here")
 
     assert _spoken(outputs) == [QUESTION]
     assert not any("goals" in text.lower() for text in _spoken(outputs))
@@ -518,7 +531,7 @@ async def test_yes_leaves_and_the_reply_is_written_in_free_conversation():
     """No ghost continuation: the closing reply sees no plan and the activity
     folded into one line — not the activity's next question."""
     session = await _companion_in_activity(exits=[ASK, LEAVE])
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
     outputs = await session.turn("yes")
 
     assert session.sm.calls[-1] == "clear"
@@ -535,7 +548,7 @@ async def test_yes_leaves_and_the_reply_is_written_in_free_conversation():
 @pytest.mark.asyncio
 async def test_no_stays_and_carries_on():
     session = await _companion_in_activity(exits=[ASK, STAY])
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
     outputs = await session.turn("hm, actually no")
 
     assert "clear" not in session.sm.calls
@@ -548,7 +561,7 @@ async def test_no_stays_and_carries_on():
 @pytest.mark.asyncio
 async def test_after_leaving_free_flow_counts_no_plan_turns():
     session = await _companion_in_activity(exits=[ASK, LEAVE])
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
     await session.turn("yes")
     calls_before = list(session.sm.calls)
     await session.turn("so, how's your day?")
@@ -613,7 +626,7 @@ async def test_a_failed_load_stays_in_free_flow():
 @pytest.mark.asyncio
 async def test_a_failed_clear_stays_in_the_activity():
     session = await _companion_in_activity(exits=[ASK, LEAVE])
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
 
     async def failing_clear():
         return {"success": False, "error": "gRPC error"}
@@ -627,7 +640,7 @@ async def test_a_failed_clear_stays_in_the_activity():
 @pytest.mark.asyncio
 async def test_an_interrupted_confirmation_is_asked_again_next_turn():
     session = await _companion_in_activity(exits=[ASK, LEAVE])
-    await session.turn("can we stop?", router=STOP)
+    await session.turn("can we stop?")
 
     gen = session.agent.process(AgentInput.text_input("s1", "yes"))
     await gen.__anext__()          # the turn starts, the check is in flight...

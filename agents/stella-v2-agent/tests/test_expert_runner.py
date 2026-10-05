@@ -191,7 +191,7 @@ def test_the_router_is_not_taught_the_state_machine_tools():
     runner = _runner()
     messages = runner._build_messages(
         _config(system_prompt="Route."), "hi", [], {}, append_output_format=False,
-        tools=create_companion_tools([], lambda: None),
+        tools=create_companion_tools([]),
     )
     assert COMPANION_TOOL_GUIDANCE in messages[0].content
     assert STATE_MACHINE_TOOL_GUIDANCE not in messages[0].content

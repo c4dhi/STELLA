@@ -2,8 +2,8 @@
 
 Every companion change is a prompt trade-off: a router that starts less eagerly
 also leaves less readily. This runs a fixed set of transcripts through the same
-pieces a live turn uses — the ``companion_router`` expert, the exit dialogue and
-``Companion.decide`` — several times each, and reports how often each turn ended
+pieces a live turn uses — the ``companion_router`` expert in free conversation,
+the exit dialogue inside an activity, and ``Companion.decide`` — several times each, and reports how often each turn ended
 where it should. Run it before and after a change, or with ``--router-prompt`` /
 ``--router-model`` to try a variant without editing the config:
 
@@ -21,6 +21,7 @@ import dataclasses
 import json
 import logging
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -126,7 +127,7 @@ class Replay:
             companion.enter(companion.find(scenario["in_activity"]))
             if scenario.get("awaiting_exit"):
                 companion.ask_exit()
-        tools = create_companion_tools(self.activities, lambda: companion.running_title)
+        tools = create_companion_tools(self.activities)
 
         records = []
         for index, turn in enumerate(scenario["turns"]):
@@ -162,18 +163,10 @@ class Replay:
         return records
 
     async def _decide(self, companion, tools, text, history, record) -> Optional[Transition]:
-        commands: List[Dict[str, Any]] = []
-        if not companion.pending_exit:
-            # With the stop question open the agent ignores the router entirely,
-            # so the call is skipped here rather than made and thrown away.
-            verdict = await self.runner.run(self.router, text, history, {}, tools=tools)
-            if verdict.verdict in _FAILED_VERDICTS:
-                record["router"] = verdict.verdict
-                return None
-            commands = commands_from([verdict])
-            record["router"] = commands[0]["command"] if commands else "-"
-        exit_step = None
-        if companion.needs_exit_step(commands):
+        """One judge per mode, as in the agent: the exit dialogue inside an
+        activity, the router in free conversation."""
+        if companion.active:
+            started = time.monotonic()
             exit_step = await exit_dialogue(
                 self.llm,
                 model=self.exit_model,
@@ -184,11 +177,20 @@ class Replay:
                 language=self.language,
                 persona=self.persona,
             )
+            record["exit_ms"] = round((time.monotonic() - started) * 1000)
             if exit_step is None:
                 record["exit"] = "failed"
                 return None
             record["exit"] = f"{exit_step.decision}: {exit_step.user_intent}"
-        return companion.decide(commands, exit_step)
+            return companion.decide([], exit_step)
+
+        verdict = await self.runner.run(self.router, text, history, {}, tools=tools)
+        if verdict.verdict in _FAILED_VERDICTS:
+            record["router"] = verdict.verdict
+            return None
+        commands = commands_from([verdict])
+        record["router"] = commands[0]["command"] if commands else "-"
+        return companion.decide(commands)
 
 
 async def replay_all(
@@ -221,6 +223,7 @@ async def replay_all(
                 "ran": len(records),
                 "passed": None if expect is None else sum(outcomes[o] for o in expect),
                 "outcomes": dict(outcomes),
+                "exit_ms": [r["exit_ms"] for r in records if "exit_ms" in r],
                 "misses": [
                     {k: r[k] for k in ("outcome", "router", "exit")}
                     for r in records if expect is not None and r["outcome"] not in expect
@@ -264,6 +267,14 @@ def report(results: List[Dict[str, Any]], out=sys.stdout) -> float:
                 outcome, router, exit_note = kind
                 detail = f"router: {router}" + (f"; exit dialogue: {exit_note}" if exit_note else "")
                 print(f"      {n}x {outcome}  ({detail})", file=out)
+
+    exit_ms = sorted(ms for r in results for ms in r.get("exit_ms", []))
+    if exit_ms:
+        print(
+            f"\nExit dialogue latency over {len(exit_ms)} calls: median "
+            f"{exit_ms[len(exit_ms) // 2]}ms, p95 {exit_ms[int(len(exit_ms) * 0.95) - 1]}ms",
+            file=out,
+        )
 
     passed, ran = sum(r["passed"] for r in scored), sum(r["ran"] for r in scored)
     rate = passed / ran if ran else 1.0

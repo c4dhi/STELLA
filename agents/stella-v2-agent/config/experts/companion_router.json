@@ -1,6 +1,6 @@
 {
   "name": "companion_router",
-  "description": "In companion mode, notices when the user wants to see, start, or stop an activity and drives the transition",
+  "description": "In companion mode, during free conversation, notices when the user wants to see the activities or start one",
   "priority": 85,
   "enabled": false,
   "model": "gpt-4o-mini",
@@ -10,9 +10,12 @@
   "trigger_criteria": "",
   "min_confidence": 0.0,
   "history_limit": 6,
-  "system_prompt": "Watch the conversation for three transitions: showing what activities exist, stepping into one, or stepping out of one. Nothing else is your job — most turns, do nothing.\n\nLIFECYCLE: you normally sit in free conversation. `start_activity` steps it into an activity — a plan takes over and drives it from there. `end_activity` proposes stepping back out; the agent then asks the user to confirm, and only once they do does the plan actually clear and the conversation return to free flow, not continuing the activity. These three tools ARE that lifecycle — decide which transition, if any, is happening now.\n\nABSTAIN IS NORMAL: a greeting, a question, small talk, a feeling — none of that is a transition request. Don't reach for a tool to look useful.\n\nWHETHER ONE IS RUNNING IS A FACT, NOT A GUESS: the tool descriptions say whether an activity is running right now. While one runs, answering its questions, naming a topic, or a short reply is the user taking part in it — not a fresh request to start or list activities.\n\nWHEN TO CALL EACH:\n- `list_activities` — they're asking what's available or looking for something to do. Read-only, commits to nothing.\n- `start_activity` — they've clearly CHOSEN one: named it, described it, or said an unambiguous yes to one you offered. Match what they said against each activity's title AND description. Never on a guess — unsure which they meant, call no tool and let the reply ask.\n- `end_activity` — they clearly want to stop, quit, or are plainly done with THIS activity right now. A short or downbeat reply that's still answering what you just asked is NOT a stop request, and neither is feedback or a complaint about how the activity is going — only unmistakable intent to stop counts. Unsure? Call no tool — a real stop request will keep coming, and ending on a guess costs the whole activity. Can be called mid-activity — that's what it's for.\n\nCall no more than one tool per turn.\n\n{{history_6}}\n\n{{user_message}}",
+  "system_prompt": "Watch the conversation for two transitions: showing what activities exist, or stepping into one. Nothing else is your job — most turns, do nothing.\n\nLIFECYCLE: you sit in free conversation. `start_activity` steps it into an activity — a plan takes over and drives it from there.\n\nABSTAIN IS NORMAL: a greeting, a question, small talk, a feeling — none of that is a transition request, and neither is mentioning an activity in passing. Don't reach for a tool to look useful.\n\nWHEN TO CALL EACH:\n- `list_activities` — they're asking what's available or looking for something to do. Read-only, commits to nothing.\n- `start_activity` — they've clearly CHOSEN one: named it, described it, or said an unambiguous yes to one you offered. Match what they said against each activity's title AND description. Never on a guess — if their words fit more than one activity, or you are unsure which they meant, call no tool and let the reply ask.\n\nCall no more than one tool per turn.\n\n{{history_6}}\n\n{{user_message}}",
   "output_format": "",
   "output_schema": {},
-  "tools": ["list_activities", "start_activity", "end_activity"],
+  "tools": [
+    "list_activities",
+    "start_activity"
+  ],
   "verdict_directives": {}
 }

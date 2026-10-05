@@ -11,7 +11,7 @@
     "'history' is what was said before the first turn. A turn's 'assistant' is the scripted reply that",
     "follows it; 'only_if' (free | activity | awaiting_exit) skips a turn the earlier ones made moot.",
     "",
-    "Tags: noise = garbled or hallucinated transcription; review = the expectation itself is a judgment",
+    "Tags: ordinary = a plain activity answer that must not be read as leaving; noise = garbled or hallucinated transcription; review = the expectation itself is a judgment",
     "call worth a second look; future = behaviour that does not exist yet."
   ],
   "activities": [
@@ -289,6 +289,34 @@
     {"id": "noise-start-focus-croup", "tags": ["noise", "start"],
      "history": [{"role": "assistant", "content": "We could do a fitness check-in, a focus group, or a memory game. What sounds good?"}],
      "turns": [{"user": "focus croup please", "expect": "started:grace_group"}]},
+
+    {"id": "ordinary-01-bare-no-to-activity-question", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "Do you do any strength training?"}], "turns": [{"user": "No.", "expect": "none"}]},
+
+    {"id": "ordinary-02-bare-yes-to-activity-question", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "Do you usually exercise in the morning?"}], "turns": [{"user": "Yes.", "expect": "none"}]},
+
+    {"id": "ordinary-03-nein-to-activity-question", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "Machen Sie auch Krafttraining?"}], "turns": [{"user": "Nein.", "expect": "none"}]},
+
+    {"id": "ordinary-04-i-dont-know", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "What gets in the way of exercising most often?"}], "turns": [{"user": "I don't know", "expect": "none"}]},
+
+    {"id": "ordinary-05-not-really", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "Would you like to exercise more than you do now?"}], "turns": [{"user": "not really", "expect": "none"}]},
+
+    {"id": "ordinary-06-asks-to-repeat", "tags": ["ordinary", "in_activity"], "in_activity": "memory", "history": [{"role": "assistant", "content": "I'll say three words: apple, river, chair. Can you say them back to me?"}], "turns": [{"user": "can you say them again?", "expect": "none"}]},
+
+    {"id": "ordinary-07-i-forgot", "tags": ["ordinary", "in_activity"], "in_activity": "memory", "history": [{"role": "assistant", "content": "I said three words a moment ago. Can you tell me what they were?"}], "turns": [{"user": "oh, I've forgotten them", "expect": "none"}]},
+
+    {"id": "ordinary-08-one-word-answer", "tags": ["ordinary", "in_activity"], "in_activity": "grace_group", "history": [{"role": "assistant", "content": "What would you call a robot like me?"}], "turns": [{"user": "Grace", "expect": "none"}]},
+
+    {"id": "ordinary-09-long-answer-with-finished", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "Tell me about your last workout."}], "turns": [{"user": "I went for a run and when I finished I was done for the day, completely exhausted", "expect": "none"}]},
+
+    {"id": "ordinary-10-wait-a-moment", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "And how long is a typical session for you?"}], "turns": [{"user": "wait a moment, let me think", "expect": "none"}]},
+
+    {"id": "ordinary-11-question-back", "tags": ["ordinary", "in_activity"], "in_activity": "grace_group", "history": [{"role": "assistant", "content": "How would you feel about a robot starting a conversation on its own?"}], "turns": [{"user": "what do you mean by that?", "expect": "none"}]},
+
+    {"id": "ordinary-12-thats-enough-as-an-answer", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "How much exercise per week feels right to you?"}], "turns": [{"user": "twice a week, that's enough for me", "expect": "none"}]},
+
+    {"id": "ordinary-13-skip-this-question", "tags": ["ordinary", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "How much do you weigh at the moment?"}], "turns": [{"user": "I'd rather not answer that one", "expect": "none"}], "note": "Declining one question is not leaving the activity."},
+
+    {"id": "ordinary-14-no-to-another-round", "tags": ["ordinary", "in_activity", "review"], "in_activity": "memory", "history": [{"role": "assistant", "content": "Perfect, all three! Ready for a harder round?"}], "turns": [{"user": "no", "expect": ["exit_asked", "none"]}], "note": "A no to more of the game: asking is right, carrying on is tolerable, leaving unasked is not."},
 
     {"id": "transcript-01-offer-pick-play-stop", "tags": ["transcript"],
      "turns": [
