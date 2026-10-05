@@ -35,7 +35,11 @@ _LEADING_TAGS_RE = re.compile(r"^(?:\s*\[[a-zA-Z_]+\]\s*)+")
 _LEADING_PUNCT_RE = re.compile(r"^[\s.,!?;:]+")
 
 
-def _strip_repeated_opener(spoken_prefix: str, continuation: str) -> str:
+# A "[tag" the stream has not closed yet.
+_OPEN_TAG_RE = re.compile(r"^\s*\[[a-zA-Z_]*$")
+
+
+def _strip_repeated_opener(spoken_prefix: str, continuation: str, is_final: bool = True) -> Optional[str]:
     """Drop a leading repeat of ``spoken_prefix`` from the model's continuation.
 
     The response prompt tells the model to continue from the bridge/prepend it
@@ -46,12 +50,21 @@ def _strip_repeated_opener(spoken_prefix: str, continuation: str) -> str:
     continuation opened with "[happy] Nice to meet you, Sam!" again). Comparison
     ignores case, punctuation and any leading emotion tag(s), since those are
     exactly what differs between the two occurrences.
+
+    The continuation arrives as a growing stream, and whatever is passed on is
+    spoken at once and cannot be taken back. So while it could still turn out
+    to be a repeat — it matches the prefix as far as it goes — this returns
+    ``None`` and the caller holds its output. Passing the partial match on and
+    stripping it a few chunks later would shorten text already sent, and the
+    SDK then speaks the whole reply again from the start.
     """
     if not spoken_prefix or not continuation:
         return continuation
 
     tag_match = _LEADING_TAGS_RE.match(continuation)
     body = continuation[tag_match.end():] if tag_match else continuation
+    if not is_final and _OPEN_TAG_RE.match(body):
+        return None  # a tag still being written: what follows it is not known yet
 
     prefix_chars = [c.lower() for c in spoken_prefix if c.isalnum()]
     if not prefix_chars:
@@ -68,9 +81,15 @@ def _strip_repeated_opener(spoken_prefix: str, continuation: str) -> str:
         ci += 1
 
     if pi < len(prefix_chars):
-        return continuation  # continuation ran out before the whole prefix matched
+        # Ran out before the whole prefix matched: a repeat in the making, or
+        # a short reply that merely starts the same way.
+        return continuation if is_final else None
 
     tail = body[ci:]
+    if not tail and not is_final:
+        return None  # matched to the last character; the word may still go on
+    if tail[:1].isalnum():
+        return continuation  # "Oh" spoken, "Ohio ..." is not a repeat of it
     punct_match = _LEADING_PUNCT_RE.match(tail)
     if punct_match:
         tail = tail[punct_match.end():]
@@ -269,7 +288,9 @@ class ResponseGenerator:
             async for llm_text, is_final in stream_completion(
                 self._llm_service, messages, config, component_name="response_generator",
             ):
-                cleaned = _strip_repeated_opener(spoken_prefix, llm_text) if spoken_prefix else llm_text
+                cleaned = _strip_repeated_opener(spoken_prefix, llm_text, is_final)
+                if cleaned is None:
+                    continue  # could still be a repeat of the opener: hold it
                 yield AgentOutput.text_chunk(
                     session_id,
                     (prefix + cleaned).strip(),

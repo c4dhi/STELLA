@@ -8,6 +8,8 @@ We test:
 - ResponseGenerator.apply_config(): runtime config overrides
 """
 
+import pytest
+
 from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.pipeline.response_generator import (
     ResponseGenerator,
@@ -599,10 +601,23 @@ def test_genuine_continuation_is_left_untouched():
 
 
 def test_partial_overlap_is_not_treated_as_a_repeat():
-    # Streaming mid-token: the accumulated text so far only partly overlaps
-    # the opener. Must not strip until the whole opener has actually repeated.
+    # A finished reply that only starts like the opener is real content.
     continuation = "[happy] Nice to meet"
     assert _strip_repeated_opener("Nice to meet you, Sam!", continuation) == continuation
+
+
+def test_a_repeat_in_the_making_is_held_while_the_stream_is_open():
+    # Mid-stream the same text could still become a repeat; passing it on now
+    # and stripping it later would shorten what was already sent.
+    opener = "Nice to meet you, Sam!"
+    assert _strip_repeated_opener(opener, "[happy] Nice to meet", is_final=False) is None
+    assert _strip_repeated_opener(opener, "[hap", is_final=False) is None
+    assert _strip_repeated_opener(opener, "Nice to meet you, Sam", is_final=False) is None
+    assert _strip_repeated_opener(opener, "Nice to see", is_final=False) == "Nice to see"
+
+
+def test_a_longer_word_is_not_a_repeat_of_a_short_opener():
+    assert _strip_repeated_opener("Oh", "Ohio is lovely.") == "Ohio is lovely."
 
 
 def test_empty_opener_or_continuation_is_a_no_op():
@@ -645,6 +660,57 @@ def test_generate_drops_a_repeated_bridge_before_it_reaches_tts():
     final_text = outputs[-1].content
     assert final_text.count("Nice to meet you, Sam!") == 1
     assert final_text == "Nice to meet you, Sam! [curious] What type of exercise do you enjoy?"
+
+
+class _StreamingLLMService:
+    """Streams a reply a few characters at a time, as a provider does."""
+
+    def __init__(self, content: str, step: int = 3):
+        self._content = content
+        self._step = step
+
+    async def generate(self, messages, config, callback, component_name="unknown"):
+        for end in range(self._step, len(self._content), self._step):
+            await callback.on_token(self._content[end - self._step:end], self._content[:end])
+        resp = LLMResponse(content=self._content, model="test", provider="test")
+        await callback.on_complete(resp)
+        return resp
+
+
+def _sent_to_tts(outputs):
+    """What the SDK loop hands to TTS: each chunk's new text, or — when a
+    chunk does not extend the last one — the whole chunk again."""
+    sent, last = "", ""
+    for output in outputs:
+        sent += output.content[len(last):] if output.content.startswith(last) else output.content
+        last = output.content
+    return sent
+
+
+@pytest.mark.parametrize("bridge, reply, heard", [
+    ("Nice to meet you, Sam!", "[happy] Nice to meet you, Sam! [curious] What do you enjoy?",
+     "Nice to meet you, Sam! [curious] What do you enjoy?"),
+    ("Glad to hear that. It sounds like a good day.", "Glad to hear that. It sounds like a good day. What made it good?",
+     "Glad to hear that. It sounds like a good day. What made it good?"),
+    ("Nice to meet you, Sam!", "[curious] What type of exercise do you enjoy?",
+     "Nice to meet you, Sam! [curious] What type of exercise do you enjoy?"),
+    ("Nice to meet you, Sam!", "Nice to see the sun out today.",
+     "Nice to meet you, Sam! Nice to see the sun out today."),
+    ("Oh", "Ohio is lovely this time of year.", "Oh Ohio is lovely this time of year."),
+])
+@pytest.mark.parametrize("step", [1, 3, 7])
+def test_streamed_text_only_ever_grows(bridge, reply, heard, step):
+    # A chunk that is not an extension of the last one makes the SDK speak the
+    # reply again from its start — the bridge was heard two and three times.
+    gen = ResponseGenerator(llm_service=_StreamingLLMService(reply, step))
+    outputs = _run_generate(
+        gen, session_id="s1", user_input="Hi.", directive=ResponseDirective(),
+        conversation_history=[], sm_context={}, bridge=bridge,
+    )
+    for earlier, later in zip(outputs, outputs[1:]):
+        assert later.content.startswith(earlier.content)
+    assert _sent_to_tts(outputs) == heard
+    assert outputs[-1].is_final
 
 
 def test_generate_leaves_a_genuine_continuation_untouched():
@@ -710,7 +776,6 @@ async def _messages_sent(monkeypatch, directive, bridge=""):
     return sent["messages"]
 
 
-import pytest
 
 
 @pytest.mark.asyncio
