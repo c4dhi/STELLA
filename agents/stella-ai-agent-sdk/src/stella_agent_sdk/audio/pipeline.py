@@ -1950,6 +1950,7 @@ class AudioPipeline:
                 payload = message.get("data")
                 payload = payload if isinstance(payload, dict) else {}
                 event = str(payload.get("event") or "")
+                logger.info(f"[CLIENT EVENT] {event}")
                 handler = getattr(self, "_client_event_handler", None)
                 if event and handler:
                     asyncio.create_task(handler(event, payload))
@@ -2709,6 +2710,20 @@ class AudioPipeline:
         close ({"type":"session_end"}) over the data channel — wired in run.py to
         run the agent's on_session_ending wrap-up, then shut down (issue #198)."""
         self._session_end_handler = handler
+
+    def start_agent_turn(self, metadata: Dict[str, Any]) -> None:
+        """Queue a turn nobody spoke: the agent's ``process()`` is called with
+        empty text and ``metadata["agent_initiated"]``. It takes its place in
+        the queue like a typed message, so it never cuts into a running turn."""
+        self._transcript_queue.put_nowait(TranscriptEvent(
+            text="",
+            is_final=True,
+            participant_id="",
+            transcript_id=f"agent_{uuid.uuid4().hex[:8]}",
+            confidence=1.0,
+            timestamp_ms=int(time.time() * 1000),
+            agent_initiated=dict(metadata),
+        ))
 
     def on_client_event(
         self, handler: Callable[[str, Dict[str, Any]], Awaitable[None]]

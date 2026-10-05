@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 import grpc
 
@@ -35,6 +35,10 @@ class TranscriptEvent:
     # classifier as the fallback signal (RFC §8.3).
     detected_language: str = ""
     language_confidence: float = 0.0
+    # Set when the AGENT opened this turn itself (BaseAgent.start_turn): nothing
+    # was said, ``text`` is empty, and this is what the agent passed along. None
+    # for everything the user said or typed.
+    agent_initiated: Optional[Dict[str, Any]] = None
     # True when this transcript was produced by a committed barge-in and is
     # being injected as a new turn (set by the pipeline, not the STT service).
     is_barge_in: bool = False
