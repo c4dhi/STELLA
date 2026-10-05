@@ -45,6 +45,8 @@ const StellaFace: React.FC<StellaFaceProps> = ({
   // drops a state tag this client has never heard of, the same way an unknown
   // expression falls back to rest rather than throwing.
   const faceState = useStore((s) => s.faceState);
+  // The agent holds her awake while it is in the middle of something.
+  const sleepAllowed = useStore((s) => s.faceSleepAllowed);
   const sleepCommandSeq =
     faceState && resolveState(faceState.tag) === 'sleep' ? faceState.seq : 0;
   const expression = useMemo(() => resolveExpression(cueExpression), [cueExpression]);
@@ -81,7 +83,8 @@ const StellaFace: React.FC<StellaFaceProps> = ({
     cameraActive: isWebcamActive,
     sleepAfterMs: sleep?.afterMs,
     force: sleep?.force,
-    sleepCommandSeq
+    sleepCommandSeq,
+    sleepAllowed
   });
 
   useEffect(() => {

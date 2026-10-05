@@ -204,6 +204,8 @@ export interface AgentEmotionCue {
  */
 export interface AgentCommand {
   command?: string
+  /** For `sleep_allowed`: whether the face may fall asleep at all. */
+  allowed?: boolean
   agent_id?: string
 }
 

@@ -70,6 +70,13 @@ type MediaState = {
    * somebody's mic shut.
    */
   faceSleepPhase: 'awake' | 'asleep' | 'waking'
+  /**
+   * Whether the agent currently lets the face fall asleep. An agent in the
+   * middle of something with the user (a companion's activity) says no, and
+   * then nothing puts her to sleep: not the presence timer, not a tag, not a
+   * command. True until an agent says otherwise.
+   */
+  faceSleepAllowed: boolean
   // Agent readiness state - controls audio processing
   agentReady: boolean
 }
@@ -89,6 +96,8 @@ type MediaActions = {
   triggerFaceGesture: (tag: string) => void
   triggerFaceState: (tag: string) => void
   setFaceSleepPhase: (phase: 'awake' | 'asleep' | 'waking') => void
+  /** Act on an `agent_command` envelope. A command this client does not know is ignored. */
+  applyAgentCommand: (data: { command?: string; allowed?: boolean }) => void
   setAudioLevel: (v: number) => void
   setIsRemoteSpeaking: (v: boolean) => void
   // Agent readiness action
@@ -299,6 +308,7 @@ export const useStore = create<
   faceGesture: null,
   faceState: null,
   faceSleepPhase: 'awake',
+  faceSleepAllowed: true,
   agentReady: false, // Audio disabled until agent is ready
   setMicGranted: (v) => set({ micGranted: v }),
   setVu: (v) => set({ vu: v }),
@@ -319,6 +329,15 @@ export const useStore = create<
   })),
   setFaceSleepPhase: (phase) =>
     set(s => (s.faceSleepPhase === phase ? s : { faceSleepPhase: phase })),
+  applyAgentCommand: (data) => {
+    if (data.command === 'sleep_allowed') {
+      set({ faceSleepAllowed: data.allowed !== false })
+    } else if (data.command) {
+      // Every other command is a face state by name; the face drops one it
+      // does not know.
+      set(s => ({ faceState: { tag: data.command as string, seq: (s.faceState?.seq ?? 0) + 1 } }))
+    }
+  },
   setAudioLevel: (v) => set({ audioLevel: v }),
   setIsRemoteSpeaking: (v) => set({ isRemoteSpeaking: v }),
   setAgentReady: (v) => set({ agentReady: v }),

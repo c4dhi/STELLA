@@ -1,7 +1,8 @@
-"""The two companion tools the router proposes transitions with.
+"""The three companion tools the router proposes transitions with.
 
   list_activities()          what can we do?
   start_activity(id)         run that plan
+  go_to_sleep()              the user is done for now
 
 They only PROPOSE. Each returns a ``command`` in its result data and touches
 nothing; the agent decides, against the session's actual mode, whether to act on
@@ -32,6 +33,9 @@ tool for ordinary conversation: that is the common case.
 - `start_activity` — the user has clearly CHOSEN one: named it, described it, or
   said an unambiguous yes to one just offered. Unsure which one they meant? Call
   no tool, and let the reply ask.
+- `go_to_sleep` — the user is done for now: they say good night or goodbye, tell
+  you to go (back) to sleep, or say they need nothing more. A thank-you alone,
+  or talk about their own sleep, is not that.
 
 Call no more than one tool per turn.
 """
@@ -150,6 +154,31 @@ class StartActivityTool(BaseTool):
         )
 
 
+class GoToSleepTool(BaseTool):
+    """Propose ending the conversation: a goodbye, then the device sleeps."""
+
+    guidance = COMPANION_TOOL_GUIDANCE
+
+    @property
+    def name(self) -> str:
+        return "go_to_sleep"
+
+    @property
+    def description(self) -> str:
+        return (
+            "The user is done for now: they said good night or goodbye, told you "
+            "to go to sleep, or said they need nothing more. You say goodbye and "
+            "go to sleep until they wake you."
+        )
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **_kwargs) -> ToolResult:
+        return ToolResult(success=True, data={"command": "sleep"})
+
+
 def create_companion_tools(activities: List[Dict[str, Any]]) -> List[BaseTool]:
     """Build the companion toolset for one session."""
-    return [ListActivitiesTool(activities), StartActivityTool(activities)]
+    return [ListActivitiesTool(activities), StartActivityTool(activities), GoToSleepTool()]

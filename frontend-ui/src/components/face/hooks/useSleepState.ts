@@ -92,6 +92,12 @@ export interface SleepInput {
   /** Preview only: run the timer regardless of presence or camera. */
   force: boolean;
   sleepAfterMs: number;
+  /**
+   * The agent lets her sleep. False while it is in the middle of something
+   * with the user, and then nothing puts her under: not the timer, not a
+   * request. Absent means allowed.
+   */
+  sleepAllowed?: boolean;
 }
 
 export function initialSleepState(now: number): SleepState {
@@ -133,6 +139,12 @@ export function stepSleep(state: SleepState, input: SleepInput, now: number): Sl
 
     case 'awake':
     default:
+      // Held awake by the agent. The countdown is pinned to now, so when sleep
+      // is allowed again she gets a full quiet period first rather than
+      // dropping off on a timer that ran out during the activity.
+      if (input.sleepAllowed === false) {
+        return { ...state, lastPresenceAt: now };
+      }
       // Being TOLD to sleep skips the countdown and ignores who is watching:
       // "go to sleep" means now, not in thirty seconds if nobody is looking.
       // It still waits for her own voice to finish — closing her eyes halfway
@@ -165,6 +177,8 @@ interface UseSleepStateOptions {
   force?: boolean;
   /** `[sleep]` from the agent — a new seq is a new request (#face-sleep). */
   sleepCommandSeq?: number;
+  /** The agent lets her sleep; see SleepInput.sleepAllowed. */
+  sleepAllowed?: boolean;
 }
 
 export interface SleepControls {
@@ -183,6 +197,7 @@ export const useSleepState = ({
   sleepAfterMs = SLEEP_AFTER_MS,
   force = false,
   sleepCommandSeq = 0,
+  sleepAllowed = true,
 }: UseSleepStateOptions): SleepControls => {
   const stateRef = useRef<SleepState>(initialSleepState(Date.now()));
   const wakeRequestedRef = useRef(false);
@@ -203,6 +218,7 @@ export const useSleepState = ({
     force,
     sleepAfterMs,
     sleepCommandSeq,
+    sleepAllowed,
   });
   inputRef.current = {
     isPresent,
@@ -212,6 +228,7 @@ export const useSleepState = ({
     force,
     sleepAfterMs,
     sleepCommandSeq,
+    sleepAllowed,
   };
 
   const [view, setView] = useState<{ phase: SleepPhase; isYawning: boolean }>({
@@ -242,6 +259,10 @@ export const useSleepState = ({
     // the old request the moment they pause would switch the camera off in the
     // middle of a conversation that had clearly restarted.
     if (live.isUserSpeaking) sleepPendingRef.current = false;
+    // A request that arrives while she is being held awake is dropped, not
+    // saved up: honouring it minutes later, when the activity ends, would put
+    // her to sleep on a goodbye nobody remembers saying.
+    if (!live.sleepAllowed) sleepPendingRef.current = false;
 
     const next = stepSleep(
       stateRef.current,
@@ -253,6 +274,7 @@ export const useSleepState = ({
         sleepRequested: sleepPendingRef.current,
         force: live.force,
         sleepAfterMs: live.sleepAfterMs,
+        sleepAllowed: live.sleepAllowed,
       },
       now
     );

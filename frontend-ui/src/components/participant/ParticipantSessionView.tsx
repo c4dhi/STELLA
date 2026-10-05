@@ -604,11 +604,9 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           return
         }
 
-        // A command from the agent to this device (e.g. sleep). Commands are
-        // face states by name; the face drops one it does not know.
+        // A command from the agent to this device (e.g. sleep).
         if (envelope.type === 'agent_command') {
-          const command = envelope.data?.command
-          if (command) useStore.getState().triggerFaceState(command)
+          useStore.getState().applyAgentCommand(envelope.data || {})
           return
         }
 

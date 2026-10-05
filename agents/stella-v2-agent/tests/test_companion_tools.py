@@ -13,6 +13,7 @@ import pytest
 
 from stella_v2_agent.companion_tools import (
     COMPANION_TOOL_GUIDANCE,
+    GoToSleepTool,
     ListActivitiesTool,
     StartActivityTool,
     create_companion_tools,
@@ -73,8 +74,14 @@ def test_start_activity_schema_pairs_ids_with_titles_and_descriptions():
 
 def test_every_companion_tool_carries_the_companion_guidance():
     tools = create_companion_tools(ACTIVITIES)
-    assert {t.name for t in tools} == {"list_activities", "start_activity"}
+    assert {t.name for t in tools} == {"list_activities", "start_activity", "go_to_sleep"}
     assert all(t.guidance == COMPANION_TOOL_GUIDANCE for t in tools)
+
+
+@pytest.mark.asyncio
+async def test_go_to_sleep_only_proposes_it():
+    result = await GoToSleepTool().execute()
+    assert result.data == {"command": "sleep"}
 
 
 def test_the_router_has_no_way_to_propose_leaving():

@@ -71,6 +71,15 @@ def test_free_flow_offers_starts_and_ignores_a_stop():
     assert _free().decide([STOP]).change is Change.NONE
 
 
+def test_being_done_for_now_is_a_dismissal_and_only_in_free_conversation():
+    dismissed = _free().decide([{"command": "sleep"}])
+    assert dismissed.change is Change.DISMISSED
+    assert "one short, warm sentence" in directive(dismissed)
+    assert decision("s1", dismissed).metadata["decision"]["kind"] == "going_to_sleep"
+    # She never sleeps mid-activity, whatever was proposed.
+    assert _running().decide([{"command": "sleep"}], ExitStep(STAY)) is NO_CHANGE
+
+
 def test_an_abstaining_router_changes_nothing():
     assert _free().decide([]).change is Change.NONE
     assert _running().decide([]).change is Change.NONE
