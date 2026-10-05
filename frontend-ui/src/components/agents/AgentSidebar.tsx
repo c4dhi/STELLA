@@ -850,7 +850,7 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
                           </div>
                           {/* Console Content */}
                           <div
-                            ref={(el) => inlineLogRefs.current.set(agent.id, el)}
+                            ref={(el) => { inlineLogRefs.current.set(agent.id, el) }}
                             onScroll={(e) => handleLogScroll(agent.id, e)}
                             className="
                               text-neutral-100 p-3
