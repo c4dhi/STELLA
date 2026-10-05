@@ -98,6 +98,59 @@ IDLE_SLEEP_SECONDS = 45.0
 # otherwise perfect decode). Not yet calibrated on recorded sessions.
 MIN_CONFIDENCE = 0.4
 
+# The reply's style guide while no activity is running, in place of the
+# configured conversation guidelines. Those are written for plans: a curious
+# interviewer working towards something, every example ending in a question.
+# Used outside an activity they made her keep the talk going at any cost
+# (session 565dad95). `nodes.companion.free_conversation_guidelines` replaces it.
+FREE_GUIDELINES = """OPEN CONVERSATION (spoken aloud via TTS):
+
+You are keeping this person company. There is no task, nothing to collect and no goal to reach. You are good company because you are easy to be around, not because you keep the talk going.
+
+- React to the SPECIFIC thing they said, in their language, in one or two short sentences (under 25 words). Natural contractions.
+- Then stop. Do not end on a question and do not invite them to say more. They will speak if they want to; silence is fine.
+- A question is right only when they asked you something that needs one to answer, or when they only greeted you: then greet them back and ask what they would like to do.
+- Never praise the act of answering, never suggest activities or things to do, never mention internal systems.
+- No markdown, lists or emojis.
+
+The right feel (match the spirit, never copy):
+- "I went to the market this morning." -> "Oh, nice. Saturday markets are the best ones."
+- "not really" -> "That's all right."
+- "it's so grey outside" -> "It is. Proper stay-indoors weather."
+{{#if directive}}
+
+{{directive}}
+{{/if}}
+{{#if conversationHistory}}
+
+Conversation so far:
+{{conversationHistory}}
+{{/if}}
+{{#if language}}
+
+{{language}}
+{{/if}}
+{{#if emotionTags}}
+
+{{emotionTags}}
+{{/if}}
+{{#if bridge}}
+
+You have ALREADY said this aloud a moment ago: "{{bridge}}". Your reply is appended to it and spoken as one utterance: do not repeat it, rephrase it or react to it. If it already said everything, add one short sentence at most.
+{{/if}}
+"""
+
+# What the reply is told on a free-conversation turn where nothing changed.
+# Proposing an activity and stepping away are the router's calls, not the
+# reply's, so this only has to stop her from filling the silence.
+FREE_CONVERSATION = (
+    "You are keeping the user company in open conversation; there is nothing "
+    "to collect and no goal to reach. React to what they just said in one or "
+    "two short sentences and nothing more: no question, no invitation to say "
+    "more, no suggestion of things to do. They will speak if they want to, "
+    "and silence is fine."
+)
+
 
 @dataclass(frozen=True)
 class ExitStep:
@@ -138,6 +191,7 @@ class Companion:
     pending_start: Optional[Dict[str, Any]] = None
     start_asks: int = 0
     exit_model: str = EXIT_MODEL
+    free_guidelines: str = FREE_GUIDELINES
     min_confidence: float = MIN_CONFIDENCE
     # When the running activity started (None if unknown, e.g. resumed after a
     # restart), what it has collected so far, and the runs that already ended —
@@ -404,9 +458,10 @@ def directive(transition: Transition) -> str:
         )
     if change is Change.DISMISSED:
         return (
-            "The user is done for now and you are about to go to sleep. Say "
-            "goodbye in one short, warm sentence and nothing more: no question, "
-            "no offer, no summary."
+            "The user is done for now and you are about to go to sleep. Step "
+            "away in one short, warm sentence and nothing more: a goodbye or good "
+            "night if they said one, otherwise that you are here whenever they "
+            "want you. No question, no offer, no summary."
         )
     if change is Change.EXIT_DECLINED:
         return (

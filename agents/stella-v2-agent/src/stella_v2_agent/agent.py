@@ -63,6 +63,7 @@ from stella_v2_agent.companion import (
     commands_from,
     decision as companion_decision,
     directive as companion_directive,
+    FREE_CONVERSATION,
     exit_dialogue,
     start_dialogue,
 )
@@ -553,6 +554,11 @@ class StellaV2Agent(BaseAgent):
             # probing cue too. Grace then spoke probing's question and invented
             # household chores while the real activity list sat unread.
             directive.routing_directive = companion_directive(transition)
+            if self._companion_mode and not directive.routing_directive and not self.companion.active:
+                # Free conversation has no plan to steer the reply, and the
+                # experts' follow-up questions were written for plans: left
+                # to them she interviews (session 565dad95).
+                directive.routing_directive = FREE_CONVERSATION
             if (
                 transition.change is Change.EXIT_ASKED
                 and transition.say
@@ -709,6 +715,7 @@ class StellaV2Agent(BaseAgent):
                     bridge=bridge,
                     prepend=prepend_text,
                     transcript_id=transcript_id,
+                    guidelines=self._free_guidelines(),
                 ):
                     if output.type.value == "text_chunk":
                         # Stamp the resolved language so the SDK sets the TTS voice
@@ -1248,6 +1255,8 @@ class StellaV2Agent(BaseAgent):
         ):
             # 0 or null switches the idle sleep off.
             self.idle_timeout_seconds = companion_config["idle_sleep_seconds"] or None
+        if isinstance(companion_config, dict) and companion_config.get("free_conversation_guidelines"):
+            self.companion.free_guidelines = companion_config["free_conversation_guidelines"]
         if isinstance(companion_config, dict) and "min_confidence" in companion_config:
             # 0 switches the confidence check off.
             self.companion.min_confidence = float(companion_config["min_confidence"] or 0.0)
@@ -1469,6 +1478,13 @@ class StellaV2Agent(BaseAgent):
             await self.send_client_command("sleep_allowed", allowed=allowed)
         except Exception as e:
             logger.warning(f"Could not send sleep_allowed={allowed}: {e}")
+
+    def _free_guidelines(self) -> Optional[str]:
+        """The reply's style guide outside an activity; None inside one and in
+        plan mode, where the configured guidelines apply unchanged."""
+        if self._companion_mode and not self.companion.active:
+            return self.companion.free_guidelines
+        return None
 
     async def on_idle(self, session_id: str, idle_seconds: float) -> None:
         """Free conversation has gone quiet: go to sleep without a word. An

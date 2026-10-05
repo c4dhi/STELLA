@@ -26,6 +26,9 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 | They say | What happens |
 |---|---|
 | "What can we do together?" | The agent names the allow-listed activities and invites a choice. |
+| "Not much." / "I'm bored." | The same: with nothing on their mind, she offers the activities once. |
+| "No." *(to that offer)* | She says she is there when wanted, and goes to sleep. "No thanks, let's just chat" keeps her awake. |
+| *(anything else in free conversation)* | A sentence or two about what they said, and no question to keep the talk going. |
 | "Let's do the memory game." | That plan is loaded and starts from its first step. |
 | "The fitness one." | She asks which she understood — "Do you mean the Extended Fitness Check-in?" — and starts it on a yes. |
 | "Actually, stop." | The agent asks whether to stop it (or, if the request was unmistakable, stops right away). |
@@ -78,11 +81,17 @@ Because nothing is applied until the pool has finished, the experts cannot race 
 
 `LoadPlan` deliberately is **not** `Initialize`. `Initialize` resumes existing state so a paused agent restarts where it left off, which is wrong here: a user who runs an activity, stops, and picks it again expects it from the top. `ClearPlan` deletes the row rather than blanking it, so every existing "no plan" code path applies unchanged — which is exactly the state a free-flow turn is in.
 
+### Free conversation is company, not an interview
+
+Outside an activity the reply is written from its own short style guide, not from the configured conversation guidelines. Those are written for plans: a curious interviewer working towards something, with every example ending in a question. Used in free conversation they made her ask a follow-up on every turn. The free-conversation guide asks for a sentence or two about what the user said and then silence; `nodes.companion.free_conversation_guidelines` in the pipeline configuration replaces it, with the same template variables as the conversation guidelines.
+
+Proposing an activity and stepping away are the router's decisions, not the reply's, so both are in the replay set: `list_activities` also fires when the user says they have nothing on their mind, and `go_to_sleep` also fires when the activities were just offered and they want none.
+
 ### Going to sleep
 
 A companion is not meant to keep a conversation going. It ends one in two ways, both only in free conversation:
 
-- **Asked.** The router proposes `go_to_sleep` on a goodbye, a good night, or "go to sleep". The reply is one short goodbye, and the agent sends the device a `sleep` command, which the SDK delivers once the goodbye has finished playing.
+- **Asked, or nothing left to do.** The router proposes `go_to_sleep` on a goodbye, a good night, or "go to sleep", and when the user wants none of the activities she just offered. The reply is one short goodbye, and the agent sends the device a `sleep` command, which the SDK delivers once the goodbye has finished playing.
 - **Unasked.** After 45 seconds with no turn, no speech and nothing done on the device, the agent sends `sleep` without saying anything. Set `nodes.companion.idle_sleep_seconds` in the pipeline configuration to change it; `0` switches it off.
 
 **She never sleeps inside an activity.** When one starts, the agent tells the device `sleep_allowed: false`, and the face then ignores its own presence timer, any `[sleep]` tag in a reply and any sleep command until the activity ends or is left. A goodbye said mid-activity is the exit dialogue's to judge: it leaves or asks, and she can be sent to sleep from free conversation afterwards.

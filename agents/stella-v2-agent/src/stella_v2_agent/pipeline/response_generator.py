@@ -139,6 +139,7 @@ class ResponseGenerator:
         bridge: str = "",
         prepend: str = "",
         transcript_id: Optional[str] = None,
+        guidelines: Optional[str] = None,
     ) -> AsyncIterator[AgentOutput]:
         """Generate a streaming response with arbitration context.
 
@@ -154,13 +155,15 @@ class ResponseGenerator:
                     "prepend" verdict directive) spoken verbatim before the
                     generated reply. The LLM continues from it without repeating it.
             transcript_id: Optional transcript ID to reuse (shared with bridge chunk).
+            guidelines: Style guide for this turn only, in place of the configured
+                    one. Companion mode passes its free-conversation guide here.
 
         Yields:
             AgentOutput.text_chunk() for each token, with is_final=True on the last one.
         """
         system_prompt = build_response_system_prompt(
             sm_context, directive,
-            custom_guidelines=self.custom_guidelines,
+            custom_guidelines=guidelines or self.custom_guidelines,
             persona=self.persona,
             emotion_tags=self.emotion_tags,
             conversation_history=conversation_history,
