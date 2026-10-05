@@ -23,6 +23,10 @@ That ordering is what makes the rest simple:
 * a pending "shall we stop?" is part of the input state, so it is answered by
   the NEXT turn, never by the turn that asked it.
 
+This module decides WHEN something happens. What is said about it, which
+model judges and how long she waits are settings (``companion_settings``),
+shipped in ``agent.yaml`` and changeable per deployment.
+
 Leaving used to need two judges in a row — the router had to notice a stop
 before the exit dialogue was asked what it was — so a stop the router missed
 never reached the judge that would have understood it.
@@ -38,7 +42,9 @@ from typing import Any, Dict, List, Optional
 from stella_agent_sdk import AgentOutput
 from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider
 
+from stella_v2_agent.companion_settings import CompanionSettings, load_settings
 from stella_v2_agent.pipeline.history_scope import ActivitySegment
+from stella_v2_agent.prompts.template import render_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +58,7 @@ class Change(Enum):
     EXIT_ASKED = "exit_asked"      # asked "shall we stop X?"
     EXITED = "exited"              # the user confirmed; back to free conversation
     EXIT_DECLINED = "exit_declined"  # the user did not confirm; carry on
+    GREETED = "greeted"            # first turn after waking: she asks how they are
     FINISHED = "finished"          # the plan reached its end; back to free conversation
     DISMISSED = "dismissed"        # the user is done for now; say goodbye and go to sleep
     UNHEARD = "unheard"            # too doubtful a transcript to act on; ask them to repeat
@@ -64,6 +71,8 @@ class Transition:
     change: Change
     activity: Optional[Dict[str, Any]] = None
     offered: List[Dict[str, Any]] = field(default_factory=list)
+    # OFFERED without being asked: the step after the greeting.
+    unasked: bool = False
     # A proposal that did not fit the mode, kept for the decision log.
     ignored: Optional[str] = None
     # EXIT_ASKED: the question to speak, as the exit dialogue wrote it.
@@ -79,77 +88,6 @@ class Transition:
 NO_CHANGE = Transition(Change.NONE)
 
 LEAVE, STAY, ASK = "leave", "stay", "ask"
-# Asking again is for a genuinely unclear answer, not a loop: after this many
-# questions without a clear yes, the activity carries on.
-MAX_EXIT_ASKS = 2
-MAX_START_ASKS = 2
-# The exit dialogue has its own model, not the reply's. With the stop question
-# open, gpt-4o-mini left on nearly anything — "Thank you.", a misheard "Nein",
-# an answer to the activity — where this one stays or asks again (replay set,
-# 5 Oct: confirmations 56% -> 96%). Overridable per deployment through the
-# pipeline config node "exit_dialogue".
-EXIT_MODEL = "gpt-5.4-mini"
-# How long free conversation may stay silent before she goes to sleep unasked.
-# Long enough to think about an offer; she only ever sleeps outside an activity.
-IDLE_SLEEP_SECONDS = 45.0
-# Below this transcript confidence a message may not change the mode: she asks
-# instead of leaving, starting or going to sleep. 0.4 is roughly where Whisper's
-# own conventions put "low confidence" (avg_logprob -1.0, or no_speech 0.6 on an
-# otherwise perfect decode). Not yet calibrated on recorded sessions.
-MIN_CONFIDENCE = 0.4
-
-# The reply's style guide while no activity is running, in place of the
-# configured conversation guidelines. Those are written for plans: a curious
-# interviewer working towards something, every example ending in a question.
-# Used outside an activity they made her keep the talk going at any cost
-# (session 565dad95). `nodes.companion.free_conversation_guidelines` replaces it.
-FREE_GUIDELINES = """OPEN CONVERSATION (spoken aloud via TTS):
-
-You are keeping this person company. There is no task, nothing to collect and no goal to reach. You are good company because you are easy to be around, not because you keep the talk going.
-
-- React to the SPECIFIC thing they said, in their language, in one or two short sentences (under 25 words). Natural contractions.
-- Then stop. Do not end on a question and do not invite them to say more. They will speak if they want to; silence is fine.
-- A question is right only when they asked you something that needs one to answer, or when they only greeted you: then greet them back and ask what they would like to do.
-- Never praise the act of answering, never suggest activities or things to do, never mention internal systems.
-- No markdown, lists or emojis.
-
-The right feel (match the spirit, never copy):
-- "I went to the market this morning." -> "Oh, nice. Saturday markets are the best ones."
-- "not really" -> "That's all right."
-- "it's so grey outside" -> "It is. Proper stay-indoors weather."
-{{#if directive}}
-
-{{directive}}
-{{/if}}
-{{#if conversationHistory}}
-
-Conversation so far:
-{{conversationHistory}}
-{{/if}}
-{{#if language}}
-
-{{language}}
-{{/if}}
-{{#if emotionTags}}
-
-{{emotionTags}}
-{{/if}}
-{{#if bridge}}
-
-You have ALREADY said this aloud a moment ago: "{{bridge}}". Your reply is appended to it and spoken as one utterance: do not repeat it, rephrase it or react to it. If it already said everything, add one short sentence at most.
-{{/if}}
-"""
-
-# What the reply is told on a free-conversation turn where nothing changed.
-# Proposing an activity and stepping away are the router's calls, not the
-# reply's, so this only has to stop her from filling the silence.
-FREE_CONVERSATION = (
-    "You are keeping the user company in open conversation; there is nothing "
-    "to collect and no goal to reach. React to what they just said in one or "
-    "two short sentences and nothing more: no question, no invitation to say "
-    "more, no suggestion of things to do. They will speak if they want to, "
-    "and silence is fine."
-)
 
 
 @dataclass(frozen=True)
@@ -190,9 +128,11 @@ class Companion:
     # "Do you mean X?" is open: the activity she asked about, and how often.
     pending_start: Optional[Dict[str, Any]] = None
     start_asks: int = 0
-    exit_model: str = EXIT_MODEL
-    free_guidelines: str = FREE_GUIDELINES
-    min_confidence: float = MIN_CONFIDENCE
+    # Since she last woke: has she asked how they are, and offered the
+    # activities? Both are done once, then she leaves the talking to them.
+    greeted: bool = False
+    offered: bool = False
+    settings: CompanionSettings = field(default_factory=load_settings)
     # When the running activity started (None if unknown, e.g. resumed after a
     # restart), what it has collected so far, and the runs that already ended —
     # together they scope the history to the current mode.
@@ -227,7 +167,7 @@ class Companion:
     def doubtful(self, confidence: float) -> bool:
         """Whether a transcript heard with this confidence is too uncertain to
         change the mode on. 0 means the STT gave no signal, which is not doubt."""
-        return 0.0 < confidence < self.min_confidence
+        return 0.0 < confidence < self.settings.min_confidence
 
     def progress_metadata(self) -> Dict[str, Any]:
         """What the progress panel needs: what is running, and what can be picked."""
@@ -273,7 +213,7 @@ class Companion:
         if asked and start_confirmed:
             if not doubtful:
                 return Transition(Change.STARTED, activity=asked)
-            if self.start_asks < MAX_START_ASKS:
+            if self.start_asks < self.settings.max_start_asks:
                 return Transition(Change.START_ASKED, activity=asked)
             return Transition(Change.START_DECLINED, activity=asked)
 
@@ -285,7 +225,7 @@ class Companion:
         if asked and kind not in ("start", "list"):
             return Transition(Change.START_DECLINED, activity=asked)
         if not command:
-            return NO_CHANGE
+            return self._unprompted()
         if kind == "list":
             return Transition(Change.OFFERED, offered=list(command.get("activities") or []))
         if kind == "sleep":
@@ -300,6 +240,17 @@ class Companion:
                 return Transition(Change.START_ASKED, activity=activity)
             logger.warning("start_activity for unknown or plan-less activity %r", command)
         return Transition(Change.NONE, ignored=kind)
+
+    def _unprompted(self) -> Transition:
+        """What she does of her own accord when the user asked for nothing:
+        once woken she asks how they are, then offers the activities, once
+        each. After that she only answers. Either step is skipped when its
+        reply instruction is empty."""
+        if not self.greeted and self.settings.instruction("greeting"):
+            return Transition(Change.GREETED)
+        if not self.offered and self.activities and self.settings.instruction("offered_unasked"):
+            return Transition(Change.OFFERED, offered=list(self.activities), unasked=True)
+        return NO_CHANGE
 
     @staticmethod
     def _named(activity: Dict[str, Any], said: str) -> bool:
@@ -323,7 +274,7 @@ class Companion:
             return Transition(Change.EXITED, activity=self.active, understood=step.user_intent)
         # Without a question to speak an ordinary ask is dropped; a stop that was
         # only heard poorly still has to be asked about, so the reply writes it.
-        if step.decision == ASK and (step.say or unheard) and self.exit_asks < MAX_EXIT_ASKS:
+        if step.decision == ASK and (step.say or unheard) and self.exit_asks < self.settings.max_exit_asks:
             return Transition(Change.EXIT_ASKED, activity=self.active, say=step.say, understood=step.user_intent)
         if self.pending_exit:
             # The stop question was open and was not answered with a yes.
@@ -354,6 +305,31 @@ class Companion:
         self.exit_asks = 0
         self.started_at = None
         self.collected = {}
+
+    def note(self, transition: Transition) -> None:
+        """Keep track of the opening: whatever happens first counts as the
+        greeting, an offer or a choice settles the offer, and going to sleep
+        starts both over for the next time she is woken."""
+        if transition.change is Change.DISMISSED:
+            self.rest()
+            return
+        self.greeted = True
+        if transition.change in (Change.OFFERED, Change.STARTED, Change.START_ASKED):
+            self.offered = True
+
+    def rest(self) -> None:
+        """She went to sleep; the next conversation opens afresh."""
+        self.greeted = False
+        self.offered = False
+
+    def instruction(self, transition: Transition) -> str:
+        """What the reply is told this turn, after the transition was applied."""
+        text = directive(transition, self.settings)
+        if not text and not self.active:
+            text = render_prompt(
+                self.settings.instruction("free"), {"activities": _listed(self.activities)},
+            ).strip()
+        return text
 
     def ask_start(self, activity: Dict[str, Any]) -> None:
         if self.pending_start is not activity:
@@ -391,85 +367,50 @@ class Companion:
 
 # ── what the reply and the log are told ─────────────────────────────────────
 
-def directive(transition: Transition) -> str:
+_INSTRUCTION_KEYS = {
+    Change.GREETED: "greeting",
+    Change.STARTED: "started",
+    Change.EXIT_ASKED: "exit_asked",   # only when the exit dialogue wrote no question
+    Change.EXITED: "exited",
+    Change.EXIT_DECLINED: "exit_declined",
+    Change.START_ASKED: "start_asked",
+    Change.START_DECLINED: "start_declined",
+    Change.UNHEARD: "unheard",
+    Change.DISMISSED: "dismissed",
+}
+
+
+def directive(transition: Transition, settings: Optional[CompanionSettings] = None) -> str:
     """The one instruction the reply gets about what just happened.
 
     Only for transitions the reply has to act on. Inside an activity the plan
-    alone steers, exactly as in plan mode.
+    alone steers, exactly as in plan mode. The wording is a setting.
     """
+    settings = settings or load_settings()
     change = transition.change
     if change is Change.OFFERED:
         if not transition.offered:
-            return (
-                "The user asked what you can do together, but no activities are "
-                "available. Say so plainly and keep the conversation going."
-            )
-        listed = "; ".join(
-            f"{a.get('title')}" + (f" ({a.get('description')})" if a.get("description") else "")
-            for a in transition.offered
-        )
-        # Naming them matters: left alone the model invents plausible activities
-        # that do not exist, a broken promise the moment the user picks one.
-        return (
-            "The user asked what you can do together. Offer exactly these, in your "
-            f"own words, and invite them to pick one: {listed}. Do not invent any others."
-        )
-    if change is Change.STARTED:
-        return (
-            f"The user just chose \"{transition.title}\" and it starts now. Acknowledge "
-            "the choice in a few words, then open it exactly as the current step "
-            "below says, as if this conversation had only just begun — do not "
-            "re-ask which activity they want, and do not invent an opening of your own."
-        )
-    if change is Change.EXIT_ASKED:
-        # Only reached when the exit dialogue failed to write the question.
-        return (
-            f"Ask clearly and briefly whether they want to stop \"{transition.title}\" — "
-            "one direct yes/no question — and do nothing else this turn: do not "
-            "continue the activity, and do not end it yet."
-        )
-    if change is Change.EXITED:
-        return (
-            f"\"{transition.title}\" has just been stopped because the user asked. "
-            "Tell them in ONE short, natural sentence that you have stopped it and that this is "
-            "fine, then say nothing more: no question, no offer of what to do "
-            "next, no comment on how they feel. Do not continue or resume it."
-        )
-    if change is Change.START_ASKED:
-        description = (transition.activity or {}).get("description")
-        return (
-            f"The user seems to want \"{transition.title}\""
-            + (f" ({description})" if description else "")
-            + " but did not name it outright. Ask in ONE short question, naming "
-            "it, whether that is the one they mean. Do nothing else this turn: "
-            "do not start it and do not list the other activities."
-        )
-    if change is Change.START_DECLINED:
-        return (
-            f"The user did not confirm \"{transition.title}\", so it does not "
-            "start. Carry on naturally; if they still want to do something, ask "
-            "which activity they mean."
-        )
-    if change is Change.UNHEARD:
-        return (
-            "You did not hear the user clearly. Say so in a few words and ask "
-            "them to say it again. Do not guess what they meant, and do not act "
-            "on it."
-        )
-    if change is Change.DISMISSED:
-        return (
-            "The user is done for now and you are about to go to sleep. Step "
-            "away in one short, warm sentence and nothing more: a goodbye or good "
-            "night if they said one, otherwise that you are here whenever they "
-            "want you. No question, no offer, no summary."
-        )
-    if change is Change.EXIT_DECLINED:
-        return (
-            "The user did not confirm stopping. Stay in the activity and pick up "
-            "naturally from where it left off — do not ask again unless they bring "
-            "it up themselves."
-        )
-    return ""
+            key = "offered_none"
+        else:
+            key = "offered_unasked" if transition.unasked else "offered"
+    else:
+        key = _INSTRUCTION_KEYS.get(change)
+    if not key:
+        return ""
+    # Naming the activities matters: left alone the model invents plausible
+    # ones that do not exist, a broken promise the moment the user picks one.
+    return render_prompt(settings.instruction(key), {
+        "title": transition.title,
+        "description": (transition.activity or {}).get("description") or "",
+        "activities": _listed(transition.offered),
+    }).strip()
+
+
+def _listed(activities: List[Dict[str, Any]]) -> str:
+    return "; ".join(
+        f"{a.get('title')}" + (f" ({a.get('description')})" if a.get("description") else "")
+        for a in activities
+    )
 
 
 _DECISIONS = {
@@ -514,6 +455,8 @@ def decision(session_id: str, transition: Transition) -> Optional[AgentOutput]:
             **({"detail": transition.understood} if transition.understood else {}),
             component=ROUTER,
         )
+    if transition.change not in _DECISIONS:
+        return None     # her own greeting is not a routing decision
     kind, summary, detail = _DECISIONS[transition.change]
     detail = transition.understood or detail
     return AgentOutput.decision(
@@ -525,59 +468,26 @@ def decision(session_id: str, transition: Transition) -> Optional[AgentOutput]:
     )
 
 
+_EXIT_FORMAT = (
+    'Respond with JSON only: {"user_intent": "...", "decision": '
+    '"leave" | "stay" | "ask", "say": "..."}'
+)
+_START_FORMAT = 'Respond with JSON only: {"user_intent": "...", "decision": "yes" | "no"}'
+
+
 def _exit_prompt(
     title: str, awaiting_answer: bool, language: Optional[str], bridge: str,
-    persona: Optional[str],
+    persona: Optional[str], instructions: str,
 ) -> str:
-    situation = (
-        f'In your last message you asked whether they want to stop "{title}". '
-        "Their message below answers that."
-        if awaiting_answer else
-        f'They are in the middle of the activity "{title}". You see every '
-        "message they send during it, and nearly all of them are simply taking "
-        "part: answering its questions (a bare yes or no included), commenting, "
-        "hesitating. Decide whether THIS message asks to stop the activity."
-    )
-    leave_rule = (
-        "they said yes, or otherwise clearly want to stop now."
-        if awaiting_answer else
-        "they asked explicitly and unmistakably to stop it now."
-    )
-    ask_rule = (
-        "it is genuinely unclear whether that was a yes or a no."
-        if awaiting_answer else
-        "they seem to want out of the activity itself but did not say so "
-        'plainly. Hesitation, filler ("hm", "well...") or an unclear answer to '
-        "the activity is not that: stay."
-    )
-    parts = [persona or ""]
-    parts.append(
-        "You handle ONE thing right now: whether the user wants to stop the "
-        f'activity "{title}" and go back to open conversation. Not the '
-        "activity's content, not anything else.\n\n"
-        f"{situation}\n\n"
-        'First write, in "user_intent", one plain sentence saying what they '
-        "actually want. Then check that sentence against their exact words, and "
-        'only then choose "decision":\n'
-        f'- "leave": {leave_rule}\n'
-        '- "stay": they want to carry on — including answering the activity, '
-        "commenting on it, or complaining about how it is going.\n"
-        f'- "ask": {ask_rule}\n\n'
-        'Whenever your decision is "ask" or "leave", write in "say" ONE short, '
-        f'warm yes/no question asking whether to stop "{title}", and nothing '
-        "else — no content from the activity. It is spoken when you ask, and "
-        "also when they were heard too poorly to leave on their word alone. "
-        '"say" stays empty when they stay. Write it in the language with code '
-        f"'{language or 'en'}'."
-        + (
-            f' It is spoken right after "{bridge}", which was already said — '
-            "continue from it, do not repeat it."
-            if bridge else ""
-        )
-        + '\n\nRespond with JSON only: {"user_intent": "...", "decision": '
-        '"leave" | "stay" | "ask", "say": "..."}'
-    )
-    return "\n\n".join(p for p in parts if p)
+    """Persona, then the configured instructions, then the answer format —
+    which is the parser's contract and so not a setting."""
+    body = render_prompt(instructions, {
+        "title": title,
+        "awaitingAnswer": awaiting_answer,
+        "language": language or "en",
+        "bridge": bridge or "",
+    }).strip()
+    return "\n\n".join(p for p in (persona or "", body, _EXIT_FORMAT) if p)
 
 
 async def exit_dialogue(
@@ -591,6 +501,7 @@ async def exit_dialogue(
     language: Optional[str] = None,
     bridge: str = "",
     persona: Optional[str] = None,
+    instructions: Optional[str] = None,
 ) -> Optional[ExitStep]:
     """Judge one user message during an activity: leave, stay, or ask.
 
@@ -605,7 +516,10 @@ async def exit_dialogue(
             messages=[
                 LLMMessage(
                     role="system",
-                    content=_exit_prompt(title, awaiting_answer, language, bridge, persona),
+                    content=_exit_prompt(
+                        title, awaiting_answer, language, bridge, persona,
+                        instructions or load_settings().exit_instructions,
+                    ),
                 ),
                 LLMMessage(
                     role="user",
@@ -639,6 +553,7 @@ async def start_dialogue(
     title: str,
     user_input: str,
     history: List[Dict[str, str]],
+    instructions: Optional[str] = None,
 ) -> Optional[bool]:
     """Judge the answer to "do you mean X?": True only for a yes to that.
 
@@ -653,19 +568,9 @@ async def start_dialogue(
             messages=[
                 LLMMessage(
                     role="system",
-                    content=(
-                        "You handle ONE thing: in your last message you asked the "
-                        f'user whether they want to start the activity "{title}". '
-                        'First write, in "user_intent", one plain sentence saying '
-                        "what their message below means. Then check that sentence "
-                        'against their exact words and choose "decision":\n'
-                        f'- "yes": they confirm they want "{title}".\n'
-                        '- "no": anything else — they decline, name a different '
-                        "activity, ask something, change the subject, or it is "
-                        "unclear.\n\n"
-                        'Respond with JSON only: {"user_intent": "...", '
-                        '"decision": "yes" | "no"}'
-                    ),
+                    content=render_prompt(
+                        instructions or load_settings().start_instructions, {"title": title},
+                    ).strip() + "\n\n" + _START_FORMAT,
                 ),
                 LLMMessage(
                     role="user",

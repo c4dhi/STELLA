@@ -26,9 +26,10 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 | They say | What happens |
 |---|---|
 | "What can we do together?" | The agent names the allow-listed activities and invites a choice. |
-| "Not much." / "I'm bored." | The same: with nothing on their mind, she offers the activities once. |
+| *(woken, or "Hi Grace")* | She greets them and asks how they are doing. |
+| *(their answer)* | She reacts in a few words and offers the activities, once. |
 | "No." *(to that offer)* | She says she is there when wanted, and goes to sleep. "No thanks, let's just chat" keeps her awake. |
-| *(anything else in free conversation)* | A sentence or two about what they said, and no question to keep the talk going. |
+| *(anything else in free conversation)* | A sentence or two about what they said, and no follow-up question. Only when they bring up an activity themselves does she ask whether they want to do it. |
 | "Let's do the memory game." | That plan is loaded and starts from its first step. |
 | "The fitness one." | She asks which she understood — "Do you mean the Extended Fitness Check-in?" — and starts it on a yes. |
 | "Actually, stop." | The agent asks whether to stop it (or, if the request was unmistakable, stops right away). |
@@ -73,7 +74,7 @@ The agent then makes at most one transition per turn, after every expert has fin
 
 The **exit dialogue** is one scoped LLM call, separate from the reply model. It sees only the user's words and the last few turns. It first states what it understands the user to want, checks that against their words, and only then decides. When it asks, it writes the question itself, in the session's language and the persona's voice, and that question is spoken as written. Given only an instruction to ask, the reply model followed the plan instead. Its reading of the user appears as the detail line of the decision tag. If the call fails, nothing changes.
 
-It runs on its own model (`EXIT_MODEL`, currently `gpt-5.4-mini`), not the reply model: with the stop question open, `gpt-4o-mini` left on almost any answer, including transcription noise. A deployment can change it with `nodes.exit_dialogue.model` in the pipeline configuration.
+It runs on its own model (the Companion node's *Judge Model*, `gpt-5.4-mini` as shipped), not the reply model: with the stop question open, `gpt-4o-mini` left on almost any answer, including transcription noise.
 
 Leaving used to take two judges in a row: the router had to notice a stop before the exit dialogue was asked what it was, so a stop the router missed never reached the judge that would have understood it.
 
@@ -83,16 +84,18 @@ Because nothing is applied until the pool has finished, the experts cannot race 
 
 ### Free conversation is company, not an interview
 
-Outside an activity the reply is written from its own short style guide, not from the configured conversation guidelines. Those are written for plans: a curious interviewer working towards something, with every example ending in a question. Used in free conversation they made her ask a follow-up on every turn. The free-conversation guide asks for a sentence or two about what the user said and then silence; `nodes.companion.free_conversation_guidelines` in the pipeline configuration replaces it, with the same template variables as the conversation guidelines.
+Outside an activity the reply is written from its own short style guide (*Free Conversation Guidelines*), not from the Response Generator's conversation guidelines. Those are written for plans: a curious interviewer working towards something, with every example ending in a question. Used in free conversation they made her ask a follow-up on every turn.
 
-Proposing an activity and stepping away are the router's decisions, not the reply's, so both are in the replay set: `list_activities` also fires when the user says they have nothing on their mind, and `go_to_sleep` also fires when the activities were just offered and they want none.
+She has one routine of her own, run once each time she is woken: on the first turn she asks how they are, on the next she offers the activities. What the user asks for comes first, so "what can we do?" or "good night" on the first turn is simply answered. After the offer she only responds. Going to sleep, asked or idle, starts the routine over. Clearing the `greeting` or `offered_unasked` reply instruction switches that step off.
+
+Stepping away is the router's decision, not the reply's, so it is in the replay set: `go_to_sleep` also fires when the activities were just offered and they want none. `list_activities` also fires when the user says they have nothing on their mind.
 
 ### Going to sleep
 
 A companion is not meant to keep a conversation going. It ends one in two ways, both only in free conversation:
 
 - **Asked, or nothing left to do.** The router proposes `go_to_sleep` on a goodbye, a good night, or "go to sleep", and when the user wants none of the activities she just offered. The reply is one short goodbye, and the agent sends the device a `sleep` command, which the SDK delivers once the goodbye has finished playing.
-- **Unasked.** After 45 seconds with no turn, no speech and nothing done on the device, the agent sends `sleep` without saying anything. Set `nodes.companion.idle_sleep_seconds` in the pipeline configuration to change it; `0` switches it off.
+- **Unasked.** After 45 seconds with no turn, no speech and nothing done on the device, the agent sends `sleep` without saying anything. *Sleep After Silence* changes it; `0` switches it off.
 
 **She never sleeps inside an activity.** When one starts, the agent tells the device `sleep_allowed: false`, and the face then ignores its own presence timer, any `[sleep]` tag in a reply and any sleep command until the activity ends or is left. A goodbye said mid-activity is the exit dialogue's to judge: it leaves or asks, and she can be sent to sleep from free conversation afterwards.
 
@@ -109,7 +112,23 @@ Below `min_confidence` (default 0.4), a message cannot leave an activity, start 
 
 A poorly heard "no", an ordinary activity answer, or "what can we do?" are handled as usual: none of them commits to anything.
 
-The default is where Whisper's own conventions put "low confidence"; it has not been calibrated on recorded sessions. Every turn logs its confidence, and `nodes.companion.min_confidence` in the pipeline configuration changes it (`0` switches the check off).
+The default is where Whisper's own conventions put "low confidence"; it has not been calibrated on recorded sessions. Every turn logs its confidence, and *Minimum Transcript Confidence* changes it (`0` switches the check off).
+
+### What you can change
+
+The code decides *when* something happens: one judge per mode, one transition per turn. What is said about it, which model judges and how long she waits are settings. They are the **Companion** node of the Pipeline Configurator, shipped as that node's defaults in `agent.yaml`, and the running agent reads the same file, so what the configurator shows is what runs.
+
+| Setting | What it holds |
+|---|---|
+| Free Conversation Guidelines | The reply's style guide outside an activity. |
+| Reply Instructions | One instruction per situation: `greeting`, `offered_unasked`, `offered`, `offered_none`, `free`, `started`, `start_asked`, `start_declined`, `exit_asked`, `exit_declined`, `exited`, `unheard`, `dismissed`. Each is the last thing the reply model reads on that turn. |
+| Leaving / Starting an Activity: Judge Instructions | What the two judges are told. The answer format is appended by the agent and is not editable, so an edit cannot break the parsing. |
+| Judge Model | The model for both judges. |
+| Stop / Start Questions in a Row | How often she asks again before letting it go (2). |
+| Sleep After Silence | Seconds of quiet before she sleeps (45; 0 = never). |
+| Minimum Transcript Confidence | Below this a message cannot change the mode (0.4; 0 = off). |
+
+A saved configuration overrides these one value at a time, and reply instructions one entry at a time. When and what the router proposes is the router expert's own prompt, in the Structural section.
 
 ### It is structural, not an expert you opt into
 

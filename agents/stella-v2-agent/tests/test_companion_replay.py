@@ -16,7 +16,7 @@ import pytest
 
 from .companion_replay import Replay, accepted, load_scenarios, replay_all, report
 
-OUTCOMES = {"none", "offered", "exit_asked", "exited", "exit_declined", "dismissed", "unheard", "start_declined"}
+OUTCOMES = {"none", "greeted", "offered", "exit_asked", "exited", "exit_declined", "dismissed", "unheard", "start_declined"}
 MODES = {"free", "activity", "awaiting_exit"}
 # 100% on 5 Oct, on scenarios written alongside the code they test; a new
 # recording that fails belongs in the set. This only catches a collapse —
@@ -36,6 +36,7 @@ def test_the_scenarios_are_well_formed():
         where = scenario["id"]
         assert scenario.get("in_activity") in activity_ids | {None}, where
         assert not scenario.get("awaiting_exit") or scenario.get("in_activity"), where
+        assert scenario.get("opening") in {"woken", "greeted", "done", None}, where
         assert scenario["turns"], where
         for turn in scenario["turns"]:
             assert turn["user"], where

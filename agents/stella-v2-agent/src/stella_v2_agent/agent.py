@@ -55,15 +55,12 @@ from stella_v2_agent.pipeline.history_scope import parse_timestamp, scope_histor
 from stella_v2_agent.companion import (
     Change,
     Companion,
-    IDLE_SLEEP_SECONDS,
     NO_CHANGE,
     ROUTER,
     Transition,
     ExitStep,
     commands_from,
     decision as companion_decision,
-    directive as companion_directive,
-    FREE_CONVERSATION,
     exit_dialogue,
     start_dialogue,
 )
@@ -441,10 +438,11 @@ class StellaV2Agent(BaseAgent):
                 # "Do you mean X?" is open from the previous turn: was this a yes?
                 start_task = asyncio.create_task(start_dialogue(
                     self.llm_service,
-                    model=self.companion.exit_model,
+                    model=self.companion.settings.judge_model,
                     title=self.companion.pending_start.get("title") or "the activity",
                     user_input=input.text,
                     history=history,
+                    instructions=self.companion.settings.start_instructions,
                 ))
 
             if bridge:
@@ -553,12 +551,12 @@ class StellaV2Agent(BaseAgent):
             # exactly the turns the router fires — "what can we do?" is a
             # probing cue too. Grace then spoke probing's question and invented
             # household chores while the real activity list sat unread.
-            directive.routing_directive = companion_directive(transition)
-            if self._companion_mode and not directive.routing_directive and not self.companion.active:
-                # Free conversation has no plan to steer the reply, and the
-                # experts' follow-up questions were written for plans: left
-                # to them she interviews (session 565dad95).
-                directive.routing_directive = FREE_CONVERSATION
+            # In free conversation there is always one: without a plan to
+            # steer it, the reply follows the experts' follow-up questions,
+            # which were written for plans, and she interviews (session 565dad95).
+            directive.routing_directive = (
+                self.companion.instruction(transition) if self._companion_mode else ""
+            )
             if (
                 transition.change is Change.EXIT_ASKED
                 and transition.say
@@ -1032,7 +1030,7 @@ class StellaV2Agent(BaseAgent):
         self._companion_mode = config.get("mode") == "companion"
         self.companion = Companion(activities=config.get("available_plans") or [])
         if self._companion_mode:
-            self.idle_timeout_seconds = IDLE_SLEEP_SECONDS
+            self.idle_timeout_seconds = self.companion.settings.idle_sleep_seconds or None
             logger.info(
                 "Companion mode: %d activit%s available",
                 len(self.companion.activities),
@@ -1243,23 +1241,18 @@ class StellaV2Agent(BaseAgent):
                 # enabled/priority/custom-expert config takes effect with no
                 # object rebuild.
 
-        # The exit dialogue is not a stage object; its one setting is its model.
+        # Companion mode's wording and limits: agent.yaml's defaults, changed
+        # slot by slot by the saved configuration.
+        companion_config = nodes.get("companion")
+        if isinstance(companion_config, dict):
+            self.companion.settings.apply(companion_config)
+        # Where the judge model lived before the companion node existed.
         exit_config = nodes.get("exit_dialogue")
         if isinstance(exit_config, dict) and exit_config.get("model"):
-            self.companion.exit_model = exit_config["model"]
-        companion_config = nodes.get("companion")
-        if (
-            self._companion_mode
-            and isinstance(companion_config, dict)
-            and "idle_sleep_seconds" in companion_config
-        ):
-            # 0 or null switches the idle sleep off.
-            self.idle_timeout_seconds = companion_config["idle_sleep_seconds"] or None
-        if isinstance(companion_config, dict) and companion_config.get("free_conversation_guidelines"):
-            self.companion.free_guidelines = companion_config["free_conversation_guidelines"]
-        if isinstance(companion_config, dict) and "min_confidence" in companion_config:
-            # 0 switches the confidence check off.
-            self.companion.min_confidence = float(companion_config["min_confidence"] or 0.0)
+            self.companion.settings.judge_model = exit_config["model"]
+        if self._companion_mode:
+            # 0 switches the idle sleep off.
+            self.idle_timeout_seconds = self.companion.settings.idle_sleep_seconds or None
 
         # Apply threshold overrides
         if "history_limit" in thresholds:
@@ -1432,6 +1425,7 @@ class StellaV2Agent(BaseAgent):
         elif change is Change.EXIT_DECLINED:
             self.companion.stay()
         logger.info("Companion: %s %s", change.value, transition.title if transition.activity else "")
+        self.companion.note(transition)
         return transition
 
     async def _exit_step(
@@ -1445,7 +1439,7 @@ class StellaV2Agent(BaseAgent):
         """Run the exit dialogue for this turn, in its own model and the persona's voice."""
         return await exit_dialogue(
             self.llm_service,
-            model=self.companion.exit_model,
+            model=self.companion.settings.judge_model,
             title=self.companion.running_title or "the activity",
             user_input=user_input,
             history=history,
@@ -1453,6 +1447,7 @@ class StellaV2Agent(BaseAgent):
             language=language,
             bridge=bridge,
             persona=(self._persona_config or {}).get("system_prompt"),
+            instructions=self.companion.settings.exit_instructions,
         )
 
     def _leave_activity(self) -> None:
@@ -1483,7 +1478,7 @@ class StellaV2Agent(BaseAgent):
         """The reply's style guide outside an activity; None inside one and in
         plan mode, where the configured guidelines apply unchanged."""
         if self._companion_mode and not self.companion.active:
-            return self.companion.free_guidelines
+            return self.companion.settings.free_conversation_guidelines
         return None
 
     async def on_idle(self, session_id: str, idle_seconds: float) -> None:
@@ -1492,6 +1487,7 @@ class StellaV2Agent(BaseAgent):
         if not self._companion_mode or self.companion.active:
             return
         logger.info("Companion: idle for %.0fs in free conversation, going to sleep", idle_seconds)
+        self.companion.rest()
         await self.send_client_command("sleep", reason="idle")
 
     async def _context_for_new_mode(
