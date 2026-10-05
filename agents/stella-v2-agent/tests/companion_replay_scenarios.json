@@ -4,12 +4,13 @@
     "Each scenario states the mode it starts in, then one or more user turns with the OUTCOME expected,",
     "not the tool expected, so the set stays valid when the router is restructured.",
     "",
-    "Outcomes: none | offered | started:<activity id> | exit_asked | exited | exit_declined | dismissed.",
+    "Outcomes: none | offered | started:<activity id> | exit_asked | exited | exit_declined | dismissed | unheard.",
     "'expect' is one outcome or a list of acceptable ones; null means undecided (reported, not scored).",
     "",
     "Start mode: 'in_activity' (an activity id) and 'awaiting_exit' (the stop question is open).",
     "'history' is what was said before the first turn. A turn's 'assistant' is the scripted reply that",
     "follows it; 'only_if' (free | activity | awaiting_exit) skips a turn the earlier ones made moot.",
+    "A turn's 'confidence' (0..1) is how well it was heard; absent means typed text.",
     "",
     "Tags: ordinary = a plain activity answer that must not be read as leaving; noise = garbled or hallucinated transcription; review = the expectation itself is a judgment",
     "call worth a second look; wind_down = going to sleep, asked or not."
@@ -394,6 +395,32 @@
 
     {"id": "sleep-15-never-mid-activity", "tags": ["wind_down", "in_activity"], "note": "Leaving mid-activity ends or asks about the activity; it never sleeps from inside one.", "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "I have to go now, the doorbell rang", "expect": ["exited", "exit_asked"]}]},
 
-    {"id": "sleep-16-good-night-mid-activity", "tags": ["wind_down", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "good night, I'm off to bed", "expect": ["exited", "exit_asked"]}]}
+    {"id": "sleep-16-good-night-mid-activity", "tags": ["wind_down", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "good night, I'm off to bed", "expect": ["exited", "exit_asked"]}]},
+
+    {"id": "conf-01-doubtful-yes-is-asked-again", "tags": ["low_confidence"], "note": "A yes heard this poorly may be filler over silence: ask again, do not leave.", "in_activity": "extended", "awaiting_exit": true, "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}], "turns": [{"user": "Yes.", "expect": "exit_asked", "confidence": 0.2}]},
+
+    {"id": "conf-02-clear-yes-leaves", "tags": ["low_confidence"], "in_activity": "extended", "awaiting_exit": true, "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}], "turns": [{"user": "Yes.", "expect": "exited", "confidence": 0.9}]},
+
+    {"id": "conf-03-doubtful-thank-you", "tags": ["low_confidence"], "in_activity": "extended", "awaiting_exit": true, "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}], "turns": [{"user": "Thank you.", "expect": ["exit_asked", "exit_declined"], "confidence": 0.15}]},
+
+    {"id": "conf-04-doubtful-no-still-stays", "tags": ["low_confidence"], "note": "Staying is the safe direction, so a doubtful no needs no second question.", "in_activity": "extended", "awaiting_exit": true, "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}], "turns": [{"user": "No.", "expect": ["exit_declined", "exit_asked"], "confidence": 0.2}]},
+
+    {"id": "conf-05-doubtful-stop-is-asked", "tags": ["low_confidence"], "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "Stop.", "expect": "exit_asked", "confidence": 0.2}]},
+
+    {"id": "conf-06-clear-stop", "tags": ["low_confidence"], "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "Stop, I want to end this now.", "expect": ["exited", "exit_asked"], "confidence": 0.9}]},
+
+    {"id": "conf-07-doubtful-ordinary-answer-is-just-an-answer", "tags": ["low_confidence"], "note": "Doubt alone never makes her ask about stopping.", "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "three times a week", "expect": "none", "confidence": 0.2}]},
+
+    {"id": "conf-08-doubtful-bye-does-not-dismiss", "tags": ["low_confidence"], "note": "A bare 'Bye.' is something Whisper invents over silence.", "history": [{"role": "assistant", "content": "It has been a grey day here too."}], "turns": [{"user": "Bye.", "expect": "unheard", "confidence": 0.2}]},
+
+    {"id": "conf-09-clear-good-night", "tags": ["low_confidence"], "history": [{"role": "assistant", "content": "It has been a grey day here too."}], "turns": [{"user": "good night Grace", "expect": "dismissed", "confidence": 0.9}]},
+
+    {"id": "conf-10-doubtful-pick-is-not-started", "tags": ["low_confidence"], "history": [{"role": "assistant", "content": "We could do a fitness check-in, a focus group, or a memory game. What sounds good?"}], "turns": [{"user": "the memory game", "expect": "unheard", "confidence": 0.25}]},
+
+    {"id": "conf-11-clear-pick", "tags": ["low_confidence"], "history": [{"role": "assistant", "content": "We could do a fitness check-in, a focus group, or a memory game. What sounds good?"}], "turns": [{"user": "the memory game", "expect": "started:memory", "confidence": 0.9}]},
+
+    {"id": "conf-12-doubtful-what-can-we-do-still-offers", "tags": ["low_confidence"], "note": "Offering commits to nothing, so doubt does not block it.", "history": [{"role": "assistant", "content": "It has been a grey day here too."}], "turns": [{"user": "what can we do?", "expect": "offered", "confidence": 0.25}]},
+
+    {"id": "conf-13-unknown-confidence-is-not-doubt", "tags": ["low_confidence"], "note": "0 means the transcriber gave no signal (e.g. another provider).", "in_activity": "extended", "awaiting_exit": true, "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}], "turns": [{"user": "Yes.", "expect": "exited", "confidence": 0.0}]}
   ]
 }

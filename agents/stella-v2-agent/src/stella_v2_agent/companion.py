@@ -54,6 +54,7 @@ class Change(Enum):
     EXIT_DECLINED = "exit_declined"  # the user did not confirm; carry on
     FINISHED = "finished"          # the plan reached its end; back to free conversation
     DISMISSED = "dismissed"        # the user is done for now; say goodbye and go to sleep
+    UNHEARD = "unheard"            # too doubtful a transcript to act on; ask them to repeat
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,11 @@ EXIT_MODEL = "gpt-5.4-mini"
 # How long free conversation may stay silent before she goes to sleep unasked.
 # Long enough to think about an offer; she only ever sleeps outside an activity.
 IDLE_SLEEP_SECONDS = 45.0
+# Below this transcript confidence a message may not change the mode: she asks
+# instead of leaving, starting or going to sleep. 0.4 is roughly where Whisper's
+# own conventions put "low confidence" (avg_logprob -1.0, or no_speech 0.6 on an
+# otherwise perfect decode). Not yet calibrated on recorded sessions.
+MIN_CONFIDENCE = 0.4
 
 
 @dataclass(frozen=True)
@@ -121,6 +127,7 @@ class Companion:
     pending_exit: bool = False
     exit_asks: int = 0
     exit_model: str = EXIT_MODEL
+    min_confidence: float = MIN_CONFIDENCE
     # When the running activity started (None if unknown, e.g. resumed after a
     # restart), what it has collected so far, and the runs that already ended —
     # together they scope the history to the current mode.
@@ -152,6 +159,11 @@ class Companion:
                 return activity
         return None
 
+    def doubtful(self, confidence: float) -> bool:
+        """Whether a transcript heard with this confidence is too uncertain to
+        change the mode on. 0 means the STT gave no signal, which is not doubt."""
+        return 0.0 < confidence < self.min_confidence
+
     def progress_metadata(self) -> Dict[str, Any]:
         """What the progress panel needs: what is running, and what can be picked."""
         return {
@@ -165,7 +177,10 @@ class Companion:
     # ── deciding ───────────────────────────────────────────────────────────
 
     def decide(
-        self, commands: List[Dict[str, Any]], exit_step: Optional[ExitStep] = None
+        self,
+        commands: List[Dict[str, Any]],
+        exit_step: Optional[ExitStep] = None,
+        doubtful: bool = False,
     ) -> Transition:
         """The one transition this turn makes, from the mode it started in.
 
@@ -173,9 +188,13 @@ class Companion:
         state machine and reports it with ``enter``/``leave``/``ask_exit``.
         In an activity only ``exit_step`` counts (None means the call failed);
         in free conversation only the router's ``commands`` do.
+
+        ``doubtful`` says the transcript itself was heard with low confidence.
+        Such a message never changes the mode — it may be a mumbled "yes" or
+        filler the transcriber invented over silence — it can only make her ask.
         """
         if self.active:
-            return self._decide_in_activity(exit_step)
+            return self._decide_in_activity(exit_step, doubtful)
 
         command = commands[0] if commands else None
         if not command:
@@ -183,6 +202,8 @@ class Companion:
         kind = command.get("command")
         if kind == "list":
             return Transition(Change.OFFERED, offered=list(command.get("activities") or []))
+        if doubtful and kind in ("start", "sleep"):
+            return Transition(Change.UNHEARD, ignored=kind)
         if kind == "sleep":
             return Transition(Change.DISMISSED)
         if kind == "start":
@@ -192,14 +213,23 @@ class Companion:
             logger.warning("start_activity for unknown or plan-less activity %r", command)
         return Transition(Change.NONE, ignored=kind)
 
-    def _decide_in_activity(self, step: Optional[ExitStep]) -> Transition:
+    def _decide_in_activity(self, step: Optional[ExitStep], doubtful: bool) -> Transition:
         # A failed judgment changes nothing, whichever question was open: ending
         # on a guess costs the whole activity, and asking "shall we stop?" on
         # every failed call would interrupt it for no reason.
         step = step or ExitStep(STAY)
+        unheard = step.decision == LEAVE and doubtful
+        if unheard:
+            # Heard as a stop, but not heard well: ask rather than leave.
+            step = ExitStep(
+                ASK, say=step.say,
+                user_intent=f"{step.user_intent} (heard with low confidence, so asked)".strip(),
+            )
         if step.decision == LEAVE:
             return Transition(Change.EXITED, activity=self.active, understood=step.user_intent)
-        if step.decision == ASK and step.say and self.exit_asks < MAX_EXIT_ASKS:
+        # Without a question to speak an ordinary ask is dropped; a stop that was
+        # only heard poorly still has to be asked about, so the reply writes it.
+        if step.decision == ASK and (step.say or unheard) and self.exit_asks < MAX_EXIT_ASKS:
             return Transition(Change.EXIT_ASKED, activity=self.active, say=step.say, understood=step.user_intent)
         if self.pending_exit:
             # The stop question was open and was not answered with a yes.
@@ -299,6 +329,12 @@ def directive(transition: Transition) -> str:
             "it warmly in a sentence, do not continue or resume it, and return to "
             "open conversation."
         )
+    if change is Change.UNHEARD:
+        return (
+            "You did not hear the user clearly. Say so in a few words and ask "
+            "them to say it again. Do not guess what they meant, and do not act "
+            "on it."
+        )
     if change is Change.DISMISSED:
         return (
             "The user is done for now and you are about to go to sleep. Say "
@@ -334,6 +370,14 @@ def decision(session_id: str, transition: Transition) -> Optional[AgentOutput]:
             f"Offered {len(titles)} activit{'y' if len(titles) == 1 else 'ies'}"
             if titles else "No activities available",
             options=titles,
+            component=ROUTER,
+        )
+    if transition.change is Change.UNHEARD:
+        return AgentOutput.decision(
+            session_id,
+            "not_heard_clearly",
+            "Asked to repeat",
+            detail=f"Heard “{transition.ignored}” with low confidence; not acted on",
             component=ROUTER,
         )
     if transition.change is Change.NONE:
@@ -394,10 +438,12 @@ def _exit_prompt(
         f'- "leave": {leave_rule}\n'
         '- "stay": they want to carry on — including answering the activity, '
         "commenting on it, or complaining about how it is going.\n"
-        f'- "ask": {ask_rule} Then write in "say" ONE short, warm '
-        f'yes/no question asking whether to stop "{title}", and nothing else — '
-        "no content from the activity.\n\n"
-        '"say" stays empty unless you ask. Write it in the language with code '
+        f'- "ask": {ask_rule}\n\n'
+        'Whenever your decision is "ask" or "leave", write in "say" ONE short, '
+        f'warm yes/no question asking whether to stop "{title}", and nothing '
+        "else — no content from the activity. It is spoken when you ask, and "
+        "also when they were heard too poorly to leave on their word alone. "
+        '"say" stays empty when they stay. Write it in the language with code '
         f"'{language or 'en'}'."
         + (
             f' It is spoken right after "{bridge}", which was already said — '
@@ -453,7 +499,7 @@ async def exit_dialogue(
         decision = str(data.get("decision", "")).strip().lower()
         if decision not in (LEAVE, STAY, ASK):
             raise ValueError(f"unknown decision {decision!r}")
-        say = str(data.get("say") or "").strip() if decision == ASK else ""
+        say = str(data.get("say") or "").strip() if decision != STAY else ""
         step = ExitStep(decision, say=say, user_intent=str(data.get("user_intent") or ""))
         logger.info("Exit dialogue: %s (%s)", step.decision, step.user_intent)
         return step

@@ -135,7 +135,11 @@ class Replay:
             if turn.get("only_if") and turn["only_if"] != mode:
                 continue
             record = {"turn": index, "mode": mode, "user": turn["user"], "router": "-", "exit": ""}
-            transition = await self._decide(companion, tools, turn["user"], history, record)
+            # 'confidence' is how well the turn was heard; absent means typed text.
+            doubtful = companion.doubtful(float(turn.get("confidence") or 0.0))
+            transition = await self._decide(
+                companion, tools, turn["user"], history, record, doubtful
+            )
             record["outcome"] = FAILED_CALL if transition is None else outcome_of(transition)
             records.append(record)
             if transition is None:
@@ -162,7 +166,9 @@ class Replay:
             })
         return records
 
-    async def _decide(self, companion, tools, text, history, record) -> Optional[Transition]:
+    async def _decide(
+        self, companion, tools, text, history, record, doubtful=False
+    ) -> Optional[Transition]:
         """One judge per mode, as in the agent: the exit dialogue inside an
         activity, the router in free conversation."""
         if companion.active:
@@ -182,7 +188,7 @@ class Replay:
                 record["exit"] = "failed"
                 return None
             record["exit"] = f"{exit_step.decision}: {exit_step.user_intent}"
-            return companion.decide([], exit_step)
+            return companion.decide([], exit_step, doubtful)
 
         verdict = await self.runner.run(self.router, text, history, {}, tools=tools)
         if verdict.verdict in _FAILED_VERDICTS:
@@ -190,7 +196,7 @@ class Replay:
             return None
         commands = commands_from([verdict])
         record["router"] = commands[0]["command"] if commands else "-"
-        return companion.decide(commands)
+        return companion.decide(commands, doubtful=doubtful)
 
 
 async def replay_all(
