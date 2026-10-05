@@ -21,7 +21,7 @@
     "framer-motion": "^13.5.0",
     "js-cookie": "^3.0.8",
     "livekit-client": "^2.22.3",
-    "lucide-react": "^1.49.0",
+    "lucide-react": "^1.50.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
