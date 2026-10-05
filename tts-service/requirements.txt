@@ -21,4 +21,4 @@ soundfile>=0.12.0
 scipy>=1.11.0,<1.18
 
 # Used by some init paths to fetch weights into the PVC.
-huggingface_hub>=1.29.0
+huggingface_hub>=2.1.1
