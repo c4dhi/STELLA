@@ -56,6 +56,7 @@ from stella_v2_agent.companion import (
     Change,
     Companion,
     NO_CHANGE,
+    ROUTER,
     Transition,
     ExitStep,
     commands_from,
@@ -355,6 +356,10 @@ class StellaV2Agent(BaseAgent):
             # expert_task` below: do not mutate `sm_context` or `history`,
             # the pool is reading them concurrently.
             experts_to_run = self.expert_registry.get_enabled_names()
+            if self._companion_mode and self.companion.active:
+                # One judge per mode: inside an activity that is the exit
+                # dialogue, and the router has no question to answer.
+                experts_to_run = [name for name in experts_to_run if name != ROUTER]
             logger.info(f"Stage 2: Expert Pool (started, runs alongside bridge) — {experts_to_run}")
             expert_task = asyncio.create_task(
                 self.expert_pool.run(experts_to_run, input.text, history, sm_context)
@@ -421,12 +426,14 @@ class StellaV2Agent(BaseAgent):
             # Covers the silent turn too, where the loop above never ran.
             turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_mode", None))
 
-            # A question "shall we stop X?" is open from the previous turn: this
-            # turn's text answers it. Judged alongside the pool (it needs the
+            # Inside an activity the exit dialogue judges every turn: does this
+            # message ask to leave — or, if "shall we stop X?" is open from the
+            # previous turn, answer it? Run alongside the pool (it needs the
             # bridge, which is now spoken), not after it.
-            if self._companion_mode and self.companion.pending_exit:
+            if self._companion_mode and self.companion.active:
                 exit_task = asyncio.create_task(self._exit_step(
-                    input.text, history, bridge, resolved_language, awaiting_answer=True,
+                    input.text, history, bridge, resolved_language,
+                    awaiting_answer=self.companion.pending_exit,
                 ))
 
             if bridge:
@@ -506,9 +513,10 @@ class StellaV2Agent(BaseAgent):
                 user_input=input.text,
             )
 
-            # Companion mode (#36): the router only proposed; the one transition
-            # this turn makes is decided and applied HERE, after every expert
-            # has finished. Folded in BEFORE the arbitration debug is published
+            # Companion mode (#36): the mode's judge has answered — the router
+            # in free conversation, the exit dialogue in an activity — and the
+            # one transition this turn makes is decided and applied HERE, after
+            # every expert has finished. Folded in BEFORE the arbitration debug is published
             # so that line reports the directive the response is written from.
             transition = NO_CHANGE
             if self._companion_mode:
@@ -517,12 +525,6 @@ class StellaV2Agent(BaseAgent):
                 if exit_task is not None:
                     exit_step = await exit_task
                     exit_task = None
-                elif self.companion.needs_exit_step(commands):
-                    # The router noticed something stop-shaped; what it was is
-                    # the exit dialogue's call.
-                    exit_step = await self._exit_step(
-                        input.text, history, bridge, resolved_language, awaiting_answer=False,
-                    )
                 transition = await self._apply_transition(
                     self.companion.decide(commands, exit_step)
                 )
@@ -1023,10 +1025,7 @@ class StellaV2Agent(BaseAgent):
                 self.tool_registry.register(tool)
 
             if self._companion_mode:
-                tools = create_companion_tools(
-                    self.companion.activities, lambda: self.companion.running_title
-                )
-                for tool in tools:
+                for tool in create_companion_tools(self.companion.activities):
                     self.tool_registry.register(tool)
 
             # Wire tool registry into expert pool

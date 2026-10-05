@@ -13,6 +13,7 @@ from stella_v2_agent.agent import StellaV2Agent
 from stella_v2_agent.companion import (
     Change,
     Companion,
+    NO_CHANGE,
     Transition,
     ASK,
     LEAVE,
@@ -81,35 +82,32 @@ def test_an_unknown_activity_does_not_start():
     assert transition.ignored == "start"
 
 
-@pytest.mark.parametrize("command", [START_MEMORY, START_CHECKIN, LIST])
-def test_a_start_or_list_mid_activity_is_ignored_not_applied(command):
+@pytest.mark.parametrize("command", [START_MEMORY, START_CHECKIN, LIST, STOP])
+def test_inside_an_activity_only_the_exit_dialogue_counts(command):
     """Regression (session 92ad3f90): the user answered the activity's name
     question and the router started the activity AGAIN, resetting its progress.
-    The same id or a different one — neither is a new choice mid-activity."""
-    transition = _running().decide([command])
-    assert transition.change is Change.NONE
-    assert transition.ignored == command["command"]
+    Whatever a router might propose mid-activity, it decides nothing there."""
+    assert _running().decide([command], ExitStep(STAY)) is NO_CHANGE
+    assert _running().decide([command], ExitStep(LEAVE)).change is Change.EXITED
 
 
-def test_a_stop_mid_activity_goes_to_the_exit_dialogue():
-    companion = _running()
-    assert companion.needs_exit_step([STOP]) is True
-    assert companion.needs_exit_step([]) is False
-    assert _free().needs_exit_step([STOP]) is False
-
-
-def test_the_exit_dialogue_decides_what_a_stop_was():
-    asked = _running().decide([STOP], ExitStep(ASK, say="Shall we stop here?"))
+def test_the_exit_dialogue_decides_every_activity_turn():
+    asked = _running().decide([], ExitStep(ASK, say="Shall we stop here?"))
     assert asked.change is Change.EXIT_ASKED and asked.say == "Shall we stop here?"
-    assert _running().decide([STOP], ExitStep(LEAVE)).change is Change.EXITED
-    # A complaint the router mistook for a stop: nothing happens.
-    stayed = _running().decide([STOP], ExitStep(STAY, user_intent="complains about the question"))
-    assert stayed.change is Change.NONE and stayed.ignored == "stop"
+    assert _running().decide([], ExitStep(LEAVE)).change is Change.EXITED
+    # An ordinary answer, or a complaint: nothing happens, and nothing is logged.
+    stayed = _running().decide([], ExitStep(STAY, user_intent="complains about the question"))
+    assert stayed is NO_CHANGE
 
 
-def test_a_failed_exit_dialogue_asks_rather_than_guesses():
-    transition = _running().decide([STOP], None)
-    assert transition.change is Change.EXIT_ASKED and transition.say == ""
+def test_a_failed_exit_dialogue_changes_nothing():
+    # It runs on every activity turn: asking "shall we stop?" whenever the call
+    # fails would interrupt the activity for no reason.
+    assert _running().decide([], None) is NO_CHANGE
+
+
+def test_an_ask_without_a_question_to_speak_changes_nothing():
+    assert _running().decide([], ExitStep(ASK, say="")) is NO_CHANGE
 
 
 def test_the_turn_that_asks_is_never_the_turn_that_answers():
@@ -118,8 +116,8 @@ def test_the_turn_that_asks_is_never_the_turn_that_answers():
     asked, and anything short of "yes stop" was silently declined."""
     companion = _running()
     assert companion.pending_exit is False
-    assert companion.decide([STOP], ExitStep(ASK, say="?")).change is Change.EXIT_ASKED
-    assert companion.needs_exit_step([]) is False
+    assert companion.decide([], ExitStep(ASK, say="?")).change is Change.EXIT_ASKED
+    assert companion.pending_exit is False  # decide() is pure; the caller records the ask
 
 
 def test_the_next_turn_answers_the_open_question():
@@ -371,7 +369,7 @@ async def test_the_exit_dialogue_is_scoped_to_the_stop_question():
     assert system.startswith("You are Grace.")          # the persona's voice
     assert '"Memory Game"' in system and "'fr'" in system
     assert "D'accord." in system                        # continues the bridge
-    assert "If there is any doubt at all, ask" in system  # first turn: cautious
+    assert "nearly all of them are simply taking" in system  # sees every turn
     assert "What's on the list?" in user and "can we stop here?" in user
     assert llm.config.json_mode is True and llm.config.model == "gpt-test"
 
@@ -519,7 +517,9 @@ async def test_history_after_leaving_an_activity_is_one_line():
     agent.companion.collected = {"nickname": "Fee"}
     started = agent.companion.started_at
     agent.companion.leave()
-    ended = agent.companion.segments[-1].ended_at
+    # enter() and leave() run microseconds apart here; a real activity lasts
+    # long enough to contain its own messages.
+    agent.companion.segments[-1].ended_at = ended = started + timedelta(seconds=10)
 
     _with_history(agent, [
         ("user", "hi", (started - timedelta(seconds=5)).isoformat()),

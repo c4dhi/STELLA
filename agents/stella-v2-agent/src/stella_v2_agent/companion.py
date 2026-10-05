@@ -7,22 +7,24 @@ way out (stop, confirmed by the user) and that the plan's end hands back to free
 conversation instead of ending the session.
 
 This module is the one place that knows what mode the session is in and how it
-changes. The router only PROPOSES (its tools return commands and touch
-nothing); ``Companion.decide`` turns the proposal into at most one transition,
+changes. Each mode has ONE judge, asking one question:
+
+* free conversation — the ``companion_router`` expert: do they want to see the
+  activities, or start one? Its tools only PROPOSE; they touch nothing.
+* in an activity — ``exit_dialogue``, on every turn: do they want to leave?
+  It answers leave, stay or ask, and when it asks it writes the question.
+
+``Companion.decide`` turns the judge's answer into at most one transition,
 judged against the mode the turn STARTED in, after every expert has finished.
 That ordering is what makes the rest simple:
 
-* experts can all run every turn — a proposal that does not fit the mode is
-  ignored, not undone;
 * nothing races: the plan loads or clears after the other experts' writes;
 * a pending "shall we stop?" is part of the input state, so it is answered by
   the NEXT turn, never by the turn that asked it.
 
-Leaving is its own small dialogue, judged by one scoped LLM call
-(``exit_dialogue``) instead of the reply model: it sees only the stop question,
-the user's words and the last few turns, says what it thinks the user wants,
-then decides — leave, stay, or ask — and when it asks, writes the question. The
-reply model, given only an instruction to ask, followed the plan instead.
+Leaving used to need two judges in a row — the router had to notice a stop
+before the exit dialogue was asked what it was — so a stop the router missed
+never reached the judge that would have understood it.
 """
 
 import json
@@ -157,14 +159,6 @@ class Companion:
 
     # ── deciding ───────────────────────────────────────────────────────────
 
-    def needs_exit_step(self, commands: List[Dict[str, Any]]) -> bool:
-        """Whether this turn's transition depends on the exit dialogue."""
-        if not self.active:
-            return False
-        if self.pending_exit:
-            return True
-        return bool(commands) and commands[0].get("command") == "stop"
-
     def decide(
         self, commands: List[Dict[str, Any]], exit_step: Optional[ExitStep] = None
     ) -> Transition:
@@ -172,40 +166,16 @@ class Companion:
 
         Pure: nothing changes until the caller has applied the transition to the
         state machine and reports it with ``enter``/``leave``/``ask_exit``.
-        ``exit_step`` is the exit dialogue's verdict when ``needs_exit_step``;
-        None there means the call failed.
+        In an activity only ``exit_step`` counts (None means the call failed);
+        in free conversation only the router's ``commands`` do.
         """
-        if self.active and self.pending_exit:
-            # This turn answers "shall we stop?"; whatever the router proposed
-            # meanwhile was written without knowing that question was open. A
-            # failed judgment stays: ending on a guess costs the whole activity.
-            step = exit_step or ExitStep(STAY)
-            if step.decision == LEAVE:
-                return Transition(Change.EXITED, activity=self.active, understood=step.user_intent)
-            if step.decision == ASK and step.say and self.exit_asks < MAX_EXIT_ASKS:
-                return Transition(Change.EXIT_ASKED, activity=self.active, say=step.say, understood=step.user_intent)
-            return Transition(Change.EXIT_DECLINED, activity=self.active, understood=step.user_intent)
+        if self.active:
+            return self._decide_in_activity(exit_step)
 
         command = commands[0] if commands else None
         if not command:
             return NO_CHANGE
         kind = command.get("command")
-
-        if self.active:
-            if kind == "stop":
-                # The router only noticed something stop-shaped; the exit
-                # dialogue decides what it was. Failed, it asks (the reply
-                # model then writes the question from the directive).
-                step = exit_step or ExitStep(ASK)
-                if step.decision == LEAVE:
-                    return Transition(Change.EXITED, activity=self.active, understood=step.user_intent)
-                if step.decision == STAY:
-                    return Transition(Change.NONE, ignored=kind, understood=step.user_intent)
-                return Transition(Change.EXIT_ASKED, activity=self.active, say=step.say, understood=step.user_intent)
-            # Starting or listing mid-activity is the router mistaking an answer
-            # for a new choice (#36) — nothing to do but note it.
-            return Transition(Change.NONE, ignored=kind)
-
         if kind == "list":
             return Transition(Change.OFFERED, offered=list(command.get("activities") or []))
         if kind == "start":
@@ -214,6 +184,20 @@ class Companion:
                 return Transition(Change.STARTED, activity=activity)
             logger.warning("start_activity for unknown or plan-less activity %r", command)
         return Transition(Change.NONE, ignored=kind)
+
+    def _decide_in_activity(self, step: Optional[ExitStep]) -> Transition:
+        # A failed judgment changes nothing, whichever question was open: ending
+        # on a guess costs the whole activity, and asking "shall we stop?" on
+        # every failed call would interrupt it for no reason.
+        step = step or ExitStep(STAY)
+        if step.decision == LEAVE:
+            return Transition(Change.EXITED, activity=self.active, understood=step.user_intent)
+        if step.decision == ASK and step.say and self.exit_asks < MAX_EXIT_ASKS:
+            return Transition(Change.EXIT_ASKED, activity=self.active, say=step.say, understood=step.user_intent)
+        if self.pending_exit:
+            # The stop question was open and was not answered with a yes.
+            return Transition(Change.EXIT_DECLINED, activity=self.active, understood=step.user_intent)
+        return NO_CHANGE
 
     # ── recording what was applied ─────────────────────────────────────────
 
@@ -367,14 +351,22 @@ def _exit_prompt(
         f'In your last message you asked whether they want to stop "{title}". '
         "Their message below answers that."
         if awaiting_answer else
-        f'They are in the middle of the activity "{title}" and just said '
-        "something that may mean they want to stop it."
+        f'They are in the middle of the activity "{title}". You see every '
+        "message they send during it, and nearly all of them are simply taking "
+        "part: answering its questions (a bare yes or no included), commenting, "
+        "hesitating. Decide whether THIS message asks to stop the activity."
     )
     leave_rule = (
         "they said yes, or otherwise clearly want to stop now."
         if awaiting_answer else
-        "they asked explicitly and unmistakably to stop it now. If there is any "
-        "doubt at all, ask instead."
+        "they asked explicitly and unmistakably to stop it now."
+    )
+    ask_rule = (
+        "it is genuinely unclear whether that was a yes or a no."
+        if awaiting_answer else
+        "they seem to want out of the activity itself but did not say so "
+        'plainly. Hesitation, filler ("hm", "well...") or an unclear answer to '
+        "the activity is not that: stay."
     )
     parts = [persona or ""]
     parts.append(
@@ -388,7 +380,7 @@ def _exit_prompt(
         f'- "leave": {leave_rule}\n'
         '- "stay": they want to carry on — including answering the activity, '
         "commenting on it, or complaining about how it is going.\n"
-        '- "ask": it is genuinely unclear. Then write in "say" ONE short, warm '
+        f'- "ask": {ask_rule} Then write in "say" ONE short, warm '
         f'yes/no question asking whether to stop "{title}", and nothing else — '
         "no content from the activity.\n\n"
         '"say" stays empty unless you ask. Write it in the language with code '
@@ -416,11 +408,10 @@ async def exit_dialogue(
     bridge: str = "",
     persona: Optional[str] = None,
 ) -> Optional[ExitStep]:
-    """Judge one user message about stopping the activity: leave, stay, or ask.
+    """Judge one user message during an activity: leave, stay, or ask.
 
-    One scoped call, separate from the router (whose broad judgment only
-    noticed something stop-shaped) and from the reply model (which follows the
-    plan). It states what the user wants before deciding, so the decision is
+    The one judge of an activity turn, separate from the reply model (which
+    follows the plan). It states what the user wants before deciding, so the decision is
     checked against their words rather than made in one leap. Returns None when
     the call fails or its answer is unusable; the caller decides what that means.
     """

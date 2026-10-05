@@ -1,22 +1,22 @@
-"""The three companion tools the router proposes transitions with.
+"""The two companion tools the router proposes transitions with.
 
   list_activities()          what can we do?
   start_activity(id)         run that plan
-  end_activity()             stop the running one (the user confirms first)
 
 They only PROPOSE. Each returns a ``command`` in its result data and touches
 nothing; the agent decides, against the session's actual mode, whether to act on
 it (``companion.py``). So the tools cannot race the other experts in the same
-turn, cannot restart a running activity, and cannot leave a half-applied
-transition behind.
+turn and cannot leave a half-applied transition behind.
+
+There is no tool for leaving. The router only runs in free conversation; inside
+an activity the exit dialogue is the one judge.
 
 They live with this agent, not in the SDK: what an activity is, and when one may
-start or stop, is this agent's policy. The SDK only offers loading and clearing
-a plan.
+start, is this agent's policy. The SDK only offers loading and clearing a plan.
 """
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from stella_agent_sdk.tools.base import BaseTool, ToolResult
 
@@ -32,16 +32,9 @@ tool for ordinary conversation: that is the common case.
 - `start_activity` — the user has clearly CHOSEN one: named it, described it, or
   said an unambiguous yes to one just offered. Unsure which one they meant? Call
   no tool, and let the reply ask.
-- `end_activity` — the user clearly wants to stop the running activity. Answering
-  its questions — briefly, reluctantly, or with a complaint about how it is going
-  — is taking part, not stopping. The user is asked to confirm before anything
-  ends.
 
 Call no more than one tool per turn.
 """
-
-# Who is running right now, as the title of the running activity or None.
-RunningActivity = Callable[[], Optional[str]]
 
 
 def _activity_view(activity: Dict[str, Any]) -> Dict[str, str]:
@@ -90,9 +83,8 @@ class StartActivityTool(BaseTool):
 
     guidance = COMPANION_TOOL_GUIDANCE
 
-    def __init__(self, activities: List[Dict[str, Any]], running: RunningActivity):
+    def __init__(self, activities: List[Dict[str, Any]]):
         self._activities = activities
-        self._running = running
 
     @property
     def name(self) -> str:
@@ -100,12 +92,6 @@ class StartActivityTool(BaseTool):
 
     @property
     def description(self) -> str:
-        running = self._running()
-        if running:
-            return (
-                f'"{running}" is already running, so there is nothing to start: '
-                "the user is taking part in it. Do not call this."
-            )
         return (
             "Start the activity the user has explicitly chosen — named, described, "
             "or clearly agreed to when offered."
@@ -164,58 +150,6 @@ class StartActivityTool(BaseTool):
         )
 
 
-class EndActivityTool(BaseTool):
-    """Propose stopping the running activity; the user confirms before it ends."""
-
-    guidance = COMPANION_TOOL_GUIDANCE
-
-    def __init__(self, running: RunningActivity):
-        self._running = running
-
-    @property
-    def name(self) -> str:
-        return "end_activity"
-
-    @property
-    def description(self) -> str:
-        running = self._running()
-        if not running:
-            return "No activity is running, so there is nothing to stop. Do not call this."
-        return (
-            f'Propose stopping "{running}", which is running right now. Call ONLY on '
-            "a clear, explicit request to stop or leave it — not for a short, "
-            "downbeat, or critical answer that is still taking part. The user is "
-            "asked to confirm before it ends."
-        )
-
-    @property
-    def parameters_schema(self) -> Dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "Brief note on why, for the log",
-                },
-            },
-        }
-
-    async def execute(self, reason: str = "", **_kwargs) -> ToolResult:
-        return ToolResult(success=True, data={"command": "stop", "reason": reason})
-
-
-def create_companion_tools(
-    activities: List[Dict[str, Any]],
-    running: RunningActivity,
-) -> List[BaseTool]:
-    """Build the companion toolset for one session.
-
-    ``running`` is read each time a schema is built, so the tool descriptions
-    always state whether an activity is running — only the router carries these
-    tools, which keeps that fact out of every other expert's context.
-    """
-    return [
-        ListActivitiesTool(activities),
-        StartActivityTool(activities, running),
-        EndActivityTool(running),
-    ]
+def create_companion_tools(activities: List[Dict[str, Any]]) -> List[BaseTool]:
+    """Build the companion toolset for one session."""
+    return [ListActivitiesTool(activities), StartActivityTool(activities)]
