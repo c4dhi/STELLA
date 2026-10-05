@@ -44,7 +44,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable, Deque, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, Optional
 
 from stella_agent_sdk.emotion.tags import EmotionCue
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
@@ -756,6 +756,11 @@ class AudioPipeline:
         # a graceful close over the data channel ({"type":"session_end"}).
         self._session_end_handler: Optional[
             Callable[[str, int], Awaitable[None]]
+        ] = None
+        # What the user did on their device that is not speech or text
+        # ({"type":"client_event"}): a tap, the face going to sleep or waking.
+        self._client_event_handler: Optional[
+            Callable[[str, Dict[str, Any]], Awaitable[None]]
         ] = None
         # Safety net for the TEXT path, which is the only caller that suspends
         # playback reversibly: if its decider hangs, the suspend would otherwise
@@ -1938,6 +1943,18 @@ class AudioPipeline:
                     asyncio.create_task(self._session_end_handler(reason, deadline_ms))
                 return
 
+            # Something the user did on the device that is neither speech nor
+            # text. Passed on as it came: what the events mean is the agent's
+            # business, not the pipeline's.
+            if message.get("type") == "client_event":
+                payload = message.get("data")
+                payload = payload if isinstance(payload, dict) else {}
+                event = str(payload.get("event") or "")
+                handler = getattr(self, "_client_event_handler", None)
+                if event and handler:
+                    asyncio.create_task(handler(event, payload))
+                return
+
             # Deliberate mic mute/unmute. The track stays published and the STT
             # stream stays open (#362); on mute the room feeds silence so the
             # in-flight utterance finalizes as a normal pause.
@@ -2692,6 +2709,13 @@ class AudioPipeline:
         close ({"type":"session_end"}) over the data channel — wired in run.py to
         run the agent's on_session_ending wrap-up, then shut down (issue #198)."""
         self._session_end_handler = handler
+
+    def on_client_event(
+        self, handler: Callable[[str, Dict[str, Any]], Awaitable[None]]
+    ) -> None:
+        """Register the async callback for device events ({"type":"client_event"}).
+        Called with the event name and the message's data."""
+        self._client_event_handler = handler
 
     async def _emit_barge_in_debug(self, content: str, **metadata) -> None:
         """Publish a barge-in debug message to the chat (frontend debug feed)
