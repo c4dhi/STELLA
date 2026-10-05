@@ -1,0 +1,354 @@
+{
+  "_readme": [
+    "Companion replay scenarios: transcripts run against the real models by tests/companion_replay.py.",
+    "Each scenario states the mode it starts in, then one or more user turns with the OUTCOME expected,",
+    "not the tool expected, so the set stays valid when the router is restructured.",
+    "",
+    "Outcomes: none | offered | started:<activity id> | exit_asked | exited | exit_declined.",
+    "'expect' is one outcome or a list of acceptable ones; null means undecided (reported, not scored).",
+    "",
+    "Start mode: 'in_activity' (an activity id) and 'awaiting_exit' (the stop question is open).",
+    "'history' is what was said before the first turn. A turn's 'assistant' is the scripted reply that",
+    "follows it; 'only_if' (free | activity | awaiting_exit) skips a turn the earlier ones made moot.",
+    "",
+    "Tags: noise = garbled or hallucinated transcription; review = the expectation itself is a judgment",
+    "call worth a second look; future = behaviour that does not exist yet."
+  ],
+  "activities": [
+    {"id": "extended", "title": "Extended Fitness Check-in", "description": "A comprehensive conversation covering exercise habits"},
+    {"id": "prolific", "title": "Prolific Study", "description": "A quick check in on the user and their fitness goals"},
+    {"id": "grace_group", "title": "Conditional GRACE Focus Group", "description": "A group discussion about living with a home companion robot"},
+    {"id": "memory", "title": "Memory Game", "description": "A short word-recall game to exercise memory"}
+  ],
+  "scenarios": [
+    {"id": "start-01-explicit-choice", "tags": ["start"],
+     "turns": [{"user": "I want to do the Extended Fitness Check-in", "expect": "started:extended"}]},
+
+    {"id": "start-02-clear-yes-to-offer", "tags": ["start"],
+     "history": [{"role": "assistant", "content": "There are a few things we could do together: the Fitness Check-in or a focus group. What interests you?"}],
+     "turns": [{"user": "the fitness one", "expect": "started:extended"}]},
+
+    {"id": "start-03-mid-activity-continuation", "tags": ["start", "in_activity"],
+     "note": "Reproduced #36: answering the activity's question restarted it.",
+     "in_activity": "grace_group",
+     "history": [{"role": "assistant", "content": "Okay. I'm Grace... May I ask what you're called?"}],
+     "turns": [{"user": "My name is Felix", "expect": "none"}]},
+
+    {"id": "start-04-explicit-restart", "tags": ["start", "in_activity"],
+     "note": "Undecided: should an explicit 'start over' restart the running activity? Today it is ignored.",
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "actually can we start that over from the beginning", "expect": null}]},
+
+    {"id": "start-05-switch-activities-mid-run", "tags": ["start", "in_activity"],
+     "note": "Undecided: leave the current one and start the other, or ask to leave first?",
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "actually let's do the memory game instead", "expect": null}]},
+
+    {"id": "start-06-passing-mention-not-a-choice", "tags": ["start"],
+     "turns": [{"user": "my neighbor said she liked the fitness check-in thing you do", "expect": "none"}]},
+
+    {"id": "start-07-bare-agreement-no-antecedent", "tags": ["start"],
+     "history": [{"role": "assistant", "content": "It has been a grey day here too."}],
+     "turns": [{"user": "sure", "expect": "none"}]},
+
+    {"id": "start-08-near-miss-title", "tags": ["start"],
+     "turns": [{"user": "let's do the grace group thing", "expect": "started:grace_group"}]},
+
+    {"id": "start-09-two-fitness-activities-ambiguous", "tags": ["start", "review"],
+     "note": "Two activities are about fitness; a bare 'fitness' picks neither. The reply should ask which.",
+     "history": [{"role": "assistant", "content": "We could do a longer fitness check-in, a quick study chat about your fitness goals, a focus group, or a memory game. What sounds good?"}],
+     "turns": [{"user": "the fitness one", "expect": "none"}]},
+
+    {"id": "start-10-picked-by-description", "tags": ["start"],
+     "note": "Felix, 29 Sep: 'fitness goals' was matched to the title containing 'Fitness', which was the other activity.",
+     "history": [{"role": "assistant", "content": "We could talk through your exercise habits in depth, do a quick check-in on your fitness goals, or play a memory game."}],
+     "turns": [{"user": "the quick one about my fitness goals", "expect": "started:prolific"}]},
+
+    {"id": "end-01-clear-stop", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "actually let's stop this", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "end-02-downbeat-on-topic", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "How has your exercise been going this week?"}],
+     "turns": [{"user": "not so good", "expect": "none"}]},
+
+    {"id": "end-03-on-topic-complaint", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "Is there anything getting in the way of exercising?"}],
+     "turns": [{"user": "my knees have been bothering me", "expect": "none"}]},
+
+    {"id": "end-04-off-topic-stop-word", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "How often do you exercise, what kind, and for how long each time?"}],
+     "turns": [{"user": "can you stop asking so many questions at once", "expect": "none"}]},
+
+    {"id": "end-05-short-nonanswer", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "How has your exercise been going this week?"}],
+     "turns": [{"user": "hm", "expect": "none"}]},
+
+    {"id": "end-06-stop-as-a-question", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "could we maybe stop for today?", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "end-07-stop-buried-in-longer-reply", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "usually three times, but honestly I'd rather stop for today", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "end-08-stop-word-is-the-answer", "tags": ["stop", "in_activity"],
+     "note": "The word 'stop' is part of the answer the activity asked for.",
+     "in_activity": "memory",
+     "history": [{"role": "assistant", "content": "I said three words a moment ago. Can you tell me what they were?"}],
+     "turns": [{"user": "stop, river and chair", "expect": "none"}]},
+
+    {"id": "end-09-stopped-as-past-tense", "tags": ["stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "Are you still going running?"}],
+     "turns": [{"user": "no, I stopped running in March", "expect": "none"}]},
+
+    {"id": "end-10-tired-of-it", "tags": ["stop", "in_activity", "review"],
+     "note": "No stop word at all, but a person saying this wants out. Asking is the right answer.",
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how long is a typical session for you?"}],
+     "turns": [{"user": "I'm tired, I don't feel like doing this any more", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "list-01-explicit-ask", "tags": ["list"],
+     "turns": [{"user": "what could we do?", "expect": "offered"}]},
+
+    {"id": "list-02-vague-boredom", "tags": ["list", "review"],
+     "note": "Offering here is the older expectation. A companion that should not push might just chat.",
+     "turns": [{"user": "I don't know, I'm a bit bored", "expect": "offered"}]},
+
+    {"id": "list-03-stop-and-ask-in-one-turn", "tags": ["list", "stop", "in_activity"],
+     "note": "Undecided: one turn asks to leave and to see the list.",
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "I don't want to do this anymore, what else is there?", "expect": null}]},
+
+    {"id": "confirm-01-clear-yes", "tags": ["confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "yes, let's stop", "expect": "exited"}]},
+
+    {"id": "confirm-02-clear-no", "tags": ["confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "no, let's keep going", "expect": "exit_declined"}]},
+
+    {"id": "confirm-03-unclear", "tags": ["confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "what were we talking about again?", "expect": ["exit_declined", "exit_asked"]}]},
+
+    {"id": "confirm-04-yes-to-a-double-question", "tags": ["confirm"],
+     "note": "Undecided: the question offered two things, and 'yes please' fits either.",
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in, or would you like me to repeat the last question?"}],
+     "turns": [{"user": "yes please", "expect": null}]},
+
+    {"id": "confirm-05-answers-the-activity-instead", "tags": ["confirm"],
+     "note": "They ignore the stop question and answer the activity: that is staying.",
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [
+       {"role": "assistant", "content": "And how often do you exercise in a typical week?"},
+       {"role": "user", "content": "ugh, this again"},
+       {"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "about three times a week I'd say", "expect": "exit_declined"}]},
+
+    {"id": "lang-01-german-mid-activity-continuation", "tags": ["lang", "in_activity"],
+     "in_activity": "grace_group",
+     "history": [{"role": "assistant", "content": "Okay. Ich bin Grace... Darf ich fragen, wie Sie heißen?"}],
+     "turns": [{"user": "Ich heiße Felix", "expect": "none"}]},
+
+    {"id": "lang-02-code-switch-stop", "tags": ["lang", "stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "Wie oft treiben Sie in einer normalen Woche Sport?"}],
+     "turns": [{"user": "ich möchte eigentlich just stop for now", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "lang-03-german-stop", "tags": ["lang", "stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "Wie oft treiben Sie in einer normalen Woche Sport?"}],
+     "turns": [{"user": "Ich mag nicht mehr, können wir aufhören?", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "lang-04-german-pick", "tags": ["lang", "start"],
+     "history": [{"role": "assistant", "content": "Wir könnten ein Gedächtnisspiel machen oder über Ihre Bewegung sprechen. Worauf haben Sie Lust?"}],
+     "turns": [{"user": "das Gedächtnisspiel bitte", "expect": "started:memory"}]},
+
+    {"id": "noise-confirm-yes-bare", "tags": ["noise", "confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "Yes.", "expect": "exited"}]},
+
+    {"id": "noise-confirm-yeah", "tags": ["noise", "confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "Yeah.", "expect": "exited"}]},
+
+    {"id": "noise-confirm-ja", "tags": ["noise", "confirm", "lang"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Sollen wir den Fitness-Check-in beenden?"}],
+     "turns": [{"user": "Ja.", "expect": "exited"}]},
+
+    {"id": "noise-confirm-yes-misheard-jess", "tags": ["noise", "confirm"],
+     "note": "'Yes' transcribed as a name. Leaving or asking again are both fine; staying silently is not.",
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "Jess.", "expect": ["exited", "exit_asked"]}]},
+
+    {"id": "noise-confirm-no-bare", "tags": ["noise", "confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "No.", "expect": "exit_declined"}]},
+
+    {"id": "noise-confirm-nein", "tags": ["noise", "confirm", "lang"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Sollen wir den Fitness-Check-in beenden?"}],
+     "turns": [{"user": "Nein.", "expect": "exit_declined"}]},
+
+    {"id": "noise-confirm-nein-misheard-nine", "tags": ["noise", "confirm", "lang"],
+     "note": "'Nein' transcribed as English 'nine'. Must never leave.",
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Sollen wir den Fitness-Check-in beenden?"}],
+     "turns": [{"user": "Nine.", "expect": ["exit_declined", "exit_asked"]}]},
+
+    {"id": "noise-confirm-no-misheard-know", "tags": ["noise", "confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "Know.", "expect": ["exit_declined", "exit_asked"]}]},
+
+    {"id": "noise-confirm-hallucination-thank-you", "tags": ["noise", "confirm"],
+     "note": "Whisper's usual output for silence or background noise. Must never leave.",
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "Thank you.", "expect": ["exit_declined", "exit_asked"]}]},
+
+    {"id": "noise-confirm-hallucination-amara", "tags": ["noise", "confirm", "lang"],
+     "note": "The German equivalent of the silence hallucination.",
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Sollen wir den Fitness-Check-in beenden?"}],
+     "turns": [{"user": "Untertitel der Amara.org-Community", "expect": ["exit_declined", "exit_asked"]}]},
+
+    {"id": "noise-confirm-hallucination-thanks-for-watching", "tags": ["noise", "confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "Thanks for watching!", "expect": ["exit_declined", "exit_asked"]}]},
+
+    {"id": "noise-confirm-fragment-you", "tags": ["noise", "confirm"],
+     "in_activity": "extended", "awaiting_exit": true,
+     "history": [{"role": "assistant", "content": "Shall we stop the Extended Fitness Check-in?"}],
+     "turns": [{"user": "you", "expect": ["exit_declined", "exit_asked"]}]},
+
+    {"id": "noise-activity-hallucination-thank-you", "tags": ["noise", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "Thank you.", "expect": "none"}]},
+
+    {"id": "noise-activity-hallucination-vielen-dank", "tags": ["noise", "in_activity", "lang"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "Wie oft treiben Sie in einer normalen Woche Sport?"}],
+     "turns": [{"user": "Vielen Dank.", "expect": "none"}]},
+
+    {"id": "noise-activity-bare-stop", "tags": ["noise", "stop", "in_activity"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "Stop.", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "noise-activity-stop-misheard-stock", "tags": ["noise", "stop", "in_activity", "review"],
+     "note": "'I want to stop now' with one word wrong. Asking is right; ignoring it traps the user.",
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "I want to stock now", "expect": ["exit_asked", "exited"]}]},
+
+    {"id": "noise-free-hallucination-thank-you", "tags": ["noise"],
+     "history": [{"role": "assistant", "content": "It has been a grey day here too."}],
+     "turns": [{"user": "Thank you.", "expect": "none"}]},
+
+    {"id": "noise-free-hallucination-after-offer", "tags": ["noise", "start"],
+     "note": "An offer is open and noise arrives. Nothing may start.",
+     "history": [{"role": "assistant", "content": "We could do a fitness check-in, a focus group, or a memory game. What sounds good?"}],
+     "turns": [{"user": "Thanks for watching!", "expect": "none"}]},
+
+    {"id": "noise-free-yes-after-offer-of-several", "tags": ["noise", "start"],
+     "note": "A bare yes to a list of several picks none of them.",
+     "history": [{"role": "assistant", "content": "We could do a fitness check-in, a focus group, or a memory game. What sounds good?"}],
+     "turns": [{"user": "Yes.", "expect": "none"}]},
+
+    {"id": "noise-start-memory-gain", "tags": ["noise", "start"],
+     "history": [{"role": "assistant", "content": "We could do a fitness check-in, a focus group, or a memory game. What sounds good?"}],
+     "turns": [{"user": "the memory gain", "expect": "started:memory"}]},
+
+    {"id": "noise-start-extended-witness", "tags": ["noise", "start"],
+     "turns": [{"user": "I want to do the extended witness check in", "expect": "started:extended"}]},
+
+    {"id": "noise-start-focus-croup", "tags": ["noise", "start"],
+     "history": [{"role": "assistant", "content": "We could do a fitness check-in, a focus group, or a memory game. What sounds good?"}],
+     "turns": [{"user": "focus croup please", "expect": "started:grace_group"}]},
+
+    {"id": "transcript-01-offer-pick-play-stop", "tags": ["transcript"],
+     "turns": [
+       {"user": "what can we do together?", "expect": "offered",
+        "assistant": "We could do a longer fitness check-in, a quick study chat, a focus group, or a memory game. What sounds good?"},
+       {"user": "the memory game", "expect": "started:memory",
+        "assistant": "Lovely. I'll say three words: apple, river, chair. Can you say them back to me?"},
+       {"user": "apple, river and chair", "expect": "none",
+        "assistant": "Perfect, all three! Ready for a harder round?"},
+       {"user": "no, I'd rather stop now", "expect": ["exit_asked", "exited"]},
+       {"only_if": "awaiting_exit", "user": "yes", "expect": "exited",
+        "assistant": "Of course. That was fun."},
+       {"only_if": "free", "user": "that was nice, thank you", "expect": "none"}
+     ]},
+
+    {"id": "transcript-02-ask-to-stop-then-change-mind", "tags": ["transcript"],
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [
+       {"user": "ugh, can we stop?", "expect": ["exit_asked", "exited"]},
+       {"only_if": "awaiting_exit", "user": "oh no wait, let's finish it", "expect": "exit_declined",
+        "assistant": "Sure, we'll carry on. How often do you exercise in a typical week?"},
+       {"only_if": "activity", "user": "about three times a week", "expect": "none"}
+     ]},
+
+    {"id": "transcript-03-leave-then-pick-it-again", "tags": ["transcript"],
+     "in_activity": "memory",
+     "history": [{"role": "assistant", "content": "I'll say three words: apple, river, chair. Can you say them back to me?"}],
+     "turns": [
+       {"user": "I want to stop the game", "expect": ["exit_asked", "exited"]},
+       {"only_if": "awaiting_exit", "user": "yes, stop", "expect": "exited",
+        "assistant": "Okay, we'll leave it there."},
+       {"only_if": "free", "user": "actually, let's do the memory game again", "expect": "started:memory"}
+     ]},
+
+    {"id": "transcript-04-answers-are-not-choices", "tags": ["transcript"],
+     "note": "A run of ordinary activity answers, some of which name other activities' topics.",
+     "in_activity": "grace_group",
+     "history": [{"role": "assistant", "content": "What would you want a home companion to help you with?"}],
+     "turns": [
+       {"user": "maybe reminding me to do my exercises", "expect": "none",
+        "assistant": "That makes sense. Anything else?"},
+       {"user": "and a memory game now and then would be nice", "expect": "none",
+        "assistant": "Good idea. How would you feel about it starting a conversation on its own?"},
+       {"user": "I'm not sure, what else could it do?", "expect": "none"}
+     ]},
+
+    {"id": "future-wind-down-thats-all", "tags": ["future", "wind_down"],
+     "note": "Should close in a line and go to sleep. No such outcome exists yet.",
+     "history": [{"role": "assistant", "content": "It's sixteen degrees and cloudy today."}],
+     "turns": [{"user": "thanks, that's all", "expect": null}]},
+
+    {"id": "future-wind-down-good-night", "tags": ["future", "wind_down"],
+     "note": "Should close in a line and go to sleep. No such outcome exists yet.",
+     "turns": [{"user": "good night Grace", "expect": null}]},
+
+    {"id": "future-wind-down-mid-activity", "tags": ["future", "wind_down", "in_activity"],
+     "note": "Leaving the room mid-activity: stop it, pause it, or just sleep?",
+     "in_activity": "extended",
+     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
+     "turns": [{"user": "I have to go now, the doorbell rang", "expect": null}]}
+  ]
+}
