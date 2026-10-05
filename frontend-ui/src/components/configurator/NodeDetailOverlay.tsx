@@ -6,6 +6,7 @@
  */
 
 import { useState, Fragment } from 'react'
+import type { JSX } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { PipelineNode as PipelineNodeType, AgentConfigurationPayload } from '../../lib/api-types'
 import type { ExpertDefinition, InputGateRule } from './useConfiguratorState'
