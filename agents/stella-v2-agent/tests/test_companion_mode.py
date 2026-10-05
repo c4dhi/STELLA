@@ -49,8 +49,11 @@ STOP = {"command": "stop", "reason": "user said stop"}
 LIST = {"command": "list", "activities": [{"id": "memory", "title": "Memory Game"}]}
 
 
-def _free():
-    return Companion(activities=ACTIVITIES)
+def _free(woken=False):
+    """Free conversation; past the opening unless a test is about it."""
+    companion = Companion(activities=ACTIVITIES)
+    companion.greeted = companion.offered = not woken
+    return companion
 
 
 def _running(activity=ACTIVITIES[0], pending_exit=False):
@@ -90,7 +93,7 @@ def test_what_counts_as_doubtful():
     assert companion.doubtful(0.9) is False
     assert companion.doubtful(0.0) is False     # no signal from the STT is not doubt
     assert companion.doubtful(1.0) is False     # typed text
-    companion.min_confidence = 0.0              # switched off
+    companion.settings.min_confidence = 0.0              # switched off
     assert companion.doubtful(0.01) is False
 
 
@@ -736,3 +739,74 @@ def test_a_saved_config_cannot_enable_the_router_in_plan_mode():
 
 def test_other_experts_keep_honouring_their_saved_config():
     assert _apply(True, {"probing": {"enabled": False}}).enabled_for("probing") is False
+
+
+# ---------------------------------------------------------------------------
+# The opening: woken, she asks how they are, offers once, then only answers
+# ---------------------------------------------------------------------------
+
+def _turn(companion, commands=()):
+    transition = companion.decide(list(commands))
+    companion.note(transition)
+    return transition
+
+
+def test_woken_she_asks_how_they_are_then_offers_then_only_answers():
+    companion = _free(woken=True)
+
+    assert _turn(companion).change is Change.GREETED
+    offer = _turn(companion)
+    assert (offer.change, offer.unasked, offer.offered) == (Change.OFFERED, True, ACTIVITIES)
+    assert _turn(companion) == NO_CHANGE
+    assert _turn(companion) == NO_CHANGE
+
+
+def test_what_the_user_asks_for_comes_before_her_own_routine():
+    companion = _free(woken=True)
+
+    asked = _turn(companion, [{"command": "list", "activities": ACTIVITIES}])
+    assert (asked.change, asked.unasked) == (Change.OFFERED, False)
+    # They have seen the activities, so nothing is left of the opening.
+    assert _turn(companion) == NO_CHANGE
+
+
+def test_going_to_sleep_starts_the_opening_over():
+    companion = _free()
+    assert _turn(companion, [{"command": "sleep"}]).change is Change.DISMISSED
+    assert _turn(companion).change is Change.GREETED
+
+    companion.rest()                            # idle sleep, nothing said
+    assert _turn(companion).change is Change.GREETED
+
+
+def test_an_empty_instruction_switches_that_step_off():
+    companion = _free(woken=True)
+    companion.settings.apply({"reply_instructions": {"greeting": ""}})
+    assert _turn(companion).change is Change.OFFERED
+
+    companion = _free(woken=True)
+    companion.settings.apply({"reply_instructions": {"offered_unasked": ""}})
+    assert _turn(companion).change is Change.GREETED
+    assert _turn(companion) == NO_CHANGE
+
+
+def test_with_nothing_to_offer_she_only_greets():
+    companion = Companion(activities=[])
+    assert _turn(companion).change is Change.GREETED
+    assert _turn(companion) == NO_CHANGE
+
+
+def test_the_opening_does_not_run_inside_an_activity():
+    companion = _running()
+    companion.greeted = companion.offered = False
+    assert companion.decide([], ExitStep(STAY)) == NO_CHANGE
+
+
+def test_in_free_conversation_the_reply_is_always_told_something():
+    companion = _free()
+    assert "no question" in companion.instruction(NO_CHANGE)
+    assert "how they are doing" in companion.instruction(Transition(Change.GREETED))
+    unasked = companion.instruction(Transition(Change.OFFERED, offered=ACTIVITIES, unasked=True))
+    assert ACTIVITIES[0]["title"] in unasked and "how they are" in unasked
+
+    assert _running().instruction(NO_CHANGE) == ""

@@ -383,6 +383,133 @@ pipelineSchema:
           step: 1
           default: 3
 
+    - id: companion
+      label: "Companion"
+      description: "Companion mode only: how she behaves outside an activity, what she says when one starts or stops, and when she goes to sleep. Ignored by plan-mode deployments."
+      icon: "🛋️"
+      # Below the main pipeline: it wraps the whole turn rather than being a stage in it.
+      position: { row: 1, col: 3 }
+      slots:
+        - id: free_conversation_guidelines
+          label: "Free Conversation Guidelines"
+          type: text
+          description: "The reply's style guide while no activity is running, in place of the Response Generator's Conversation Guidelines (inside an activity those apply unchanged). Same runtime variables: {{directive}}, {{conversationHistory}}, {{language}}, {{emotionTags}}, {{bridge}}."
+          default: |
+            OPEN CONVERSATION (spoken aloud via TTS):
+
+            You are keeping this person company. There is no task, nothing to collect and no goal to reach. You are good company because you are easy to be around, not because you keep the talk going.
+
+            - React to the SPECIFIC thing they said, in their language, in one or two short sentences (under 25 words). Natural contractions.
+            - Then stop. Do not end on a question and do not invite them to say more. They will speak if they want to; silence is fine.
+            - A question is right only when the instruction for this turn asks for one, or when they asked you something that needs one to answer.
+            - Never praise the act of answering, never suggest activities or things to do unless the instruction for this turn says so, never mention internal systems.
+            - No markdown, lists or emojis.
+
+            The right feel (match the spirit, never copy):
+            - "I went to the market this morning." -> "Oh, nice. Saturday markets are the best ones."
+            - "not really" -> "That's all right."
+            - "it's so grey outside" -> "It is. Proper stay-indoors weather."
+            {{#if directive}}
+
+            {{directive}}
+            {{/if}}
+            {{#if conversationHistory}}
+
+            Conversation so far:
+            {{conversationHistory}}
+            {{/if}}
+            {{#if language}}
+
+            {{language}}
+            {{/if}}
+            {{#if emotionTags}}
+
+            {{emotionTags}}
+            {{/if}}
+            {{#if bridge}}
+
+            You have ALREADY said this aloud a moment ago: "{{bridge}}". Your reply is appended to it and spoken as one utterance: do not repeat it, rephrase it or react to it. If it already said everything, add one short sentence at most.
+            {{/if}}
+        - id: reply_instructions
+          label: "Reply Instructions"
+          type: key_value
+          description: "What the reply is told on a turn where companion mode did something, one entry per situation. Each is the last instruction the reply model reads. Variables: {{title}} and {{description}} of the activity concerned, {{activities}} (the list on offer)."
+          default:
+            greeting: "This is the start of the conversation: they have just woken you or said hello. Greet them in a few words, respond to anything they said, and ask how they are doing. One question, nothing else."
+            offered_unasked: "They have just told you how they are. React to that in a few words, then tell them what you could do together: {{activities}}. Offer exactly these, in your own words, and ask whether they would like to do one. Do not invent any others, and ask nothing else."
+            offered: "The user asked what you can do together. Offer exactly these, in your own words, and invite them to pick one: {{activities}}. Do not invent any others."
+            offered_none: "The user asked what you can do together, but no activities are available. Say so plainly in one sentence, with no question."
+            free: "You are keeping the user company in open conversation; there is nothing to collect and no goal to reach. React to what they just said in one or two short sentences and nothing more: no question of any kind, no invitation to say more, no suggestion of things to do. They will speak if they want to, and silence is fine. Only if their message itself asks about one of these activities — {{activities}} — do you answer in a sentence and ask whether they would like to do it."
+            started: "The user just chose \"{{title}}\" and it starts now. Acknowledge the choice in a few words, then open it exactly as the current step below says, as if this conversation had only just begun — do not re-ask which activity they want, and do not invent an opening of your own."
+            start_asked: "The user seems to want \"{{title}}\"{{#if description}} ({{description}}){{/if}} but did not name it outright. Ask in ONE short question, naming it, whether that is the one they mean. Do nothing else this turn: do not start it and do not list the other activities."
+            start_declined: "The user did not confirm \"{{title}}\", so it does not start. Say so in a few words and nothing more: no question, no other suggestion."
+            exit_asked: "Ask clearly and briefly whether they want to stop \"{{title}}\" — one direct yes/no question — and do nothing else this turn: do not continue the activity, and do not end it yet."
+            exit_declined: "The user did not confirm stopping. Stay in the activity and pick up naturally from where it left off — do not ask again unless they bring it up themselves."
+            exited: "\"{{title}}\" has just been stopped because the user asked. Tell them in ONE short, natural sentence that you have stopped it and that this is fine, then say nothing more: no question, no offer of what to do next, no comment on how they feel. Do not continue or resume it."
+            unheard: "You did not hear the user clearly. Say so in a few words and ask them to say it again. Do not guess what they meant, and do not act on it."
+            dismissed: "The user is done for now and you are about to go to sleep. Step away in one short, warm sentence and nothing more: a goodbye or good night if they said one, otherwise that you are here whenever they want you. No question, no offer, no summary."
+        - id: exit_instructions
+          label: "Leaving an Activity: Judge Instructions"
+          type: text
+          description: "Read on every message during an activity by a separate model that decides whether the user wants to leave: stay, ask, or leave. Variables: {{title}}, {{awaitingAnswer}} (the stop question is open), {{language}}, {{bridge}}. The persona is placed before it and the answer format after it."
+          default: |
+            You handle ONE thing right now: whether the user wants to stop the activity "{{title}}" and go back to open conversation. Not the activity's content, not anything else.
+
+            {{#if awaitingAnswer}}In your last message you asked whether they want to stop "{{title}}". Their message below answers that.{{else}}They are in the middle of the activity "{{title}}". You see every message they send during it, and nearly all of them are simply taking part: answering its questions (a bare yes or no included), commenting, hesitating. Decide whether THIS message asks to stop the activity.{{/if}}
+
+            First write, in "user_intent", one plain sentence saying what they actually want. Then check that sentence against their exact words, and only then choose "decision":
+            - "leave": {{#if awaitingAnswer}}they said yes, or otherwise clearly want to stop now.{{else}}they asked explicitly and unmistakably to stop it now.{{/if}}
+            - "stay": they want to carry on — including answering the activity, commenting on it, or complaining about how it is going.
+            - "ask": {{#if awaitingAnswer}}it is genuinely unclear whether that was a yes or a no.{{else}}they seem to want out of the activity itself but did not say so plainly. Hesitation, filler ("hm", "well...") or an unclear answer to the activity is not that: stay.{{/if}}
+
+            Whenever your decision is "ask" or "leave", write in "say" ONE short, warm yes/no question asking whether to stop "{{title}}", and nothing else — no content from the activity. It is spoken when you ask, and also when they were heard too poorly to leave on their word alone. "say" stays empty when they stay. Write it in the language with code '{{language}}'.{{#if bridge}} It is spoken right after "{{bridge}}", which was already said — continue from it, do not repeat it.{{/if}}
+        - id: start_instructions
+          label: "Starting an Activity: Judge Instructions"
+          type: text
+          description: "Read by a separate model when she has asked \"do you mean X?\": decides whether the answer is a yes. Variable: {{title}}. The answer format is placed after it."
+          default: |
+            You handle ONE thing: in your last message you asked the user whether they want to start the activity "{{title}}". First write, in "user_intent", one plain sentence saying what their message below means. Then check that sentence against their exact words and choose "decision":
+            - "yes": they confirm they want "{{title}}".
+            - "no": anything else — they decline, name a different activity, ask something, change the subject, or it is unclear.
+        - id: judge_model
+          label: "Judge Model"
+          type: select
+          description: "The model for both judges above. With the stop question open, gpt-4o-mini left an activity on almost any answer, including transcription noise."
+          options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"]
+          default: "gpt-5.4-mini"
+        - id: max_exit_asks
+          label: "Stop Questions in a Row"
+          type: number
+          description: "How often she may ask \"shall we stop?\" before an unclear answer simply carries on."
+          min: 1
+          max: 5
+          step: 1
+          default: 2
+        - id: max_start_asks
+          label: "Start Questions in a Row"
+          type: number
+          description: "How often she may ask \"do you mean X?\" about a poorly heard yes before dropping it."
+          min: 1
+          max: 5
+          step: 1
+          default: 2
+        - id: idle_sleep_seconds
+          label: "Sleep After Silence (seconds)"
+          type: number
+          description: "Outside an activity she goes to sleep after this long with nothing said or done. 0 switches it off. She never sleeps inside an activity."
+          min: 0
+          max: 600
+          step: 5
+          default: 45
+        - id: min_confidence
+          label: "Minimum Transcript Confidence"
+          type: number
+          description: "A message heard with less confidence than this cannot start or leave an activity or send her to sleep; she asks instead. 0 switches the check off."
+          min: 0
+          max: 1
+          step: 0.05
+          default: 0.4
+
   edges:
     - source: expert_pool
       target: arbitration

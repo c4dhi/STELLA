@@ -22,7 +22,9 @@ from stella_agent_sdk import AgentInput
 from stella_agent_sdk.llm import LLMResponse
 from stella_v2_agent.companion_tools import create_companion_tools
 from stella_v2_agent.agent import StellaV2Agent
-from stella_v2_agent.companion import EXIT_MODEL, Companion
+from stella_v2_agent.companion import Companion
+
+EXIT_MODEL = Companion().settings.judge_model
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
@@ -157,8 +159,9 @@ NO = {"user_intent": "does not confirm it", "decision": "no"}
 class Session:
     """One agent, its message store, and scripted expert behaviour per turn."""
 
-    def __init__(self, *, companion: bool, sm: FakeStateMachine, exits=None):
+    def __init__(self, *, companion: bool, sm: FakeStateMachine, exits=None, woken: bool = False):
         self.sm = sm
+        self.woken = woken
         self.messages: List[SimpleNamespace] = []
         self.pool_inputs: List[Dict[str, Any]] = []
         self.replies: List[Dict[str, Any]] = []
@@ -193,6 +196,8 @@ class Session:
         agent._newest_history_at = None
         agent._companion_mode = companion
         agent.companion = Companion(activities=ACTIVITIES if companion else [])
+        # Mid-conversation unless a test is about the opening itself.
+        agent.companion.greeted = agent.companion.offered = not self.woken
         agent.sm_client = self.sm
         agent.language_resolver = SimpleNamespace(
             set_plan_language=lambda *_a, **_k: None,
@@ -841,7 +846,7 @@ async def test_free_conversation_is_written_from_its_own_style_guide():
     session = Session(companion=True, sm=FakeStateMachine())
     await session.turn("I went for a walk this morning")
 
-    assert session.reply["guidelines"] == session.agent.companion.free_guidelines
+    assert session.reply["guidelines"] == session.agent.companion.settings.free_conversation_guidelines
     assert "no question" in session.reply["guidance"]
 
 
@@ -872,3 +877,38 @@ async def test_a_deployment_can_replace_the_free_conversation_guide():
     await session.turn("hello")
 
     assert session.reply["guidelines"] == "Be brief. {{directive}}"
+
+
+# ── The opening and the settings, end to end ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_woken_she_greets_then_offers_then_keeps_quiet():
+    session = Session(companion=True, sm=FakeStateMachine(), woken=True)
+
+    await session.turn("Hi Grace")
+    assert "ask how they are doing" in session.reply["guidance"]
+
+    outputs = await session.turn("fine, thanks")
+    assert "what you could do together" in session.reply["guidance"]
+    assert ACTIVITIES[0]["title"] in session.reply["guidance"]
+    assert "activities_offered" in _kinds(outputs)
+
+    await session.turn("no, I just wanted to say hello")
+    assert "no question" in session.reply["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_can_reword_what_she_is_told_and_retime_her_sleep():
+    session = Session(companion=True, sm=FakeStateMachine())
+    session.agent.barge_in_evaluator = None
+    session.agent._apply_pipeline_config({"nodes": {"companion": {
+        "reply_instructions": {"free": "Hum a tune."},
+        "idle_sleep_seconds": 120,
+        "judge_model": "gpt-other",
+    }}})
+    await session.turn("it's raining")
+
+    assert "Hum a tune." in session.reply["guidance"]
+    assert session.agent.idle_timeout_seconds == 120
+    assert session.agent.companion.settings.judge_model == "gpt-other"

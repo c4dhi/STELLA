@@ -27,11 +27,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from stella_agent_sdk.llm import LLMService
+from stella_v2_agent.companion_settings import load_settings
 from stella_v2_agent.companion_tools import create_companion_tools
 
 from stella_v2_agent.agent import PROMPT_COMPILER_VERSION
 from stella_v2_agent.companion import (
-    EXIT_MODEL,
     ROUTER,
     Change,
     Companion,
@@ -103,7 +103,7 @@ class Replay:
         *,
         router_prompt: Optional[str] = None,
         router_model: Optional[str] = None,
-        exit_model: str = EXIT_MODEL,
+        exit_model: Optional[str] = None,
         persona: Optional[str] = None,
         language: Optional[str] = None,
     ):
@@ -115,13 +115,19 @@ class Replay:
             k: v for k, v in (("system_prompt", router_prompt), ("model", router_model)) if v
         }
         self.router = dataclasses.replace(router, **overrides)
-        self.exit_model = exit_model
+        self.exit_model = exit_model or load_settings().judge_model
         self.persona = persona
         self.language = language
 
     async def run(self, scenario: Dict[str, Any]) -> List[Dict[str, Any]]:
         """One trial of a scenario: a record per turn that ran."""
         companion = Companion(activities=self.activities)
+        # 'opening' is where she is in her own routine: "woken" (nothing said
+        # yet), "greeted" (she has asked how they are), or, by default, past
+        # it — a scenario picks up mid-conversation unless it says otherwise.
+        opening = scenario.get("opening", "done")
+        companion.greeted = opening != "woken"
+        companion.offered = opening == "done"
         history: List[Dict[str, str]] = list(scenario.get("history") or [])
         # What free conversation looked like before the running activity, so
         # leaving it restores that plus the one-line note, as the agent does.
@@ -166,6 +172,7 @@ class Replay:
                 companion.ask_exit()
             elif change is Change.EXIT_DECLINED:
                 companion.stay()
+            companion.note(transition)
             reply = transition.say if change is Change.EXIT_ASKED and transition.say else None
             history.append({
                 "role": "assistant",
@@ -320,7 +327,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--tag", help="run scenarios carrying this tag")
     parser.add_argument("--router-prompt", type=Path, help="file with a replacement router prompt")
     parser.add_argument("--router-model")
-    parser.add_argument("--exit-model", default=EXIT_MODEL)
+    parser.add_argument("--exit-model", default=load_settings().judge_model)
     parser.add_argument("--persona", type=Path, help="file with the persona the exit dialogue speaks in")
     parser.add_argument("--language", help="session language code for the exit dialogue")
     parser.add_argument("--out", type=Path, help="write the results as JSON")
