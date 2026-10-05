@@ -784,12 +784,17 @@ class BaseAgent(ABC):
                 # events share a single key for downstream joins. Forward the
                 # independent language detection so the agent's resolver can use
                 # the acoustic signal (falls back to text when absent, RFC §8.3).
+                # ``stt_confidence`` is how far the transcript itself can be
+                # trusted (0..1; 0 means the STT gave no signal, 1.0 is typed
+                # text), so an agent can treat a doubtful short answer as not
+                # heard rather than act on it.
                 input_msg = AgentInput.text_input(
                     self._session_id or "",
                     event.text,
                     turn_id=getattr(event, "transcript_id", None),
                     detected_language=getattr(event, "detected_language", "") or "",
                     language_confidence=getattr(event, "language_confidence", 0.0) or 0.0,
+                    stt_confidence=getattr(event, "confidence", 0.0) or 0.0,
                     is_barge_in=getattr(event, "is_barge_in", False),
                 )
 

@@ -7,6 +7,7 @@ Follows industry best practices (LiveKit, OpenAI Realtime, Deepgram, Pipecat):
 - Configurable endpointing delays for conversational speech
 """
 
+import math
 import asyncio
 import difflib
 import json
@@ -123,6 +124,27 @@ def _collect_segments(segments) -> Tuple[str, dict]:
         "no_speech_prob": _stats(no_speech, max),
         "compression_ratio": _stats(compression, max),
     }
+
+
+def _transcript_confidence(metrics: dict) -> float:
+    """How far a final transcript can be trusted, 0..1, from the decode itself.
+
+    The chance it was speech at all, times the model's average confidence in the
+    words it chose: ``(1 - no_speech_prob) * exp(avg_logprob)``. Both halves
+    matter to whoever acts on a short answer. Filler invented over near-silence
+    ("Thank you.") can be decoded confidently and is only given away by the
+    no-speech probability; a real but mumbled "yes" is the reverse.
+
+    The worst segment's no-speech probability is used, because one invented
+    segment is what a hallucination looks like in a longer decode. Returns 0.0
+    when the decode carried no signal, which callers read as "unknown".
+    """
+    logprob = (metrics.get("avg_logprob") or {}).get("mean")
+    if logprob is None:
+        return 0.0
+    no_speech = (metrics.get("no_speech_prob") or {}).get("worst") or 0.0
+    confidence = (1.0 - no_speech) * math.exp(min(logprob, 0.0))
+    return round(max(0.0, min(1.0, confidence)), 4)
 
 
 def _trailing_silence_samples(samples: np.ndarray, rms_threshold: float, frame: int = 512) -> int:
@@ -964,7 +986,7 @@ class WhisperSession(STTSession):
                 is_final=True,
                 transcript_id=self.transcript_id,
                 participant_id=self.participant_id,
-                confidence=0.95,
+                confidence=_transcript_confidence(final_metrics),
                 timestamp_ms=int(current_time * 1000),
                 detected_language=detected_language or "",
                 language_confidence=language_confidence,
