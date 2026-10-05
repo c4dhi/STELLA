@@ -749,6 +749,19 @@ class BaseAgent(ABC):
     async def _on_user_speech_started(self) -> None:
         self._note_activity()
 
+    def start_turn(self, **metadata: Any) -> None:
+        """Open a turn yourself, without the user having said anything.
+
+        ``process()`` is called with empty text and
+        ``input.metadata["agent_initiated"]`` set to ``metadata``; what it
+        yields is published and spoken like any reply. Use it to speak first:
+        on a device event, after a timer, at a point of your own choosing. The
+        turn waits its place behind one that is running, and a message the
+        user sends in the meantime replaces it.
+        """
+        if self.has_audio:
+            self.audio.start_agent_turn(metadata)
+
     async def _dispatch_client_event(self, event: str, data: Dict[str, Any]) -> None:
         self._note_activity()
         try:
@@ -833,7 +846,8 @@ class BaseAgent(ABC):
         idle_watchdog.add_done_callback(lambda t: t.cancelled() or t.exception())
 
         async for event in self.audio.audio_in():
-            if event.is_final and event.text.strip():
+            agent_initiated = getattr(event, "agent_initiated", None)
+            if event.is_final and (event.text.strip() or agent_initiated is not None):
                 # Terminal close (issue #198): once the session is winding down we
                 # stop taking new turns. The closing farewell is spoken out-of-band
                 # by the session-end handler; processing another user turn here would
@@ -873,6 +887,10 @@ class BaseAgent(ABC):
                     language_confidence=getattr(event, "language_confidence", 0.0) or 0.0,
                     stt_confidence=getattr(event, "confidence", 0.0) or 0.0,
                     is_barge_in=getattr(event, "is_barge_in", False),
+                    # A turn the agent opened itself (start_turn): no text, and
+                    # whatever it passed along. Absent on a user's turn.
+                    **({"agent_initiated": getattr(event, "agent_initiated")}
+                       if getattr(event, "agent_initiated", None) is not None else {}),
                 )
 
                 # Process and stream response

@@ -183,3 +183,64 @@ async def test_idle_is_off_by_default_and_never_fires_while_the_agent_speaks():
     speaking.idle_timeout_seconds = 0.1
     await _watch(speaking, 1.2)
     assert speaking.idles == []
+
+
+# ── a turn the agent opens itself ────────────────────────────────────────────
+
+class _Opener(BaseAgent):
+    def __init__(self):
+        super().__init__()
+        self.inputs = []
+
+    async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
+        self.inputs.append(input)
+        yield AgentOutput.text_final(input.session_id, "Hello! How are you?")
+
+    async def on_interrupt(self, session_id: str) -> None:
+        pass
+
+
+def test_start_turn_queues_a_turn_nobody_spoke():
+    pipeline = AudioPipeline.__new__(AudioPipeline)
+    pipeline._transcript_queue = asyncio.Queue()
+
+    pipeline.start_agent_turn({"event": "wake"})
+
+    event = pipeline._transcript_queue.get_nowait()
+    assert (event.text, event.is_final, event.agent_initiated) == ("", True, {"event": "wake"})
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_agent_opened_reaches_process_and_is_spoken():
+    agent = _Opener()
+    audio, _ = _audio()
+
+    async def audio_in():
+        yield SimpleNamespace(
+            text="", is_final=True, transcript_id="agent_1", agent_initiated={"event": "wake"},
+            detected_language="", language_confidence=0.0, confidence=1.0, is_barge_in=False,
+        )
+
+    audio.audio_in = audio_in
+    agent._audio_pipeline = audio
+    agent._session_id = "s1"
+    spoken = []
+    agent._enqueue_sentence = lambda text, *_a, **_k: spoken.append(text)
+
+    await agent.run_audio_loop()
+
+    assert agent.inputs[0].text == ""
+    assert agent.inputs[0].metadata["agent_initiated"] == {"event": "wake"}
+    assert spoken == ["Hello! How are you?"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_transcript_is_still_not_a_turn():
+    agent = _Opener()
+    audio, _ = _audio(final_text="   ")
+    agent._audio_pipeline = audio
+    agent._session_id = "s1"
+
+    await agent.run_audio_loop()
+
+    assert agent.inputs == []
