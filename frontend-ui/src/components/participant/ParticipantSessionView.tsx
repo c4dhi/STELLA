@@ -19,6 +19,7 @@ import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
 import VisualizerRenderer from '../face/VisualizerRenderer'
 import { useSleepMicrophone } from '../face/hooks/useSleepMicrophone'
+import { useSleepEvents } from '../face/hooks/useSleepEvents'
 import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
@@ -603,6 +604,14 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           return
         }
 
+        // A command from the agent to this device (e.g. sleep). Commands are
+        // face states by name; the face drops one it does not know.
+        if (envelope.type === 'agent_command') {
+          const command = envelope.data?.command
+          if (command) useStore.getState().triggerFaceState(command)
+          return
+        }
+
         // Start session timer on first agent message (only if a max duration is configured)
         if (
           !sessionTimerStartedRef.current &&
@@ -1087,6 +1096,19 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     toggleMute: toggleMicrophone,
     enabled: room?.state === 'connected'
   })
+
+  // Tell the agent when the face falls asleep or wakes (same envelope as
+  // PeerTransport.sendClientEvent).
+  const sendClientEvent = useCallback((event: string) => {
+    if (!room || room.state !== 'connected') return
+    const envelope = { type: 'client_event', data: { event, timestamp: Date.now() } }
+    try {
+      room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(envelope)), { reliable: true })
+    } catch (error) {
+      console.error('[Participant] Error sending client event:', error)
+    }
+  }, [room])
+  useSleepEvents({ send: sendClientEvent, enabled: room?.state === 'connected' })
 
   // Cleanup audio resources
   const cleanupAudio = () => {
