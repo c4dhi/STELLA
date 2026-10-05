@@ -22,7 +22,7 @@ from stella_agent_sdk import AgentInput
 from stella_agent_sdk.llm import LLMResponse
 from stella_agent_sdk.tools.companion import create_companion_tools
 from stella_v2_agent.agent import StellaV2Agent
-from stella_v2_agent.companion import Companion
+from stella_v2_agent.companion import EXIT_MODEL, Companion
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
@@ -165,6 +165,7 @@ class Session:
         # What the exit dialogue answers, call by call (then: ask).
         self.exit_answers = list(exits or [])
         self.exit_calls: List[Any] = []
+        self.exit_models: List[str] = []
         self.agent = self._build(companion)
 
     def _build(self, companion: bool) -> StellaV2Agent:
@@ -254,6 +255,7 @@ class Session:
 
         async def llm_generate(messages, config=None, callback=None, component_name="unknown"):
             session.exit_calls.append(messages)
+            session.exit_models.append(config.model)
             answer = session.exit_answers.pop(0) if session.exit_answers else ASK
             if isinstance(answer, Exception):
                 raise answer
@@ -455,6 +457,22 @@ async def test_a_failed_exit_dialogue_still_asks():
     assert session.agent.companion.pending_exit is True
     assert len(session.replies) == replies_before + 1
     assert "whether they want to stop" in session.reply["guidance"]
+
+
+@pytest.mark.asyncio
+async def test_the_exit_dialogue_runs_on_its_own_model_not_the_replys():
+    session = await _companion_in_activity(exits=[ASK])
+    await session.turn("can we stop?", router=STOP)
+    assert session.exit_models == [EXIT_MODEL]
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_can_choose_the_exit_dialogues_model():
+    session = await _companion_in_activity(exits=[ASK])
+    session.agent.barge_in_evaluator = None
+    session.agent._apply_pipeline_config({"nodes": {"exit_dialogue": {"model": "gpt-other"}}})
+    await session.turn("can we stop?", router=STOP)
+    assert session.exit_models == ["gpt-other"]
 
 
 @pytest.mark.asyncio

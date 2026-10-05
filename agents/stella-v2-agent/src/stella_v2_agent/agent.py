@@ -1200,6 +1200,11 @@ class StellaV2Agent(BaseAgent):
                 # enabled/priority/custom-expert config takes effect with no
                 # object rebuild.
 
+        # The exit dialogue is not a stage object; its one setting is its model.
+        exit_config = nodes.get("exit_dialogue")
+        if isinstance(exit_config, dict) and exit_config.get("model"):
+            self.companion.exit_model = exit_config["model"]
+
         # Apply threshold overrides
         if "history_limit" in thresholds:
             self._custom_history_limit = int(thresholds["history_limit"])
@@ -1375,10 +1380,10 @@ class StellaV2Agent(BaseAgent):
         language: Optional[str],
         awaiting_answer: bool,
     ) -> Optional[ExitStep]:
-        """Run the exit dialogue for this turn, in the reply's model and voice."""
+        """Run the exit dialogue for this turn, in its own model and the persona's voice."""
         return await exit_dialogue(
             self.llm_service,
-            model=self.response_generator.response_model,
+            model=self.companion.exit_model,
             title=self.companion.running_title or "the activity",
             user_input=user_input,
             history=history,

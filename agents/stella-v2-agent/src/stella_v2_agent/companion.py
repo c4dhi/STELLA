@@ -75,6 +75,12 @@ LEAVE, STAY, ASK = "leave", "stay", "ask"
 # Asking again is for a genuinely unclear answer, not a loop: after this many
 # questions without a clear yes, the activity carries on.
 MAX_EXIT_ASKS = 2
+# The exit dialogue has its own model, not the reply's. With the stop question
+# open, gpt-4o-mini left on nearly anything — "Thank you.", a misheard "Nein",
+# an answer to the activity — where this one stays or asks again (replay set,
+# 5 Oct: confirmations 56% -> 96%). Overridable per deployment through the
+# pipeline config node "exit_dialogue".
+EXIT_MODEL = "gpt-5.4-mini"
 
 
 @dataclass(frozen=True)
@@ -107,6 +113,7 @@ class Companion:
     active: Optional[Dict[str, Any]] = None
     pending_exit: bool = False
     exit_asks: int = 0
+    exit_model: str = EXIT_MODEL
     # When the running activity started (None if unknown, e.g. resumed after a
     # restart), what it has collected so far, and the runs that already ended —
     # together they scope the history to the current mode.
