@@ -185,7 +185,7 @@ def test_each_tools_guidance_is_injected_once():
 def test_the_router_is_not_taught_the_state_machine_tools():
     # companion_router got the set_deliverable contract appended, for tools it
     # cannot call, contradicting its own prompt.
-    from stella_agent_sdk.tools.companion import COMPANION_TOOL_GUIDANCE, create_companion_tools
+    from stella_v2_agent.companion_tools import COMPANION_TOOL_GUIDANCE, create_companion_tools
     from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
 
     runner = _runner()

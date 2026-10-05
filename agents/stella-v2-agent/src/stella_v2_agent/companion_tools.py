@@ -1,10 +1,18 @@
-"""The three companion tools and their registry factory.
+"""The three companion tools the router proposes transitions with.
+
+  list_activities()          what can we do?
+  start_activity(id)         run that plan
+  end_activity()             stop the running one (the user confirms first)
 
 They only PROPOSE. Each returns a ``command`` in its result data and touches
 nothing; the agent decides, against the session's actual mode, whether to act on
-it. So the tools cannot race the other experts in the same turn, cannot restart
-a running activity, and cannot leave a half-applied transition behind — the
-agent applies at most one transition per turn, after every expert has finished.
+it (``companion.py``). So the tools cannot race the other experts in the same
+turn, cannot restart a running activity, and cannot leave a half-applied
+transition behind.
+
+They live with this agent, not in the SDK: what an activity is, and when one may
+start or stop, is this agent's policy. The SDK only offers loading and clearing
+a plan.
 """
 
 import logging

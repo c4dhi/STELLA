@@ -20,7 +20,7 @@ import pytest
 
 from stella_agent_sdk import AgentInput
 from stella_agent_sdk.llm import LLMResponse
-from stella_agent_sdk.tools.companion import create_companion_tools
+from stella_v2_agent.companion_tools import create_companion_tools
 from stella_v2_agent.agent import StellaV2Agent
 from stella_v2_agent.companion import EXIT_MODEL, Companion
 from stella_v2_agent.models.expert_verdict import ExpertVerdict

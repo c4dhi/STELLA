@@ -7,7 +7,9 @@ a start or stop is valid is decided in one place, against the session's actual
 mode (stella_v2_agent.companion).
 """
 
-from stella_agent_sdk.tools.companion.activities import (
+import pytest
+
+from stella_v2_agent.companion_tools import (
     COMPANION_TOOL_GUIDANCE,
     EndActivityTool,
     ListActivitiesTool,
@@ -34,12 +36,14 @@ def _running():
     return "Fitness Check-in"
 
 
+@pytest.mark.asyncio
 async def test_list_activities_proposes_offering_them():
     result = await ListActivitiesTool(ACTIVITIES).execute()
     assert result.data["command"] == "list"
     assert [a["id"] for a in result.data["activities"]] == ["act-1", "act-2"]
 
 
+@pytest.mark.asyncio
 async def test_start_activity_proposes_the_chosen_one_and_loads_nothing():
     result = await StartActivityTool(ACTIVITIES, _idle).execute(activity_id="act-2")
     assert result.success is True
@@ -50,11 +54,13 @@ async def test_start_activity_proposes_the_chosen_one_and_loads_nothing():
     }
 
 
+@pytest.mark.asyncio
 async def test_start_activity_accepts_a_title_for_an_id():
     result = await StartActivityTool(ACTIVITIES, _idle).execute(activity_id="memory game")
     assert result.data["activity_id"] == "act-2"
 
 
+@pytest.mark.asyncio
 async def test_start_activity_rejects_an_unknown_id():
     result = await StartActivityTool(ACTIVITIES, _idle).execute(activity_id="nope")
     assert result.success is False
@@ -84,6 +90,7 @@ def test_descriptions_state_whether_an_activity_is_running():
     assert '"Fitness Check-in"' in EndActivityTool(_running).description
 
 
+@pytest.mark.asyncio
 async def test_end_activity_only_proposes_stopping():
     result = await EndActivityTool(_running).execute(reason="user said stop")
     assert result.data == {"command": "stop", "reason": "user said stop"}
