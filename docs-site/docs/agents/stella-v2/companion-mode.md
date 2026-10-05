@@ -27,6 +27,7 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 |---|---|
 | "What can we do together?" | The agent names the allow-listed activities and invites a choice. |
 | "Let's do the memory game." | That plan is loaded and starts from its first step. |
+| "The fitness one." | She asks which she understood — "Do you mean the Extended Fitness Check-in?" — and starts it on a yes. |
 | "Actually, stop." | The agent asks whether to stop it (or, if the request was unmistakable, stops right away). |
 | "Yes." | The plan is dropped; the conversation continues. "No", and the activity carries on; unclear, and it asks once more. |
 | *(the plan reaches its end)* | The plan's farewell plays as a hand-back line, and free conversation resumes. |
@@ -58,7 +59,9 @@ The agent then makes at most one transition per turn, after every expert has fin
 | Mode at turn start | The judge says | What happens |
 |---|---|---|
 | Free conversation | list | The activities are offered. |
-| Free conversation | start | The plan is loaded (`LoadPlan`); the reply opens its first step. |
+| Free conversation | start, and the user said its title | The plan is loaded (`LoadPlan`); the reply opens its first step. |
+| Free conversation | start, title not said | "Do you mean X?" is asked; nothing starts yet. |
+| Asked "do you mean X?" | *(a yes)* | X starts. Anything else closes the question: another activity they name is handled as a fresh choice, and a plain no starts nothing. |
 | Free conversation | sleep | The reply says goodbye; the device is told to sleep once that has been heard. |
 | In an activity | stay | Nothing. The turn is an ordinary plan turn. |
 | In an activity | ask | "Shall we stop X?" is asked; nothing ends yet. |
@@ -109,7 +112,7 @@ It rides on the `companion` capability, so an agent that does not declare that c
 
 ### Starting and leaving err in opposite directions
 
-Starting an activity takes over the conversation and costs the user a turn to undo, so it must never be a guess — the router's prompt leans hard on abstaining. Leaving errs the other way, because asking to stop and not being let go is the worse failure: the exit dialogue asks when someone seems to want out without saying so.
+Starting an activity takes over the conversation and costs the user a turn to undo, so it must never be a guess. The router's prompt leans hard on abstaining, and its choice is only acted on at once when the user's own words contain the activity's title. Otherwise — a description, "the fitness one", a garbled name, a yes to a spoken offer, a choice heard poorly — she asks about the one the router picked, and a second scoped call (`start_dialogue`, on the exit dialogue's model) judges whether the answer is a yes. Give activities short, distinct titles in the language the study is run in: a title people actually say starts without the extra turn. Leaving errs the other way, because asking to stop and not being let go is the worse failure: the exit dialogue asks when someone seems to want out without saying so.
 
 Both are checked against a fixed set of transcripts before a prompt or model changes (`tests/companion_replay.py`). To tune them, edit the router prompt in `config/experts/companion_router.json` or the exit dialogue's model.
 

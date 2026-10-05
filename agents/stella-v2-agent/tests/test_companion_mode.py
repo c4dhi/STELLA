@@ -66,7 +66,7 @@ def _running(activity=ACTIVITIES[0], pending_exit=False):
 
 def test_free_flow_offers_starts_and_ignores_a_stop():
     assert _free().decide([LIST]).change is Change.OFFERED
-    started = _free().decide([START_MEMORY])
+    started = _free().decide([START_MEMORY], said="let's play the memory game")
     assert started.change is Change.STARTED and started.activity is ACTIVITIES[0]
     assert _free().decide([STOP]).change is Change.NONE
 
@@ -130,12 +130,88 @@ def test_asking_again_on_doubt_does_not_loop_forever():
     assert declined.change is Change.EXIT_DECLINED
 
 
-@pytest.mark.parametrize("command", [START_MEMORY, {"command": "sleep"}])
-def test_a_doubtful_start_or_goodbye_is_not_acted_on(command):
-    unheard = _free().decide([command], doubtful=True)
+def test_a_doubtful_goodbye_is_not_acted_on():
+    unheard = _free().decide([{"command": "sleep"}], doubtful=True)
     assert unheard.change is Change.UNHEARD
     assert "ask them to say it again" in directive(unheard)
     assert decision("s1", unheard).metadata["decision"]["kind"] == "not_heard_clearly"
+
+
+# ---------------------------------------------------------------------------
+# Starting is never a guess: named outright, or asked about first
+# ---------------------------------------------------------------------------
+
+def test_an_activity_named_outright_starts_at_once():
+    for said in ("the Memory Game please", "memory game", "Let's do the MEMORY-GAME."):
+        assert _free().decide([START_MEMORY], said=said).change is Change.STARTED
+
+
+def test_an_activity_not_named_is_asked_about_first():
+    """"The fitness one" with two fitness activities: the router picks one, and
+    used to start it."""
+    asked = _free().decide([START_CHECKIN], said="the fitness one")
+    assert asked.change is Change.START_ASKED and asked.activity is ACTIVITIES[1]
+    assert '"Fitness Check-in"' in directive(asked)
+    assert decision("s1", asked).metadata["decision"]["kind"] == "activity_start_proposed"
+
+
+def test_a_yes_to_an_offer_is_still_asked_about():
+    # Her offer may have listed several by informal names, so only the user's
+    # own words settle which one: "yes" names none.
+    assert _free().decide([START_MEMORY], said="yes please").change is Change.START_ASKED
+
+
+def test_a_no_to_the_question_is_not_a_goodbye():
+    """"No, never mind" was taken for being done, and she went to sleep."""
+    declined = _asked().decide([{"command": "sleep"}], start_confirmed=False, said="no, never mind")
+    assert declined.change is Change.START_DECLINED
+
+
+def test_asking_what_there_is_instead_of_answering_lists_them():
+    assert _asked().decide([LIST], start_confirmed=False, said="what else is there?").change is Change.OFFERED
+
+
+def test_a_named_activity_heard_poorly_is_still_asked_about():
+    asked = _free().decide([START_MEMORY], doubtful=True, said="the memory game")
+    assert asked.change is Change.START_ASKED
+
+
+def _asked():
+    companion = _free()
+    companion.ask_start(ACTIVITIES[1])
+    return companion
+
+
+def test_a_yes_to_the_question_starts_what_was_asked_about():
+    started = _asked().decide([], start_confirmed=True, said="yes")
+    assert started.change is Change.STARTED and started.activity is ACTIVITIES[1]
+
+
+def test_anything_but_a_yes_does_not_start_it():
+    for confirmed in (False, None):   # a no, or the judgment failed
+        declined = _asked().decide([], start_confirmed=confirmed, said="no")
+        assert declined.change is Change.START_DECLINED
+        assert "does not start" in directive(declined)
+
+
+def test_naming_another_one_instead_starts_that_one():
+    started = _asked().decide([START_MEMORY], start_confirmed=False, said="no, the memory game")
+    assert started.change is Change.STARTED and started.activity is ACTIVITIES[0]
+
+
+def test_a_poorly_heard_yes_is_asked_again_then_dropped():
+    companion = _asked()
+    again = companion.decide([], doubtful=True, start_confirmed=True, said="Yes.")
+    assert again.change is Change.START_ASKED
+    companion.ask_start(ACTIVITIES[1])
+    dropped = companion.decide([], doubtful=True, start_confirmed=True, said="Yes.")
+    assert dropped.change is Change.START_DECLINED
+
+
+def test_entering_an_activity_closes_the_open_question():
+    companion = _asked()
+    companion.enter(ACTIVITIES[1])
+    assert companion.pending_start is None and companion.start_asks == 0
 
 
 def test_a_doubtful_question_about_activities_is_still_answered():

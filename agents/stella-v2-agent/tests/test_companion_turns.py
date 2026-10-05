@@ -150,6 +150,8 @@ QUESTION = "Just to check: do you want to stop the Extended Fitness Check-in her
 ASK = {"user_intent": "might want to stop", "decision": "ask", "say": QUESTION}
 LEAVE = {"user_intent": "wants to stop now", "decision": "leave", "say": ""}
 STAY = {"user_intent": "wants to carry on", "decision": "stay", "say": ""}
+YES = {"user_intent": "confirms it", "decision": "yes"}
+NO = {"user_intent": "does not confirm it", "decision": "no"}
 
 
 class Session:
@@ -166,6 +168,9 @@ class Session:
         self.exit_answers = list(exits or [])
         self.exit_calls: List[Any] = []
         self.exit_models: List[str] = []
+        # What the start dialogue answers to "do you mean X?" (then: no).
+        self.start_answers: List[Any] = []
+        self.start_calls: List[Any] = []
         self.agent = self._build(companion)
 
     def _build(self, companion: bool) -> StellaV2Agent:
@@ -259,6 +264,10 @@ class Session:
         agent.response_generator = SimpleNamespace(generate=generate, response_model="gpt-test")
 
         async def llm_generate(messages, config=None, callback=None, component_name="unknown"):
+            if component_name == "start_dialogue":
+                session.start_calls.append(messages)
+                answer = session.start_answers.pop(0) if session.start_answers else NO
+                return LLMResponse(content=json.dumps(answer), model="t", provider="t")
             session.exit_calls.append(messages)
             session.exit_models.append(config.model)
             answer = session.exit_answers.pop(0) if session.exit_answers else STAY
@@ -304,7 +313,7 @@ async def _companion_in_activity(**kwargs) -> Session:
     session = Session(companion=True, sm=FakeStateMachine(), **kwargs)
     await session.turn("hi Grace")
     await session.turn("what can we do?", router=[{"tool": "list_activities"}])
-    await session.turn("let's do the extended one", router=_start("extended"),
+    await session.turn("let's do the Extended Fitness Check-in", router=_start("extended"),
                        assistant_says="Great! First, what's your name?")
     return session
 
@@ -341,7 +350,7 @@ async def test_the_plan_loads_after_the_pool_so_nothing_races_it():
         return await run(*args)
 
     session.agent.expert_pool = SimpleNamespace(run=pool_run)
-    await session.turn("let's do the extended one", router=_start("extended"))
+    await session.turn("let's do the Extended Fitness Check-in", router=_start("extended"))
     assert seen_during_pool == [None]
     assert session.sm.plan is PLAN
 
@@ -617,7 +626,7 @@ async def test_a_failed_load_stays_in_free_flow():
 
     sm.load_plan = failing_load
     session = Session(companion=True, sm=sm)
-    await session.turn("let's do the extended one", router=_start("extended"))
+    await session.turn("let's do the Extended Fitness Check-in", router=_start("extended"))
     assert session.agent.companion.active is None
     assert session.agent._plan_config is None
     assert session.reply["guidance"] == ""
@@ -690,7 +699,7 @@ async def test_asked_to_sleep_she_says_goodbye_and_tells_the_device():
 async def test_the_device_may_not_sleep_while_an_activity_runs():
     session = Session(companion=True, sm=FakeStateMachine())
     sent = _record_sleep_signals(session)
-    await session.turn("let's do the extended one", router=_start("extended"))
+    await session.turn("let's do the Extended Fitness Check-in", router=_start("extended"))
     assert sent == [("sleep_allowed", False)]
 
     session.exit_answers = [LEAVE]
@@ -775,3 +784,47 @@ async def test_a_deployment_can_set_or_switch_off_the_confidence_check():
     session.agent._apply_pipeline_config({"nodes": {"companion": {"min_confidence": 0}}})
     outputs = await _heard(session, "Bye.", 0.2, router=SLEEP)
     assert _commands(outputs) == [("sleep", {})]
+
+
+# ---------------------------------------------------------------------------
+# Starting: asked about first unless it was named outright
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_an_unnamed_choice_is_asked_about_and_a_yes_starts_it():
+    session = Session(companion=True, sm=FakeStateMachine())
+    outputs = await session.turn("the fitness one", router=_start("extended"))
+
+    assert not any(c.startswith("load:") for c in session.sm.calls)
+    assert session.agent.companion.pending_start["id"] == "extended"
+    assert "whether that is the one they mean" in session.reply["guidance"]
+    assert "activity_start_proposed" in _kinds(outputs)
+
+    session.start_answers = [YES]
+    outputs = await session.turn("yes")
+    assert session.sm.calls.count("load:checkin-plan") == 1
+    assert session.agent.companion.running_title == "Extended Fitness Check-in"
+    assert session.agent.companion.pending_start is None
+    assert "activity_started" in _kinds(outputs)
+
+
+@pytest.mark.asyncio
+async def test_a_no_starts_nothing_and_the_question_is_closed():
+    session = Session(companion=True, sm=FakeStateMachine())
+    await session.turn("the fitness one", router=_start("extended"))
+    outputs = await session.turn("no, never mind")
+
+    assert not any(c.startswith("load:") for c in session.sm.calls)
+    assert session.agent.companion.pending_start is None
+    assert "activity_start_declined" in _kinds(outputs)
+    # The question is judged once; the next turn is ordinary conversation.
+    await session.turn("how are you?")
+    assert len(session.start_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_naming_the_other_one_in_reply_starts_that_one():
+    session = Session(companion=True, sm=FakeStateMachine())
+    await session.turn("the fitness one", router=_start("extended"))
+    await session.turn("no, the Prolific Study", router=_start("prolific"))
+    assert session.agent.companion.running_title == "Prolific Study"

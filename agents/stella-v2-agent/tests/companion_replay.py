@@ -38,6 +38,7 @@ from stella_v2_agent.companion import (
     Transition,
     commands_from,
     exit_dialogue,
+    start_dialogue,
 )
 from stella_v2_agent.experts.registry import ExpertRegistry
 from stella_v2_agent.experts.runner import ExpertRunner
@@ -61,8 +62,8 @@ def load_scenarios(path: Path = SCENARIOS) -> Dict[str, Any]:
 
 
 def outcome_of(transition: Transition) -> str:
-    if transition.change is Change.STARTED:
-        return f"started:{transition.activity['id']}"
+    if transition.change in (Change.STARTED, Change.START_ASKED):
+        return f"{transition.change.value}:{transition.activity['id']}"
     return transition.change.value
 
 
@@ -86,6 +87,8 @@ def _default_reply(transition: Transition) -> str:
         return f"We could do: {titles}. What would you like?"
     if transition.change is Change.STARTED:
         return f"Okay, let's start {transition.title}."
+    if transition.change is Change.START_ASKED:
+        return f"Do you mean {transition.title}?"
     if transition.change is Change.EXITED:
         return f"Okay, we'll leave {transition.title} there."
     return "Okay."
@@ -147,6 +150,10 @@ class Replay:
 
             history.append({"role": "user", "content": turn["user"]})
             change = transition.change
+            if change is Change.START_ASKED:
+                companion.ask_start(transition.activity)
+            else:
+                companion.drop_start()
             if change is Change.STARTED:
                 free_history, history = history, []
                 companion.enter(transition.activity)
@@ -190,13 +197,30 @@ class Replay:
             record["exit"] = f"{exit_step.decision}: {exit_step.user_intent}"
             return companion.decide([], exit_step, doubtful)
 
-        verdict = await self.runner.run(self.router, text, history, {}, tools=tools)
+        start_confirmed = None
+        if companion.pending_start:
+            # "Do you mean X?" is open; the router still runs, as in the agent.
+            start_confirmed, verdict = await asyncio.gather(
+                start_dialogue(
+                    self.llm,
+                    model=self.exit_model,
+                    title=companion.pending_start.get("title") or "the activity",
+                    user_input=text,
+                    history=history,
+                ),
+                self.runner.run(self.router, text, history, {}, tools=tools),
+            )
+            record["exit"] = f"start confirmed: {start_confirmed}"
+        else:
+            verdict = await self.runner.run(self.router, text, history, {}, tools=tools)
         if verdict.verdict in _FAILED_VERDICTS:
             record["router"] = verdict.verdict
             return None
         commands = commands_from([verdict])
         record["router"] = commands[0]["command"] if commands else "-"
-        return companion.decide(commands, doubtful=doubtful)
+        return companion.decide(
+            commands, doubtful=doubtful, start_confirmed=start_confirmed, said=text,
+        )
 
 
 async def replay_all(
