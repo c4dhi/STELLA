@@ -55,6 +55,7 @@ from stella_v2_agent.pipeline.history_scope import parse_timestamp, scope_histor
 from stella_v2_agent.companion import (
     Change,
     Companion,
+    IDLE_SLEEP_SECONDS,
     NO_CHANGE,
     ROUTER,
     Transition,
@@ -566,6 +567,13 @@ class StellaV2Agent(BaseAgent):
             tag = companion_decision(input.session_id, transition)
             if tag:
                 yield tag
+            if transition.change is Change.DISMISSED:
+                # Delivered by the SDK once the goodbye has been heard.
+                yield AgentOutput.client_command(input.session_id, "sleep")
+            elif transition.change is Change.STARTED:
+                await self._set_sleep_allowed(False)
+            elif transition.change is Change.EXITED:
+                await self._set_sleep_allowed(True)
 
             # Deterministic verdict directive: a flagging expert can replace the
             # generated response with a literature-informed template.
@@ -995,6 +1003,7 @@ class StellaV2Agent(BaseAgent):
         self._companion_mode = config.get("mode") == "companion"
         self.companion = Companion(activities=config.get("available_plans") or [])
         if self._companion_mode:
+            self.idle_timeout_seconds = IDLE_SLEEP_SECONDS
             logger.info(
                 "Companion mode: %d activit%s available",
                 len(self.companion.activities),
@@ -1209,6 +1218,14 @@ class StellaV2Agent(BaseAgent):
         exit_config = nodes.get("exit_dialogue")
         if isinstance(exit_config, dict) and exit_config.get("model"):
             self.companion.exit_model = exit_config["model"]
+        companion_config = nodes.get("companion")
+        if (
+            self._companion_mode
+            and isinstance(companion_config, dict)
+            and "idle_sleep_seconds" in companion_config
+        ):
+            # 0 or null switches the idle sleep off.
+            self.idle_timeout_seconds = companion_config["idle_sleep_seconds"] or None
 
         # Apply threshold overrides
         if "history_limit" in thresholds:
@@ -1322,6 +1339,7 @@ class StellaV2Agent(BaseAgent):
             self._plan_config = activity["plan"]
             self._resolve_persona_in_plan_text(self._plan_config)
             logger.info("Resumed mid-activity after restart: %s", self.companion.running_title)
+            await self._set_sleep_allowed(False)
             return
         # The allow-list changed under a running activity (redeploy with a
         # different selection). Clear it, so the backend agrees with the free
@@ -1409,7 +1427,26 @@ class StellaV2Agent(BaseAgent):
         if self.sm_client and not await self._cleared():
             logger.error("Could not clear the finished activity %r", finished.title)
         self._leave_activity()
+        await self._set_sleep_allowed(True)
         return companion_decision(session_id, finished)
+
+    async def _set_sleep_allowed(self, allowed: bool) -> None:
+        """Tell the device whether it may fall asleep. Never inside an activity:
+        not on its own timer, not on a tag in a reply, not on command."""
+        if getattr(self, "_audio_pipeline", None) is None:
+            return
+        try:
+            await self.send_client_command("sleep_allowed", allowed=allowed)
+        except Exception as e:
+            logger.warning(f"Could not send sleep_allowed={allowed}: {e}")
+
+    async def on_idle(self, session_id: str, idle_seconds: float) -> None:
+        """Free conversation has gone quiet: go to sleep without a word. An
+        activity is never slept through; it waits for the user."""
+        if not self._companion_mode or self.companion.active:
+            return
+        logger.info("Companion: idle for %.0fs in free conversation, going to sleep", idle_seconds)
+        await self.send_client_command("sleep", reason="idle")
 
     async def _context_for_new_mode(
         self, turn_start: Dict[str, Any], history_limit: int

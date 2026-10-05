@@ -4,7 +4,7 @@
     "Each scenario states the mode it starts in, then one or more user turns with the OUTCOME expected,",
     "not the tool expected, so the set stays valid when the router is restructured.",
     "",
-    "Outcomes: none | offered | started:<activity id> | exit_asked | exited | exit_declined.",
+    "Outcomes: none | offered | started:<activity id> | exit_asked | exited | exit_declined | dismissed.",
     "'expect' is one outcome or a list of acceptable ones; null means undecided (reported, not scored).",
     "",
     "Start mode: 'in_activity' (an activity id) and 'awaiting_exit' (the stop question is open).",
@@ -12,7 +12,7 @@
     "follows it; 'only_if' (free | activity | awaiting_exit) skips a turn the earlier ones made moot.",
     "",
     "Tags: ordinary = a plain activity answer that must not be read as leaving; noise = garbled or hallucinated transcription; review = the expectation itself is a judgment",
-    "call worth a second look; future = behaviour that does not exist yet."
+    "call worth a second look; wind_down = going to sleep, asked or not."
   ],
   "activities": [
     {"id": "extended", "title": "Extended Fitness Check-in", "description": "A comprehensive conversation covering exercise habits"},
@@ -364,19 +364,36 @@
        {"user": "I'm not sure, what else could it do?", "expect": "none"}
      ]},
 
-    {"id": "future-wind-down-thats-all", "tags": ["future", "wind_down"],
-     "note": "Should close in a line and go to sleep. No such outcome exists yet.",
-     "history": [{"role": "assistant", "content": "It's sixteen degrees and cloudy today."}],
-     "turns": [{"user": "thanks, that's all", "expect": null}]},
+    {"id": "sleep-01-good-night", "tags": ["wind_down"], "turns": [{"user": "good night Grace", "expect": "dismissed"}]},
 
-    {"id": "future-wind-down-good-night", "tags": ["future", "wind_down"],
-     "note": "Should close in a line and go to sleep. No such outcome exists yet.",
-     "turns": [{"user": "good night Grace", "expect": null}]},
+    {"id": "sleep-02-go-to-sleep", "tags": ["wind_down"], "history": [{"role": "assistant", "content": "It's sixteen degrees and cloudy today."}], "turns": [{"user": "you can go to sleep now", "expect": "dismissed"}]},
 
-    {"id": "future-wind-down-mid-activity", "tags": ["future", "wind_down", "in_activity"],
-     "note": "Leaving the room mid-activity: stop it, pause it, or just sleep?",
-     "in_activity": "extended",
-     "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}],
-     "turns": [{"user": "I have to go now, the doorbell rang", "expect": null}]}
+    {"id": "sleep-03-go-back-to-sleep", "tags": ["wind_down"], "turns": [{"user": "okay, go back to sleep", "expect": "dismissed"}]},
+
+    {"id": "sleep-04-thats-all-bye", "tags": ["wind_down"], "history": [{"role": "assistant", "content": "It's sixteen degrees and cloudy today."}], "turns": [{"user": "that's all for now, bye", "expect": "dismissed"}]},
+
+    {"id": "sleep-05-german", "tags": ["wind_down", "lang"], "history": [{"role": "assistant", "content": "Heute sind es sechzehn Grad und es ist bewölkt."}], "turns": [{"user": "Danke, das war's. Schlaf gut.", "expect": "dismissed"}]},
+
+    {"id": "sleep-06-going-to-bed", "tags": ["wind_down"], "turns": [{"user": "I'm going to bed now, good night", "expect": "dismissed"}]},
+
+    {"id": "sleep-07-thanks-thats-all", "tags": ["wind_down", "review"], "note": "No goodbye, but nothing more is wanted. If this stays 'none' the idle timer still puts her to sleep.", "history": [{"role": "assistant", "content": "It's sixteen degrees and cloudy today."}], "turns": [{"user": "thanks, that's all", "expect": "dismissed"}]},
+
+    {"id": "sleep-08-thank-you-alone-is-not-goodbye", "tags": ["wind_down"], "history": [{"role": "assistant", "content": "It's sixteen degrees and cloudy today."}], "turns": [{"user": "thank you", "expect": "none"}]},
+
+    {"id": "sleep-09-talking-about-own-sleep", "tags": ["wind_down"], "turns": [{"user": "I slept really badly last night", "expect": "none"}]},
+
+    {"id": "sleep-10-question-about-sleep", "tags": ["wind_down"], "turns": [{"user": "do you ever sleep?", "expect": "none"}]},
+
+    {"id": "sleep-11-tired-is-not-goodbye", "tags": ["wind_down"], "history": [{"role": "assistant", "content": "How has your day been?"}], "turns": [{"user": "I'm a bit tired today", "expect": "none"}]},
+
+    {"id": "sleep-12-noise-thank-you-must-not-dismiss", "tags": ["wind_down", "noise"], "note": "Whisper's silence filler must never put her to sleep.", "history": [{"role": "assistant", "content": "It has been a grey day here too."}], "turns": [{"user": "Thank you.", "expect": "none"}]},
+
+    {"id": "sleep-13-noise-thanks-for-watching", "tags": ["wind_down", "noise"], "history": [{"role": "assistant", "content": "It has been a grey day here too."}], "turns": [{"user": "Thanks for watching!", "expect": "none"}]},
+
+    {"id": "sleep-14-noise-bare-bye", "tags": ["wind_down", "noise", "review"], "note": "A bare 'Bye.' can be a hallucination, but taken as heard it is a goodbye.", "history": [{"role": "assistant", "content": "It has been a grey day here too."}], "turns": [{"user": "Bye.", "expect": "dismissed"}]},
+
+    {"id": "sleep-15-never-mid-activity", "tags": ["wind_down", "in_activity"], "note": "Leaving mid-activity ends or asks about the activity; it never sleeps from inside one.", "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "I have to go now, the doorbell rang", "expect": ["exited", "exit_asked"]}]},
+
+    {"id": "sleep-16-good-night-mid-activity", "tags": ["wind_down", "in_activity"], "in_activity": "extended", "history": [{"role": "assistant", "content": "And how often do you exercise in a typical week?"}], "turns": [{"user": "good night, I'm off to bed", "expect": ["exited", "exit_asked"]}]}
   ]
 }

@@ -144,7 +144,7 @@ def test_shipped_experts_only_get_their_own_tools():
 
     config_dir = Path(__file__).parent.parent / "config" / "experts"
     registry = ExpertRegistry(experts_dir=str(config_dir))
-    activity_tools = {"list_activities", "start_activity"}
+    activity_tools = {"list_activities", "start_activity", "go_to_sleep"}
     assert set(registry.get("companion_router").tools) == activity_tools
     assert not activity_tools & set(registry.get("task_extraction").tools)
     assert registry.get("task_extraction").tools

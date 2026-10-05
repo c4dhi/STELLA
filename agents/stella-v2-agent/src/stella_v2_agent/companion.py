@@ -10,7 +10,8 @@ This module is the one place that knows what mode the session is in and how it
 changes. Each mode has ONE judge, asking one question:
 
 * free conversation — the ``companion_router`` expert: do they want to see the
-  activities, or start one? Its tools only PROPOSE; they touch nothing.
+  activities, start one, or are they done for now? Its tools only PROPOSE;
+  they touch nothing.
 * in an activity — ``exit_dialogue``, on every turn: do they want to leave?
   It answers leave, stay or ask, and when it asks it writes the question.
 
@@ -52,6 +53,7 @@ class Change(Enum):
     EXITED = "exited"              # the user confirmed; back to free conversation
     EXIT_DECLINED = "exit_declined"  # the user did not confirm; carry on
     FINISHED = "finished"          # the plan reached its end; back to free conversation
+    DISMISSED = "dismissed"        # the user is done for now; say goodbye and go to sleep
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,9 @@ MAX_EXIT_ASKS = 2
 # 5 Oct: confirmations 56% -> 96%). Overridable per deployment through the
 # pipeline config node "exit_dialogue".
 EXIT_MODEL = "gpt-5.4-mini"
+# How long free conversation may stay silent before she goes to sleep unasked.
+# Long enough to think about an offer; she only ever sleeps outside an activity.
+IDLE_SLEEP_SECONDS = 45.0
 
 
 @dataclass(frozen=True)
@@ -178,6 +183,8 @@ class Companion:
         kind = command.get("command")
         if kind == "list":
             return Transition(Change.OFFERED, offered=list(command.get("activities") or []))
+        if kind == "sleep":
+            return Transition(Change.DISMISSED)
         if kind == "start":
             activity = self.find(command.get("activity_id"))
             if activity and activity.get("plan"):
@@ -292,6 +299,12 @@ def directive(transition: Transition) -> str:
             "it warmly in a sentence, do not continue or resume it, and return to "
             "open conversation."
         )
+    if change is Change.DISMISSED:
+        return (
+            "The user is done for now and you are about to go to sleep. Say "
+            "goodbye in one short, warm sentence and nothing more: no question, "
+            "no offer, no summary."
+        )
     if change is Change.EXIT_DECLINED:
         return (
             "The user did not confirm stopping. Stay in the activity and pick up "
@@ -307,6 +320,7 @@ _DECISIONS = {
     Change.EXITED: ("activity_ended", "Left “{title}”", "Back to free conversation"),
     Change.EXIT_DECLINED: ("activity_end_declined", "Staying in “{title}”", None),
     Change.FINISHED: ("activity_completed", "Finished “{title}”", "Back to free conversation"),
+    Change.DISMISSED: ("going_to_sleep", "Going to sleep", "The user is done for now"),
 }
 
 

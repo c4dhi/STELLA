@@ -16,7 +16,7 @@ import pytest
 
 from .companion_replay import Replay, accepted, load_scenarios, replay_all, report
 
-OUTCOMES = {"none", "offered", "exit_asked", "exited", "exit_declined"}
+OUTCOMES = {"none", "offered", "exit_asked", "exited", "exit_declined", "dismissed"}
 MODES = {"free", "activity", "awaiting_exit"}
 # 96% on 5 Oct with the exit dialogue on its own model (84% before). This only
 # catches a collapse, not a regression of a few scenarios — compare two --out

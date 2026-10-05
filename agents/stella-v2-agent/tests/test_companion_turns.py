@@ -648,3 +648,86 @@ async def test_an_interrupted_confirmation_is_asked_again_next_turn():
     await asyncio.sleep(0)
     assert session.agent.companion.pending_exit is True
     assert "clear" not in session.sm.calls
+
+
+# ---------------------------------------------------------------------------
+# Winding down: asleep when asked or when it goes quiet, never mid-activity
+# ---------------------------------------------------------------------------
+
+SLEEP = [{"tool": "go_to_sleep"}]
+
+
+def _commands(outputs):
+    return [(o.content, o.metadata) for o in outputs if o.type.value == "client_command"]
+
+
+def _record_sleep_signals(session):
+    """Stand in for the device: record what it is told about sleeping."""
+    sent = []
+
+    async def set_sleep_allowed(allowed):
+        sent.append(("sleep_allowed", allowed))
+
+    async def send_client_command(command, **data):
+        sent.append((command, data))
+
+    session.agent._set_sleep_allowed = set_sleep_allowed
+    session.agent.send_client_command = send_client_command
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_asked_to_sleep_she_says_goodbye_and_tells_the_device():
+    session = Session(companion=True, sm=FakeStateMachine())
+    outputs = await session.turn("good night Grace", router=SLEEP)
+
+    assert _commands(outputs) == [("sleep", {})]
+    assert "about to go to sleep" in session.reply["guidance"]
+    assert "going_to_sleep" in _kinds(outputs)
+
+
+@pytest.mark.asyncio
+async def test_the_device_may_not_sleep_while_an_activity_runs():
+    session = Session(companion=True, sm=FakeStateMachine())
+    sent = _record_sleep_signals(session)
+    await session.turn("let's do the extended one", router=_start("extended"))
+    assert sent == [("sleep_allowed", False)]
+
+    session.exit_answers = [LEAVE]
+    await session.turn("stop, I want to end this now")
+    assert sent == [("sleep_allowed", False), ("sleep_allowed", True)]
+
+
+@pytest.mark.asyncio
+async def test_a_finished_activity_lets_the_device_sleep_again():
+    session = await _companion_in_activity()
+    sent = _record_sleep_signals(session)
+
+    async def full_state_at_end():
+        return {"plan_id": PLAN["id"], "current_state_id": "__end__", "states": []}
+
+    session.sm.get_full_state = full_state_at_end
+    session.extraction = {"session_completed": True, "farewell_message": "Thanks, that's all!"}
+    await session.turn("my goal is a 10k")
+    assert sent == [("sleep_allowed", True)]
+
+
+@pytest.mark.asyncio
+async def test_quiet_free_conversation_goes_to_sleep_and_a_quiet_activity_does_not():
+    free = Session(companion=True, sm=FakeStateMachine())
+    sent = _record_sleep_signals(free)
+    await free.agent.on_idle("s1", 45.0)
+    assert sent == [("sleep", {"reason": "idle"})]
+
+    busy = await _companion_in_activity()
+    sent = _record_sleep_signals(busy)
+    await busy.agent.on_idle("s1", 45.0)
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_plan_mode_agent_never_puts_the_device_to_sleep():
+    session = Session(companion=False, sm=FakeStateMachine(plan=PLAN))
+    sent = _record_sleep_signals(session)
+    await session.agent.on_idle("s1", 600.0)
+    assert sent == [] and session.agent.idle_timeout_seconds is None

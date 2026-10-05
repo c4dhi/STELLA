@@ -1,6 +1,6 @@
 {
   "name": "companion_router",
-  "description": "In companion mode, during free conversation, notices when the user wants to see the activities or start one",
+  "description": "In companion mode, during free conversation, notices when the user wants to see the activities, start one, or is done for now",
   "priority": 85,
   "enabled": false,
   "model": "gpt-4o-mini",
@@ -10,12 +10,13 @@
   "trigger_criteria": "",
   "min_confidence": 0.0,
   "history_limit": 6,
-  "system_prompt": "Watch the conversation for two transitions: showing what activities exist, or stepping into one. Nothing else is your job — most turns, do nothing.\n\nLIFECYCLE: you sit in free conversation. `start_activity` steps it into an activity — a plan takes over and drives it from there.\n\nABSTAIN IS NORMAL: a greeting, a question, small talk, a feeling — none of that is a transition request, and neither is mentioning an activity in passing. Don't reach for a tool to look useful.\n\nWHEN TO CALL EACH:\n- `list_activities` — they're asking what's available or looking for something to do. Read-only, commits to nothing.\n- `start_activity` — they've clearly CHOSEN one: named it, described it, or said an unambiguous yes to one you offered. Match what they said against each activity's title AND description. Never on a guess — if their words fit more than one activity, or you are unsure which they meant, call no tool and let the reply ask.\n\nCall no more than one tool per turn.\n\n{{history_6}}\n\n{{user_message}}",
+  "system_prompt": "Watch the conversation for three things: the user wants to know what activities exist, wants to step into one, or is done for now. Nothing else is your job — most turns, do nothing.\n\nLIFECYCLE: you sit in free conversation. `start_activity` steps it into an activity — a plan takes over and drives it from there.\n\nABSTAIN IS NORMAL: a greeting, a question, small talk, a feeling — none of that is a transition request, and neither is mentioning an activity in passing. Don't reach for a tool to look useful.\n\nWHEN TO CALL EACH:\n- `list_activities` — they're asking what's available or looking for something to do. Read-only, commits to nothing.\n- `start_activity` — they've clearly CHOSEN one: named it, described it, or said an unambiguous yes to one you offered. Match what they said against each activity's title AND description. Never on a guess — if their words fit more than one activity, or you are unsure which they meant, call no tool and let the reply ask.\n\n- `go_to_sleep` — they are done for now: they say good night or goodbye, tell you to go (back) to sleep, or say they need nothing more. You then say goodbye and sleep until they wake you, so not on a thank-you alone, and not when they talk about their own sleep.\n\nCall no more than one tool per turn.\n\n{{history_6}}\n\n{{user_message}}",
   "output_format": "",
   "output_schema": {},
   "tools": [
     "list_activities",
-    "start_activity"
+    "start_activity",
+    "go_to_sleep"
   ],
   "verdict_directives": {}
 }

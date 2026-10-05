@@ -30,6 +30,8 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 | "Actually, stop." | The agent asks whether to stop it (or, if the request was unmistakable, stops right away). |
 | "Yes." | The plan is dropped; the conversation continues. "No", and the activity carries on; unclear, and it asks once more. |
 | *(the plan reaches its end)* | The plan's farewell plays as a hand-back line, and free conversation resumes. |
+| "Good night." / "Go to sleep." | She says goodbye in a sentence and goes to sleep until tapped awake. |
+| *(nothing, for 45 seconds, outside an activity)* | She goes to sleep without a word. |
 
 Reaching a plan's `__end__` means **pop, not hang up**. A finished activity is not a finished conversation.
 
@@ -45,11 +47,11 @@ Each mode has **one judge**, asking one question:
 
 | Mode at turn start | Judge | Its question |
 |---|---|---|
-| Free conversation | `companion_router`, an ordinary expert with two tools | Do they want to see the activities, or start one? |
+| Free conversation | `companion_router`, an ordinary expert with three tools | Do they want to see the activities, start one, or are they done for now? |
 | In an activity | the exit dialogue, on every turn | Do they want to leave? |
 | Asked to stop | the exit dialogue | Was that a yes? |
 
-The router's tools, `list_activities` and `start_activity`, only **propose**: each returns a command and touches nothing. The router does not run inside an activity, and there is no tool for leaving.
+The router's tools, `list_activities`, `start_activity` and `go_to_sleep`, only **propose**: each returns a command and touches nothing. The router does not run inside an activity, and there is no tool for leaving.
 
 The agent then makes at most one transition per turn, after every expert has finished, judged against the mode the turn started in (`stella_v2_agent/companion.py`):
 
@@ -57,6 +59,7 @@ The agent then makes at most one transition per turn, after every expert has fin
 |---|---|---|
 | Free conversation | list | The activities are offered. |
 | Free conversation | start | The plan is loaded (`LoadPlan`); the reply opens its first step. |
+| Free conversation | sleep | The reply says goodbye; the device is told to sleep once that has been heard. |
 | In an activity | stay | Nothing. The turn is an ordinary plan turn. |
 | In an activity | ask | "Shall we stop X?" is asked; nothing ends yet. |
 | In an activity | leave | The request was unmistakable: the plan is dropped (`ClearPlan`). |
@@ -71,6 +74,15 @@ Leaving used to take two judges in a row: the router had to notice a stop before
 Because nothing is applied until the pool has finished, the experts cannot race the plan loading or clearing.
 
 `LoadPlan` deliberately is **not** `Initialize`. `Initialize` resumes existing state so a paused agent restarts where it left off, which is wrong here: a user who runs an activity, stops, and picks it again expects it from the top. `ClearPlan` deletes the row rather than blanking it, so every existing "no plan" code path applies unchanged — which is exactly the state a free-flow turn is in.
+
+### Going to sleep
+
+A companion is not meant to keep a conversation going. It ends one in two ways, both only in free conversation:
+
+- **Asked.** The router proposes `go_to_sleep` on a goodbye, a good night, or "go to sleep". The reply is one short goodbye, and the agent sends the device a `sleep` command, which the SDK delivers once the goodbye has finished playing.
+- **Unasked.** After 45 seconds with no turn, no speech and nothing done on the device, the agent sends `sleep` without saying anything. Set `nodes.companion.idle_sleep_seconds` in the pipeline configuration to change it; `0` switches it off.
+
+**She never sleeps inside an activity.** When one starts, the agent tells the device `sleep_allowed: false`, and the face then ignores its own presence timer, any `[sleep]` tag in a reply and any sleep command until the activity ends or is left. A goodbye said mid-activity is the exit dialogue's to judge: it leaves or asks, and she can be sent to sleep from free conversation afterwards.
 
 ### It is structural, not an expert you opt into
 

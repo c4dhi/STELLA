@@ -191,3 +191,23 @@ describe('waking', () => {
     expect(isYawningAt(woke, T0 + 60_000 + WAKE_MS * YAWN_FRACTION + 1)).toBe(false)
   })
 })
+
+describe('held awake by the agent', () => {
+  it('does not nod off on the timer, however long nobody is visible', () => {
+    const s = run(initialSleepState(T0), { sleepAllowed: false }, SLEEP_AFTER_MS * 3)
+    expect(s.phase).toBe('awake')
+  })
+
+  it('does not sleep when told to', () => {
+    const s = run(initialSleepState(T0), { sleepAllowed: false, sleepRequested: true }, 2_000)
+    expect(s.phase).toBe('awake')
+  })
+
+  it('gets a full quiet period once sleep is allowed again', () => {
+    const held = run(initialSleepState(T0), { sleepAllowed: false }, SLEEP_AFTER_MS * 2)
+    const soon = stepSleep(held, input(), T0 + SLEEP_AFTER_MS * 2 + 1_000)
+    expect(soon.phase).toBe('awake')
+    const later = stepSleep(soon, input(), T0 + SLEEP_AFTER_MS * 3 + 1_000)
+    expect(later.phase).toBe('asleep')
+  })
+})
