@@ -29,7 +29,7 @@
     "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest-e2e.json",
     "fix-room-urls": "node --import ./scripts/register-ts-node-esm.mjs scripts/fix-room-urls.ts",
     "bootstrap:admin": "node --import ./scripts/register-ts-node-esm.mjs scripts/bootstrap-initial-admin.ts",
-    "db:seed": "npx tsc prisma/seed.ts --outDir .seed-dist --rootDir . --esModuleInterop --resolveJsonModule --module nodenext --moduleResolution nodenext --target ES2023 --skipLibCheck && node .seed-dist/prisma/seed.js",
+    "db:seed": "npx tsc --ignoreConfig prisma/seed.ts --outDir .seed-dist --rootDir . --esModuleInterop --resolveJsonModule --module nodenext --moduleResolution nodenext --target ES2023 --skipLibCheck && node .seed-dist/prisma/seed.js",
     "db:seed:run": "node prisma/seed.js"
   },
   "prisma": {
@@ -68,6 +68,7 @@
     "@nestjs/platform-socket.io": "^12.1.2",
     "@nestjs/schedule": "^12.0.2",
     "@nestjs/websockets": "^12.1.2",
+    "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@types/uuid": "^11.0.0",
     "adm-zip": "^0.6.1",
