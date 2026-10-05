@@ -80,6 +80,69 @@ def test_being_done_for_now_is_a_dismissal_and_only_in_free_conversation():
     assert _running().decide([{"command": "sleep"}], ExitStep(STAY)) is NO_CHANGE
 
 
+# ---------------------------------------------------------------------------
+# A doubtful transcript never changes the mode; it can only make her ask
+# ---------------------------------------------------------------------------
+
+def test_what_counts_as_doubtful():
+    companion = _free()
+    assert companion.doubtful(0.2) is True
+    assert companion.doubtful(0.9) is False
+    assert companion.doubtful(0.0) is False     # no signal from the STT is not doubt
+    assert companion.doubtful(1.0) is False     # typed text
+    companion.min_confidence = 0.0              # switched off
+    assert companion.doubtful(0.01) is False
+
+
+def test_a_doubtful_yes_is_asked_again_not_left_on():
+    """"Thank you." invented over silence, or a misheard "Nein", used to end the
+    activity once the stop question was open."""
+    companion = _running()
+    companion.ask_exit()
+    asked = companion.decide([], ExitStep(LEAVE, say="Stop here?", user_intent="yes"), doubtful=True)
+    assert asked.change is Change.EXIT_ASKED and asked.say == "Stop here?"
+    assert "low confidence" in asked.understood
+    # Heard clearly, the same answer leaves.
+    assert companion.decide([], ExitStep(LEAVE, say="Stop here?")).change is Change.EXITED
+
+
+def test_a_doubtful_stop_is_asked_about_even_without_a_written_question():
+    asked = _running().decide([], ExitStep(LEAVE), doubtful=True)
+    assert asked.change is Change.EXIT_ASKED and asked.say == ""
+    assert "Ask clearly and briefly" in directive(asked)
+
+
+def test_doubt_alone_never_asks_about_stopping():
+    assert _running().decide([], ExitStep(STAY), doubtful=True) is NO_CHANGE
+
+
+def test_a_doubtful_no_still_stays():
+    companion = _running()
+    companion.ask_exit()
+    assert companion.decide([], ExitStep(STAY), doubtful=True).change is Change.EXIT_DECLINED
+
+
+def test_asking_again_on_doubt_does_not_loop_forever():
+    companion = _running()
+    companion.ask_exit()
+    companion.ask_exit()
+    declined = companion.decide([], ExitStep(LEAVE, say="Stop here?"), doubtful=True)
+    assert declined.change is Change.EXIT_DECLINED
+
+
+@pytest.mark.parametrize("command", [START_MEMORY, {"command": "sleep"}])
+def test_a_doubtful_start_or_goodbye_is_not_acted_on(command):
+    unheard = _free().decide([command], doubtful=True)
+    assert unheard.change is Change.UNHEARD
+    assert "ask them to say it again" in directive(unheard)
+    assert decision("s1", unheard).metadata["decision"]["kind"] == "not_heard_clearly"
+
+
+def test_a_doubtful_question_about_activities_is_still_answered():
+    # Offering commits to nothing.
+    assert _free().decide([LIST], doubtful=True).change is Change.OFFERED
+
+
 def test_an_abstaining_router_changes_nothing():
     assert _free().decide([]).change is Change.NONE
     assert _running().decide([]).change is Change.NONE
@@ -385,9 +448,11 @@ async def test_the_exit_dialogue_is_scoped_to_the_stop_question():
 
 @pytest.mark.asyncio
 async def test_answering_the_question_says_so():
-    llm = _ScriptedLLM('{"user_intent": "yes", "decision": "leave", "say": "ignored"}')
+    llm = _ScriptedLLM('{"user_intent": "yes", "decision": "leave", "say": "Stop here?"}')
     step = await _dialogue(llm, awaiting_answer=True)
-    assert step == ExitStep(LEAVE, user_intent="yes")  # "say" only when asking
+    # The question comes with a "leave" too: it is spoken if they were heard
+    # too poorly to leave on their word alone.
+    assert step == ExitStep(LEAVE, say="Stop here?", user_intent="yes")
     assert "you asked whether they want to stop" in llm.messages[0].content
 
 

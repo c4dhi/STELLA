@@ -84,6 +84,21 @@ A companion is not meant to keep a conversation going. It ends one in two ways, 
 
 **She never sleeps inside an activity.** When one starts, the agent tells the device `sleep_allowed: false`, and the face then ignores its own presence timer, any `[sleep]` tag in a reply and any sleep command until the activity ends or is left. A goodbye said mid-activity is the exit dialogue's to judge: it leaves or asks, and she can be sent to sleep from free conversation afterwards.
 
+### A poorly heard message never changes the mode
+
+Each spoken turn arrives with a transcript confidence between 0 and 1, computed by the STT service from the decode itself: low for mumbled speech, and low for filler the transcriber invents over near-silence ("Thank you.", "Bye."). Typed text is 1; 0 means the provider gave no signal and is not treated as doubt.
+
+Below `min_confidence` (default 0.4), a message cannot leave an activity, start one, or send her to sleep. It can only make her ask:
+
+| Heard poorly | Instead of | She |
+|---|---|---|
+| a yes to "shall we stop?", or a stop request | leaving | asks (again) whether to stop |
+| a choice of activity, or a goodbye | starting it, or going to sleep | says she did not catch that and asks them to repeat |
+
+A poorly heard "no", an ordinary activity answer, or "what can we do?" are handled as usual: none of them commits to anything.
+
+The default is where Whisper's own conventions put "low confidence"; it has not been calibrated on recorded sessions. Every turn logs its confidence, and `nodes.companion.min_confidence` in the pipeline configuration changes it (`0` switches the check off).
+
 ### It is structural, not an expert you opt into
 
 The router sits in its own section of the Pipeline Configurator, beside Task Extraction, and has **no on/off switch**. That is deliberate: it is the mechanism companion mode is made of, the same way `task_extraction` is the mechanism plans are made of. Deleting either does not leave a working system with one fewer opinion in it — it removes the thing the mode runs on.

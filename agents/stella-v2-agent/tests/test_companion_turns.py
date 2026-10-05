@@ -731,3 +731,47 @@ async def test_a_plan_mode_agent_never_puts_the_device_to_sleep():
     sent = _record_sleep_signals(session)
     await session.agent.on_idle("s1", 600.0)
     assert sent == [] and session.agent.idle_timeout_seconds is None
+
+
+# ---------------------------------------------------------------------------
+# Heard poorly: the turn's transcript confidence reaches the decision
+# ---------------------------------------------------------------------------
+
+async def _heard(session, text, confidence, **kwargs):
+    session.router_calls = kwargs.get("router") or []
+    session._record("user", text)
+    outputs = [o async for o in session.agent.process(
+        AgentInput.text_input("s1", text, stt_confidence=confidence)
+    )]
+    session._record("assistant", f"reply to: {text}")
+    return outputs
+
+
+@pytest.mark.asyncio
+async def test_a_poorly_heard_yes_does_not_end_the_activity():
+    session = await _companion_in_activity(exits=[ASK, LEAVE])
+    await session.turn("can we stop?")
+    outputs = await _heard(session, "Thank you.", 0.15)
+
+    assert "clear" not in session.sm.calls
+    assert session.agent.companion.pending_exit is True
+    assert "activity_end_proposed" in _kinds(outputs)
+
+
+@pytest.mark.asyncio
+async def test_a_poorly_heard_goodbye_does_not_put_her_to_sleep():
+    session = Session(companion=True, sm=FakeStateMachine())
+    outputs = await _heard(session, "Bye.", 0.2, router=SLEEP)
+
+    assert _commands(outputs) == []
+    assert "did not hear the user clearly" in session.reply["guidance"]
+    assert "not_heard_clearly" in _kinds(outputs)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_can_set_or_switch_off_the_confidence_check():
+    session = Session(companion=True, sm=FakeStateMachine())
+    session.agent.barge_in_evaluator = None
+    session.agent._apply_pipeline_config({"nodes": {"companion": {"min_confidence": 0}}})
+    outputs = await _heard(session, "Bye.", 0.2, router=SLEEP)
+    assert _commands(outputs) == [("sleep", {})]

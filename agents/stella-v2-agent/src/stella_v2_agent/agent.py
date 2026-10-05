@@ -305,10 +305,8 @@ class StellaV2Agent(BaseAgent):
             meta = input.metadata or {}
             # Logged on every turn so a threshold for "too doubtful to act on"
             # can be set from real sessions rather than guessed.
-            logger.info(
-                "Transcript confidence %.2f for %r",
-                float(meta.get("stt_confidence") or 0.0), input.text[:60],
-            )
+            stt_confidence = float(meta.get("stt_confidence") or 0.0)
+            logger.info("Transcript confidence %.2f for %r", stt_confidence, input.text[:60])
             detected_language = meta.get("detected_language") or None
             language_signal = (
                 (detected_language, float(meta.get("language_confidence") or 0.0))
@@ -527,7 +525,9 @@ class StellaV2Agent(BaseAgent):
                     exit_step = await exit_task
                     exit_task = None
                 transition = await self._apply_transition(
-                    self.companion.decide(commands, exit_step)
+                    self.companion.decide(
+                        commands, exit_step, self.companion.doubtful(stt_confidence)
+                    )
                 )
             directive = arb_result.directive
             # Its OWN field, not primary_action: primary_action loses to any
@@ -1226,6 +1226,9 @@ class StellaV2Agent(BaseAgent):
         ):
             # 0 or null switches the idle sleep off.
             self.idle_timeout_seconds = companion_config["idle_sleep_seconds"] or None
+        if isinstance(companion_config, dict) and "min_confidence" in companion_config:
+            # 0 switches the confidence check off.
+            self.companion.min_confidence = float(companion_config["min_confidence"] or 0.0)
 
         # Apply threshold overrides
         if "history_limit" in thresholds:
