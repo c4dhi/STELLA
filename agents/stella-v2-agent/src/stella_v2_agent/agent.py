@@ -64,6 +64,7 @@ from stella_v2_agent.companion import (
     decision as companion_decision,
     directive as companion_directive,
     exit_dialogue,
+    start_dialogue,
 )
 from stella_agent_sdk.language import LanguageResolver
 from stella_agent_sdk.agent import BargeInEvaluator
@@ -269,6 +270,7 @@ class StellaV2Agent(BaseAgent):
         # bridge raises or a barge-in closes this generator mid-stream.
         expert_task: Optional[asyncio.Task] = None
         exit_task: Optional[asyncio.Task] = None
+        start_task: Optional[asyncio.Task] = None
 
         try:
             # Fetch context. The history is scoped to the current mode (#36):
@@ -434,6 +436,15 @@ class StellaV2Agent(BaseAgent):
                     input.text, history, bridge, resolved_language,
                     awaiting_answer=self.companion.pending_exit,
                 ))
+            elif self._companion_mode and self.companion.pending_start:
+                # "Do you mean X?" is open from the previous turn: was this a yes?
+                start_task = asyncio.create_task(start_dialogue(
+                    self.llm_service,
+                    model=self.companion.exit_model,
+                    title=self.companion.pending_start.get("title") or "the activity",
+                    user_input=input.text,
+                    history=history,
+                ))
 
             if bridge:
                 logger.info(
@@ -524,9 +535,15 @@ class StellaV2Agent(BaseAgent):
                 if exit_task is not None:
                     exit_step = await exit_task
                     exit_task = None
+                start_confirmed: Optional[bool] = None
+                if start_task is not None:
+                    start_confirmed = await start_task
+                    start_task = None
                 transition = await self._apply_transition(
                     self.companion.decide(
-                        commands, exit_step, self.companion.doubtful(stt_confidence)
+                        commands, exit_step, self.companion.doubtful(stt_confidence),
+                        start_confirmed=start_confirmed,
+                        said=input.text,
                     )
                 )
             directive = arb_result.directive
@@ -756,6 +773,11 @@ class StellaV2Agent(BaseAgent):
                 if not exit_task.done():
                     exit_task.cancel()
                 exit_task.add_done_callback(lambda t: t.cancelled() or t.exception())
+            if start_task is not None:
+                # And for an unreached judgment of "do you mean X?".
+                if not start_task.done():
+                    start_task.cancel()
+                start_task.add_done_callback(lambda t: t.cancelled() or t.exception())
 
     # ─────────────────────────────────────────────────────────────────────
     # Post-response processing
@@ -1374,6 +1396,11 @@ class StellaV2Agent(BaseAgent):
         the turn as a no-change.
         """
         change = transition.change
+        if change is Change.START_ASKED:
+            self.companion.ask_start(transition.activity)
+        else:
+            # Whatever else this turn did, the open "do you mean X?" is settled.
+            self.companion.drop_start()
         if change is Change.STARTED:
             result = await self.sm_client.load_plan(transition.activity["plan"]) if self.sm_client else None
             if not (result and result.get("success")):

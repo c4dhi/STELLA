@@ -16,18 +16,18 @@ import pytest
 
 from .companion_replay import Replay, accepted, load_scenarios, replay_all, report
 
-OUTCOMES = {"none", "offered", "exit_asked", "exited", "exit_declined", "dismissed", "unheard"}
+OUTCOMES = {"none", "offered", "exit_asked", "exited", "exit_declined", "dismissed", "unheard", "start_declined"}
 MODES = {"free", "activity", "awaiting_exit"}
-# 96% on 5 Oct with the exit dialogue on its own model (84% before). This only
-# catches a collapse, not a regression of a few scenarios — compare two --out
-# files for that.
+# 100% on 5 Oct, on scenarios written alongside the code they test; a new
+# recording that fails belongs in the set. This only catches a collapse —
+# compare two --out files to see a regression of a few scenarios.
 MIN_PASS_RATE = 0.9
 
 
 def test_the_scenarios_are_well_formed():
     data = load_scenarios()
     activity_ids = {a["id"] for a in data["activities"]}
-    known = OUTCOMES | {f"started:{i}" for i in activity_ids}
+    known = OUTCOMES | {f"{kind}:{i}" for i in activity_ids for kind in ("started", "start_asked")}
 
     ids = [s["id"] for s in data["scenarios"]]
     assert len(ids) == len(set(ids)), "duplicate scenario ids"

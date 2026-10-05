@@ -55,6 +55,8 @@ class Change(Enum):
     FINISHED = "finished"          # the plan reached its end; back to free conversation
     DISMISSED = "dismissed"        # the user is done for now; say goodbye and go to sleep
     UNHEARD = "unheard"            # too doubtful a transcript to act on; ask them to repeat
+    START_ASKED = "start_asked"    # asked "do you mean X?" before starting it
+    START_DECLINED = "start_declined"  # they did not confirm X; it does not start
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,7 @@ LEAVE, STAY, ASK = "leave", "stay", "ask"
 # Asking again is for a genuinely unclear answer, not a loop: after this many
 # questions without a clear yes, the activity carries on.
 MAX_EXIT_ASKS = 2
+MAX_START_ASKS = 2
 # The exit dialogue has its own model, not the reply's. With the stop question
 # open, gpt-4o-mini left on nearly anything — "Thank you.", a misheard "Nein",
 # an answer to the activity — where this one stays or asks again (replay set,
@@ -105,6 +108,11 @@ class ExitStep:
     user_intent: str = ""        # what it understood, stated before deciding (for the log)
 
 
+def _plain(text: str) -> str:
+    """Lower-case words only, so "Check-in" and "check in" compare equal."""
+    return " ".join("".join(c if c.isalnum() else " " for c in text.lower()).split())
+
+
 def commands_from(verdicts: List[Any]) -> List[Dict[str, Any]]:
     """The router's proposals this turn, in call order."""
     commands: List[Dict[str, Any]] = []
@@ -126,6 +134,9 @@ class Companion:
     active: Optional[Dict[str, Any]] = None
     pending_exit: bool = False
     exit_asks: int = 0
+    # "Do you mean X?" is open: the activity she asked about, and how often.
+    pending_start: Optional[Dict[str, Any]] = None
+    start_asks: int = 0
     exit_model: str = EXIT_MODEL
     min_confidence: float = MIN_CONFIDENCE
     # When the running activity started (None if unknown, e.g. resumed after a
@@ -181,6 +192,9 @@ class Companion:
         commands: List[Dict[str, Any]],
         exit_step: Optional[ExitStep] = None,
         doubtful: bool = False,
+        *,
+        start_confirmed: Optional[bool] = None,
+        said: str = "",
     ) -> Transition:
         """The one transition this turn makes, from the mode it started in.
 
@@ -192,26 +206,52 @@ class Companion:
         ``doubtful`` says the transcript itself was heard with low confidence.
         Such a message never changes the mode — it may be a mumbled "yes" or
         filler the transcriber invented over silence — it can only make her ask.
+
+        Starting takes over the conversation, so it is never a guess: an
+        activity starts at once only when the user said its title (``said``).
+        Anything less is asked about first, and ``start_confirmed`` is the
+        judgment of their answer when that question is open.
         """
         if self.active:
             return self._decide_in_activity(exit_step, doubtful)
 
+        asked = self.pending_start
+        if asked and start_confirmed:
+            if not doubtful:
+                return Transition(Change.STARTED, activity=asked)
+            if self.start_asks < MAX_START_ASKS:
+                return Transition(Change.START_ASKED, activity=asked)
+            return Transition(Change.START_DECLINED, activity=asked)
+
+        # Not a yes. They may still name the one they meant ("no, the memory
+        # game") or ask what there is; anything else just closes the question —
+        # "no, never mind" is not a goodbye.
         command = commands[0] if commands else None
+        kind = command.get("command") if command else None
+        if asked and kind not in ("start", "list"):
+            return Transition(Change.START_DECLINED, activity=asked)
         if not command:
             return NO_CHANGE
-        kind = command.get("command")
         if kind == "list":
             return Transition(Change.OFFERED, offered=list(command.get("activities") or []))
-        if doubtful and kind in ("start", "sleep"):
-            return Transition(Change.UNHEARD, ignored=kind)
         if kind == "sleep":
+            if doubtful:
+                return Transition(Change.UNHEARD, ignored=kind)
             return Transition(Change.DISMISSED)
         if kind == "start":
             activity = self.find(command.get("activity_id"))
             if activity and activity.get("plan"):
-                return Transition(Change.STARTED, activity=activity)
+                if not doubtful and self._named(activity, said):
+                    return Transition(Change.STARTED, activity=activity)
+                return Transition(Change.START_ASKED, activity=activity)
             logger.warning("start_activity for unknown or plan-less activity %r", command)
         return Transition(Change.NONE, ignored=kind)
+
+    @staticmethod
+    def _named(activity: Dict[str, Any], said: str) -> bool:
+        """Whether the user's own words contain the activity's title."""
+        title = _plain(activity.get("title") or "")
+        return bool(title) and title in _plain(said)
 
     def _decide_in_activity(self, step: Optional[ExitStep], doubtful: bool) -> Transition:
         # A failed judgment changes nothing, whichever question was open: ending
@@ -248,6 +288,7 @@ class Companion:
         self.active = activity
         self.pending_exit = False
         self.exit_asks = 0
+        self.drop_start()
         self.started_at = now
         self.collected = {}
 
@@ -259,6 +300,16 @@ class Companion:
         self.exit_asks = 0
         self.started_at = None
         self.collected = {}
+
+    def ask_start(self, activity: Dict[str, Any]) -> None:
+        if self.pending_start is not activity:
+            self.start_asks = 0
+        self.pending_start = activity
+        self.start_asks += 1
+
+    def drop_start(self) -> None:
+        self.pending_start = None
+        self.start_asks = 0
 
     def ask_exit(self) -> None:
         self.pending_exit = True
@@ -329,6 +380,21 @@ def directive(transition: Transition) -> str:
             "it warmly in a sentence, do not continue or resume it, and return to "
             "open conversation."
         )
+    if change is Change.START_ASKED:
+        description = (transition.activity or {}).get("description")
+        return (
+            f"The user seems to want \"{transition.title}\""
+            + (f" ({description})" if description else "")
+            + " but did not name it outright. Ask in ONE short question, naming "
+            "it, whether that is the one they mean. Do nothing else this turn: "
+            "do not start it and do not list the other activities."
+        )
+    if change is Change.START_DECLINED:
+        return (
+            f"The user did not confirm \"{transition.title}\", so it does not "
+            "start. Carry on naturally; if they still want to do something, ask "
+            "which activity they mean."
+        )
     if change is Change.UNHEARD:
         return (
             "You did not hear the user clearly. Say so in a few words and ask "
@@ -357,6 +423,8 @@ _DECISIONS = {
     Change.EXIT_DECLINED: ("activity_end_declined", "Staying in “{title}”", None),
     Change.FINISHED: ("activity_completed", "Finished “{title}”", "Back to free conversation"),
     Change.DISMISSED: ("going_to_sleep", "Going to sleep", "The user is done for now"),
+    Change.START_ASKED: ("activity_start_proposed", "Asked to confirm starting “{title}”", None),
+    Change.START_DECLINED: ("activity_start_declined", "Not starting “{title}”", None),
 }
 
 
@@ -505,4 +573,62 @@ async def exit_dialogue(
         return step
     except Exception as e:
         logger.warning(f"Exit dialogue failed ({e})")
+        return None
+
+
+async def start_dialogue(
+    llm_service,
+    *,
+    model: str,
+    title: str,
+    user_input: str,
+    history: List[Dict[str, str]],
+) -> Optional[bool]:
+    """Judge the answer to "do you mean X?": True only for a yes to that.
+
+    Anything else — a no, another activity, a change of subject — is False, and
+    the turn is then handled as ordinary free conversation. None when the call
+    fails, which the caller treats as not a yes: starting on a guess takes over
+    the conversation.
+    """
+    recent = "\n".join(f"{m['role']}: {m['content']}" for m in history[-6:])
+    try:
+        response = await llm_service.generate(
+            messages=[
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "You handle ONE thing: in your last message you asked the "
+                        f'user whether they want to start the activity "{title}". '
+                        'First write, in "user_intent", one plain sentence saying '
+                        "what their message below means. Then check that sentence "
+                        'against their exact words and choose "decision":\n'
+                        f'- "yes": they confirm they want "{title}".\n'
+                        '- "no": anything else — they decline, name a different '
+                        "activity, ask something, change the subject, or it is "
+                        "unclear.\n\n"
+                        'Respond with JSON only: {"user_intent": "...", '
+                        '"decision": "yes" | "no"}'
+                    ),
+                ),
+                LLMMessage(
+                    role="user",
+                    content=(f"Recent conversation:\n{recent}\n\n" if recent else "")
+                    + f"Their message: {user_input}",
+                ),
+            ],
+            config=LLMConfig(
+                model=model, temperature=0.0, max_tokens=120,
+                provider=LLMProvider.OPENAI_LANGCHAIN, json_mode=True,
+            ),
+            component_name="start_dialogue",
+        )
+        data = json.loads(response.content)
+        decision = str(data.get("decision", "")).strip().lower()
+        if decision not in ("yes", "no"):
+            raise ValueError(f"unknown decision {decision!r}")
+        logger.info("Start dialogue: %s (%s)", decision, data.get("user_intent"))
+        return decision == "yes"
+    except Exception as e:
+        logger.warning(f"Start dialogue failed ({e})")
         return None
