@@ -119,6 +119,68 @@ async def test_batch_update_completes_and_skips_explicitly():
     # Verify the tool drove explicit complete + skip via the client.
     assert ("complete_task", "task-1", "done") in client.calls
     assert ("skip_task", "task-2", "skip") in client.calls
+    assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_batch_update_failure_says_why():
+    # A failed batch_update read "failed: None" in the debug log: it set no
+    # `error`, and a client error of None beat the "unknown" fallback.
+    class FailingClient(FakeClient):
+        async def set_deliverable(self, key, value, reasoning="", unconfirmed=False, correction=False):
+            return {"success": False, "error": None}
+
+    result = await BatchUpdateTool(FailingClient()).execute(
+        deliverables=[{"key": "fitness_goal", "value": "v", "reasoning": "r"}],
+    )
+    assert result.success is False
+    assert result.error == "fitness_goal: unknown"
+    assert result.data["deliverables_failed"] == [{"key": "fitness_goal", "error": "unknown"}]
+
+
+@pytest.mark.asyncio
+async def test_a_task_its_own_deliverable_satisfied_is_addressed_not_failed():
+    # The backend drops a task from "pending" once its deliverables are all in
+    # (#291), so the explicit complete in the same batch found nothing and was
+    # logged as "invalid task_id" on nearly every turn (session 5d10b334).
+    class SatisfyingClient(FakeClient):
+        async def set_deliverable(self, key, value, reasoning="", unconfirmed=False, correction=False):
+            self._pending = [t for t in self._pending if t["id"] != "task-1"]
+            return {"success": True, "transitioned": False}
+
+    client = SatisfyingClient()
+    result = await BatchUpdateTool(client).execute(
+        deliverables=[{"key": "preferred_exercise", "value": "running", "reasoning": "r"}],
+        tasks=[{"task_id": "task-1", "reasoning": "asked and answered"}],
+    )
+    assert result.success is True
+    assert result.data["tasks_addressed"] == [{"task_id": "task-1"}]
+    assert result.data["tasks_failed"] == []
+    assert not any(call[0] == "complete_task" for call in client.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_was_never_pending_still_fails():
+    result = await BatchUpdateTool(FakeClient()).execute(
+        deliverables=[{"key": "k", "value": "v", "reasoning": "r"}],
+        tasks=[{"task_id": "made-up", "reasoning": "r"}],
+    )
+    assert result.success is False
+    assert "invalid task_id 'made-up'" in result.error
+
+
+def test_mutating_state_machine_tools_carry_their_guidance():
+    from stella_agent_sdk.tools.state_machine import (
+        STATE_MACHINE_TOOL_GUIDANCE,
+        create_state_machine_tools,
+    )
+
+    guided = {t.name for t in create_state_machine_tools(FakeClient()) if t.guidance}
+    assert guided == {"complete_task", "skip_task", "skip_state", "set_deliverable", "batch_update"}
+    assert all(
+        t.guidance == STATE_MACHINE_TOOL_GUIDANCE
+        for t in create_state_machine_tools(FakeClient()) if t.guidance
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -4,9 +4,27 @@ import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import type { Persona } from '../../lib/api-types'
 
+/** The built-in persona for companion deployments (prisma/seed.ts). */
+export const COMPANION_DEFAULT_PERSONA_ID = '00000000-0000-4000-8000-000000000002'
+
+/**
+ * The built-in persona that fits a deploy mode: the companion default for a
+ * companion, the plan default for everything else. Mirrors what the backend
+ * resolves when a deployment names no persona, so the step shows that choice
+ * instead of leaving it to happen out of sight.
+ */
+export function defaultPersonaFor(personas: Persona[], mode?: string): Persona | undefined {
+  const defaults = personas.filter((p) => p.isSystemDefault)
+  const companion = defaults.find((p) => p.id === COMPANION_DEFAULT_PERSONA_ID)
+  const plan = defaults.find((p) => p.id !== COMPANION_DEFAULT_PERSONA_ID)
+  return (mode === 'companion' ? companion : plan) ?? plan ?? companion
+}
+
 interface PersonaSelectionStepProps {
   selectedPersona: Persona | null
   onSelectPersona: (persona: Persona | null) => void
+  /** The deploy mode, when the flow has one: decides which default is preselected. */
+  mode?: string
   personas?: Persona[]
   onPersonasChange?: (personas: Persona[]) => void
 }
@@ -41,6 +59,7 @@ export default function PersonaSelectionStep({
   onSelectPersona,
   personas: externalPersonas,
   onPersonasChange,
+  mode,
 }: PersonaSelectionStepProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
@@ -68,12 +87,21 @@ export default function PersonaSelectionStep({
         // state the user has to resolve — omitting a persona already means the
         // default server-side, so this only makes that visible.
         if (!selectedPersona && list.length > 0) {
-          onSelectPersona(list.find((p) => p.isSystemDefault) ?? list[0])
+          onSelectPersona(defaultPersonaFor(list, mode) ?? list[0])
         }
       })
       .catch((err) => console.error('Failed to fetch personas:', err))
       .finally(() => setIsLoading(false))
-  }, [hasFetched, setPersonas, selectedPersona, onSelectPersona])
+  }, [hasFetched, setPersonas, selectedPersona, onSelectPersona, mode])
+
+  // A built-in default follows the mode; a persona the user picked never moves.
+  // The mode step comes before this one, so the switch is on screen when they
+  // arrive here.
+  useEffect(() => {
+    if (!selectedPersona?.isSystemDefault) return
+    const fitting = defaultPersonaFor(personas, mode)
+    if (fitting && fitting.id !== selectedPersona.id) onSelectPersona(fitting)
+  }, [mode, personas, selectedPersona, onSelectPersona])
 
   const inputClass = `
     w-full px-3 py-2 rounded-lg text-sm font-light

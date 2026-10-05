@@ -121,6 +121,12 @@ export default function SessionView() {
     connectionId: 0
   })
 
+  // What one session's agent told the face must not carry into the next one
+  // opened in the same page load.
+  useEffect(() => {
+    useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
+  }, [sessionId])
+
   // Load session details, then participants (serialized to avoid connection burst)
   useEffect(() => {
     const loadSession = async () => {
@@ -255,6 +261,7 @@ export default function SessionView() {
     transport.onSpeechProgress = (data) => setSpeechProgress(data)
     // Emotion tags (#face-emotions): same bridge, same consumer.
     transport.onEmotionCues = (data) => setEmotionCues(data)
+    transport.onAgentCommand = (data) => useStore.getState().applyAgentCommand(data)
     transport.onProcessingMessage = (m: ProcessingMessage) => addProcessingMessage(m)
 
     // === TTS handlers (from ConnectPanel) ===
@@ -486,6 +493,7 @@ export default function SessionView() {
       transport.onTranscript = () => { }
       transport.onSpeechProgress = () => { }
       transport.onEmotionCues = () => { }
+      transport.onAgentCommand = () => { }
       transport.onProcessingMessage = () => { }
       transport.onTTSStart = () => { }
       transport.onTTSStop = () => { }

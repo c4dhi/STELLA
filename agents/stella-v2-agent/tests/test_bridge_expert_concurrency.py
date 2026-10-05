@@ -20,6 +20,7 @@ import pytest
 
 from stella_agent_sdk import AgentInput, AgentOutput
 from stella_v2_agent.agent import StellaV2Agent
+from stella_v2_agent.companion import Companion
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
@@ -63,10 +64,7 @@ def _make_agent(
 
     agent._audio_pipeline = None  # has_audio is a property → _elapsed_ms returns 0.0
     agent._is_processing = False
-    agent._active_activity = None
-    agent._activity_started_at = None
-    agent._activity_segments = []
-    agent._activity_collected = {}
+    agent.companion = Companion()
     agent._turn_counter = 0
     agent._last_reply_text = ""
     agent._session_language = None

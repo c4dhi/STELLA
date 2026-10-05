@@ -448,8 +448,29 @@ const SYSTEM_DEFAULT_PERSONA_PROMPT = `You are STELLA — a warm, genuinely curi
 - React to the specific thing the user said; never re-ask something they already answered.
 - Ask for missing information naturally, one thing at a time.`
 
+/**
+ * The built-in persona for companion deployments. The default above is written
+ * for plans; a companion keeps company and collects nothing, and saying so in
+ * the persona means no hidden instruction has to argue the persona down.
+ * Id-stable for the same reason, and looked up BY id: with two defaults,
+ * "the row flagged isSystemDefault" no longer names one.
+ */
+const COMPANION_DEFAULT_PERSONA_ID = '00000000-0000-4000-8000-000000000002'
+
+const COMPANION_DEFAULT_PERSONA_PROMPT = `You are STELLA — a warm, easygoing companion with a personality of your own. You keep someone company. You are not interviewing them, and there is nothing you need to find out.
+
+- Respond in the SAME LANGUAGE the user speaks (German if they speak German, English if English).
+- Keep responses to one or two short sentences (this is a voice conversation).
+- NEVER mention internal systems, experts, deliverables, or technical metadata.
+- React to the specific thing the user said. Do not ask questions to keep the conversation going: let them lead, and be comfortable with silence.
+- While an activity is running, follow it: ask what it asks, one thing at a time.`
+
 async function seedSystemDefaultPersona(): Promise<void> {
-  const existing = await prisma.persona.findFirst({ where: { isSystemDefault: true } })
+  // The plan default may have been repointed to another id by an operator, so
+  // it is "the default that is not the companion one".
+  const existing = await prisma.persona.findFirst({
+    where: { isSystemDefault: true, id: { not: COMPANION_DEFAULT_PERSONA_ID } },
+  })
 
   if (existing) {
     // Only the prompt text is refreshed. Name/icon are left alone so an operator
@@ -461,22 +482,46 @@ async function seedSystemDefaultPersona(): Promise<void> {
       })
       console.log(`  - refreshed system default persona (${existing.id})`)
     }
-    return
+  } else {
+    const created = await prisma.persona.create({
+      data: {
+        id: SYSTEM_DEFAULT_PERSONA_ID,
+        userId: null,
+        name: 'STELLA (default)',
+        description:
+          'Built-in fallback identity, used when a deployment names no persona. Copy it to make your own.',
+        icon: '🌟',
+        systemPrompt: SYSTEM_DEFAULT_PERSONA_PROMPT,
+        isSystemDefault: true,
+      },
+    })
+    console.log(`  - created system default persona (${created.id})`)
   }
 
-  const created = await prisma.persona.create({
+  const companion = await prisma.persona.findUnique({ where: { id: COMPANION_DEFAULT_PERSONA_ID } })
+  if (companion) {
+    if (companion.systemPrompt !== COMPANION_DEFAULT_PERSONA_PROMPT) {
+      await prisma.persona.update({
+        where: { id: companion.id },
+        data: { systemPrompt: COMPANION_DEFAULT_PERSONA_PROMPT },
+      })
+      console.log(`  - refreshed companion default persona (${companion.id})`)
+    }
+    return
+  }
+  await prisma.persona.create({
     data: {
-      id: SYSTEM_DEFAULT_PERSONA_ID,
+      id: COMPANION_DEFAULT_PERSONA_ID,
       userId: null,
-      name: 'STELLA (default)',
+      name: 'STELLA Companion (default)',
       description:
-        'Built-in fallback identity, used when a deployment names no persona. Copy it to make your own.',
-      icon: '🌟',
-      systemPrompt: SYSTEM_DEFAULT_PERSONA_PROMPT,
+        'Built-in identity for companion deployments, used when one names no persona. Keeps company instead of interviewing. Copy it to make your own.',
+      icon: '🛋️',
+      systemPrompt: COMPANION_DEFAULT_PERSONA_PROMPT,
       isSystemDefault: true,
     },
   })
-  console.log(`  - created system default persona (${created.id})`)
+  console.log(`  - created companion default persona (${COMPANION_DEFAULT_PERSONA_ID})`)
 }
 
 async function main() {

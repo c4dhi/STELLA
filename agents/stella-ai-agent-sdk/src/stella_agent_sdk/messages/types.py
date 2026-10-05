@@ -102,6 +102,9 @@ class OutputType(str, Enum):
     ANALYTICS = "analytics"
     """Analytics timing measurement — stored for aggregation, not displayed or spoken."""
 
+    CLIENT_COMMAND = "client_command"
+    """A command to the user's device (e.g. "sleep") — delivered once this turn's speech has played."""
+
 
 class StatusSubtype(str, Enum):
     """Subtypes for STATUS output messages."""

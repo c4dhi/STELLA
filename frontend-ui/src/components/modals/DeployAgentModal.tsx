@@ -114,14 +114,17 @@ export default function DeployAgentModal({
     if (agentRequirements.supportsConfigurator && selectedType?.pipelineSchema) {
       steps.push('configuration')
     }
+    // Mode first: it decides which built-in persona is preselected (a companion
+    // has its own default) and whether a MENU of activities or a single plan
+    // is picked afterwards.
+    if (agentRequirements.requiresPlan) {
+      steps.push('mode')
+    }
     // Persona BEFORE plan: who the agent is, then the task it carries out. Every
     // agent gets one (omitting it means the system default), so unlike the plan
     // step this is not gated on a capability.
     steps.push('persona')
-    // Mode decides what comes next: a companion picks a MENU of activities, a
-    // plan-follower picks the single plan it runs.
     if (agentRequirements.requiresPlan) {
-      steps.push('mode')
       steps.push(mode === 'companion' ? 'activities' : 'plan')
     }
     if (supportsVoiceSelection) {
@@ -794,6 +797,7 @@ export default function DeployAgentModal({
                     onSelectPersona={setSelectedPersona}
                     personas={personas}
                     onPersonasChange={setPersonas}
+                    mode={agentRequirements.requiresPlan ? mode : undefined}
                   />
                 </motion.div>
               ) : step === 'mode' ? (
