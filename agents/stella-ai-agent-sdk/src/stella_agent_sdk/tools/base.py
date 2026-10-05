@@ -105,6 +105,12 @@ class BaseTool(ABC):
                 return ToolResult(success=True, data={"result": "value"})
     """
 
+    # How to use this tool, beyond what its schema says. A runner appends the
+    # guidance of exactly the tools it hands a model — each distinct text once —
+    # so the contract travels with the tool and never reaches a model that
+    # cannot call it.
+    guidance: str = ""
+
     @property
     @abstractmethod
     def name(self) -> str:

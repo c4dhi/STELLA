@@ -15,7 +15,6 @@ import time
 from typing import Dict, Any, List, Optional
 
 from stella_agent_sdk.tools import BaseTool
-from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
 from stella_agent_sdk import prompts as sdk_prompts
 
 from stella_v2_agent.experts.base import ExpertConfig
@@ -143,7 +142,7 @@ class ExpertRunner:
             messages = self._build_messages(
                 config, user_input, conversation_history, sm_context,
                 append_output_format=False,
-                append_tool_guidance=True,
+                tools=tools,
             )
 
             # Use OPENAI_DIRECT provider (supports tool calling, unlike LANGCHAIN)
@@ -299,7 +298,7 @@ class ExpertRunner:
         conversation_history: List[Dict[str, str]],
         sm_context: Dict[str, Any],
         append_output_format: bool = True,
-        append_tool_guidance: bool = False,
+        tools: Optional[List[BaseTool]] = None,
     ) -> List[LLMMessage]:
         """Build LLM messages for the expert call.
 
@@ -311,10 +310,10 @@ class ExpertRunner:
         Args:
             append_output_format: If False, skip appending output_format
                 (used in tool mode where tools replace structured JSON output).
-            append_tool_guidance: If True, append the SDK's canonical
-                state-machine tool-usage contract (single source of truth) to the
-                system prompt. Set for tool-calling experts so the tool mechanics
-                are injected from code, never hand-written in the expert prompt.
+            tools: The tools this call can use. Each one's ``guidance`` (the SDK's
+                usage contract for it) is appended once — so an expert is taught
+                exactly the tools it has, from code, never from its editable
+                prompt.
         """
         template = config.system_prompt or ""
 
@@ -345,11 +344,12 @@ class ExpertRunner:
             )
             compiled_prompt = template
 
-        # Tool-calling experts get the canonical tool-usage contract from the SDK
-        # (single source of truth, shared with stella-light) — never from the
-        # editable expert prompt.
-        if append_tool_guidance:
-            compiled_prompt += "\n\n" + STATE_MACHINE_TOOL_GUIDANCE
+        # The usage contract of each tool this expert can call, once per distinct
+        # text. It used to be the state-machine contract for ANY tool-calling
+        # expert, which taught companion_router set_deliverable rules it could
+        # not even call.
+        for guidance in dict.fromkeys(t.guidance for t in tools or [] if t.guidance):
+            compiled_prompt += "\n\n" + guidance
 
         # Append output format instruction if configured (not in tool mode)
         if append_output_format and config.output_format:

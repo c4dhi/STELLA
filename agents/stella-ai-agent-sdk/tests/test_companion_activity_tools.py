@@ -1,152 +1,101 @@
-"""EndActivityTool proposes leaving; it does not end anything (Felix, 29 Sep).
+"""The companion tools only PROPOSE a transition; the agent applies it.
 
-A single misjudged end_activity call used to clear the plan immediately —
-this is the tool half of the fix: it no longer touches the state machine at
-all. The agent turns the proposal into a confirmation question, and a
-separate check on the reply decides whether to actually clear the plan (see
-stella_v2_agent.agent._resolve_pending_end_confirmation).
-
-StartActivityTool's guard (also Felix, 29 Sep, #36) is a separate fix: the
-router isn't reliable at telling "the user just chose this activity" from
-"the user is answering the question this activity already asked" — confirmed
-empirically (80/80 trials across four prompt variants still misfired). So the
-tool checks the actual running state itself rather than trusting the call.
-
-It blocks ANY start_activity while one is already running, not just a repeat
-of the same id: a same-id-only version was tried first and gave 0%
-protection on the actual reproduction case — the model doesn't reliably
-repeat the running activity's own id when it misfires, it calls
-start_activity with a DIFFERENT (wrong) one instead (confirmed 20/20 trials).
-Reloading on any of these resets the plan to its first state and discards
-whatever it already collected. Switching activities deliberately has to go
-through end_activity first (already gated behind its own confirmation step).
+They used to act: start_activity loaded the plan from inside the Expert Pool,
+racing the other experts' writes, and needed its own guard against restarting a
+running activity. Now each returns a ``command`` and touches nothing, so whether
+a start or stop is valid is decided in one place, against the session's actual
+mode (stella_v2_agent.companion).
 """
 
-from types import SimpleNamespace
-
 from stella_agent_sdk.tools.companion.activities import (
+    COMPANION_TOOL_GUIDANCE,
     EndActivityTool,
+    ListActivitiesTool,
     StartActivityTool,
     create_companion_tools,
 )
 
 ACTIVITIES = [
-    {"id": "act-1", "title": "Fitness Check-in", "plan": {"id": "act-1", "title": "Fitness Check-in"}},
-    {"id": "act-2", "title": "Memory Game", "plan": {"id": "act-2", "title": "Memory Game"}},
+    {
+        "id": "act-1",
+        "title": "Fitness Check-in",
+        "description": "A quick check-in on your fitness goals",
+        "plan": {"id": "act-1"},
+    },
+    {"id": "act-2", "title": "Memory Game", "description": "", "plan": {"id": "act-2"}},
 ]
 
 
-def _sm_client(full_state=None, load_plan_result=None):
-    async def get_full_state():
-        return full_state
-
-    async def load_plan(plan):
-        return load_plan_result or {"success": True, "current_state_id": "s1"}
-
-    return SimpleNamespace(get_full_state=get_full_state, load_plan=load_plan)
+def _idle():
+    return None
 
 
-async def test_start_activity_already_running_is_a_no_op():
-    sm_client = _sm_client(full_state={"plan_id": "act-1"})
-    tool = StartActivityTool(ACTIVITIES, sm_client)
+def _running():
+    return "Fitness Check-in"
 
-    result = await tool.execute(activity_id="act-1")
 
+async def test_list_activities_proposes_offering_them():
+    result = await ListActivitiesTool(ACTIVITIES).execute()
+    assert result.data["command"] == "list"
+    assert [a["id"] for a in result.data["activities"]] == ["act-1", "act-2"]
+
+
+async def test_start_activity_proposes_the_chosen_one_and_loads_nothing():
+    result = await StartActivityTool(ACTIVITIES, _idle).execute(activity_id="act-2")
     assert result.success is True
     assert result.data == {
-        "activity_already_running": True,
-        "activity_id": "act-1",
-        "activity_title": "Fitness Check-in",
+        "command": "start",
+        "activity_id": "act-2",
+        "activity_title": "Memory Game",
     }
 
 
-async def test_start_activity_requesting_a_different_activity_while_one_runs_is_also_a_no_op():
-    # The actual failure mode (#36): the router doesn't reliably repeat the
-    # running activity's own id, it calls start_activity with a DIFFERENT
-    # (wrong) one. A same-id-only guard gives 0% protection here — this one
-    # blocks on ANY activity already running, reporting the one actually
-    # running (act-1), not the wrongly-requested one (act-2).
-    sm_client = _sm_client(full_state={"plan_id": "act-1"})
-    tool = StartActivityTool(ACTIVITIES, sm_client)
-
-    result = await tool.execute(activity_id="act-2")
-
-    assert result.success is True
-    assert result.data == {
-        "activity_already_running": True,
-        "activity_id": "act-1",
-        "activity_title": "Fitness Check-in",
-    }
-
-
-async def test_start_activity_not_yet_running_loads_the_plan():
-    sm_client = _sm_client(full_state={"plan_id": None})
-    tool = StartActivityTool(ACTIVITIES, sm_client)
-
-    result = await tool.execute(activity_id="act-1")
-
-    assert result.success is True
-    assert result.data["activity_started"] is True
-    assert result.data["activity_id"] == "act-1"
-
-
-async def test_start_activity_after_the_running_one_is_actually_cleared_loads_normally():
-    # Once nothing is running (plan_id gone — the agent clears it via
-    # end_activity's confirmation flow before adopting a new one), a start
-    # call goes through normally. Switching activities is still possible,
-    # just not in a single unguarded call.
-    sm_client = _sm_client(full_state={"plan_id": None})
-    tool = StartActivityTool(ACTIVITIES, sm_client)
-
-    result = await tool.execute(activity_id="act-2")
-
-    assert result.success is True
-    assert result.data["activity_started"] is True
+async def test_start_activity_accepts_a_title_for_an_id():
+    result = await StartActivityTool(ACTIVITIES, _idle).execute(activity_id="memory game")
     assert result.data["activity_id"] == "act-2"
 
 
-def test_start_activity_schema_labels_each_id_with_its_title():
-    # The model has nothing else pairing an opaque id to what it means (#36
-    # follow-up, 29 Sep) — confirmed empirically that a bare-uuid enum is why
-    # it picks the wrong activity when it does call this tool. The enum
-    # itself stays ids-only (still the field the tool call needs); the
-    # description is where the pairing lives.
-    tool = StartActivityTool(ACTIVITIES, _sm_client())
-    schema = tool.parameters_schema
+async def test_start_activity_rejects_an_unknown_id():
+    result = await StartActivityTool(ACTIVITIES, _idle).execute(activity_id="nope")
+    assert result.success is False
+    assert "act-1" in result.error
+
+
+def test_start_activity_schema_pairs_ids_with_titles_and_descriptions():
+    # The reply offers activities by description ("a quick check-in on your
+    # fitness goals"), so the user picks by description. Titles alone sent
+    # "the fitness goals" to the wrong activity (Felix, 29 Sep).
+    schema = StartActivityTool(ACTIVITIES, _idle).parameters_schema
     description = schema["properties"]["activity_id"]["description"]
-    assert 'act-1 = "Fitness Check-in"' in description
+    assert 'act-1 = "Fitness Check-in" (A quick check-in on your fitness goals)' in description
     assert 'act-2 = "Memory Game"' in description
     assert schema["properties"]["activity_id"]["enum"] == ["act-1", "act-2"]
 
 
-async def test_start_activity_no_full_state_loads_the_plan():
-    # get_full_state() returning None (no plan row yet) must not crash the guard.
-    sm_client = _sm_client(full_state=None)
-    tool = StartActivityTool(ACTIVITIES, sm_client)
+def test_descriptions_state_whether_an_activity_is_running():
+    # Only the router carries these tools, so this is how it learns an activity
+    # is running without that fact entering any other expert's history.
+    idle_start = StartActivityTool(ACTIVITIES, _idle).description
+    busy_start = StartActivityTool(ACTIVITIES, _running).description
+    assert "already running" not in idle_start
+    assert '"Fitness Check-in" is already running' in busy_start
 
-    result = await tool.execute(activity_id="act-1")
-
-    assert result.success is True
-    assert result.data["activity_started"] is True
-
-
-async def test_end_activity_only_proposes_it():
-    tool = EndActivityTool()
-    result = await tool.execute(reason="user seems done")
-
-    assert result.success is True
-    assert result.data == {"activity_end_proposed": True, "reason": "user seems done"}
+    assert "nothing to stop" in EndActivityTool(_idle).description
+    assert '"Fitness Check-in"' in EndActivityTool(_running).description
 
 
-async def test_end_activity_needs_no_state_machine_client():
-    # Unlike before, there is nothing to call — clearing the plan happens
-    # later, deterministically, once the user has confirmed.
-    tool = EndActivityTool()
-    result = await tool.execute()
-    assert result.success is True
+async def test_end_activity_only_proposes_stopping():
+    result = await EndActivityTool(_running).execute(reason="user said stop")
+    assert result.data == {"command": "stop", "reason": "user said stop"}
 
 
-def test_create_companion_tools_end_activity_takes_no_sm_client():
-    tools = create_companion_tools(activities=[], sm_client=object())
-    end_tool = next(t for t in tools if t.name == "end_activity")
-    assert isinstance(end_tool, EndActivityTool)
+def test_every_companion_tool_carries_the_companion_guidance():
+    tools = create_companion_tools(ACTIVITIES, _idle)
+    assert {t.name for t in tools} == {"list_activities", "start_activity", "end_activity"}
+    assert all(t.guidance == COMPANION_TOOL_GUIDANCE for t in tools)
+
+
+def test_the_guidance_does_not_treat_a_change_of_subject_as_stopping():
+    # It used to list "change subject" as a reason to end — the opposite of what
+    # the router's own prompt said, and a cause of unprovoked exits.
+    assert "change subject" not in COMPANION_TOOL_GUIDANCE

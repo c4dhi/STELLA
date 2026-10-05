@@ -27,18 +27,35 @@ Those plans are **snapshotted into the deployment**. Editing a plan afterwards d
 |---|---|
 | "What can we do together?" | The agent names the allow-listed activities and invites a choice. |
 | "Let's do the memory game." | That plan is loaded and starts from its first step. |
-| "Actually, stop." | The plan is dropped; the conversation continues. |
+| "Actually, stop." | The agent asks whether to stop it (or, if the request was unmistakable, stops right away). |
+| "Yes." | The plan is dropped; the conversation continues. "No", and the activity carries on; unclear, and it asks once more. |
 | *(the plan reaches its end)* | The plan's farewell plays as a hand-back line, and free conversation resumes. |
 
 Reaching a plan's `__end__` means **pop, not hang up**. A finished activity is not a finished conversation.
 
+## Inside an activity it is plan mode
+
+The one rule everything else follows: **an activity runs exactly as a plan-mode deployment of that plan would.** The reply and every expert get the same plan context and the same history, and that history starts where the activity started, the way a plan-mode session has nothing before its first turn. Nothing from the free conversation carries into the activity.
+
+The only additions are the way out (asked, then confirmed) and the hand-back at the plan's end. A test replays an activity turn and the same turn in a plan-mode deployment, and fails if their inputs differ (`tests/test_companion_turns.py`).
+
 ## How it works
 
-The router is an ordinary expert — `companion_router` — with three tools:
+The router is an ordinary expert — `companion_router` — with three tools, and all three only **propose**: `list_activities`, `start_activity` and `end_activity` each return a command and touch nothing.
 
-- `list_activities` answers **locally** from the deploy snapshot. It runs inside a conversational turn, so it must not add a network round trip.
-- `start_activity` calls `LoadPlan` on the state machine.
-- `end_activity` calls `ClearPlan`.
+The agent then makes at most one transition per turn, after every expert has finished, judged against the mode the turn started in (`stella_v2_agent/companion.py`):
+
+| Mode at turn start | Router proposes | What happens |
+|---|---|---|
+| Free conversation | list | The activities are offered. |
+| Free conversation | start | The plan is loaded (`LoadPlan`); the reply opens its first step. |
+| In an activity | stop | The exit dialogue judges the user's words: ask "shall we stop X?" (nothing ends yet), leave straight away if the request was unmistakable, or ignore it if it was not a stop request at all. |
+| Asked to stop | *(anything)* | The exit dialogue judges the answer: leave (`ClearPlan`), stay, or — if genuinely unclear — ask once more. |
+| In an activity | start or list | Ignored, and tagged as ignored. The router mistook an answer for a new choice. |
+
+The **exit dialogue** is one scoped LLM call, separate from the router and from the reply model. It sees only the stop question, the user's words and the last few turns. It first states what it understands the user to want, checks that against their words, and only then decides. When it asks, it writes the question itself, in the session's language and the persona's voice, and that question is spoken as written. Given only an instruction to ask, the reply model followed the plan instead. Its reading of the user appears as the detail line of the decision tag.
+
+Because nothing is applied until the pool has finished, experts can all run every turn without racing each other or the plan loading. The router learns whether an activity is running from its own tool descriptions, which no other expert sees.
 
 `LoadPlan` deliberately is **not** `Initialize`. `Initialize` resumes existing state so a paused agent restarts where it left off, which is wrong here: a user who runs an activity, stops, and picks it again expects it from the top. `ClearPlan` deletes the row rather than blanking it, so every existing "no plan" code path applies unchanged — which is exactly the state a free-flow turn is in.
 
@@ -68,10 +85,10 @@ This matters more than it sounds. "What can we do together?" is also a probing c
 
 **In the agent sidebar**, a companion shows `Free conversation` and a **Can offer** list while idle, and the running activity's name once one starts. This is read from the live progress stream, not the deploy snapshot — a companion picks a plan up and drops it mid-session, so the snapshot cannot answer "what is running right now".
 
-**With the processing toggle on**, every tool call the pipeline makes is also shown — `start_activity`, `set_deliverable`, `complete_task` — with the arguments the model passed and what came back.
+**With the processing toggle on**, every tool call the pipeline makes is also shown — `start_activity`, `set_deliverable`, `complete_task` — with the arguments the model passed and what came back. A companion tool call only shows the proposal; the decision tag next to it shows what the agent actually did with it.
 
 ## Interaction with other features
 
-- **Auto-pause / wake.** A companion that is paused mid-activity resumes into it: the state-machine row outlives the pod, and the agent re-adopts the running plan on ready. If a redeploy removed that plan from the allow-list, the session drops back to free conversation rather than running a plan the deployment no longer offers.
+- **Auto-pause / wake.** A companion that is paused mid-activity resumes into it: the state-machine row outlives the pod, and the agent re-adopts the running plan on ready. If a redeploy removed that plan from the allow-list, the plan is cleared and the session drops back to free conversation rather than running a plan the deployment no longer offers. Two things do not survive a restart yet: an open "shall we stop?" question, and where the resumed activity's history begins.
 - **Persona.** Unchanged and orthogonal. Identity comes from the persona; activities are structure. The same persona can front any set of activities.
 - **Language.** A loaded plan may declare a language, which pins the session for as long as it is running.

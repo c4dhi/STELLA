@@ -1,41 +1,53 @@
-"""The three companion tools and their registry factory."""
+"""The three companion tools and their registry factory.
+
+They only PROPOSE. Each returns a ``command`` in its result data and touches
+nothing; the agent decides, against the session's actual mode, whether to act on
+it. So the tools cannot race the other experts in the same turn, cannot restart
+a running activity, and cannot leave a half-applied transition behind — the
+agent applies at most one transition per turn, after every expert has finished.
+"""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from stella_agent_sdk.tools.base import BaseTool, ToolResult
 
 logger = logging.getLogger(__name__)
 
 
-# Appended to a companion router's prompt from the SDK, so the contract lives in
-# one place rather than being hand-copied into each deployment's expert config —
-# the same arrangement STATE_MACHINE_TOOL_GUIDANCE uses.
 COMPANION_TOOL_GUIDANCE = """
-ACTIVITY TOOLS — use them only when the user's intent is unmistakable.
+ACTIVITY TOOLS — use them only when the user's intent is unmistakable. Call NO
+tool for ordinary conversation: that is the common case.
 
-- `list_activities` — the user asked what they can do, what is available, or is
-  casting about for something to do. Cheap and read-only; calling it does not
-  commit the user to anything.
-- `start_activity` — the user has clearly CHOSEN one. A name they said, or an
-  unambiguous "yes" to one you just offered. Never start an activity because it
-  seemed like a good idea, and never start one they have not agreed to: it takes
-  over the conversation, and taking it back costs the user a turn.
-- `end_activity` — the user clearly and explicitly wants to stop, leave, change
-  subject, or is plainly finished. A downbeat or ambiguous answer that is still
-  on topic is not a request to leave — require an unmistakable one.
+- `list_activities` — the user asked what they can do, or is looking for
+  something to do. Read-only; it commits them to nothing.
+- `start_activity` — the user has clearly CHOSEN one: named it, described it, or
+  said an unambiguous yes to one just offered. Unsure which one they meant? Call
+  no tool, and let the reply ask.
+- `end_activity` — the user clearly wants to stop the running activity. Answering
+  its questions — briefly, reluctantly, or with a complaint about how it is going
+  — is taking part, not stopping. The user is asked to confirm before anything
+  ends.
 
-Call NO tool for ordinary conversation. That is the common case.
+Call no more than one tool per turn.
 """
+
+# Who is running right now, as the title of the running activity or None.
+RunningActivity = Callable[[], Optional[str]]
+
+
+def _activity_view(activity: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "id": activity.get("id") or "",
+        "title": activity.get("title") or activity.get("name") or "Untitled",
+        "description": activity.get("description") or "",
+    }
 
 
 class ListActivitiesTool(BaseTool):
-    """What the user can choose from.
+    """What the user can choose from, answered from the deploy-time snapshot."""
 
-    Answers from the deploy-time snapshot rather than a backend call: this runs
-    inside a conversational turn, and an activity list is fixed for the life of
-    the deployment, so a round trip would buy nothing but latency.
-    """
+    guidance = COMPANION_TOOL_GUIDANCE
 
     def __init__(self, activities: List[Dict[str, Any]]):
         self._activities = activities
@@ -59,27 +71,20 @@ class ListActivitiesTool(BaseTool):
         return ToolResult(
             success=True,
             data={
-                "activities": [
-                    {
-                        "id": a.get("id"),
-                        "title": a.get("title") or a.get("name") or "Untitled",
-                        "description": a.get("description") or "",
-                    }
-                    for a in self._activities
-                ],
-                # Surfaced so the reply can name the options instead of the model
-                # inventing them; see the agent's directive assembly.
-                "offer_activities": True,
+                "command": "list",
+                "activities": [_activity_view(a) for a in self._activities],
             },
         )
 
 
 class StartActivityTool(BaseTool):
-    """Load a chosen plan and hand the conversation over to it."""
+    """Propose starting the activity the user chose."""
 
-    def __init__(self, activities: List[Dict[str, Any]], sm_client):
+    guidance = COMPANION_TOOL_GUIDANCE
+
+    def __init__(self, activities: List[Dict[str, Any]], running: RunningActivity):
         self._activities = activities
-        self._sm_client = sm_client
+        self._running = running
 
     @property
     def name(self) -> str:
@@ -87,27 +92,35 @@ class StartActivityTool(BaseTool):
 
     @property
     def description(self) -> str:
+        running = self._running()
+        if running:
+            return (
+                f'"{running}" is already running, so there is nothing to start: '
+                "the user is taking part in it. Do not call this."
+            )
         return (
-            "Start an activity the user has explicitly chosen. Only call once "
-            "they have named it or clearly agreed to one you offered."
+            "Start the activity the user has explicitly chosen — named, described, "
+            "or clearly agreed to when offered."
         )
 
     @property
     def parameters_schema(self) -> Dict[str, Any]:
-        # The enum alone is opaque ids with nothing pairing one to its title —
-        # confirmed empirically (Felix, 29 Sep) that this is why the model
-        # picks the wrong activity when it does decide to call this: labeling
-        # the description with id = title pairs took targeting accuracy on
-        # the reproduction case from 0/20 to 20/20.
-        pairs = "; ".join(
-            f'{a.get("id")} = "{a.get("title")}"' for a in self._activities if a.get("id")
+        # Titles AND descriptions: the reply offers activities in its own words,
+        # usually from their descriptions ("a quick check-in on your fitness
+        # goals"), so the user picks by description too. With titles alone the
+        # router matched "fitness goals" to the only title containing "Fitness",
+        # which was the other activity (Felix, 29 Sep).
+        options = "; ".join(
+            f'{v["id"]} = "{v["title"]}"' + (f' ({v["description"]})' if v["description"] else "")
+            for v in map(_activity_view, self._activities)
+            if v["id"]
         )
         return {
             "type": "object",
             "properties": {
                 "activity_id": {
                     "type": "string",
-                    "description": f"id of the activity the user chose. Mapping of id to title: {pairs}",
+                    "description": f"id of the activity the user chose. The options: {options}",
                     "enum": [a.get("id") for a in self._activities if a.get("id")],
                 },
             },
@@ -133,84 +146,23 @@ class StartActivityTool(BaseTool):
                 success=False,
                 error=f"Unknown activity '{activity_id}'. Available: {known}",
             )
-
-        plan = activity.get("plan")
-        if not plan:
-            return ToolResult(
-                success=False,
-                error=f"Activity '{activity_id}' has no plan attached",
-            )
-
-        if not self._sm_client:
-            return ToolResult(success=False, error="No state machine available")
-
-        # The router isn't reliable at telling "the user just chose this" from
-        # "the user is answering the question this activity already asked"
-        # (#36) — confirmed empirically, prompt wording doesn't fix it. So this
-        # checks the actual running state rather than trusting the call.
-        #
-        # Blocks on ANY activity already being active, not just a repeat of the
-        # SAME one: a same-id-only check was tried first and gave 0% protection
-        # on the actual reproduction case — the model doesn't reliably repeat
-        # the running activity's own id, it calls start_activity with a
-        # DIFFERENT (wrong) one instead (Felix, 29 Sep — confirmed 20/20 trials
-        # requested a different id, never the running one). Reloading on ANY of
-        # these resets the plan to its first state and discards whatever it
-        # already collected, for a call that reflects no real new choice either
-        # way. To switch activities deliberately, the router has to end the
-        # running one first (already gated behind its own confirmation step) —
-        # not jump straight from one to another in a single call.
-        full_state = await self._sm_client.get_full_state()
-        running_plan_id = full_state.get("plan_id") if full_state else None
-        if running_plan_id:
-            running = self._find(running_plan_id) or {}
-            running_title = running.get("title") or running_plan_id
-            logger.info(
-                "start_activity('%s') called while '%s' is already running — ignored",
-                activity.get("title"), running_title,
-            )
-            return ToolResult(
-                success=True,
-                data={
-                    "activity_already_running": True,
-                    "activity_id": running_plan_id,
-                    "activity_title": running_title,
-                },
-            )
-
-        result = await self._sm_client.load_plan(plan)
-        if not result or not result.get("success"):
-            return ToolResult(
-                success=False,
-                error=(result or {}).get("error") or "Failed to load the activity",
-            )
-
-        logger.info("Started activity '%s'", activity.get("title"))
         return ToolResult(
             success=True,
             data={
-                # `activity_started` is what the agent watches for to switch out of
-                # free-flow; the runner already surfaces unknown data keys verbatim.
-                "activity_started": True,
+                "command": "start",
                 "activity_id": activity.get("id"),
                 "activity_title": activity.get("title"),
-                "current_state_id": result.get("current_state_id"),
             },
         )
 
 
 class EndActivityTool(BaseTool):
-    """Propose leaving the running plan — does not clear it.
+    """Propose stopping the running activity; the user confirms before it ends."""
 
-    Ending used to be immediate, which meant a single misjudged call by the
-    router (a downbeat but on-topic reply, mistaken for a stop request) threw
-    the user out of the activity with no way back. It now only PROPOSES
-    leaving; the agent turns that into a direct yes/no question, and a
-    separate, narrowly-scoped check on the reply decides whether to actually
-    clear the plan. The router keeps its own judgment for deciding SOMETHING
-    stop-shaped happened; it no longer gets the last word on whether it really
-    was one.
-    """
+    guidance = COMPANION_TOOL_GUIDANCE
+
+    def __init__(self, running: RunningActivity):
+        self._running = running
 
     @property
     def name(self) -> str:
@@ -218,12 +170,14 @@ class EndActivityTool(BaseTool):
 
     @property
     def description(self) -> str:
+        running = self._running()
+        if not running:
+            return "No activity is running, so there is nothing to stop. Do not call this."
         return (
-            "Propose stopping the current activity — does not end it immediately, "
-            "the user is asked to confirm first. Call ONLY on a clear, explicit "
-            "request to stop, leave, or move on — not for a downbeat or ambiguous "
-            "answer that is still on topic for what was just asked. Can be called "
-            "mid-activity."
+            f'Propose stopping "{running}", which is running right now. Call ONLY on '
+            "a clear, explicit request to stop or leave it — not for a short, "
+            "downbeat, or critical answer that is still taking part. The user is "
+            "asked to confirm before it ends."
         )
 
     @property
@@ -239,17 +193,21 @@ class EndActivityTool(BaseTool):
         }
 
     async def execute(self, reason: str = "", **_kwargs) -> ToolResult:
-        logger.info("Proposed ending activity (%s)", reason or "no reason given")
-        return ToolResult(success=True, data={"activity_end_proposed": True, "reason": reason})
+        return ToolResult(success=True, data={"command": "stop", "reason": reason})
 
 
 def create_companion_tools(
     activities: List[Dict[str, Any]],
-    sm_client,
+    running: RunningActivity,
 ) -> List[BaseTool]:
-    """Build the companion toolset for one session."""
+    """Build the companion toolset for one session.
+
+    ``running`` is read each time a schema is built, so the tool descriptions
+    always state whether an activity is running — only the router carries these
+    tools, which keeps that fact out of every other expert's context.
+    """
     return [
         ListActivitiesTool(activities),
-        StartActivityTool(activities, sm_client),
-        EndActivityTool(),
+        StartActivityTool(activities, running),
+        EndActivityTool(running),
     ]
