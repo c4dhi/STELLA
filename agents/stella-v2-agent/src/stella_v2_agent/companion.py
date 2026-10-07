@@ -225,6 +225,17 @@ class Companion:
         command = commands[0] if commands else None
         kind = command.get("command") if command else None
         if asked and kind not in ("start", "list"):
+            # A "no" the judge concluded on its own is a real answer and ends
+            # the question. But a transcript heard too poorly to trust is not
+            # evidence of anything, "no" included — the symmetric doubtful-yes
+            # case above already asks again rather than acting on it; a
+            # doubtful non-yes must do the same, or a single garbled turn
+            # silently closes a question the user never actually answered
+            # (#50/#52: "Ja, genau, Dean." never got the chance to confirm,
+            # because the turn before it — a mistranscription — had already
+            # dropped the question it would have answered).
+            if doubtful and self.start_asks < self.settings.max_start_asks:
+                return Transition(Change.START_ASKED, activity=asked)
             return Transition(Change.START_DECLINED, activity=asked)
         if not command:
             return self._unprompted()
@@ -260,9 +271,26 @@ class Companion:
 
     @staticmethod
     def _named(activity: Dict[str, Any], said: str) -> bool:
-        """Whether the user's own words contain the activity's title."""
+        """Whether the user's own words contain the activity's title — or
+        enough of it.
+
+        The full title is the strongest match. Failing that, the title minus
+        its FIRST word also counts, as long as two words of it are still
+        left: a leading qualifier ("Prolific Fitness Check-in") is not
+        something a user asking for "the Fitness Check-in" would ever say,
+        and its absence alone must not fall back to asking "do you mean X?"
+        every time (#50/#52). Short of two remaining words this is switched
+        off — "Memory Game" minus "Memory" is just "Game", too common a word
+        to mean much on its own.
+        """
+        said = _plain(said)
         title = _plain(activity.get("title") or "")
-        return bool(title) and title in _plain(said)
+        if not title:
+            return False
+        if title in said:
+            return True
+        rest = " ".join(title.split()[1:])
+        return len(rest.split()) >= 2 and rest in said
 
     def _decide_in_activity(self, step: Optional[ExitStep], doubtful: bool) -> Transition:
         # A failed judgment changes nothing, whichever question was open: ending
