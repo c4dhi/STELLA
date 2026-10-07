@@ -7,24 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.3.0] - 2026-10-07
+
+Personas and companion mode. An agent's identity is now separate from its plan,
+and an agent can be deployed without a plan to keep someone company and run
+activities on request. **If you upgrade an existing installation, read "Upgrade
+notes" first. If your study runs plans on 1.2.0, read "For studies running
+plans" under Changed.**
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** This release applies 8 database migrations on its own during the deploy (personas, the plan's default persona, measured voice capacity, the audit record) and nothing backs up for you first
+- **Node on the host:** the deploy runs the database migration on the host with Prisma 7, which needs Node 20.19+, 22.12+ or 24+. The deploy workflows now install Node 26 themselves; if you deploy by hand with `./scripts/start-k8s.sh`, check `node --version` first
+- **Personas, once after updating:** run `npx ts-node scripts/migrations/extract-plan-personas.ts` (a dry run that prints plan names, counts and persona names; add `--show-prompts` to also print prompt text), read the output, then run it again with `--apply`. It turns each plan's and public project's own prompt and voice into a persona and links the plan to it, so existing plans keep their personality. It is safe to re-run. Saved configurations that set a custom persona in the old configurator slot are not carried over
+- No new required setting. `STELLA_MODEL_KEEP_WARM` (default on) is new and optional
+- The backend now runs on NestJS 12 and Prisma 7 and is built with TypeScript 6. Nothing to do unless you build your own image from a changed `Dockerfile`
+
 ### Added
 
-- Voice capacity: a repeatable load test (`scripts/load-test`) raises the number of simultaneous simulated sessions until speech recognition or the voice slows or stutters, and the admin dashboard shows the measured number for each server with the GPU it was measured on and the date. Nothing is limited by it; it tells you what a server carries
-- Personas: an agent's identity (name, system prompt, voice, language) is now separate from its plan and can be chosen when deploying. A plan remembers the persona it was built with, and a deployment that names no persona uses the plan's, then the system default
-- **Upgrade step for existing installations:** run `npx ts-node scripts/migrations/extract-plan-personas.ts` once after updating (a dry run that prints plan names, counts and persona names; add `--show-prompts` to also print prompt text), read the output, then run it again with `--apply`. It turns each plan's and public project's own prompt and voice into a persona and links the plan to it, so existing plans keep their personality. It is safe to re-run. Saved configurations that set a custom persona in the old configurator slot are not carried over
+**Personas**
+- An agent's identity (name, system prompt, voice, language) is now a persona, separate from its plan and from the pipeline configuration, and is chosen when deploying. A plan remembers the persona it was built with, and a deployment that names no persona uses the plan's, then the built-in default
+- Persona variables: a plan or configuration can refer to the persona, for example `{{persona.name}}`, and the Plan Builder shows which variables exist and highlights them
+- Public projects have a Persona step in their setup wizard. Before, every public link ran the built-in default
+- Two built-in personas: one for plans and "STELLA Companion" for companion mode. The deploy dialog asks for the mode before the persona and preselects the matching one
+
+**Companion mode**
+- An agent can be deployed with no plan. It keeps company in free conversation, offers the plans the operator allowed as activities, starts one on request and leaves it when the participant wants to stop. Companion is a mode chosen when deploying; a deployment that does not choose it follows its plan as before
+- She speaks first when woken: she asks how the participant is, then offers the activities, once each, and after that only responds. Free conversation keeps company instead of interviewing
+- She asks before she acts on an unclear turn: "do you mean X?" before starting an activity that was not named outright, and "shall we stop?" before leaving one. Mood alone does not end an activity
+- After an activity, stopped or finished, she asks once whether they would like another one
+- Sleep: she goes to sleep when told goodbye or good night, or after 45 quiet seconds outside an activity, and never inside one. Tapping her wakes her. Captions are hidden while she sleeps
+- What she says in each of these situations, which model judges a yes or a stop, how often she may ask, and the sleep time are settings in the new Companion node of the pipeline configurator
+- The admin view of a session shows what the agent decided in each turn and which activities it can offer
+
+**Face**
+- The face is more expressive (eyes with lids, a wider set of expressions) and is driven by emotion tags the agent writes into its reply. The tags are never spoken and never shown to participants; the admin board shows them so an operator can see which replies were tagged
+- The face can sleep and wake, and reports both to the agent
+
+**Voice**
+- Speech recognition and the voice model are kept warm in the background, so the first sentence after a quiet period no longer waits about 11 seconds (the 1.2.0 known limitation, #561). `STELLA_MODEL_KEEP_WARM=false` switches it off; the setup wizard asks
+- `STELLA_TTS_PLAYBACK` per deployment: `stream` (default) or `sentence`, which waits for the whole sentence before playing it, for a voice model slower than real time
+- When `STELLA_TTS_PREROLL_MS` is not set, the playback head start now adapts to how fast the voice is being synthesised (200 ms to 3 s). A set value still pins it
+- Speech recognition reports a real confidence for each final transcript and passes it to the agent. It was a constant before
+- Both speech-recognition providers now share one turn detection, backed by Silero VAD. The sherpa provider (the default without a GPU) gains proper barge-in: it can tell speech from noise and reports when speech ends
+
+**Voice capacity**
+- A repeatable load test (`scripts/load-test`) raises the number of simultaneous simulated sessions until speech recognition or the voice slows or stutters. The admin dashboard shows the measured number for each server behind an info icon on the GPU card, with the GPU it was measured on, the date, and the reason when the number is zero. Nothing is limited by it; it tells you what a server carries
+
+**Backup**
+- Every import of a backup is recorded in an audit record with who did it, the outcome and the bundle, and an import can no longer erase that record (#380)
+
+**Agent SDK**
+- For agent authors, not yet released to PyPI (the package stays at 0.6.0): an agent can open a turn itself, send commands to the device and receive device events and an idle signal; `process()` receives the transcript confidence as `metadata["stt_confidence"]`; `set_deliverable` and `batch_update` accept `correction`
 
 ### Changed
 
+**Personas replace the plan's own prompt and voice**
+- A plan no longer carries a system prompt or a voice; saving a plan with either is rejected, and the AI plan generator no longer writes them. Run the upgrade step above so existing plans keep their personality
+- The persona slot is gone from the Agent Configurator. A value stored there is no longer read; no saved configuration becomes invalid
 - Sessions paused before the upgrade keep their plan's own personality when they wake up (temporary fallback, removed one release after 1.3.0)
+
+**For studies running plans**
+- The face no longer falls asleep on its own timer during a session. It sleeps only when the agent sends it to sleep, which a plan session does not do
+- "Can we stop?" is no longer handled by the task-extraction expert: it is told to call no tool for it. In companion mode the stop is asked about and decided separately; in a plan session nothing else decides it. If your plan relied on the participant ending a step that way, test it before your study
+- `batch_update` now reports `tasks_addressed` in its result
+- A required answer that was already collected can no longer be silently replaced by a later, worse one. The agent has to mark the change as a deliberate correction, every change is kept in the answer's history, and rejected attempts are logged. The default prompts in the configurator teach this; if your study edited the task-extraction prompt, compare it with the new default
+- Speech confidence limit: in companion mode a message heard with a confidence below 0.4 cannot start or leave an activity or send her to sleep; she asks instead (Minimum Transcript Confidence in the Companion node, 0 switches it off). The value is not yet tuned on real sessions. Plan sessions only log the confidence
+
+**Agents**
+- `stella-light` is deprecated in favour of `stella-v2`. Existing deployments keep running and it can still be deployed when chosen, but it is shown last and marked in the gallery, and a deployment that names no agent type now gets `stella-v2`
+
+**Backup**
+- Backup bundles are encrypted by default, because they contain the deployment's secrets. A plaintext bundle needs both `--no-encrypt` and `--allow-plaintext-config`. `BACKUP_PASSPHRASE` is honoured for unattended export and restore (#380)
 
 ### Fixed
 
-- Conversations now end on their own after the farewell. The last step of a plan leads to the end by default (in stored plans and in AI-generated ones), a session stuck on its last step is released to the end, and the Plan Builder no longer claims a plan will end when it will not
-- Muting the microphone no longer makes Stella stutter or answer half-sentences. Mute now keeps the audio connection and sends silence instead of tearing it down, so speech recognition is not restarted on every mute, and the agent is told the mute was deliberate. Unmuting reuses the same connection. Note for researchers: while muted, the browser still holds the microphone (the browser's mic indicator stays on) but no sound is sent.
+- Conversations now end on their own after the farewell. The last step of a plan leads to the end by default (in stored plans and in AI-generated ones), a session stuck on its last step is released to the end, a last step with no tasks is not ended early at the turn limit, and the Plan Builder no longer claims a plan will end when it will not (#452)
+- An AI-generated plan now starts at its first step: the generated start was not mapped to the new step id
+- Muting the microphone no longer makes Stella stutter or answer half-sentences. Mute now keeps the audio connection and sends silence instead of tearing it down, so speech recognition is not restarted on every mute, and the agent is told the mute was deliberate. Unmuting reuses the same connection. Note for researchers: while muted, the browser still holds the microphone (the browser's mic indicator stays on) but no sound is sent
+- The opening phrase of a reply is no longer spoken twice, and the reply no longer acknowledges the same thing a second time after it (#627)
+- A reply that arrived right at the opening phrase's time limit could make the agent leave the room mid-reply; the limit can no longer cancel the turn
+- Background noise no longer makes the agent lower its voice and stay quiet, and a short "mhm" that did not take the turn is now marked as such in the transcript instead of looking like a turn the agent ignored
+- Two sessions speaking at the same time on the Qwen3 voice no longer garble each other's audio: the shared model takes one sentence at a time (#463)
+- A cancelled sentence no longer lets the next one start on the voice model while the first is still being synthesised, and the keep-warm run never overlaps a live sentence
+- On iPhone and Safari, agent audio that the browser blocked now starts on the next tap
+- A tool-calling expert is offered only the tools on its own list again. Loading a configuration dropped that list, so every such expert was offered every tool
+- The Plan Builder keeps highlighted text aligned with what is typed
+- The deploy dialog keeps a built-in persona the user picked when the mode changes
+- Companion mode: speech recognition stays on the session language once the agent is sure of it, and a clear yes to "do you mean X?" starts the activity
+- Security updates for npm dependencies (Dependabot alerts), and upload errors are reported as a client error again
 
 ### Known limitations
 
 - On the development server's Tesla T4 with the Qwen3 voice in streaming playback, one session already starves the voice (9.7% of playback against a 5% limit, judged with an 800 ms player pre-roll) and two sessions collapse, so its measured capacity is 0 (see the Voice capacity card). This is the T4 only; production's GPU has not been measured, and the sentence-by-sentence playback mode was not tested
+- Dependency updates for the voice service (`transformers`, `huggingface-hub`, `faster-qwen3-tts`) are held until they have been tested on a GPU host; `transformers` stays pinned below 5.17 ([#665](https://github.com/c4dhi/STELLA/issues/665))
 
 ---
 
