@@ -18,7 +18,7 @@ grpcio-tools==1.84.0
 numpy==2.4.6
 soundfile>=0.12.0
 # scipy 1.18 raised its floor to Python >=3.12 as well; same rule as numpy.
-scipy>=1.11.0,<1.18
+scipy>=1.17.1,<1.18
 
 # Used by some init paths to fetch weights into the PVC.
 huggingface_hub>=1.29.0
