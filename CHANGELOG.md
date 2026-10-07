@@ -60,7 +60,7 @@ plans" under Changed.**
 - Every import of a backup is recorded in an audit record with who did it, the outcome and the bundle, and an import can no longer erase that record (#380)
 
 **Agent SDK**
-- For agent authors, not yet released to PyPI (the package stays at 0.6.0): an agent can open a turn itself, send commands to the device and receive device events and an idle signal; `process()` receives the transcript confidence as `metadata["stt_confidence"]`; `set_deliverable` and `batch_update` accept `correction`
+- Agent SDK 0.7.0 on PyPI (`pip install stella-ai-agent-sdk==0.7.0`). For agent authors: an agent can open a turn itself, send commands to the device and receive device events and an idle signal; `process()` receives the transcript confidence as `metadata["stt_confidence"]`; `set_deliverable` and `batch_update` accept `correction`; emotion tags and persona variables are handled by the SDK. Details in the [SDK changelog](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md)
 
 ### Changed
 

@@ -30,7 +30,7 @@ pip install -e STELLA/agents/stella-ai-agent-sdk
 Or pin directly to a tag without cloning:
 
 ```bash
-pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.6.0#subdirectory=agents/stella-ai-agent-sdk"
+pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.7.0#subdirectory=agents/stella-ai-agent-sdk"
 ```
 
 ## Quick Start
@@ -223,8 +223,8 @@ triggered by pushing a `sdk-v<version>` tag:
 ```bash
 # 1. Bump `version` in agents/stella-ai-agent-sdk/pyproject.toml, then commit it to main.
 # 2. Tag the commit. The tag version must match pyproject.toml or the workflow fails.
-git tag sdk-v0.6.0
-git push origin sdk-v0.6.0
+git tag sdk-v0.7.0
+git push origin sdk-v0.7.0
 ```
 
 The workflow builds the sdist and wheel, installs the wheel into a clean environment and runs
