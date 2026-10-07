@@ -96,7 +96,7 @@ plans" under Changed.**
 - A tool-calling expert is offered only the tools on its own list again. Loading a configuration dropped that list, so every such expert was offered every tool
 - The Plan Builder keeps highlighted text aligned with what is typed
 - The deploy dialog keeps a built-in persona the user picked when the mode changes
-- Companion mode: a clear yes to "do you mean X?" starts the activity
+- Companion mode: a clear yes to a still-open "do you mean X?" starts the activity, and repeated declines no longer let the question be asked without end
 - Security updates for npm dependencies (Dependabot alerts), and upload errors are reported as a client error again
 
 ### Known limitations
