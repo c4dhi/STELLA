@@ -67,6 +67,7 @@ export default function DeployAgentModal({
   const [mode, setMode] = useState<AgentMode>('plan')
   const [activityPlanIds, setActivityPlanIds] = useState<string[]>([])
   const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null)
+  const [personaPickedByUser, setPersonaPickedByUser] = useState(false)
   const [personas, setPersonas] = useState<Persona[]>([])
   const [selectedConfiguration, setSelectedConfiguration] = useState<AgentConfiguration | null>(null)
 
@@ -146,6 +147,7 @@ export default function DeployAgentModal({
       setError(null)
       setSelectedPlan(null)
       setSelectedPersona(null)
+      setPersonaPickedByUser(false)
       setMode('plan')
       setActivityPlanIds([])
       setSelectedEnvVarTemplate(null)
@@ -794,7 +796,11 @@ export default function DeployAgentModal({
                 >
                   <PersonaSelectionStep
                     selectedPersona={selectedPersona}
-                    onSelectPersona={setSelectedPersona}
+                    pickedByUser={personaPickedByUser}
+                    onSelectPersona={(persona, pickedByUser) => {
+                      setSelectedPersona(persona)
+                      setPersonaPickedByUser(pickedByUser)
+                    }}
                     personas={personas}
                     onPersonasChange={setPersonas}
                     mode={agentRequirements.requiresPlan ? mode : undefined}
