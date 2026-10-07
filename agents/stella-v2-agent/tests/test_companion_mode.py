@@ -211,6 +211,62 @@ def test_a_poorly_heard_yes_is_asked_again_then_dropped():
     assert dropped.change is Change.START_DECLINED
 
 
+def test_a_doubtful_no_is_asked_again_not_closed():
+    """Symmetric with a doubtful yes above: a transcript too poorly heard to
+    trust is not evidence of "no" either — it asks again rather than closing
+    the question (#50/#52: a mistranscribed turn used to drop it outright, so
+    a clear "yes" the very next turn had nothing left to confirm)."""
+    again = _asked().decide([], doubtful=True, start_confirmed=False, said="??")
+    assert again.change is Change.START_ASKED and again.activity is ACTIVITIES[1]
+
+
+def test_a_doubtful_no_is_asked_again_then_dropped():
+    companion = _asked()
+    companion.decide([], doubtful=True, start_confirmed=False, said="??")
+    companion.ask_start(ACTIVITIES[1])
+    dropped = companion.decide([], doubtful=True, start_confirmed=False, said="??")
+    assert dropped.change is Change.START_DECLINED
+
+
+def test_a_leading_qualifier_in_the_title_is_not_required():
+    """"the Fitness Check-in" clearly means "Prolific Fitness Check-in" even
+    without the brand word (#50/#52 — the shape of the turn that failed to
+    start)."""
+    activity = {**ACTIVITIES[1], "title": "Prolific Fitness Check-in"}
+    companion = Companion(activities=[ACTIVITIES[0], activity])
+    started = companion.decide(
+        [{"command": "start", "activity_id": activity["id"]}],
+        said="I'd like to do the Fitness Check-in, please.",
+    )
+    assert started.change is Change.STARTED and started.activity is activity
+
+
+def test_dropping_only_the_titles_own_word_is_not_enough():
+    """"Memory" minus "Game" is one common word, too weak to start on alone."""
+    asked = _free().decide([START_MEMORY], said="let's play a game")
+    assert asked.change is Change.START_ASKED
+
+
+def test_a_shortened_title_shared_by_two_activities_is_still_asked_about():
+    """"Prolific Fitness Check-in" and "Extended Fitness Check-in" both drop to
+    "Fitness Check-in" — "I'd like the Fitness Check-in" must not silently
+    start whichever one the router happened to propose (#52 review)."""
+    prolific = {**ACTIVITIES[1], "id": "prolific", "title": "Prolific Fitness Check-in"}
+    extended = {**ACTIVITIES[1], "id": "extended", "title": "Extended Fitness Check-in"}
+    companion = Companion(activities=[ACTIVITIES[0], prolific, extended])
+    asked = companion.decide(
+        [{"command": "start", "activity_id": "extended"}],
+        said="I'd like to do the Fitness Check-in, please.",
+    )
+    assert asked.change is Change.START_ASKED and asked.activity is extended
+    # The full title, said in full, is never ambiguous.
+    started = companion.decide(
+        [{"command": "start", "activity_id": "extended"}],
+        said="I'd like the Extended Fitness Check-in, please.",
+    )
+    assert started.change is Change.STARTED and started.activity is extended
+
+
 def test_the_router_proposing_it_again_does_not_ask_without_end():
     # Not a yes, and the router proposes the same one again: asked once more,
     # then the question is dropped like any other.
@@ -220,6 +276,22 @@ def test_the_router_proposing_it_again_does_not_ask_without_end():
     companion.ask_start(ACTIVITIES[1])
     dropped = companion.decide([START_CHECKIN], start_confirmed=False, said="maybe that one")
     assert dropped.change is Change.START_DECLINED
+
+
+def test_a_plain_decline_does_not_reset_the_ask_count():
+    """A clear "no" closes the open question (drop_start), but a router that
+    keeps proposing the same activity right after must still run into
+    max_start_asks rather than restarting the count at 0 (#52 review:
+    @sable got "do you mean X?" six rounds running with start_asks stuck
+    at 1, because drop_start() used to zero it on every decline)."""
+    companion = _asked()               # start_asks=1
+    companion.drop_start()             # the "no" closes the question
+    again = companion.decide([START_CHECKIN], start_confirmed=False, said="no")
+    assert again.change is Change.START_ASKED     # 2nd ask, not a fresh 1st
+    companion.ask_start(ACTIVITIES[1])
+    companion.drop_start()
+    declined = companion.decide([START_CHECKIN], start_confirmed=False, said="no")
+    assert declined.change is Change.START_DECLINED   # bound reached, no 3rd ask
 
 
 def test_entering_an_activity_closes_the_open_question():
