@@ -836,6 +836,44 @@ async def test_naming_the_other_one_in_reply_starts_that_one():
     assert session.agent.companion.running_title == "Prolific Study"
 
 
+@pytest.mark.asyncio
+async def test_the_grace_session_turn_starts_without_the_formal_title():
+    """In the shape of #50's "Grace test" (dev, 7 Oct, 17:10:01): asked this
+    way the user never said "Extended Fitness Check-in" in full, and used to
+    only ever get asked "do you mean X?" because of it (#52)."""
+    session = Session(companion=True, sm=FakeStateMachine())
+    outputs = await session.turn(
+        "I'd like to do the Fitness Check-in, please.",
+        router=_start("extended"),
+    )
+    assert session.sm.calls.count("load:checkin-plan") == 1
+    assert session.agent.companion.running_title == "Extended Fitness Check-in"
+    assert "activity_started" in _kinds(outputs)
+
+
+@pytest.mark.asyncio
+async def test_a_garbled_reply_does_not_cost_the_confirmation_right_after():
+    """#50/#52: a mistranscribed reply to "do you mean X?" used to drop the
+    question outright, so a clear "yes" on the very next turn had nothing
+    left to confirm — in the real session, a confidently-heard "yes" never
+    started the activity, because the turn before it, heard poorly, already
+    had. (Stand-in text here; the real transcript is private.)"""
+    session = Session(companion=True, sm=FakeStateMachine())
+    await session.turn("the fitness one", router=_start("extended"))
+    assert session.agent.companion.pending_start["id"] == "extended"
+
+    # The STT-garbled turn: nothing usable for the router to propose, heard
+    # poorly enough to be doubtful. No scripted answer, so the start-dialogue
+    # judge defaults to "no" — just as it did on the real garbled turn.
+    await _heard(session, "<unintelligible>", 0.2)
+    assert session.agent.companion.pending_start["id"] == "extended"  # still open
+
+    session.start_answers = [YES]
+    outputs = await session.turn("Yes, exactly.")
+    assert session.agent.companion.running_title == "Extended Fitness Check-in"
+    assert "activity_started" in _kinds(outputs)
+
+
 # ── Free conversation: company, not an interview ────────────────────────────
 
 
