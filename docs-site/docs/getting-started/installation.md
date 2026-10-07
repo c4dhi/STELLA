@@ -38,6 +38,7 @@ credentials) already work.
 **Requirements:**
 - **Docker**: [Docker Desktop](https://docker.com/products/docker-desktop) or [OrbStack](https://orbstack.dev) (recommended)
 - **kubectl**: Auto-installed if missing
+- **Node.js**: 20.19+, 22.12+ or 24+ on the host: `./scripts/start-k8s.sh` runs the database migration there with Prisma 7. Check with `node --version`. The GitHub deploy workflows install Node 26 themselves
 - **OpenAI API key**
 
 OrbStack provides a built-in Kubernetes cluster that's lightweight and fast. The startup script auto-detects OrbStack and uses it automatically.
@@ -47,6 +48,7 @@ OrbStack provides a built-in Kubernetes cluster that's lightweight and fast. The
 **Requirements:**
 - **Docker**: Docker Engine
 - **K3s**: Auto-installed by the startup script
+- **Node.js**: 20.19+, 22.12+ or 24+ on the host: `./scripts/start-k8s.sh` runs the database migration there with Prisma 7. Check with `node --version`. The GitHub deploy workflows install Node 26 themselves
 - **OpenAI API key**
 
 K3s is a lightweight Kubernetes distribution that's automatically installed and configured by the startup script on Linux systems.

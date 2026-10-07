@@ -314,6 +314,8 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
 | `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
 
+The SDK also reads two timing settings that neither built-in agent declares in `agent.yaml`: `BARGE_IN_DUCK_TIMEOUT_MS` (default `1200`), after which a duck that was never confirmed as an interruption lifts by itself, so background noise cannot keep the agent quiet; and `STELLA_MUTE_SILENCE_MS` (default `3000`), the silence fed to speech recognition when a participant mutes the microphone, so the sentence in flight is finalized like any pause.
+
 The SDK also reads `BARGE_IN_DUCK_GAIN` (default `0.25`): the volume the agent drops to the moment the user makes a sound, where `1.0` disables ducking. Neither built-in agent declares it in `agent.yaml` yet, so it can't be set from the deploy form and every deployment runs the default.
 
 ### Turn Management

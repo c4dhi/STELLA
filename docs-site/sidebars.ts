@@ -51,6 +51,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'agents/overview',
+        'agents/personas',
         {
           type: 'category',
           label: '🧠 stella-v2',
