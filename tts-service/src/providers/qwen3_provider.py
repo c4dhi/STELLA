@@ -216,6 +216,14 @@ class Qwen3Provider(TTSProvider):
     def __init__(self):
         self._initialized = False
         self._model: Optional["FasterQwen3TTS"] = None
+        # One model instance is shared by every session in this process, and it
+        # keeps mutable state (KV cache, CUDA-graph buffers) between decoder
+        # steps, so two syntheses running at once garble each other's audio
+        # (#463). Requests take this lock in turn (asyncio.Lock wakes waiters
+        # first-come-first-served). A request is one sentence, so a session
+        # waits for at most the sentences ahead of it, never a whole utterance.
+        self._model_lock = asyncio.Lock()
+        self._lock_waiters = 0
         self._model_id = os.getenv("QWEN3_MODEL_ID", DEFAULT_MODEL_ID)
         self._model_path = os.getenv("QWEN3_MODEL_PATH", "")
         self._device = os.getenv("QWEN3_DEVICE", "cuda")
@@ -659,6 +667,23 @@ class Qwen3Provider(TTSProvider):
             supports_voice_selection=len(voices) > 1,
         )
 
+    async def _acquire_model(self) -> None:
+        """Wait for exclusive use of the shared model, logging any queueing."""
+        queued = self._model_lock.locked()
+        if queued:
+            self._lock_waiters += 1
+        t0 = time.time()
+        try:
+            await self._model_lock.acquire()
+        finally:
+            if queued:
+                self._lock_waiters -= 1
+        if queued:
+            print(
+                f"[Qwen3] Waited {(time.time() - t0) * 1000:.0f}ms for the model "
+                f"({self._lock_waiters} more queued)"
+            )
+
     async def synthesize(
         self,
         text: str,
@@ -687,8 +712,22 @@ class Qwen3Provider(TTSProvider):
 
         try:
             loop = asyncio.get_event_loop()
-            t0 = time.time()
-            audio_list, sr = await loop.run_in_executor(None, _run)
+            await self._acquire_model()
+            # The lock is released when the worker thread has actually finished,
+            # not when this coroutine stops waiting for it. If the caller goes
+            # away (client disconnect, deadline, a cancelled keep-alive) the
+            # thread keeps running generate_voice_clone, and the next request
+            # must not start on the model until it is done. shield() keeps a
+            # cancel from marking the executor future done early, which would
+            # fire the release callback while the model is still in use.
+            try:
+                t0 = time.time()
+                fut = loop.run_in_executor(None, _run)
+            except BaseException:
+                self._model_lock.release()
+                raise
+            fut.add_done_callback(lambda _f: self._model_lock.release())
+            audio_list, sr = await asyncio.shield(fut)
             # generate_voice_clone returns a list of chunks or one tensor.
             if isinstance(audio_list, list):
                 int16_parts = [self._to_int16_numpy(c) for c in audio_list if c is not None]
@@ -752,7 +791,11 @@ class Qwen3Provider(TTSProvider):
         ref_audio, ref_text = self._resolve_ref(voice, language)
 
         for attempt_idx, attempt_lang in enumerate(attempts):
-            queue: asyncio.Queue = asyncio.Queue(maxsize=16)
+            # Unbounded on purpose: the producer must never wait on the consumer,
+            # because it holds the model lock while it runs. One sentence of
+            # 16-bit PCM is a few hundred KB, so buffering it is cheap, and a
+            # slow client can no longer stall every other session.
+            queue: asyncio.Queue = asyncio.Queue()
             # Set on early consumer exit (barge-in -> GeneratorExit) so the worker
             # thread stops synthesizing into an abandoned queue.
             stop_event = threading.Event()
@@ -770,21 +813,27 @@ class Qwen3Provider(TTSProvider):
                     ):
                         if stop_event.is_set():
                             break
-                        # Back-pressured handoff: block this worker thread until the
-                        # consumer frees a slot rather than dropping audio when the
-                        # bounded queue is full (put_nowait would raise QueueFull
-                        # inside call_soon_threadsafe and be swallowed -> silent gap).
                         try:
-                            asyncio.run_coroutine_threadsafe(queue.put(audio_chunk), loop).result()
+                            loop.call_soon_threadsafe(queue.put_nowait, audio_chunk)
                         except RuntimeError:
-                            break  # event loop gone (shutdown) — stop producing
+                            break  # event loop gone (shutdown): stop producing
                 except Exception as e:
                     loop.call_soon_threadsafe(queue.put_nowait, e)
                 finally:
                     loop.call_soon_threadsafe(queue.put_nowait, _QWEN3_STREAM_DONE)
 
-            t0 = time.time()
-            producer_fut = loop.run_in_executor(None, _producer)
+            # Exclusive use of the model while THIS producer runs. The lock is
+            # released the moment the producer finishes (or is stopped), not when
+            # the consumer has read the last frame, so a slow client cannot hold
+            # it. The done-callback runs on the event loop.
+            await self._acquire_model()
+            try:
+                t0 = time.time()
+                producer_fut = loop.run_in_executor(None, _producer)
+            except BaseException:
+                self._model_lock.release()
+                raise
+            producer_fut.add_done_callback(lambda _f: self._model_lock.release())
 
             first_yielded = False
             errored = False
@@ -829,10 +878,11 @@ class Qwen3Provider(TTSProvider):
                         first_yielded = True
                     leftover = int16[full:]
 
-                await producer_fut
+                await asyncio.shield(producer_fut)
             finally:
-                # Stop + unblock the producer so a cancelled stream doesn't leak a
-                # worker thread mid-synthesis (parked on a full queue).
+                # Stop the producer so a cancelled stream does not keep the model
+                # busy on audio nobody will hear (it checks this between chunks;
+                # the lock is released when it ends).
                 stop_event.set()
                 while not queue.empty():
                     try:

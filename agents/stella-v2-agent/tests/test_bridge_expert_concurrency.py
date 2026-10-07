@@ -20,6 +20,7 @@ import pytest
 
 from stella_agent_sdk import AgentInput, AgentOutput
 from stella_v2_agent.agent import StellaV2Agent
+from stella_v2_agent.companion import Companion
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
@@ -63,6 +64,7 @@ def _make_agent(
 
     agent._audio_pipeline = None  # has_audio is a property → _elapsed_ms returns 0.0
     agent._is_processing = False
+    agent.companion = Companion()
     agent._turn_counter = 0
     agent._last_reply_text = ""
     agent._session_language = None
@@ -70,6 +72,9 @@ def _make_agent(
     agent._custom_history_limit = 20
     agent._plan_system_prompt = None
     agent._plan_config = {}
+    # Set by __init__ in production, which this harness bypasses (#467).
+    agent._persona_config = None
+    agent._companion_mode = False
     agent._compiler_version = "1.0.0"
 
     # Mirrors production: task_extraction sets deliverables via tools DURING the

@@ -77,6 +77,10 @@ data:
   # Decode diagnostics: logging + per-turn metrics on the transcript event.
   # Costs extra GPU decodes per turn — investigation switch, leave unset/0 in
   # steady state. Set to 1 to populate the STT cards in the metrics modal.
+  # Keep the speech models warm in the background so no session meets a cold one
+  # (STT and TTS both read this). true (default) or false.
+  STELLA_MODEL_KEEP_WARM: "${STELLA_MODEL_KEEP_WARM}"
+
   STT_DECODE_DIAGNOSTICS: "${STT_DECODE_DIAGNOSTICS}"            # 0 (default) or 1
   WHISPER_INITIAL_PROMPT: "${WHISPER_INITIAL_PROMPT}"            # Domain context prompt for improved accuracy
 

@@ -587,16 +587,38 @@ class BridgeGenerator:
             # slow LLM never stalls the turn. The timeout covers first-byte AND the
             # tail; on timeout we keep whatever validated sentences already
             # streamed (or fall back below if none did).
-            async with asyncio.timeout(self.bridge_timeout_s):
-                async for raw, final in stream_completion(
-                    self._llm_service, messages, config, component_name="bridge_generator",
-                ):
+            #
+            # The bound is applied to each wait ON THE LLM, never around the
+            # yield. `async with asyncio.timeout(...)` around a yield cancels
+            # whatever the task is doing when the deadline passes — and while
+            # this generator is suspended at a yield, that is the CALLER,
+            # publishing the bridge. A bridge that arrived right at the limit
+            # therefore cancelled the agent's whole turn loop, and the agent
+            # left the room without a word or a log line (session 3bde6b95).
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self.bridge_timeout_s
+            stream = stream_completion(
+                self._llm_service, messages, config, component_name="bridge_generator",
+            ).__aiter__()
+            try:
+                while True:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError()
+                    try:
+                        raw, final = await asyncio.wait_for(stream.__anext__(), remaining)
+                    except StopAsyncIteration:
+                        break
                     candidate, stop = _gate_stream(raw, final=final, user_input=user_input)
                     if candidate and candidate != released and candidate.startswith(released):
                         released = candidate
                         yield released
                     if stop:
                         break
+            finally:
+                aclose = getattr(stream, "aclose", None)
+                if aclose is not None:
+                    await aclose()
 
             latency_ms = (time.time() - start_time) * 1000
             if released:

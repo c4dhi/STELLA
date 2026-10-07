@@ -372,6 +372,11 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         if getattr(agent, "supports_teleprompter", False):
             audio_pipeline.enable_teleprompter()
 
+        # 6c. Wire emotion tags (#face-emotions): the agent strips [tags] from
+        # its reply and publishes them as cues the face animates from.
+        if getattr(agent, "supports_emotion_tags", False):
+            audio_pipeline.enable_emotion_tags()
+
         # 7. Create HistoryClient for chat history access
         # Generate JWT token with same claims as LiveKit token (for validation)
         now = int(time.time())
@@ -638,6 +643,21 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             [audio_loop_task, asyncio.create_task(shutdown_event.wait())],
             return_when=asyncio.FIRST_COMPLETED,
         )
+
+        # An audio loop that ended by itself is the session ending — unless it
+        # died. Its exception is otherwise never retrieved, so the agent left
+        # the room mid-reply with nothing in the log to say why.
+        if audio_loop_task in done:
+            if audio_loop_task.cancelled():
+                logger.error(
+                    "Agent audio loop was cancelled from inside a turn (no shutdown "
+                    "was requested); the session ends here"
+                )
+            elif audio_loop_task.exception() is not None:
+                logger.error(
+                    "Agent audio loop crashed; the session ends here",
+                    exc_info=audio_loop_task.exception(),
+                )
 
         # Cancel pending tasks
         for task in pending:

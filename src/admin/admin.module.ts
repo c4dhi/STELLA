@@ -1,11 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
-import { AdminController } from './admin.controller';
-import { AdminService } from './admin.service';
-import { ServerMetricsService } from './services/server-metrics.service';
-import { UsageLoggingService } from './services/usage-logging.service';
-import { PrismaModule } from '../prisma/prisma.module';
-import { KubernetesModule } from '../kubernetes/kubernetes.module';
+import { AdminController } from './admin.controller.js';
+import { AdminService } from './admin.service.js';
+import { ServerMetricsService } from './services/server-metrics.service.js';
+import { UsageLoggingService } from './services/usage-logging.service.js';
+import { CapacityService } from './services/capacity.service.js';
+import { PrismaModule } from '../prisma/prisma.module.js';
+import { KubernetesModule } from '../kubernetes/kubernetes.module.js';
 
 /**
  * AdminModule - System Administration Dashboard
@@ -27,7 +28,7 @@ import { KubernetesModule } from '../kubernetes/kubernetes.module';
     ScheduleModule.forRoot(),
   ],
   controllers: [AdminController],
-  providers: [AdminService, ServerMetricsService, UsageLoggingService],
+  providers: [AdminService, ServerMetricsService, UsageLoggingService, CapacityService],
   exports: [AdminService],
 })
 export class AdminModule {}

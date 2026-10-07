@@ -4,7 +4,7 @@ import {
   pruneRemovedOverrides,
   satisfiesMinCompilerVersion,
   type PipelineSchema,
-} from './configuration-compat.util';
+} from './configuration-compat.util.js';
 
 export interface ReconcileReport {
   agentTypeId: string;

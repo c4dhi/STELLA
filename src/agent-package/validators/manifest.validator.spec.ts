@@ -1,6 +1,9 @@
-import { ManifestValidator } from './manifest.validator'
+import { ManifestValidator } from './manifest.validator.js'
 import * as fs from 'fs'
 import * as path from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 describe('ManifestValidator', () => {
   let validator: ManifestValidator

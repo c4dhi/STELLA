@@ -90,6 +90,58 @@ class StateMachineClient:
                 "current_state_id": None,
             }
 
+    async def load_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace the session's plan, discarding any progress.
+
+        For an agent that switches plans mid-session. ``initialize`` deliberately
+        RESUMES an existing state (so a paused agent restarts where it left off);
+        this starts the given plan from the top, even if it ran before.
+
+        Returns:
+            Dict with success, error, current_state_id, plan_title
+        """
+        self._ensure_connected()
+        logger.info(f"Loading plan into session {self._session_id}")
+
+        try:
+            request = state_machine_pb2.LoadPlanRequest(
+                session_id=self._session_id,
+                plan_json=json.dumps(plan),
+            )
+            response = await self._stub.LoadPlan(request)
+
+            return {
+                "success": response.success,
+                "error": response.error or None,
+                "current_state_id": response.current_state_id or None,
+                "plan_title": response.plan_title or None,
+            }
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC error during load_plan: {e.code()} - {e.details()}")
+            return {
+                "success": False,
+                "error": f"gRPC error: {e.details()}",
+                "current_state_id": None,
+                "plan_title": None,
+            }
+
+    async def clear_plan(self) -> Dict[str, Any]:
+        """Drop the session's plan, leaving the session with no plan at all.
+
+        Returns:
+            Dict with success, error
+        """
+        self._ensure_connected()
+        logger.info(f"Clearing plan from session {self._session_id}")
+
+        try:
+            request = state_machine_pb2.ClearPlanRequest(session_id=self._session_id)
+            response = await self._stub.ClearPlan(request)
+            return {"success": response.success, "error": response.error or None}
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC error during clear_plan: {e.code()} - {e.details()}")
+            return {"success": False, "error": f"gRPC error: {e.details()}"}
+
     async def complete_task(
         self,
         task_id: str,
@@ -240,6 +292,7 @@ class StateMachineClient:
         value: Any,
         reasoning: str = "",
         unconfirmed: bool = False,
+        correction: bool = False,
     ) -> Dict[str, Any]:
         """
         Set a deliverable value.
@@ -252,6 +305,10 @@ class StateMachineClient:
                 answering a question about it. Recorded, but surfaced to the
                 agent as 'partial' so it gets confirmed in conversation instead
                 of re-asked. Setting the same key again without this confirms it.
+            correction: The participant deliberately changed an answer that was
+                already collected. Required to replace a settled required
+                deliverable; without it the backend rejects the write. The
+                reasoning must say what they said.
 
         Returns:
             Dict with success, error, task_completed, transitioned, new_state_id, progress
@@ -266,6 +323,7 @@ class StateMachineClient:
                 value=json.dumps(value) if not isinstance(value, str) else value,
                 reasoning=reasoning,
                 unconfirmed=unconfirmed,
+                correction=correction,
             )
             response = await self._stub.SetDeliverable(request)
 

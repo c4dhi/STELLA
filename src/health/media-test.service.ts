@@ -1,7 +1,7 @@
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common'
 import { randomUUID } from 'crypto'
-import { LiveKitService } from '../livekit/livekit.service'
-import { MediaTestSession } from './dto/media-test.dto'
+import { LiveKitService } from '../livekit/livekit.service.js'
+import { MediaTestSession } from './dto/media-test.dto.js'
 
 const TOKEN_TTL_SECONDS = 90
 const PER_IP_COOLDOWN_MS = 30_000

@@ -16,7 +16,7 @@ Plan (Root)
 ├── States (Conversation Phases)
 │   └── Tasks (Specific Actions)
 │       └── Deliverables (Data to Collect)
-└── Metadata (system_prompt, initial_state_id, etc.)
+└── Metadata (initial_state_id, language, etc.)
 ```
 
 ### Component Relationships
@@ -48,9 +48,13 @@ When a STELLA agent loads a plan:
 | `description` | `string` | No | Overview of the plan's purpose |
 | `initial_state_id` | `string` | No | Starting state (defaults to first state) |
 | `states` | `array` | Yes | Array of state definitions |
-| `system_prompt` | `string` | No | Agent persona and behavior instructions |
+| `language` | `string` | No | ISO 639-1 code that fixes the session to one language |
 | `session_context` | `object` | No | Fields to collect at session start |
 | `metadata` | `object` | No | Additional metadata (version, notes, etc.) |
+
+:::note Personas, since 1.3.0
+A plan no longer carries a `system_prompt` or a `voice`. Who the agent is lives in a [persona](../agents/personas.md), chosen when deploying. Saving a plan with either field is rejected. A plan can still name the agent with persona variables such as `{{persona.name}}`.
+:::
 
 ## Quick Example
 
@@ -62,7 +66,6 @@ Here's a minimal plan with two states:
   "title": "Simple Greeting Flow",
   "description": "A basic greeting and farewell conversation",
   "initial_state_id": "greeting",
-  "system_prompt": "You are a friendly assistant. Be warm and helpful.",
   "states": [
     {
       "id": "greeting",

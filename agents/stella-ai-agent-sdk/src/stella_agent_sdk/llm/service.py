@@ -356,7 +356,9 @@ class OpenAIDirectProvider(LLMProviderInterface):
                 "model": config.model,
                 "messages": openai_messages,
                 "temperature": config.temperature,
-                "max_tokens": config.max_tokens,
+                # Not "max_tokens": the gpt-5 family rejects it outright, and a
+                # tool-calling expert moved to one failed every turn.
+                "max_completion_tokens": config.max_tokens,
             }
             if config.json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
@@ -408,7 +410,9 @@ class OpenAIDirectProvider(LLMProviderInterface):
                 "model": config.model,
                 "messages": openai_messages,
                 "temperature": config.temperature,
-                "max_tokens": config.max_tokens,
+                # Not "max_tokens": the gpt-5 family rejects it outright, and a
+                # tool-calling expert moved to one failed every turn.
+                "max_completion_tokens": config.max_tokens,
                 "stream": True,
             }
             if config.json_mode:

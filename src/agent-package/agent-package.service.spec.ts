@@ -1,5 +1,5 @@
 import AdmZip from 'adm-zip'
-import { AgentPackageService } from './agent-package.service'
+import { AgentPackageService } from './agent-package.service.js'
 
 /**
  * Focused unit tests for readExpertDefaults — the publish-time gate for expert

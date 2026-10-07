@@ -4,6 +4,7 @@ import { generateUUID } from '../lib/uuid'
 import type {
   TranscriptChunk,
   AgentSpeechProgress,
+  AgentEmotionCues,
   Transport,
   ProcessingMessage,
   ParticipantEvent,
@@ -44,6 +45,38 @@ type MediaState = {
   isFaceModalOpen: boolean
   audioLevel: number
   isRemoteSpeaking: boolean
+  // Emotion tags (#face-emotions): what the face is currently doing. Resolved
+  // from the emotion cues by whichever view owns the teleprompter cursor, and
+  // published here because the face renders in a SIBLING subtree (the visualizer)
+  // rather than under that view. Low-frequency — a few changes per turn.
+  faceExpression: string | null
+  /** One-shot gesture. The seq is what makes a repeat of the same tag fire again. */
+  faceGesture: { tag: string; seq: number } | null
+  /**
+   * State command from the agent, e.g. `[sleep]` (#face-sleep).
+   *
+   * Carried as a seq for the same reason a gesture is: the tag alone cannot say
+   * "again". Unlike an expression it is never cleared at the end of a turn —
+   * outliving the reply is what makes it a state.
+   */
+  faceState: { tag: string; seq: number } | null
+  /**
+   * Whether the face is awake, asleep, or coming round (#face-sleep).
+   *
+   * Published because sleep is not only a drawing: it releases the camera and
+   * mutes the microphone, and the microphone belongs to whichever view owns the
+   * session, not to the face. Reset to 'awake' when the face unmounts, so a
+   * view closed on a sleeping face cannot leave a stale 'asleep' behind holding
+   * somebody's mic shut.
+   */
+  faceSleepPhase: 'awake' | 'asleep' | 'waking'
+  /**
+   * Whether the agent currently lets the face fall asleep. An agent in the
+   * middle of something with the user (a companion's activity) says no, and
+   * then nothing puts her to sleep: not the presence timer, not a tag, not a
+   * command. True until an agent says otherwise.
+   */
+  faceSleepAllowed: boolean
   // Agent readiness state - controls audio processing
   agentReady: boolean
 }
@@ -59,6 +92,12 @@ type MediaActions = {
   setTTSPaused: (v: boolean) => void
   // Face interface actions
   setFaceModalOpen: (v: boolean) => void
+  setFaceExpression: (tag: string | null) => void
+  triggerFaceGesture: (tag: string) => void
+  triggerFaceState: (tag: string) => void
+  setFaceSleepPhase: (phase: 'awake' | 'asleep' | 'waking') => void
+  /** Act on an `agent_command` envelope. A command this client does not know is ignored. */
+  applyAgentCommand: (data: { command?: string; allowed?: boolean }) => void
   setAudioLevel: (v: number) => void
   setIsRemoteSpeaking: (v: boolean) => void
   // Agent readiness action
@@ -91,6 +130,11 @@ type ChatState = {
   // low-frequency (a few per turn); the 60fps cursor lives in useTeleprompter.
   lastSpeechProgress: { data: AgentSpeechProgress; seq: number } | null
 
+  // Emotion tags (#face-emotions): latest agent_emotion_cues envelope, bridged
+  // the same way. Carries the full cue list for its transcript, so applying the
+  // newest one is always correct.
+  lastEmotionCues: { data: AgentEmotionCues; seq: number } | null
+
   // Optimistic message tracking - correlationIds of messages awaiting confirmation
   pendingMessageIds: Set<string>
 
@@ -104,6 +148,7 @@ type ChatState = {
 type ChatActions = {
   upsertChunk: (c: TranscriptChunk) => void
   setSpeechProgress: (data: AgentSpeechProgress) => void
+  setEmotionCues: (data: AgentEmotionCues) => void
   addFinal: (role: TranscriptChunk['role'], text: string) => void
   addProcessingMessage: (message: ProcessingMessage) => void
   addParticipantEvent: (event: ParticipantEvent) => void
@@ -259,6 +304,11 @@ export const useStore = create<
   isFaceModalOpen: false,
   audioLevel: 0,
   isRemoteSpeaking: false,
+  faceExpression: null,
+  faceGesture: null,
+  faceState: null,
+  faceSleepPhase: 'awake',
+  faceSleepAllowed: true,
   agentReady: false, // Audio disabled until agent is ready
   setMicGranted: (v) => set({ micGranted: v }),
   setVu: (v) => set({ vu: v }),
@@ -270,6 +320,24 @@ export const useStore = create<
   setTTSPlaying: (v) => set({ isTTSPlaying: v }),
   setTTSPaused: (v) => set({ isTTSPaused: v }),
   setFaceModalOpen: (v) => set({ isFaceModalOpen: v }),
+  setFaceExpression: (tag) => set(s => (s.faceExpression === tag ? s : { faceExpression: tag })),
+  triggerFaceGesture: (tag) => set(s => ({
+    faceGesture: { tag, seq: (s.faceGesture?.seq ?? 0) + 1 },
+  })),
+  triggerFaceState: (tag) => set(s => ({
+    faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 },
+  })),
+  setFaceSleepPhase: (phase) =>
+    set(s => (s.faceSleepPhase === phase ? s : { faceSleepPhase: phase })),
+  applyAgentCommand: (data) => {
+    if (data.command === 'sleep_allowed') {
+      set({ faceSleepAllowed: data.allowed !== false })
+    } else if (data.command) {
+      // Every other command is a face state by name; the face drops one it
+      // does not know.
+      set(s => ({ faceState: { tag: data.command as string, seq: (s.faceState?.seq ?? 0) + 1 } }))
+    }
+  },
   setAudioLevel: (v) => set({ audioLevel: v }),
   setIsRemoteSpeaking: (v) => set({ isRemoteSpeaking: v }),
   setAgentReady: (v) => set({ agentReady: v }),
@@ -285,11 +353,15 @@ export const useStore = create<
   showProcessingMessages: false,
   lastAssistantMessageId: undefined,
   lastSpeechProgress: null,
+  lastEmotionCues: null,
   pendingMessageIds: new Set<string>(),
   // Teleprompter (#241): record the latest progress envelope with a monotonic
   // seq so a useEffect in the consuming view applies each one exactly once.
   setSpeechProgress: (data) => set(s => ({
     lastSpeechProgress: { data, seq: (s.lastSpeechProgress?.seq ?? 0) + 1 },
+  })),
+  setEmotionCues: (data) => set(s => ({
+    lastEmotionCues: { data, seq: (s.lastEmotionCues?.seq ?? 0) + 1 },
   })),
   upsertChunk: (c) => set(() => {
     const state = get()

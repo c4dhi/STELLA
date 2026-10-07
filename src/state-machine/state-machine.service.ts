@@ -1,5 +1,5 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service.js';
 import { SessionState, Prisma } from '@prisma/client';
 
 /**
@@ -129,6 +129,40 @@ export interface DeliverableValue {
    * Surfaces as status 'partial'. Setting the same key again WITHOUT the flag
    * is what confirms it.
    */
+  unconfirmed?: boolean;
+  /**
+   * Earlier values of this deliverable, oldest first. Appended whenever the
+   * value changes, so a replaced answer is never lost: the study record shows
+   * what the participant said first, what replaced it, and whether the agent
+   * marked the change as a deliberate correction.
+   */
+  history?: DeliverableChange[];
+  /**
+   * Changes the state machine refused because they were not marked as a
+   * correction. Kept so a participant's genuine correction that the agent sent
+   * without the flag is not lost without a trace; empty for rows that never had
+   * one. Capped to the most recent few.
+   */
+  rejectedAttempts?: RejectedDeliverableChange[];
+}
+
+export interface RejectedDeliverableChange {
+  value: unknown;
+  reasoning: string;
+  attemptedAt: string;
+}
+
+/**
+ * One replaced value in a deliverable's history.
+ */
+export interface DeliverableChange {
+  value: unknown;
+  reasoning: string;
+  collectedAt: string;
+  /** When this value was replaced. */
+  replacedAt: string;
+  /** The replacement was an explicit, agent-marked correction. */
+  correction: boolean;
   unconfirmed?: boolean;
 }
 
@@ -395,9 +429,27 @@ export class StateMachineService {
         return { ...state, transitions: normalizedExistingTransitions };
       }
 
-      // Last state: terminal, no transition.
+      // Last state with no authored exit: route it to the end of the conversation.
+      // Without this edge nothing ever ends the session after the farewell (#452).
+      // A goal state ends on goal_achieved; other states end once their tasks are
+      // done (a state without tasks has nothing to complete, so the stuck-state
+      // net releases it instead).
       if (isLastState) {
-        return { ...state, transitions: [] };
+        const endsOnGoal = stateType === 'goal';
+        if (!endsOnGoal && (state.tasks?.length ?? 0) === 0) {
+          return { ...state, transitions: [] };
+        }
+        this.logger.log(`Adding end-of-conversation transition for last state '${state.id}'`);
+        return {
+          ...state,
+          transitions: [
+            {
+              target_state_id: END_STATE_ID,
+              condition_type: endsOnGoal ? ('goal_achieved' as const) : ('all_tasks_complete' as const),
+              priority: StateMachineService.COMPLETION_FALLBACK_PRIORITY,
+            },
+          ],
+        };
       }
 
       // Default transition to the next state: completion-driven (goal states use
@@ -461,6 +513,71 @@ export class StateMachineService {
         totalTurns: 0,
       },
     });
+  }
+
+  /**
+   * Replace the session's plan, discarding any progress.
+   *
+   * Deliberately NOT initializeForSession, which resumes an existing state so a
+   * paused agent can restart without losing progress. Starting an activity in
+   * companion mode is the opposite intent: the user just chose this plan and
+   * expects it from the top, even if they ran it earlier in the same session.
+   */
+  async loadPlanForSession(
+    sessionId: string,
+    plan: PlanData,
+  ): Promise<SessionState> {
+    const normalizedPlan = this.ensureTransitions(plan);
+    const initialStateId =
+      normalizedPlan.initial_state_id || normalizedPlan.states[0]?.id;
+
+    if (!initialStateId) {
+      throw new BadRequestException('Plan must have at least one state');
+    }
+
+    this.logger.log(
+      `Loading plan ${normalizedPlan.id} into session ${sessionId} (replacing any existing state)`,
+    );
+
+    const data = {
+      planId: normalizedPlan.id,
+      planData: normalizedPlan as unknown as Prisma.InputJsonValue,
+      currentStateId: initialStateId,
+      completedTasks: [],
+      skippedTasks: [],
+      deliverables: {},
+      turnsWithoutProgress: 0,
+      totalTurns: 0,
+      lastTransitionAt: null,
+    };
+
+    // Upsert rather than delete+create: SessionState is 1:1 with the session, and
+    // a delete would briefly leave a live session with no row for a concurrent
+    // reader to find.
+    return this.prisma.sessionState.upsert({
+      where: { sessionId },
+      create: { sessionId, ...data },
+      update: data,
+    });
+  }
+
+  /**
+   * Drop the session's plan and return to free-flow companion conversation.
+   *
+   * The row is removed rather than blanked so every reader's existing
+   * "no state machine for this session" path applies unchanged — that is exactly
+   * the condition a plan-less companion turn is in.
+   */
+  async clearPlanForSession(sessionId: string): Promise<void> {
+    const existing = await this.prisma.sessionState.findUnique({
+      where: { sessionId },
+    });
+    if (!existing) return;
+
+    this.logger.log(
+      `Clearing plan ${existing.planId ?? '(none)'} from session ${sessionId} — back to companion`,
+    );
+    await this.prisma.sessionState.delete({ where: { sessionId } });
   }
 
   /**
@@ -590,6 +707,105 @@ export class StateMachineService {
     };
   }
 
+  /** The plan's definition of a deliverable, searched across every state. */
+  private findDeliverableDefinition(plan: PlanData, key: string): PlanDeliverable | null {
+    for (const st of plan.states ?? []) {
+      for (const task of st.tasks ?? []) {
+        for (const d of task.deliverables ?? []) if (d.key === key) return d;
+      }
+      for (const d of st.goal?.deliverables ?? []) if (d.key === key) return d;
+    }
+    return null;
+  }
+
+  /**
+   * Refuse to change a collected, settled required deliverable unless the write
+   * is a marked correction. Returns the rejection to hand back, or null to let
+   * the write proceed. A rejected attempt is logged with what was attempted and
+   * kept on the deliverable, because neither agent reads tool results back, so
+   * without a trace the participant's correction would just vanish.
+   */
+  private async guardOverwrite(
+    sessionId: string,
+    deliverables: Record<string, DeliverableValue>,
+    key: string,
+    value: unknown,
+    reasoning: string,
+    correction: boolean,
+    isRequired: boolean,
+  ): Promise<StateMachineResult | null> {
+    const existing = deliverables[key];
+    if (
+      !existing ||
+      !isRequired ||
+      existing.discovered ||
+      existing.unconfirmed ||
+      correction ||
+      this.sameValue(existing.value, value)
+    ) {
+      return null;
+    }
+    this.logger.warn(
+      `[setDeliverable] Rejected overwrite of required '${key}' for session ${sessionId} ` +
+        `(no correction flag): kept ${JSON.stringify(existing.value)}, ` +
+        `attempted ${JSON.stringify(value)}, reasoning: ${JSON.stringify(reasoning)}`,
+    );
+    const attempts = [
+      ...(existing.rejectedAttempts ?? []),
+      { value, reasoning, attemptedAt: new Date().toISOString() },
+    ].slice(-10);
+    deliverables[key] = { ...existing, rejectedAttempts: attempts };
+    await this.prisma.sessionState.update({
+      where: { sessionId },
+      data: { deliverables: deliverables as unknown as Prisma.InputJsonValue },
+    });
+    return {
+      success: false,
+      error:
+        `'${key}' is required and already collected as ${JSON.stringify(existing.value)}, ` +
+        `so it was not changed. If the participant deliberately corrected themselves, call again ` +
+        `with correction=true and a reasoning that quotes what they said. Otherwise keep the ` +
+        `collected answer.`,
+    };
+  }
+
+  private sameValue(a: unknown, b: unknown): boolean {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  /**
+   * The `history` for a deliverable being written. When there is a previous
+   * value and the new one differs, the previous one is appended (and logged), so
+   * every change leaves a trace. Otherwise the existing history is carried over
+   * unchanged, and rows that never changed keep no `history` key at all.
+   */
+  private historyFor(
+    sessionId: string,
+    key: string,
+    existing: DeliverableValue | undefined,
+    newValue: unknown,
+    correction: boolean,
+  ): { history?: DeliverableChange[] } {
+    const prior = existing?.history ?? [];
+    if (!existing || this.sameValue(existing.value, newValue)) {
+      return prior.length ? { history: prior } : {};
+    }
+    const change: DeliverableChange = {
+      value: existing.value,
+      reasoning: existing.reasoning,
+      collectedAt: existing.collectedAt,
+      replacedAt: new Date().toISOString(),
+      correction,
+      ...(existing.unconfirmed ? { unconfirmed: true } : {}),
+    };
+    this.logger.log(
+      `[setDeliverable] '${key}' changed for session ${sessionId}: ` +
+        `${JSON.stringify(existing.value)} -> ${JSON.stringify(newValue)}` +
+        `${correction ? ' (correction)' : ''}`,
+    );
+    return { history: [...prior, change] };
+  }
+
   /**
    * Set a deliverable value
    */
@@ -599,10 +815,11 @@ export class StateMachineService {
     value: unknown,
     reasoning: string,
     unconfirmed = false,
+    correction = false,
   ): Promise<StateMachineResult> {
     // Serialized per session so concurrent writes don't clobber the deliverables JSON.
     return this.withSessionLock(sessionId, () =>
-      this.setDeliverableLocked(sessionId, key, value, reasoning, unconfirmed),
+      this.setDeliverableLocked(sessionId, key, value, reasoning, unconfirmed, correction),
     );
   }
 
@@ -612,6 +829,7 @@ export class StateMachineService {
     value: unknown,
     reasoning: string,
     unconfirmed = false,
+    correction = false,
   ): Promise<StateMachineResult> {
     const state = await this.getState(sessionId);
     if (!state) {
@@ -659,11 +877,32 @@ export class StateMachineService {
     if (!foundDeliverable && currentState.type === 'goal') {
       // Goal mode: accept as discovered insight
       this.logger.log(`[setDeliverable] Discovered insight '${key}' in goal state for session ${sessionId}`);
+      // Insights stay freely overwritable, but a replaced one is still logged.
+      // A key that is really a defined deliverable collected in an earlier state
+      // is NOT an insight: the same protection applies, or a goal state could
+      // replace a settled required answer just by naming its key.
+      const prior = deliverables[key];
+      const settledDefined = prior !== undefined && !prior.discovered;
+      if (settledDefined) {
+        const guarded = await this.guardOverwrite(
+          sessionId,
+          deliverables,
+          key,
+          value,
+          reasoning,
+          correction,
+          this.findDeliverableDefinition(plan, key)?.required !== false,
+        );
+        if (guarded) return guarded;
+      }
       deliverables[key] = {
         value,
         reasoning,
         collectedAt: new Date().toISOString(),
-        discovered: true,
+        // A protected deliverable that is corrected here stays what it was;
+        // only a genuine insight is marked discovered.
+        ...(settledDefined ? {} : { discovered: true }),
+        ...this.historyFor(sessionId, key, prior, value, correction),
       };
 
       await this.prisma.sessionState.update({
@@ -714,14 +953,47 @@ export class StateMachineService {
       };
     }
 
+    // A required answer that is already collected and settled is study data: a
+    // later, worse one must not replace it silently. It can change only through
+    // an explicit correction the agent marks. Not guarded: optional
+    // deliverables, discovered insights, a value still `unconfirmed` (that is
+    // what confirming and refining it means), and re-setting the same value.
+    const existing = deliverables[key];
+    const isRequired = foundDeliverable.required !== false;
+    const changesValue = existing !== undefined && !this.sameValue(existing.value, value);
+    if (correction && !reasoning?.trim()) {
+      return {
+        success: false,
+        error: `A correction to '${key}' needs a reasoning that says what the participant said to change it.`,
+      };
+    }
+    if (existing) {
+      const guarded = await this.guardOverwrite(
+        sessionId,
+        deliverables,
+        key,
+        value,
+        reasoning,
+        correction,
+        isRequired,
+      );
+      if (guarded) return guarded;
+    }
+
     // Update deliverables. The flag is written only when true, so confirming a
     // value (setting it again without the flag) clears it, and rows collected
     // before this existed stay exactly as they were.
+    // A passing mention of the value already settled must not demote it back to
+    // 'partial'.
+    const staysSettled = existing !== undefined && !existing.unconfirmed && !changesValue;
     deliverables[key] = {
       value,
       reasoning,
       collectedAt: new Date().toISOString(),
-      ...(unconfirmed ? { unconfirmed: true } : {}),
+      // A correction is the participant's deliberate answer, so it is never
+      // stored as unconfirmed (which would reopen the guard for the next write).
+      ...(unconfirmed && !correction && !staysSettled ? { unconfirmed: true } : {}),
+      ...this.historyFor(sessionId, key, existing, value, correction),
     };
 
     // Setting a deliverable ONLY records data — it never auto-completes a task or
@@ -1194,8 +1466,8 @@ export class StateMachineService {
   /**
    * Safety-net release target (#291). Returns the next state in plan order when the
    * current state has been stuck for STUCK_STATE_TURN_LIMIT turns without progress
-   * (the agent never completed/skipped its tasks), or undefined otherwise — including
-   * for the last state, which is terminal and has nowhere to advance to.
+   * (the agent never completed/skipped its tasks), or undefined otherwise. The last
+   * state is released to the end of the conversation (#452).
    */
   private stuckStateReleaseTarget(
     plan: PlanData,
@@ -1206,8 +1478,14 @@ export class StateMachineService {
       return undefined;
     }
     const index = plan.states.findIndex(s => s.id === currentState.id);
-    if (index < 0 || index >= plan.states.length - 1) {
-      return undefined; // last state / not found: nothing to release to
+    if (index < 0) {
+      return undefined;
+    }
+    if (index >= plan.states.length - 1) {
+      // A last state with no tasks (free chat, a final "just talk" state) can
+      // never make progress, so the turn limit must not end it.
+      const hasWork = currentState.type === 'goal' || (currentState.tasks?.length ?? 0) > 0;
+      return hasWork ? END_STATE_ID : undefined;
     }
     return plan.states[index + 1].id;
   }
@@ -1998,21 +2276,22 @@ export class StateMachineService {
         break;
       }
 
+      // A state with no transitions is not a dead end: the stuck-state net below
+      // can still release it (the last state releases to the end, #452).
       if (!currentState.transitions || currentState.transitions.length === 0) {
         this.logger.log(
           `[evaluateAndTransition] State '${currentState.id}' has no transitions defined`,
         );
-        break;
       }
 
       this.logger.log(
-        `[evaluateAndTransition] State '${currentState.id}' has ${currentState.transitions.length} transition(s)`,
+        `[evaluateAndTransition] State '${currentState.id}' has ${currentState.transitions?.length ?? 0} transition(s)`,
       );
 
       // Use ?? instead of || so that priority:0 (highest urgency) is respected.
       // With ||, 0 is falsy and would be replaced by 100, silently demoting the
       // highest-priority transition to the default bucket.
-      const sortedTransitions = [...currentState.transitions].sort(
+      const sortedTransitions = [...(currentState.transitions ?? [])].sort(
         (a, b) => (a.priority ?? 100) - (b.priority ?? 100),
       );
 
@@ -2132,6 +2411,8 @@ export class StateMachineService {
       }
 
       if (!matchedTargetId) {
+        // (A state with no transitions also gets here. ensureTransitions gives every
+        // middle state a default, so in practice only a task-less last state does.)
         // No authored/default condition matched. Before giving up, apply the
         // last-resort safety net: if the agent has left this state stuck for too
         // many no-progress turns, force the default forward transition so the

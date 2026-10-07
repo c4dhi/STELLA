@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 // Integration test for the #198 auto-end flow: drives the REAL SessionTimeoutService
 // and SessionsService together over a shared, mutable in-memory session store, with
 // only the external boundaries (LiveKit, agents, Prisma I/O) stubbed. It exercises
@@ -11,8 +12,8 @@ jest.mock('../livekit/livekit.service', () => ({ LiveKitService: class {} }));
 jest.mock('../message-recorder/room-monitor.service', () => ({ RoomMonitorService: class {} }));
 jest.mock('livekit-server-sdk', () => ({ TokenVerifier: class {}, AccessToken: class {} }));
 
-import { SessionsService } from './sessions.service';
-import { SessionTimeoutService } from './session-timeout.service';
+import { SessionsService } from './sessions.service.js';
+import { SessionTimeoutService } from './session-timeout.service.js';
 
 type Store = {
   id: string;

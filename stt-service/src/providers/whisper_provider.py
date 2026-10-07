@@ -7,6 +7,7 @@ Follows industry best practices (LiveKit, OpenAI Realtime, Deepgram, Pipecat):
 - Configurable endpointing delays for conversational speech
 """
 
+import math
 import asyncio
 import difflib
 import json
@@ -23,6 +24,7 @@ import numpy as np
 
 from .base import STTProvider, STTSession
 import stt_pb2
+from vad.speech_gate import GateConfig, GateSignal, SpeechGate, SpeechState
 
 # ── Decode diagnostics (STT_DECODE_DIAGNOSTICS) ──────────────────────────────
 # Logging-only instrumentation for the endpointing/hallucination investigation.
@@ -124,6 +126,27 @@ def _collect_segments(segments) -> Tuple[str, dict]:
     }
 
 
+def _transcript_confidence(metrics: dict) -> float:
+    """How far a final transcript can be trusted, 0..1, from the decode itself.
+
+    The chance it was speech at all, times the model's average confidence in the
+    words it chose: ``(1 - no_speech_prob) * exp(avg_logprob)``. Both halves
+    matter to whoever acts on a short answer. Filler invented over near-silence
+    ("Thank you.") can be decoded confidently and is only given away by the
+    no-speech probability; a real but mumbled "yes" is the reverse.
+
+    The worst segment's no-speech probability is used, because one invented
+    segment is what a hallucination looks like in a longer decode. Returns 0.0
+    when the decode carried no signal, which callers read as "unknown".
+    """
+    logprob = (metrics.get("avg_logprob") or {}).get("mean")
+    if logprob is None:
+        return 0.0
+    no_speech = (metrics.get("no_speech_prob") or {}).get("worst") or 0.0
+    confidence = (1.0 - no_speech) * math.exp(min(logprob, 0.0))
+    return round(max(0.0, min(1.0, confidence)), 4)
+
+
 def _trailing_silence_samples(samples: np.ndarray, rms_threshold: float, frame: int = 512) -> int:
     """Count trailing samples that are below the RMS gate.
 
@@ -190,8 +213,6 @@ class WhisperSession(STTSession):
         self.vad_model = vad_model
         self.config = config
 
-        # Core state (3-state machine: IDLE, SPEAKING, or MAYBE_ENDING)
-        self.state = "IDLE"
         # Audio is held in typed int16 arrays, not Python lists. A list stores a
         # boxed int object per sample — ~36 bytes each — so a 35s utterance costs
         # 20MB per active session instead of 1.1MB. array('h') keeps len() in
@@ -219,23 +240,30 @@ class WhisperSession(STTSession):
         # RMS threshold of 0.01 = -40dB, typical for speech vs ambient noise
         self.rms_threshold = config.get('rms_threshold', 0.01)
 
+        # Turn boundaries. The 3-state machine (IDLE / SPEAKING / MAYBE_ENDING)
+        # used to be written out inline here; it now lives in vad/speech_gate.py
+        # and is shared with the sherpa provider, which had never had one. The
+        # properties below keep `self.state` and friends readable so the rest of
+        # this class is unchanged.
+        #
+        # Driven on WALL-CLOCK time, deliberately, because that is what this
+        # provider has always used and the endpointing is tuned to it. (Sherpa
+        # drives the same gate on audio time; the gate takes `now` from its
+        # caller precisely so that is the provider's choice, not the gate's.)
+        self.gate = SpeechGate(GateConfig(
+            silence_duration_ms=self.silence_duration_ms,
+            continuation_window_ms=self.continuation_window_ms,
+            barge_in_min_speech_ms=self.barge_in_min_speech_ms,
+            max_endpointing_delay_ms=self.max_endpointing_delay_ms,
+            sample_rate=16000,
+        ))
+
         # Tracking
-        self.silence_start_time = None
-        self.speech_start_time = None
         self.last_partial_time = 0
         self.last_audio_time = 0  # Track when we last received meaningful audio
         self.transcript_id = None
         self.last_final_text = ""
         self.last_final_time = 0
-
-        # Continuation window state (for MAYBE_ENDING)
-        self.pending_final_time = None  # When we entered MAYBE_ENDING state
-
-        # Barge-in signal state. `voiced_samples` counts only frames that passed
-        # BOTH the RMS gate and VAD, so silence inside an utterance does not
-        # inflate it — 600ms here means 600ms of actual voice.
-        self.voiced_samples = 0
-        self.barge_in_signalled = False
 
         # Transcription state (prevent concurrent transcriptions)
         self.is_transcribing = False
@@ -297,6 +325,37 @@ class WhisperSession(STTSession):
         self.shadow_submitted_at = 0.0
         self.last_partial_snapshot = ""
 
+    # -- VAD state, read through from the shared gate --------------------
+    #
+    # These were plain attributes until the state machine moved out. Keeping
+    # the names means the timeout paths, the partial-submission checks and the
+    # debug logging in this class did not have to change, and there is still
+    # exactly one copy of the state — the gate's.
+
+    @property
+    def state(self) -> str:
+        return self.gate.state
+
+    @property
+    def silence_start_time(self):
+        return self.gate.silence_start_time
+
+    @property
+    def speech_start_time(self):
+        return self.gate.speech_start_time
+
+    @property
+    def pending_final_time(self):
+        return self.gate.pending_final_time
+
+    @property
+    def voiced_samples(self) -> int:
+        return self.gate.voiced_samples
+
+    @property
+    def barge_in_signalled(self) -> bool:
+        return self.gate.barge_in_signalled
+
     def set_language_hint(self, language: Optional[str]) -> None:
         """Pin transcription to a language (opt-in; forwarded from ``AudioChunk.language``).
 
@@ -342,7 +401,8 @@ class WhisperSession(STTSession):
             print(f"[WhisperSession] GPU cache clear error: {e}")
 
     def _speech_boundary_event(
-        self, current_time: float, *, started: bool = False, ended: bool = False
+        self, current_time: float, *, started: bool = False, ended: bool = False,
+        confirmed: bool = False,
     ) -> stt_pb2.TranscriptEvent:
         """A textless VAD event marking the edge of "the user is talking".
 
@@ -360,6 +420,7 @@ class WhisperSession(STTSession):
             timestamp_ms=int(current_time * 1000),
             speech_started=started,
             speech_ended=ended,
+            speech_confirmed=confirmed,
         )
 
     def _accumulate_speech(self, audio_int16: np.ndarray) -> None:
@@ -505,170 +566,97 @@ class WhisperSession(STTSession):
         audio_int16: np.ndarray,
         current_time: float
     ) -> List[stt_pb2.TranscriptEvent]:
-        """Check for speech activity using Silero VAD (3-state machine).
+        """Decide whether this window is voiced, then let the gate rule on it.
 
-        State transitions:
-        - IDLE -> SPEAKING: speech_prob > threshold
-        - SPEAKING -> MAYBE_ENDING: silence >= silence_duration_ms
-        - MAYBE_ENDING -> SPEAKING: speech resumes (cancel pending final)
-        - MAYBE_ENDING -> IDLE: continuation_window_ms elapsed OR max_endpointing_delay_ms reached
+        Two things are left here, and they are the two that are genuinely this
+        provider's: turning a window into a voiced/not verdict (RMS pre-filter,
+        then Silero), and deciding where the samples go once the gate has
+        ruled. The state machine itself is in vad/speech_gate.py.
+
+        Worth noting what disappeared in the move: the RMS branch and the VAD
+        branch used to carry SEPARATE, hand-duplicated copies of the silence
+        and continuation-window logic. They were supposed to be identical and
+        happened to be. Now there is one path, because "too quiet" and "not a
+        voice" are the same answer to the same question.
         """
         events = []
 
         try:
-            # RMS energy gate - filter out quiet background noise before VAD
-            # This prevents hallucinations from low-level ambient sounds
-            rms = np.sqrt(np.mean(audio_float ** 2))
+            rms = float(np.sqrt(np.mean(audio_float ** 2)))
 
-            # Debug logging every 100 windows to diagnose VAD issues
             if self.chunk_count % 100 == 0:
-                print(f"[WhisperSession] DEBUG: chunk={self.chunk_count}, rms={rms:.6f}, threshold={self.rms_threshold}, state={self.state}")
+                print(f"[WhisperSession] DEBUG: chunk={self.chunk_count}, rms={rms:.6f}, "
+                      f"threshold={self.rms_threshold}, state={self.state}")
 
             if rms < self.rms_threshold:
-                # Audio too quiet to be speech - treat as silence
-                # Still update pre-buffer but don't check VAD
-                self.pre_buffer.frombytes(audio_int16.tobytes())
-                if len(self.pre_buffer) > self.pre_buffer_samples:
-                    self.pre_buffer = self.pre_buffer[-self.pre_buffer_samples:]
+                # Too quiet to be speech. Skipping the VAD here is also what
+                # stops the model hallucinating over low-level ambient noise.
+                voiced = False
+            else:
+                audio_tensor = torch.from_numpy(audio_float)
+                # The Silero model is shared by every session and carries internal
+                # state, and process_audio runs on worker threads, so calls must
+                # not overlap.
+                with _VAD_LOCK:
+                    speech_prob = self.vad_model(audio_tensor, 16000).item()
+                if self.chunk_count % 100 == 0:
+                    print(f"[WhisperSession] DEBUG: VAD prob={speech_prob:.3f}, "
+                          f"threshold={self.vad_threshold}, state={self.state}")
+                voiced = speech_prob > self.vad_threshold
 
-                # Handle silence in SPEAKING/MAYBE_ENDING states
-                if self.state == "SPEAKING":
-                    if self.silence_start_time is None:
-                        self.silence_start_time = current_time
-                    self._accumulate_speech(audio_int16)
-                    silence_ms = (current_time - self.silence_start_time) * 1000
-                    if silence_ms >= self.silence_duration_ms:
-                        self.state = "MAYBE_ENDING"
-                        self.pending_final_time = current_time
-                        self._submit_shadow_decode()
-                        events.append(self._speech_boundary_event(current_time, ended=True))
-                elif self.state == "MAYBE_ENDING":
-                    self._accumulate_speech(audio_int16)
-                    time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
-                    if time_in_maybe_ending >= self.continuation_window_ms:
-                        final_event = self._generate_final(current_time)
-                        if final_event:
-                            events.append(final_event)
-                        self._reset()
-                return events
+            # Captured BEFORE the gate advances: buffering is decided by where
+            # the utterance was when this audio arrived, not where it ends up.
+            was_active = self.gate.is_active
 
-            # Get VAD probability (single signal)
-            audio_tensor = torch.from_numpy(audio_float)
-            # The Silero model is shared by every session and carries internal
-            # state, and process_audio now runs on worker threads, so calls must
-            # not overlap.
-            with _VAD_LOCK:
-                speech_prob = self.vad_model(audio_tensor, 16000).item()
+            signals = self.gate.observe(
+                voiced=voiced, samples=len(audio_int16), now=current_time
+            )
 
-            # Debug logging for VAD probability
-            if self.chunk_count % 100 == 0:
-                print(f"[WhisperSession] DEBUG: VAD prob={speech_prob:.3f}, threshold={self.vad_threshold}, state={self.state}")
-
-            if speech_prob > self.vad_threshold:
-                # Speech detected
-                self.silence_start_time = None
-
-                if self.state == "IDLE":
-                    # Transition: IDLE -> SPEAKING
-                    self.state = "SPEAKING"
-                    self.speech_start_time = current_time
+            for signal in signals:
+                if signal == GateSignal.UTTERANCE_BEGAN:
                     self.transcript_id = f"whisper_{uuid.uuid4().hex[:8]}"
+                    # The pre-buffer is the half second before the VAD noticed;
+                    # without it every utterance loses its first syllable.
                     self.speech_buffer = self.pre_buffer[:]
                     self.pre_buffer = array('h')
-                    print(f"[WhisperSession] Speech started (prob={speech_prob:.2f})")
+                    print("[WhisperSession] Speech started")
 
-                    # Emit speech_started event for barge-in detection
-                    events.append(stt_pb2.TranscriptEvent(
-                        text="",
-                        is_final=False,
-                        transcript_id=self.transcript_id,
-                        participant_id=self.participant_id,
-                        confidence=0.0,
-                        timestamp_ms=int(current_time * 1000),
-                        speech_started=True
-                    ))
-
-                elif self.state == "MAYBE_ENDING":
-                    # Transition: MAYBE_ENDING -> SPEAKING (speech resumed!)
-                    print(f"[WhisperSession] Speech resumed, canceling pending final (prob={speech_prob:.2f})")
-                    self.state = "SPEAKING"
-                    self.pending_final_time = None
-                    # Keep same transcript_id - this is a continuation
-                    # Re-open the speaking bracket: the agent un-ducked when we
-                    # entered MAYBE_ENDING, and the user is talking again.
+                elif signal == GateSignal.SPEECH_STARTED:
                     events.append(self._speech_boundary_event(current_time, started=True))
 
-                # Accumulate audio (with buffer limits)
+                elif signal == GateSignal.SPEECH_CONFIRMED:
+                    print(f"[WhisperSession] Barge-in signal ({self.gate.voiced_ms:.0f}ms voiced)")
+                    events.append(self._speech_boundary_event(current_time, confirmed=True))
+
+                elif signal == GateSignal.SPEECH_ENDED:
+                    print("[WhisperSession] Entering MAYBE_ENDING")
+                    # The buffer is complete at this point — the user has been
+                    # quiet for silence_duration_ms — so this is a candidate
+                    # final, not a truncated partial. Diagnostics-gated.
+                    self._submit_shadow_decode()
+                    events.append(self._speech_boundary_event(current_time, ended=True))
+
+                elif signal == GateSignal.FINALIZE:
+                    print("[WhisperSession] Continuation window expired")
+                    final_event = self._generate_final(current_time)
+                    if final_event:
+                        events.append(final_event)
+                    self._reset()
+                    return events
+
+            if voiced:
                 self._accumulate_speech(audio_int16)
-
-                # Barge-in trigger. Once the user has voiced enough audio, this
-                # is an interruption and not a backchannel — say so immediately,
-                # from VAD alone. Waiting for a partial would add a decode
-                # (~400-550ms measured) before the agent could even react, and
-                # the text would then have to be judged in a language we may not
-                # have identified yet. Duration needs neither.
-                self.voiced_samples += len(audio_int16)
-                if not self.barge_in_signalled:
-                    voiced_ms = self.voiced_samples / 16000 * 1000
-                    if voiced_ms >= self.barge_in_min_speech_ms:
-                        self.barge_in_signalled = True
-                        print(f"[WhisperSession] Barge-in signal ({voiced_ms:.0f}ms voiced)")
-                        events.append(stt_pb2.TranscriptEvent(
-                            text="",
-                            is_final=False,
-                            transcript_id=self.transcript_id,
-                            participant_id=self.participant_id,
-                            confidence=0.0,
-                            timestamp_ms=int(current_time * 1000),
-                            speech_started=False,
-                            speech_confirmed=True,
-                        ))
-
             else:
-                # Silence detected
+                # Silence still goes to the pre-buffer, so that if this turns
+                # out to be a pause rather than an ending, the next utterance
+                # starts with the run-up rather than mid-word.
                 self.pre_buffer.frombytes(audio_int16.tobytes())
                 if len(self.pre_buffer) > self.pre_buffer_samples:
                     self.pre_buffer = self.pre_buffer[-self.pre_buffer_samples:]
-
-                if self.state == "SPEAKING":
-                    # Track silence duration
-                    if self.silence_start_time is None:
-                        self.silence_start_time = current_time
-
-                    # Continue accumulating during silence (might resume)
+                if was_active:
+                    # Keep accumulating through a pause: speech may resume, and
+                    # if it does this silence belongs inside the utterance.
                     self._accumulate_speech(audio_int16)
-
-                    # Check if silence threshold reached -> transition to MAYBE_ENDING
-                    silence_ms = (current_time - self.silence_start_time) * 1000
-                    if silence_ms >= self.silence_duration_ms:
-                        # Transition: SPEAKING -> MAYBE_ENDING
-                        print(f"[WhisperSession] Entering MAYBE_ENDING ({silence_ms:.0f}ms silence)")
-                        self.state = "MAYBE_ENDING"
-                        self.pending_final_time = current_time
-                        # Speech buffer is complete here (the user has been quiet
-                        # for silence_duration_ms), so this decode is a candidate
-                        # final, not a partial. Diagnostics-gated; no-op when off.
-                        self._submit_shadow_decode()
-                        events.append(self._speech_boundary_event(current_time, ended=True))
-                        # Don't emit final yet - wait for continuation window
-
-                elif self.state == "MAYBE_ENDING":
-                    # Continue accumulating audio during MAYBE_ENDING (in case speech resumes)
-                    self._accumulate_speech(audio_int16)
-
-                    # Check if continuation window expired
-                    # Only use time_in_maybe_ending - this ensures we always wait the full
-                    # continuation window, even if silence accumulated during transcription blocking
-                    time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
-                    total_silence = (current_time - self.silence_start_time) * 1000
-
-                    if time_in_maybe_ending >= self.continuation_window_ms:
-                        # Transition: MAYBE_ENDING -> IDLE, emit final
-                        print(f"[WhisperSession] Continuation window expired ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
-                        final_event = self._generate_final(current_time)
-                        if final_event:
-                            events.append(final_event)
-                        self._reset()
 
         except Exception as e:
             print(f"[WhisperSession] VAD error: {e}")
@@ -998,7 +986,7 @@ class WhisperSession(STTSession):
                 is_final=True,
                 transcript_id=self.transcript_id,
                 participant_id=self.participant_id,
-                confidence=0.95,
+                confidence=_transcript_confidence(final_metrics),
                 timestamp_ms=int(current_time * 1000),
                 detected_language=detected_language or "",
                 language_confidence=language_confidence,
@@ -1122,18 +1110,13 @@ class WhisperSession(STTSession):
 
     def _reset(self) -> None:
         """Reset state for next utterance."""
-        self.state = "IDLE"
+        self.gate.reset()
         self.speech_buffer = array('h')
         self.audio_buffer = []  # Also clear audio buffer
         self.pre_buffer = array('h')  # Clear pre-buffer to prevent stale audio
-        self.silence_start_time = None
-        self.speech_start_time = None
         self.last_audio_time = 0
         self.transcript_id = None
-        self.pending_final_time = None  # Clear continuation window state
         self.is_transcribing = False  # Clear transcription lock
-        self.voiced_samples = 0
-        self.barge_in_signalled = False
 
         # Clear async partial state
         self.pending_partial_future = None
@@ -1179,6 +1162,23 @@ class WhisperProvider(STTProvider):
         self._warmed_up = False
         self._last_warmup_time = 0
         self._warmup_ttl_seconds = int(os.getenv("WHISPER_WARMUP_TTL", "300"))  # 5 min default
+        # Background keep-alive: re-run warmup on this interval so no session
+        # ever meets a cold model. Kept under the TTL so the model is never
+        # considered stale; 0 disables it.
+        keepalive = int(os.getenv("WHISPER_KEEPALIVE_INTERVAL", "180"))
+        # The deployment-wide switch (STELLA_MODEL_KEEP_WARM, asked in the setup
+        # wizard) turns the keep-alive off for STT and TTS together.
+        if os.getenv("STELLA_MODEL_KEEP_WARM", "true").strip().lower() in ("false", "0", "no", "off"):
+            keepalive = 0
+        if keepalive > 0:
+            keepalive = min(keepalive, max(1, int(self._warmup_ttl_seconds * 0.8)))
+        self._keepalive_interval_seconds = keepalive
+        self._keepalive_task: Optional[asyncio.Task] = None
+        # Language to pin warmup decoding to, so it skips detection. Explicit
+        # WHISPER_WARMUP_LANGUAGE wins, then the configured language, then the
+        # last language any session declared.
+        self._warmup_language = os.getenv("WHISPER_WARMUP_LANGUAGE", None) or None
+        self._last_declared_language: Optional[str] = None
 
         # Whisper model configuration (4 parameters)
         self.model_size = os.getenv("WHISPER_MODEL", "large-v3")
@@ -1292,7 +1292,7 @@ class WhisperProvider(STTProvider):
             traceback.print_exc()
             return False
 
-    async def warmup(self, duration_ms: int = 1000) -> bool:
+    async def warmup(self, duration_ms: int = 1000, force: bool = False) -> bool:
         """Warm up the Whisper model by running inference on dummy audio.
 
         This eliminates cold-start latency caused by:
@@ -1305,6 +1305,8 @@ class WhisperProvider(STTProvider):
 
         Args:
             duration_ms: Duration of dummy audio to process (default 1000ms)
+            force: Run even if the TTL says the model is still warm (used by
+                the keep-alive, which refreshes the TTL itself)
 
         Returns:
             True if warmup ran successfully, False otherwise.
@@ -1316,7 +1318,7 @@ class WhisperProvider(STTProvider):
         current_time = time.time()
 
         # Check TTL - skip if already warm
-        if self._warmed_up and (current_time - self._last_warmup_time) < self._warmup_ttl_seconds:
+        if not force and self._warmed_up and (current_time - self._last_warmup_time) < self._warmup_ttl_seconds:
             time_since_warmup = current_time - self._last_warmup_time
             print(f"[WhisperProvider] Model still warm ({time_since_warmup:.0f}s since last warmup, TTL={self._warmup_ttl_seconds}s)")
             return True
@@ -1336,10 +1338,12 @@ class WhisperProvider(STTProvider):
             # model takes 15-35 s here and would freeze every other stream.
             # Use configured language or auto-detect - warmup doesn't affect
             # session language since each session has its own detected_language.
+            warmup_language = self._warmup_language or self.language or self._last_declared_language
+
             def _infer():
                 segments, _info = self.whisper_model.transcribe(
                     dummy_audio,
-                    language=self.language,
+                    language=warmup_language,
                     beam_size=self.beam_size,
                     vad_filter=False,
                     word_timestamps=False,
@@ -1403,8 +1407,37 @@ class WhisperProvider(STTProvider):
             config=config
         )
 
+    def note_language(self, language: Optional[str]) -> None:
+        if language:
+            self._last_declared_language = language
+
+    def start_keepalive(self) -> None:
+        """Keep the model warm in the background (needs a running event loop)."""
+        if self._keepalive_interval_seconds <= 0:
+            print("[WhisperProvider] Keep-alive disabled (WHISPER_KEEPALIVE_INTERVAL=0)")
+            return
+        if self._keepalive_task is not None and not self._keepalive_task.done():
+            return
+        self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+        print(f"[WhisperProvider] Keep-alive started (every {self._keepalive_interval_seconds}s, "
+              f"TTL={self._warmup_ttl_seconds}s)")
+
+    async def _keepalive_loop(self) -> None:
+        # First pass runs immediately: the model is warm before the first session.
+        while True:
+            try:
+                await self.warmup(force=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"[WhisperProvider] Keep-alive warmup error: {e}")
+            await asyncio.sleep(self._keepalive_interval_seconds)
+
     async def cleanup(self) -> None:
         """Clean up resources."""
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
         self.whisper_model = None
         self.vad_model = None
         self.model_ready = False

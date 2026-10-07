@@ -1,12 +1,12 @@
 import * as yaml from 'js-yaml'
-import Ajv from 'ajv'
+import { Ajv } from 'ajv'
 import { z } from 'zod'
 import {
   MANIFEST_SCHEMA_VERSION,
   RESOURCE_LIMITS,
   SLUG_REGEX,
   VERSION_REGEX,
-} from '../agent-manifest.types'
+} from '../agent-manifest.types.js'
 
 const VALID_CAPABILITIES = ['voice', 'text', 'progress', 'plans', 'experts'] as const
 const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives'] as const
@@ -331,6 +331,12 @@ export const agentManifestSchema = z
         .optional(),
       icon: z.string().optional(),
       tags: z.array(z.string()).optional(),
+      // Superseded, but still deployable. Unlike removing an agent from the
+      // registry (which retires it outright), this keeps existing deployments
+      // and their saved configurations working — it only demotes the type in
+      // the gallery so nobody picks it for something new.
+      deprecated: z.boolean().optional(),
+      deprecationNote: z.string().min(1).optional(),
     }),
     capabilities: z.array(z.string()).optional(),
     image: z

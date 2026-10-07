@@ -1,14 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as k8s from '@kubernetes/client-node';
-import { AgentImageService } from '../agent-image/agent-image.service';
-import { buildPodEnvVars, buildSecretStringData } from './utils/agent-config-injection.util';
+import { AgentImageService } from '../agent-image/agent-image.service.js';
+import { buildPodEnvVars, buildSecretStringData } from './utils/agent-config-injection.util.js';
 import {
   clampCpuLimit,
   clampMemoryLimit,
   DEFAULT_CPU_LIMIT,
   DEFAULT_MEMORY_LIMIT,
-} from './utils/resource-clamping.util';
+} from './utils/resource-clamping.util.js';
 
 export interface AgentPodConfig {
   agentId: string;
@@ -47,7 +47,7 @@ export class KubernetesService {
     private agentImageService: AgentImageService,
   ) {
     this.namespace = this.configService.get<string>('KUBERNETES_NAMESPACE', 'default');
-    this.defaultAgentType = this.configService.get<string>('DEFAULT_AGENT_TYPE', 'stella-light-agent');
+    this.defaultAgentType = this.configService.get<string>('DEFAULT_AGENT_TYPE', 'stella-v2-agent');
     this.imagePullPolicy = this.configService.get<string>('AGENT_IMAGE_PULL_POLICY', 'IfNotPresent');
     // Configurable gRPC server address for agent connections
     // Allows agents to connect from anywhere (K8s, external servers, etc.)

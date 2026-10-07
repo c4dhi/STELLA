@@ -2,8 +2,8 @@ import { Injectable } from '@nestjs/common'
 import {
   AgentManifest,
   ManifestValidationResult,
-} from '../agent-manifest.types'
-import { parseAgentManifestYaml } from '../schemas/agent-manifest.schema'
+} from '../agent-manifest.types.js'
+import { parseAgentManifestYaml } from '../schemas/agent-manifest.schema.js'
 
 @Injectable()
 export class ManifestValidator {

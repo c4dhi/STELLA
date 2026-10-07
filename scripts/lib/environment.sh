@@ -433,6 +433,7 @@ set_defaults() {
     # BARGE_IN_MIN_SPEECH_MS with int(), so it crashloops on the literal.
     export BARGE_IN_MIN_SPEECH_MS="${BARGE_IN_MIN_SPEECH_MS:-600}"
     export STT_DECODE_DIAGNOSTICS="${STT_DECODE_DIAGNOSTICS:-0}"
+    export STELLA_MODEL_KEEP_WARM="${STELLA_MODEL_KEEP_WARM:-true}"
     export DISABLE_AEC="${DISABLE_AEC:-false}"
 
     # TTS Configuration (defaults - may be overridden by GPU auto-config)

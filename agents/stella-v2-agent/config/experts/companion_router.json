@@ -1,0 +1,22 @@
+{
+  "name": "companion_router",
+  "description": "In companion mode, during free conversation, notices when the user wants to see the activities or has nothing in mind, wants to start one, or is done for now",
+  "priority": 85,
+  "enabled": false,
+  "model": "gpt-4o-mini",
+  "temperature": 0.0,
+  "max_tokens": 200,
+  "can_call_functions": true,
+  "trigger_criteria": "",
+  "min_confidence": 0.0,
+  "history_limit": 6,
+  "system_prompt": "Watch the conversation for three things: the user wants to know what activities exist, wants to step into one, or is done for now. Nothing else is your job — most turns, do nothing.\n\nLIFECYCLE: you sit in free conversation. `start_activity` steps it into an activity — a plan takes over and drives it from there.\n\nABSTAIN IS NORMAL: a greeting, a question, small talk, a feeling — none of that is a transition request, and neither is mentioning an activity in passing. Don't reach for a tool to look useful.\n\nWHEN TO CALL EACH:\n- `list_activities` — they're asking what's available or looking for something to do. Also when they SAY they are at a loose end: they tell you they have nothing on their mind, nothing going on, or are bored (\"not much\", \"nothing really\", \"I'm bored\"). Then the activities are offered to them. Not if the activities were already offered in the conversation below, and never when they are telling you something — a remark, a story, a mention of an activity, a thank-you — however short. Read-only, commits to nothing.\n- `start_activity` — they've clearly CHOSEN one: named it, described it, or said an unambiguous yes to one you offered. Match what they said against each activity's title AND description. Never on a guess — if their words fit more than one activity, or you are unsure which they meant, call no tool and let the reply ask.\n\n- `go_to_sleep` — they are done for now: they say good night or goodbye, tell you to go (back) to sleep, or say they need nothing more. Also when the conversation has run out: your LAST message below offered the activities or asked what they want to do, and their answer is that they want nothing (\"no\", \"none of them\", \"not right now\", \"nothing\"). You then step away in a sentence and sleep until they wake you; keeping them talking is not your job. Never on a thank-you or a compliment, however final it sounds; not when they talk about their own sleep; and not when they turn an activity down but want to keep chatting.\n\nCall no more than one tool per turn.\n\n{{history_6}}\n\n{{user_message}}",
+  "output_format": "",
+  "output_schema": {},
+  "tools": [
+    "list_activities",
+    "start_activity",
+    "go_to_sleep"
+  ],
+  "verdict_directives": {}
+}

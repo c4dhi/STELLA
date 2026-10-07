@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { ZipWriter, ZipReader, copyZipAdding } from './bundle-zip'
+import { ZipWriter, ZipReader, copyZipAdding } from './bundle-zip.js'
 
 /**
  * Streaming zip writer/reader round-trip (#378). Covers buffer entries, a
@@ -22,7 +22,7 @@ describe('bundle-zip', () => {
     await fs.writeFile(srcFile, Buffer.from([1, 2, 3, 4, 5]))
 
     const zipPath = path.join(dir, 'a.zip')
-    const w = new ZipWriter(zipPath)
+    const w = await ZipWriter.create(zipPath)
     w.addBuffer('manifest.json', Buffer.from('{"formatVersion":2}', 'utf8'))
     w.addBuffer('tables/User/000000.json', Buffer.from('[{"id":"u1"}]', 'utf8'))
     w.addBuffer('tables/User/000001.json', Buffer.from('[{"id":"u2"}]', 'utf8'))
@@ -55,7 +55,7 @@ describe('bundle-zip', () => {
 
   it('copyZipAdding copies all entries and folds in an extra entry', async () => {
     const srcPath = path.join(dir, 'data.zip')
-    const w = new ZipWriter(srcPath)
+    const w = await ZipWriter.create(srcPath)
     w.addBuffer('manifest.json', Buffer.from('M', 'utf8'))
     w.addBuffer('tables/Room/000000.json', Buffer.from('[]', 'utf8'))
     await w.finalize()

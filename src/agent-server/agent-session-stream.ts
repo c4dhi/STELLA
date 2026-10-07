@@ -9,7 +9,7 @@ import {
   InputType,
   OutputType,
   AgentState,
-} from './agent.types';
+} from './agent.types.js';
 
 /**
  * Manages a single agent's bidirectional gRPC stream.

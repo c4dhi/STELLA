@@ -30,7 +30,7 @@ pip install -e STELLA/agents/stella-ai-agent-sdk
 Or pin directly to a tag without cloning:
 
 ```bash
-pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.5.0#subdirectory=agents/stella-ai-agent-sdk"
+pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.7.0#subdirectory=agents/stella-ai-agent-sdk"
 ```
 
 ## Quick Start
@@ -169,6 +169,8 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `TTS_SERVICE_ADDRESS` | `tts-service:50052` | TTS gRPC service address |
 | `TTS_ENABLED` | `true` | Set to `false` to disable TTS entirely. The agent will still receive speech input and send text responses, but no audio will be synthesized — effectively turning it into a text chatbot. |
 | `STT_WARMUP_ENABLED` | `true` | Warm up STT model before first utterance |
+| `STELLA_TTS_PLAYBACK` | `stream` | `stream` plays each sentence as it synthesizes; `sentence` synthesizes the whole sentence first, then plays it (use with a TTS provider slower than real time). Unknown values log a warning and use `stream` |
+| `STELLA_TTS_PREROLL_MS` | auto | Audio buffered before an utterance starts playing in `stream` mode. Unset, it adapts to the measured synthesis speed (200 ms to 3 s); set, it is pinned |
 | `SESSION_SERVER_URL` | `http://session-management-server:3000` | Session management HTTP URL |
 | `GRPC_SERVER` | `session-management-server:50051` | Session management gRPC address |
 | `SESSION_ID` | *(falls back to ROOM_NAME)* | Database session UUID |
@@ -221,8 +223,8 @@ triggered by pushing a `sdk-v<version>` tag:
 ```bash
 # 1. Bump `version` in agents/stella-ai-agent-sdk/pyproject.toml, then commit it to main.
 # 2. Tag the commit. The tag version must match pyproject.toml or the workflow fails.
-git tag sdk-v0.6.0
-git push origin sdk-v0.6.0
+git tag sdk-v0.7.0
+git push origin sdk-v0.7.0
 ```
 
 The workflow builds the sdist and wheel, installs the wheel into a clean environment and runs

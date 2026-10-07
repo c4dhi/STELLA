@@ -8,7 +8,7 @@
  * whether the highlight reads as in sync with the voice.
  */
 import { describe, it, expect } from 'vitest'
-import { planSegment } from './useTeleprompter'
+import { planSegment, activeExpressionAt, gesturesCrossed } from './useTeleprompter'
 
 // Mirrors the constants in the hook.
 const LAG = 60
@@ -77,5 +77,76 @@ describe('planSegment', () => {
       now += 200
     }
     expect(scheduledUntil - now).toBeLessThan(TOLERANCE + LAG + 200)
+  })
+})
+
+/**
+ * Emotion cues resolved against the same cursor (#face-emotions).
+ *
+ * The cursor is what makes a tag land on the word it was written before rather
+ * than when its packet arrived, so these are the rules that decide whether the
+ * face looks in sync or arbitrary.
+ */
+describe('activeExpressionAt', () => {
+  const cues = [
+    { char: 0, tag: 'playful', kind: 'expression' as const },
+    { char: 25, tag: 'nod', kind: 'gesture' as const },
+    { char: 40, tag: 'thinking', kind: 'expression' as const },
+  ]
+
+  it('wears nothing before the first cue', () => {
+    // A reply that opens without a tag starts from rest rather than inheriting
+    // whatever the previous turn ended on.
+    expect(activeExpressionAt([{ char: 10, tag: 'happy', kind: 'expression' }], 5)).toBeNull()
+  })
+
+  it('holds an expression until the next one — that IS the "until the next tag" rule', () => {
+    expect(activeExpressionAt(cues, 0)).toBe('playful')
+    expect(activeExpressionAt(cues, 24)).toBe('playful')
+    expect(activeExpressionAt(cues, 39)).toBe('playful')
+    expect(activeExpressionAt(cues, 40)).toBe('thinking')
+    expect(activeExpressionAt(cues, 5000)).toBe('thinking')
+  })
+
+  it('ignores gestures — they never become the resting pose', () => {
+    expect(activeExpressionAt(cues, 30)).toBe('playful')
+  })
+
+  it('handles a reply with no cues at all', () => {
+    expect(activeExpressionAt([], 100)).toBeNull()
+  })
+})
+
+describe('gesturesCrossed', () => {
+  const cues = [
+    { char: 0, tag: 'brow_flash', kind: 'gesture' as const },
+    { char: 12, tag: 'happy', kind: 'expression' as const },
+    { char: 30, tag: 'nod', kind: 'gesture' as const },
+  ]
+
+  it('fires a cue sitting at offset 0 on the first frame', () => {
+    // Which is why the cursor starts at -1 rather than 0.
+    expect(gesturesCrossed(cues, -1, 0)).toEqual(['brow_flash'])
+  })
+
+  it('fires each gesture exactly once as the cursor sweeps past it', () => {
+    expect(gesturesCrossed(cues, -1, 5)).toEqual(['brow_flash'])
+    expect(gesturesCrossed(cues, 5, 35)).toEqual(['nod'])
+    // The same span again must not replay it.
+    expect(gesturesCrossed(cues, 35, 35)).toEqual([])
+    expect(gesturesCrossed(cues, 35, 100)).toEqual([])
+  })
+
+  it('does not drop a gesture a long frame jumped over', () => {
+    // A dropped frame or a rebase can move the cursor a long way at once.
+    expect(gesturesCrossed(cues, -1, 100)).toEqual(['brow_flash', 'nod'])
+  })
+
+  it('never fires on a cursor that moved backwards (barge-in rewind)', () => {
+    expect(gesturesCrossed(cues, 50, 10)).toEqual([])
+  })
+
+  it('ignores expressions', () => {
+    expect(gesturesCrossed(cues, 5, 20)).toEqual([])
   })
 })

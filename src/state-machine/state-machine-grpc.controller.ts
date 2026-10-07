@@ -1,6 +1,6 @@
 import { Controller, Logger } from '@nestjs/common';
 import { GrpcMethod } from '@nestjs/microservices';
-import { StateMachineService, END_STATE_ID } from './state-machine.service';
+import { StateMachineService, END_STATE_ID } from './state-machine.service.js';
 
 /**
  * StateMachineGrpcController - gRPC endpoints for state machine operations.
@@ -45,6 +45,57 @@ export class StateMachineGrpcController {
         success: false,
         error: error.message,
       };
+    }
+  }
+
+  /**
+   * Replace the session's plan (companion mode: the user picked an activity).
+   */
+  @GrpcMethod('StateMachineService', 'LoadPlan')
+  async loadPlan(request: {
+    sessionId: string;
+    planJson: string;
+  }): Promise<{
+    success: boolean;
+    error?: string;
+    currentStateId?: string;
+    planTitle?: string;
+  }> {
+    this.logger.log(`LoadPlan called for session: ${request.sessionId}`);
+
+    try {
+      const plan = JSON.parse(request.planJson);
+      const state = await this.stateMachineService.loadPlanForSession(
+        request.sessionId,
+        plan,
+      );
+
+      return {
+        success: true,
+        currentStateId: state.currentStateId,
+        planTitle: plan.title ?? '',
+      };
+    } catch (error) {
+      this.logger.error(`LoadPlan error: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Drop the session's plan — back to free-flow companion conversation.
+   */
+  @GrpcMethod('StateMachineService', 'ClearPlan')
+  async clearPlan(request: {
+    sessionId: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    this.logger.log(`ClearPlan called for session: ${request.sessionId}`);
+
+    try {
+      await this.stateMachineService.clearPlanForSession(request.sessionId);
+      return { success: true };
+    } catch (error) {
+      this.logger.error(`ClearPlan error: ${error.message}`);
+      return { success: false, error: error.message };
     }
   }
 
@@ -187,6 +238,7 @@ export class StateMachineGrpcController {
     value: string;
     reasoning: string;
     unconfirmed?: boolean;
+    correction?: boolean;
   }): Promise<{
     success: boolean;
     error?: string;
@@ -217,6 +269,7 @@ export class StateMachineGrpcController {
       parsedValue,
       request.reasoning,
       request.unconfirmed ?? false,
+      request.correction ?? false,
     );
 
     return {

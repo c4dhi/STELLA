@@ -1,12 +1,13 @@
 import { Module, forwardRef } from '@nestjs/common';
-import { AgentsService } from './agents.service';
-import { AgentsController } from './agents.controller';
-import { KubernetesModule } from '../kubernetes/kubernetes.module';
-import { AgentServerModule } from '../agent-server/agent-server.module';
-import { AgentImageModule } from '../agent-image/agent-image.module';
-import { SessionsModule } from '../sessions/sessions.module';
-import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module';
-import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module';
+import { AgentsService } from './agents.service.js';
+import { AgentsController } from './agents.controller.js';
+import { KubernetesModule } from '../kubernetes/kubernetes.module.js';
+import { AgentServerModule } from '../agent-server/agent-server.module.js';
+import { AgentImageModule } from '../agent-image/agent-image.module.js';
+import { SessionsModule } from '../sessions/sessions.module.js';
+import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
+import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module.js';
+import { PersonasModule } from '../personas/personas.module.js';
 
 /**
  * AgentsModule - Manages agent lifecycle.
@@ -24,6 +25,8 @@ import { AgentConfigurationsModule } from '../agent-configurations/agent-configu
     EnvVarTemplatesModule,
     // Resolve + validate stored pipeline configurations at deploy time.
     AgentConfigurationsModule,
+    // Resolve the persona (agent identity) snapshot at deploy time.
+    PersonasModule,
     forwardRef(() => AgentServerModule),
     forwardRef(() => SessionsModule),
   ],

@@ -19,6 +19,7 @@ import time
 
 import pytest
 
+from stella_agent_sdk.audio.preroll import PrerollController
 from stella_agent_sdk.audio.pipeline import (
     AudioPipeline,
     _BYTES_PER_SAMPLE,
@@ -88,6 +89,7 @@ def make_pipeline(tts, teleprompter=True, barge_in=True, preroll_frames=2):
     pipe._barge_in_enabled = barge_in
     # Pin the jitter buffer so tests do not inherit the production default.
     pipe._preroll_bytes = _PLAYOUT_FRAME_BYTES * preroll_frames
+    pipe._preroll = PrerollController(fixed_ms=_PLAYOUT_FRAME_MS * preroll_frames)
     pipe._is_speaking = True
     pipe._stop_speaking_event.clear()
     pipe._play_allowed.set()
@@ -236,6 +238,7 @@ def make_paced_pipeline(tts, teleprompter=True, preroll_frames=2):
     pipe._teleprompter_enabled = teleprompter
     pipe._barge_in_enabled = True
     pipe._preroll_bytes = _PLAYOUT_FRAME_BYTES * preroll_frames
+    pipe._preroll = PrerollController(fixed_ms=_PLAYOUT_FRAME_MS * preroll_frames)
     pipe._is_speaking = True
     pipe._stop_speaking_event.clear()
     pipe._play_allowed.set()
@@ -266,6 +269,7 @@ def make_realtime_pipeline(tts, preroll_frames=40):
     pipe._teleprompter_enabled = True
     pipe._barge_in_enabled = True
     pipe._preroll_bytes = _PLAYOUT_FRAME_BYTES * preroll_frames
+    pipe._preroll = PrerollController(fixed_ms=_PLAYOUT_FRAME_MS * preroll_frames)
     pipe._is_speaking = True
     pipe._stop_speaking_event.clear()
     pipe._play_allowed.set()
@@ -759,3 +763,221 @@ def test_fade_in_ramps_up_and_leaves_the_tail_alone():
     head = faded[:_DECLICK_SAMPLES]
     assert head == sorted(head), "fade-in is not monotonically rising"
     assert faded[_DECLICK_SAMPLES:] == original[_DECLICK_SAMPLES:], "tail was altered"
+
+
+# ── STELLA_TTS_PLAYBACK: stream (default) | sentence ─────────────────────────
+# `sentence` restores the 1.1.0 behaviour for GPUs slower than real time: the
+# whole sentence is synthesized before the first frame is published.
+
+from stella_agent_sdk.audio.pipeline import _parse_tts_playback  # noqa: E402
+
+
+def test_playback_mode_defaults_to_stream_and_parses_values(caplog):
+    assert _parse_tts_playback(None) == "stream"
+    assert _parse_tts_playback("") == "stream"
+    assert _parse_tts_playback("  ") == "stream"
+    assert _parse_tts_playback("stream") == "stream"
+    assert _parse_tts_playback("Sentence") == "sentence"
+    assert _parse_tts_playback(" sentence ") == "sentence"
+
+
+def test_unknown_playback_mode_warns_and_falls_back_to_stream(caplog):
+    with caplog.at_level("WARNING"):
+        assert _parse_tts_playback("chunky") == "stream"
+    assert "chunky" in caplog.text
+
+
+def test_pipeline_reads_the_playback_env_once(monkeypatch):
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "sentence")
+    pipe, _ = make_pipeline(SlowTTS())
+    assert pipe._tts_playback == "sentence"
+
+    monkeypatch.delenv("STELLA_TTS_PLAYBACK")
+    pipe, _ = make_pipeline(SlowTTS())
+    assert pipe._tts_playback == "stream"
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_publishes_nothing_until_synthesis_completes():
+    tts = SlowTTS(frames=6, gap=0.03)  # ~180 ms to synthesize
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    utt = pipe._begin_synthesis("hello there")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+
+    await asyncio.sleep(0.09)  # stream mode would already be playing here
+    assert not utt.complete, "test is not exercising the in-flight case"
+    assert len(room.published) == 0, "audio was published before the sentence was complete"
+
+    await asyncio.wait_for(play, timeout=5)
+    # Nothing lost, nothing bridged with silence, every chunk once, in order.
+    assert real_frame_ids(room) == list(range(1, 7))
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_first_audio_costs_the_whole_synthesis():
+    tts = SlowTTS(frames=6, gap=0.03)
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    loop = asyncio.get_event_loop()
+    t0 = loop.time()
+    utt = pipe._begin_synthesis("hello")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+    while not room.published:
+        await asyncio.sleep(0.005)
+    ttfa_ms = (loop.time() - t0) * 1000
+    await asyncio.wait_for(play, timeout=5)
+    assert ttfa_ms >= 150, f"first audio after {ttfa_ms:.0f}ms; sentence mode should wait for ~180ms"
+
+
+@pytest.mark.asyncio
+async def test_stream_mode_is_unchanged_by_the_setting():
+    tts = SlowTTS(frames=6, gap=0.03)
+    pipe, room = make_pipeline(tts)
+    assert pipe._tts_playback == "stream"
+
+    utt = pipe._begin_synthesis("hello there")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+    await asyncio.sleep(0.09)
+    assert len(room.published) > 0 and not utt.complete
+    await asyncio.wait_for(play, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_barge_in_while_waiting_stops_playback_and_synthesis():
+    tts = SlowTTS(frames=50, gap=0.03)  # would take 1.5 s
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    utt = pipe._begin_synthesis("a long sentence")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+    await asyncio.sleep(0.06)
+    pipe._stop_speaking_event.set()  # the user interrupts before anything played
+
+    await asyncio.wait_for(play, timeout=1)  # must not sit out the synthesis
+    assert len(room.published) == 0
+    # No manual utt.cancel(): the pipeline's own cleanup must stop the synthesis.
+    await asyncio.sleep(0.05)
+    assert tts.cancelled, "synthesis kept running after playback was abandoned"
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_teleprompter_still_works():
+    tts = SlowTTS(frames=5, gap=0.01)
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    utt = pipe._begin_synthesis("hello there")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response", meta=META), timeout=5)
+
+    assert progress_events(room), "no teleprompter progress was emitted in sentence mode"
+    assert real_frame_ids(room) == list(range(1, 6))
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_barge_in_once_playing_stops_mid_sentence():
+    """After the sentence is whole and playing, a stop still ends playback early."""
+    tts = SlowTTS(frames=12, gap=0.005)  # ~60 ms to synthesize, then it plays
+    pipe, room = make_pipeline(tts)
+    pipe._tts_playback = "sentence"
+
+    # The room takes frames instantly, so barge in from inside it: the user
+    # interrupts on the third published frame.
+    real_publish = room.publish_audio
+    seen = {"complete_at_first_frame": None}
+
+    async def publish_and_interrupt(data: bytes):
+        await real_publish(data)
+        if seen["complete_at_first_frame"] is None:
+            seen["complete_at_first_frame"] = utt.complete
+        if len(room.published) >= 3 * _PLAYOUT_FRAME_BYTES:
+            pipe._stop_speaking_event.set()
+
+    room.publish_audio = publish_and_interrupt
+
+    utt = pipe._begin_synthesis("a sentence")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response", meta=META), timeout=2)
+
+    assert seen["complete_at_first_frame"] is True, "sentence mode started before the sentence was whole"
+    assert len(real_frame_ids(room)) < 12, "playback ran to the end despite the barge-in"
+
+
+@pytest.mark.asyncio
+async def test_sentence_mode_latency_is_not_reported_as_an_alarm(caplog):
+    """The first-byte time includes full synthesis in sentence mode by design."""
+    pipe, room = make_pipeline(SlowTTS())
+    pipe._tts_playback = "sentence"
+    with caplog.at_level("INFO"):
+        pipe._report_first_byte_latency("response", 6000)  # far past the alarm line
+        await asyncio.sleep(0.05)
+    assert not [r for r in caplog.records if r.levelname in ("ERROR", "WARNING")]
+    assert "sentence playback" in caplog.text
+    published = [d for d in room.data if d.get("type") == "analytics"]
+    assert published and published[-1]["data"]["playback"] == "sentence"
+
+
+@pytest.mark.asyncio
+async def test_stream_mode_latency_alarms_are_unchanged(caplog):
+    pipe, room = make_pipeline(SlowTTS())
+    with caplog.at_level("INFO"):
+        pipe._report_first_byte_latency("response", 6000)
+        await asyncio.sleep(0.05)
+    assert [r for r in caplog.records if r.levelname == "ERROR"]
+    published = [d for d in room.data if d.get("type") == "analytics"]
+    assert published[-1]["data"]["playback"] == "stream"
+
+
+@pytest.mark.asyncio
+async def test_unpinned_preroll_grows_after_a_slow_sentence(monkeypatch):
+    """No STELLA_TTS_PREROLL_MS: a sentence synthesized slower than real time
+    (RTF ~2.5 here) leaves the NEXT sentence a longer head start."""
+    monkeypatch.delenv("STELLA_TTS_PREROLL_MS", raising=False)
+    tts = SlowTTS(frames=40, gap=_PLAYOUT_FRAME_MS / 1000.0 * 2.5)
+    room = PacedRoom()
+    pipe = AudioPipeline(room, stt_client=None, tts_client=tts, session_id="s")
+    pipe._is_speaking = True
+    pipe._stop_speaking_event.clear()
+    pipe._play_allowed.set()
+    assert not pipe._preroll.fixed
+    before = pipe._preroll.current_ms
+
+    utt = pipe._begin_synthesis("a sentence the provider cannot keep up with")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=30)
+
+    assert pipe._preroll.current_ms > before
+
+
+@pytest.mark.asyncio
+async def test_pinned_preroll_is_left_alone(monkeypatch):
+    monkeypatch.setenv("STELLA_TTS_PREROLL_MS", "300")
+    tts = SlowTTS(frames=40, gap=_PLAYOUT_FRAME_MS / 1000.0 * 2.5)
+    room = PacedRoom()
+    pipe = AudioPipeline(room, stt_client=None, tts_client=tts, session_id="s")
+    pipe._is_speaking = True
+    pipe._stop_speaking_event.clear()
+    pipe._play_allowed.set()
+
+    utt = pipe._begin_synthesis("a sentence the provider cannot keep up with")
+    await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=30)
+
+    assert pipe._preroll.fixed and pipe._preroll.current_ms == 300
+
+
+@pytest.mark.parametrize(
+    "env, expected",
+    [
+        (None, "auto, starting at 200 ms"),
+        ("300", "pinned to 300 ms"),
+    ],
+)
+def test_preroll_setting_is_logged_once_at_session_start(monkeypatch, caplog, env, expected):
+    if env is None:
+        monkeypatch.delenv("STELLA_TTS_PREROLL_MS", raising=False)
+    else:
+        monkeypatch.setenv("STELLA_TTS_PREROLL_MS", env)
+    with caplog.at_level("INFO"):
+        AudioPipeline(PacedRoom(), stt_client=None, tts_client=SlowTTS(frames=1, gap=0), session_id="s")
+    lines = [r.getMessage() for r in caplog.records if "Pre-roll" in r.getMessage()]
+    assert len(lines) == 1 and expected in lines[0]

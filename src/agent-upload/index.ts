@@ -1,3 +1,3 @@
-export * from './agent-upload.module'
-export * from './agent-upload.controller'
-export * from './agent-admin.controller'
+export * from './agent-upload.module.js'
+export * from './agent-upload.controller.js'
+export * from './agent-admin.controller.js'

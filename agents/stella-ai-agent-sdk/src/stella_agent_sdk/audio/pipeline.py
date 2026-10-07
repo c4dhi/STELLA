@@ -44,9 +44,11 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
-from typing import AsyncIterator, Awaitable, Callable, Deque, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, Optional
 
+from stella_agent_sdk.emotion.tags import EmotionCue
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
+from stella_agent_sdk.audio.preroll import PrerollController
 from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
@@ -254,10 +256,38 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 # silence if the source actually drains, and logs the milliseconds it had to
 # insert. That number is the acceptance test for this constant — if "bridged
 # Xms" is ever non-zero, the cushion is too small for the hardware of the day.
-# Prefer raising it back over adding a rate controller: the only reason a fixed
-# cushion works at all is that RTF < 1, and if that stops holding under GPU
-# contention no amount of prediction saves it either.
+# This is now the FLOOR, not the value: unless STELLA_TTS_PREROLL_MS pins it, a
+# PrerollController (audio/preroll.py) raises the head start when the measured
+# RTF or a non-zero "bridged Xms" says 200ms is not enough (a slower GPU than the
+# one this was tuned on), and lowers it slowly back toward this floor.
 _DEFAULT_TTS_PREROLL_MS = 200
+
+# How synthesized speech is played (STELLA_TTS_PLAYBACK, a per-deployment agent
+# setting declared in agent.yaml):
+#   stream   -- start playing each sentence as it synthesizes, behind the
+#               pre-roll (5c3534a). Lowest latency; needs a provider that
+#               synthesizes at or faster than real time.
+#   sentence -- synthesize the whole sentence first, then play it (the 1.1.0
+#               behaviour). Costs first-audio latency but a sentence can never
+#               run dry mid-word, which is what a GPU slower than real time
+#               (a T4 running Qwen3) does to `stream`.
+_TTS_PLAYBACK_MODES = ("stream", "sentence")
+_DEFAULT_TTS_PLAYBACK = "stream"
+
+
+def _parse_tts_playback(raw: Optional[str]) -> str:
+    """Resolve STELLA_TTS_PLAYBACK; unset/empty means the default, and an
+    unknown value logs a warning and falls back to it (never fails an agent)."""
+    if raw is None or not raw.strip():
+        return _DEFAULT_TTS_PLAYBACK
+    value = raw.strip().lower()
+    if value in _TTS_PLAYBACK_MODES:
+        return value
+    logger.warning(
+        f"[TTS] Unknown STELLA_TTS_PLAYBACK={raw!r} "
+        f"(expected {' or '.join(_TTS_PLAYBACK_MODES)}); using {_DEFAULT_TTS_PLAYBACK!r}"
+    )
+    return _DEFAULT_TTS_PLAYBACK
 
 # Wall-clock covered by one playout frame.
 _PLAYOUT_FRAME_MS = _PLAYOUT_FRAME_SAMPLES * 1000 // _TTS_SAMPLE_RATE
@@ -373,7 +403,7 @@ class _StreamingUtterance:
     coming; ``wait_for_data`` parks the player when it catches up with synthesis.
     """
 
-    __slots__ = ("data", "complete", "error", "task", "_new")
+    __slots__ = ("data", "complete", "error", "task", "_new", "synth_ms")
 
     def __init__(self) -> None:
         self.data = bytearray()
@@ -381,6 +411,9 @@ class _StreamingUtterance:
         self.error: Optional[Exception] = None
         self.task: Optional[asyncio.Task] = None
         self._new = asyncio.Event()
+        # Wall time the TTS service spent producing this audio (lock wait
+        # excluded); with the audio length it gives the real-time factor.
+        self.synth_ms: Optional[float] = None
 
     def append(self, audio: bytes) -> None:
         self.data += audio
@@ -584,16 +617,33 @@ class AudioPipeline:
         # audio; this keeps at most one stream in flight per pipeline.
         self._synthesis_lock: asyncio.Lock = asyncio.Lock()
         # Jitter buffer before an utterance starts playing (see the constant).
-        # 0 disables it, which is only sane if the provider streams smoothly.
-        try:
-            _preroll_ms = int(
-                os.getenv("STELLA_TTS_PREROLL_MS", str(_DEFAULT_TTS_PREROLL_MS))
-            )
-        except ValueError:
-            _preroll_ms = _DEFAULT_TTS_PREROLL_MS
-        self._preroll_bytes = max(
-            0, int(_preroll_ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE
+        # STELLA_TTS_PREROLL_MS pins it (0 disables it, which is only sane if the
+        # provider streams smoothly). Unset, a PrerollController learns it from
+        # the RTF of the sentences actually synthesized, so a slower GPU than the
+        # one the default was tuned on gets a longer head start by itself.
+        _env_preroll = os.getenv("STELLA_TTS_PREROLL_MS")
+        _fixed_preroll: Optional[int] = None
+        if _env_preroll not in (None, ""):
+            try:
+                _fixed_preroll = int(_env_preroll)
+            except ValueError:
+                logger.warning(
+                    f"[TTS] Ignoring STELLA_TTS_PREROLL_MS={_env_preroll!r}: not an integer"
+                )
+        self._preroll = PrerollController(
+            fixed_ms=_fixed_preroll, min_ms=_DEFAULT_TTS_PREROLL_MS
         )
+        self._preroll_bytes = self._preroll_ms_to_bytes(self._preroll.current_ms)
+        logger.info(
+            f"[TTS] Pre-roll: pinned to {self._preroll.current_ms} ms (STELLA_TTS_PREROLL_MS)"
+            if self._preroll.fixed
+            else f"[TTS] Pre-roll: auto, starting at {self._preroll.current_ms} ms "
+            "(adapts from measured synthesis speed)"
+        )
+        # Read once: stream (default) or sentence. See _TTS_PLAYBACK_MODES.
+        self._tts_playback: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
+        if self._tts_playback != _DEFAULT_TTS_PLAYBACK:
+            logger.info(f"[TTS] Playback mode: {self._tts_playback}")
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -657,6 +707,25 @@ class AudioPipeline:
             os.getenv("BARGE_IN_DUCK_GAIN", "0.25")
         )))
         self._ducked = False
+        self._ducked_at = 0.0
+        # How long a duck may last WITHOUT the interruption being confirmed.
+        #
+        # The duck is a reflex fired on the VAD's first frame, and the comment
+        # above is only true — "it costs nothing to be wrong" — if being wrong
+        # is self-correcting. It was not. Every path that lifts the duck waits
+        # on something arriving: `speech_ended`, or a final transcript, or the
+        # agent running out of things to say. A provider that never sends the
+        # first two (the sherpa CPU provider emits `speech_started` and nothing
+        # else) leaves the agent ducked for the REST OF THE UTTERANCE on one
+        # frame of background noise, which is exactly how it was reported.
+        #
+        # Derived from the barge-in threshold rather than picked: if the user
+        # had really taken the floor, `speech_confirmed` would have arrived
+        # after barge_in_min_speech_ms of voiced audio. Once that much time has
+        # passed with no confirmation, whatever ducked us was not a turn — by
+        # the system's own definition — so come back up. The margin covers the
+        # round trip from the STT service.
+        self._duck_timeout_s = _env_float("BARGE_IN_DUCK_TIMEOUT_MS", 1200.0) / 1000.0
         # transcript_id of an utterance we have committed a voice barge-in for,
         # while waiting for its final to deliver as the interrupting turn.
         # Keyed on the id, not a bare flag, so the state cannot outlive its
@@ -687,6 +756,11 @@ class AudioPipeline:
         # a graceful close over the data channel ({"type":"session_end"}).
         self._session_end_handler: Optional[
             Callable[[str, int], Awaitable[None]]
+        ] = None
+        # What the user did on their device that is not speech or text
+        # ({"type":"client_event"}): a tap, the face going to sleep or waking.
+        self._client_event_handler: Optional[
+            Callable[[str, Dict[str, Any]], Awaitable[None]]
         ] = None
         # Safety net for the TEXT path, which is the only caller that suspends
         # playback reversibly: if its decider hangs, the suspend would otherwise
@@ -745,6 +819,17 @@ class AudioPipeline:
         else:
             self._teleprompter_enabled = _tp_env.lower() in ("true", "1", "yes")
             self._teleprompter_env_locked = True
+        # Emotion tags (#face-emotions): the agent strips [tags] out of the
+        # reply and publishes them as cues keyed to offsets in the stripped
+        # text. Same default-on / env-locked contract as the teleprompter,
+        # which the cues share a coordinate space with.
+        _et_env = os.getenv("STELLA_EMOTION_TAGS_ENABLED")
+        if _et_env is None:
+            self._emotion_tags_enabled = True  # default on
+            self._emotion_tags_env_locked = False
+        else:
+            self._emotion_tags_enabled = _et_env.lower() in ("true", "1", "yes")
+            self._emotion_tags_env_locked = True
         # Character span of the sentence currently held in _cur_audio, used to
         # translate the byte-accurate playhead into a character offset in the
         # published agent_text. None when the held audio carries no offsets.
@@ -1401,8 +1486,27 @@ class AudioPipeline:
                         transcript=text,
                     )
 
-                # Keep the on-screen transcript live either way.
-                await self._publish_user_transcript(event)
+                # Keep the on-screen transcript live either way — but say what
+                # happened to it. Every FINAL that reaches this line is one the
+                # pipeline is about to drop: the carry-over branch above has
+                # already taken anything that started on an open gate or that
+                # cleared the interruption threshold, and this branch ends in
+                # `continue`, so nothing here ever becomes a turn.
+                #
+                # Reported as "I said mhm, it marked it as a turn, and kept
+                # speaking". The barge-in decision was right — the utterance
+                # never confirmed, so the agent correctly carried on. What was
+                # wrong was that the transcript went out unmarked and rendered
+                # as an ordinary delivered turn, which reads as the agent
+                # hearing you and ignoring you. The sibling case (the same
+                # backchannel decoded AFTER playback stops) has always been
+                # marked; the only thing separating them is whether the decode
+                # landed before or after the agent finished its sentence, which
+                # is not something the user can see or should have to.
+                #
+                # Partials stay unmarked: they are still live, and the final
+                # replaces them by transcript_id.
+                await self._publish_user_transcript(event, discarded=event.is_final)
                 continue
 
             # 1. Partials go out immediately so the bubble stays live. A FINAL
@@ -1839,6 +1943,28 @@ class AudioPipeline:
                     asyncio.create_task(self._session_end_handler(reason, deadline_ms))
                 return
 
+            # Something the user did on the device that is neither speech nor
+            # text. Passed on as it came: what the events mean is the agent's
+            # business, not the pipeline's.
+            if message.get("type") == "client_event":
+                payload = message.get("data")
+                payload = payload if isinstance(payload, dict) else {}
+                event = str(payload.get("event") or "")
+                logger.info(f"[CLIENT EVENT] {event}")
+                handler = getattr(self, "_client_event_handler", None)
+                if event and handler:
+                    asyncio.create_task(handler(event, payload))
+                return
+
+            # Deliberate mic mute/unmute. The track stays published and the STT
+            # stream stays open (#362); on mute the room feeds silence so the
+            # in-flight utterance finalizes as a normal pause.
+            if message.get("type") in ("audio_stream_mute", "audio_stream_unmute"):
+                muted = message["type"] == "audio_stream_mute"
+                logger.info(f"[MUTE] participant {'muted' if muted else 'unmuted'} the mic (soft mute, STT stream kept)")
+                self._room.set_mic_muted(muted)
+                return
+
             # Handle user_text messages from frontend
             if message.get("type") == "user_text":
                 # Handle both old format (data as string) and new format (data as object)
@@ -2099,6 +2225,39 @@ class AudioPipeline:
             },
         })
 
+    async def publish_emotion_cues(
+        self,
+        cues: List[EmotionCue],
+        transcript_id: str,
+    ) -> None:
+        """Publish the emotion cues parsed out of a reply (#face-emotions).
+
+        Carries the FULL cue list for the transcript every time, not a delta.
+        Same accumulated-snapshot contract as ``agent_text``: the client
+        replaces by ``transcript_id``, so a dropped packet heals on the next
+        one instead of leaving the face stuck on a stale expression.
+
+        Offsets index the STRIPPED text — the same text ``agent_text`` carries
+        and the same coordinate space ``agent_speech_progress`` reports its
+        playhead in — so the client fires each cue when its word is heard.
+
+        Unlike the teleprompter's ``target_char``, this needs no coupled
+        deploy: an older client ignores the unknown envelope type, and a newer
+        client against an older agent simply receives no cues.
+        """
+        logger.info(
+            "[EMOTION-TAGS] Publishing %d cue(s) for %s: %s",
+            len(cues), transcript_id, ", ".join(f"{c.tag}@{c.char}" for c in cues),
+        )
+        await self._room.publish_data({
+            "type": "agent_emotion_cues",
+            "data": {
+                "transcript_id": transcript_id,
+                "agent_id": self._agent_id,
+                "cues": [cue.to_payload() for cue in cues],
+            },
+        })
+
     async def speak(
         self,
         text: str,
@@ -2304,6 +2463,7 @@ class AudioPipeline:
         if self._ducked or self._barge_in_duck_gain >= 1.0:
             return
         self._ducked = True
+        self._ducked_at = time.monotonic()
         logger.info(f"[BARGE-IN] Ducking to {self._barge_in_duck_gain:.0%} — user is speaking")
 
     def unduck_speech(self) -> None:
@@ -2311,7 +2471,19 @@ class AudioPipeline:
         if not self._ducked:
             return
         self._ducked = False
+        self._ducked_at = 0.0
         logger.info("[BARGE-IN] Restored volume — user stopped without interrupting")
+
+    def _duck_expired(self) -> bool:
+        """Has the duck outlived the interruption it was waiting to confirm?
+
+        Checked where the gain is applied rather than on a timer, so it costs
+        one comparison per frame and cannot itself be the thing that fails to
+        fire.
+        """
+        if not self._ducked or self._duck_timeout_s <= 0:
+            return False
+        return time.monotonic() - self._ducked_at >= self._duck_timeout_s
 
     def suspend_speech(self) -> None:
         """Suspend playback reversibly (barge-in reflex).
@@ -2504,6 +2676,26 @@ class AudioPipeline:
         self._teleprompter_enabled = True
         logger.info("[TELEPROMPTER] Enabled from agent declaration")
 
+    def enable_emotion_tags(self) -> None:
+        """Enable emotion-tag parsing because the agent declares support.
+
+        Same override contract as :meth:`enable_teleprompter`: an explicit
+        STELLA_EMOTION_TAGS_ENABLED wins either way.
+        """
+        if self._emotion_tags_env_locked:
+            logger.info(
+                f"[EMOTION-TAGS] Agent declares support; env override in effect "
+                f"(enabled={self._emotion_tags_enabled})"
+            )
+            return
+        self._emotion_tags_enabled = True
+        logger.info("[EMOTION-TAGS] Enabled from agent declaration")
+
+    @property
+    def emotion_tags_enabled(self) -> bool:
+        """Whether the agent should strip [tags] and publish cues for them."""
+        return self._emotion_tags_enabled
+
     def set_barge_in_decider(
         self, decider: Callable[[str], Awaitable["BargeInDecision"]]
     ) -> None:
@@ -2518,6 +2710,27 @@ class AudioPipeline:
         close ({"type":"session_end"}) over the data channel — wired in run.py to
         run the agent's on_session_ending wrap-up, then shut down (issue #198)."""
         self._session_end_handler = handler
+
+    def start_agent_turn(self, metadata: Dict[str, Any]) -> None:
+        """Queue a turn nobody spoke: the agent's ``process()`` is called with
+        empty text and ``metadata["agent_initiated"]``. It takes its place in
+        the queue like a typed message, so it never cuts into a running turn."""
+        self._transcript_queue.put_nowait(TranscriptEvent(
+            text="",
+            is_final=True,
+            participant_id="",
+            transcript_id=f"agent_{uuid.uuid4().hex[:8]}",
+            confidence=1.0,
+            timestamp_ms=int(time.time() * 1000),
+            agent_initiated=dict(metadata),
+        ))
+
+    def on_client_event(
+        self, handler: Callable[[str, Dict[str, Any]], Awaitable[None]]
+    ) -> None:
+        """Register the async callback for device events ({"type":"client_event"}).
+        Called with the event name and the message's data."""
+        self._client_event_handler = handler
 
     async def _emit_barge_in_debug(self, content: str, **metadata) -> None:
         """Publish a barge-in debug message to the chat (frontend debug feed)
@@ -3074,6 +3287,10 @@ class AudioPipeline:
         self._turn_response_tts_first_byte_emitted = False
         self._last_response_tts_done_elapsed = 0
 
+    @staticmethod
+    def _preroll_ms_to_bytes(ms: int) -> int:
+        return max(0, int(ms * _TTS_SAMPLE_RATE / 1000) * _BYTES_PER_SAMPLE)
+
     def _begin_synthesis(
         self, sentence: str, voice=None, speed: Optional[float] = None, language=None
     ) -> "_StreamingUtterance":
@@ -3110,6 +3327,7 @@ class AudioPipeline:
                 # faster than real time, so it acquires the lock early in the
                 # current sentence's playback and the prefetch overlap survives.
                 async with self._synthesis_lock:
+                    _synth_started = time.monotonic()
                     async for chunk in self._tts.synthesize_stream(
                         text=sentence,
                         session_id=self._session_id,
@@ -3118,6 +3336,7 @@ class AudioPipeline:
                         language=language if language is not None else self._tts_language,
                     ):
                         utt.append(chunk.audio_data)
+                    utt.synth_ms = (time.monotonic() - _synth_started) * 1000.0
             except asyncio.CancelledError:
                 utt.finish()
                 raise
@@ -3165,7 +3384,14 @@ class AudioPipeline:
             f"(target ≤{target_ms}ms, warn>{_FIRST_BYTE_WARN_MS}ms, "
             f"alarm>{_FIRST_BYTE_ALARM_MS}ms) → {status}"
         )
-        if status == "alarm":
+        if self._tts_playback == "sentence":
+            # sentence mode plays only after the whole sentence is synthesized,
+            # so this number INCLUDES the full synthesis by design (that is the
+            # trade for never running dry mid-word). Measured against the
+            # streaming budget it would alarm on every turn, so it is logged at
+            # info, and the analytics event says which mode produced it.
+            logger.info(msg + " [sentence playback: includes full synthesis]")
+        elif status == "alarm":
             logger.error(msg)
         elif status == "warn":
             logger.warning(msg)
@@ -3177,6 +3403,7 @@ class AudioPipeline:
                 elapsed_ms,
                 target_ms=target_ms,
                 status=status,
+                playback=self._tts_playback,
             )
         )
 
@@ -3245,6 +3472,8 @@ class AudioPipeline:
         last_sample = 0
         starve_count = 0
         bridged_ms = 0.0
+        # The head start for THIS sentence, as learned from the previous ones.
+        self._preroll_bytes = self._preroll_ms_to_bytes(self._preroll.current_ms)
         self._cur_complete = utt.complete
         self._cur_last_char = 0
         self._cur_promised = 0
@@ -3285,6 +3514,16 @@ class AudioPipeline:
                 if not first and _now() >= next_tick_at:
                     self._emit_speech_progress("speaking", meta=meta)
                     next_tick_at = _now() + _PROGRESS_TICK_MS / 1000.0
+
+                # sentence mode: hold the first frame until the whole sentence is
+                # synthesized, exactly like already-complete audio. The wait races
+                # the stop event, so barge-in stays responsive while it waits.
+                if first and self._tts_playback == "sentence" and not utt.complete:
+                    if not await utt.wait_for_data(
+                        1 << 62, self._stop_speaking_event
+                    ):
+                        break  # stopped while waiting
+                    continue
 
                 available = len(self._cur_audio) - self._cur_cursor
                 # The jitter buffer is armed ONCE, before the first frame.
@@ -3353,6 +3592,12 @@ class AudioPipeline:
 
                 # The agent is now audibly talking — a barge-in may start.
                 self._audio_active = True
+                if self._duck_expired():
+                    logger.info(
+                        f"[BARGE-IN] Duck expired after {self._duck_timeout_s:.1f}s with no "
+                        "confirmed speech — restoring volume (noise, not a turn)"
+                    )
+                    self.unduck_speech()
                 if self._ducked:
                     frame = _apply_gain(frame, self._barge_in_duck_gain)
                 await self._room.publish_audio(frame)
@@ -3368,6 +3613,7 @@ class AudioPipeline:
                 # so the NEXT sentence's mid-synthesis estimate is grounded in
                 # measurement rather than the seeded default.
                 self._calibrate_pace(meta)
+                self._learn_preroll(utt, bridged_ms)
                 # CONTRACT: "spoken" fires when the last frame is *pushed*, not
                 # when the user *hears* the end — up to queued_playout_ms of this
                 # audio is still draining the output + client buffers. The
@@ -3396,6 +3642,22 @@ class AudioPipeline:
             self._cur_complete = False
             self._cur_last_char = 0
             self._cur_promised = 0
+
+    def _learn_preroll(self, utt: "_StreamingUtterance", bridged_ms: float) -> None:
+        """Feed a finished sentence to the pre-roll controller (no-op when pinned)."""
+        if self._preroll.fixed or utt.error is not None or not utt.synth_ms:
+            return
+        before = self._preroll.current_ms
+        audio_ms = len(utt.data) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000.0
+        self._preroll.observe(audio_ms, utt.synth_ms, bridged_ms)
+        if self._preroll.current_ms != before:
+            rtf = self._preroll.rtf
+            logger.info(
+                f"[TTS] Pre-roll {before}ms -> {self._preroll.current_ms}ms "
+                f"(RTF {rtf:.2f}, bridged {bridged_ms:.0f}ms)"
+                if rtf is not None
+                else f"[TTS] Pre-roll {before}ms -> {self._preroll.current_ms}ms"
+            )
 
     async def _bridge_underrun(self, fade_from: int = 0) -> float:
         """Push silence when the output source is about to run dry.

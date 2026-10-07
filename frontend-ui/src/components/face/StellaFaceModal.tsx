@@ -9,6 +9,8 @@ import { X, LayoutGrid, Maximize2, Minimize2, Subtitles } from 'lucide-react';
 import TranscriptOverlay from './TranscriptOverlay';
 import VisualizerGallery from './VisualizerGallery';
 import VisualizerRenderer from './VisualizerRenderer';
+import { useSleepMicrophone } from './hooks/useSleepMicrophone';
+import { useSleepEvents } from './hooks/useSleepEvents';
 import { VisualizerType } from './types';
 import { useStore } from '../../store';
 import { startMicWithVu } from '../../services/audio/capture';
@@ -182,8 +184,17 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
   const toggleMute = useCallback(async () => {
     if (!transport || status !== 'connected') return;
 
-    if (isMuted) {
-      // Unmute - start streaming audio
+    if (isMuted && transport.hasPublishedAudio()) {
+      // Soft unmute: the mic and track are still there, just muted (#362)
+      try {
+        await transport.unmuteAudio();
+        setIsMuted(false);
+        setIsRecording(true);
+      } catch (error) {
+        console.error('Error unmuting audio:', error);
+      }
+    } else if (isMuted) {
+      // First unmute - acquire the microphone and publish it
       try {
         // Clean up any existing stream
         if (streamRef.current) {
@@ -212,20 +223,26 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
         setIsRecording(false);
       }
     } else {
-      // Mute - stop streaming audio
-      await transport.unpublishAudioTrack();
-
-      // Stop and clean up stream
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
+      // Soft mute: keep the connection and the track, send silence (#362)
+      await transport.muteAudio();
 
       setIsMuted(true);
       setIsRecording(false);
       useStore.getState().setVu(0); // Reset VU meter
     }
   }, [isMuted, transport, status, setIsMuted, setIsRecording]);
+
+  // Sleeping mutes the mic; waking gives it back if sleep is what took it.
+  useSleepMicrophone({ isMuted, toggleMute, enabled: status === 'connected' });
+  // And the agent is told, so it knows the conversation is over or back.
+  const sendClientEvent = useCallback(
+    (event: string) => transport?.sendClientEvent(event),
+    [transport]
+  );
+  useSleepEvents({ send: sendClientEvent, enabled: status === 'connected' });
+  // Captions go when she falls asleep: the last thing she said should not
+  // stay on screen under a sleeping face.
+  const isAsleep = useStore((s) => s.faceSleepPhase === 'asleep');
 
   // Handle spacebar to toggle mute
   useEffect(() => {
@@ -394,7 +411,7 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
           <TranscriptOverlay
             transcript={userPartialTranscript}
             theme={currentVisualizer}
-            isVisible={showSubtitles}
+            isVisible={showSubtitles && !isAsleep}
           />
 
           {/* Bottom-right ESC hint (also fade on inactivity, hidden when gallery is open) */}

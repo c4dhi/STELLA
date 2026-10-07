@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { fetchTtsCapabilities, TtsCapabilities } from './grpc/tts-capabilities.client';
+import { fetchTtsCapabilities, TtsCapabilities } from './grpc/tts-capabilities.client.js';
 
 const DEFAULT_TTS_ADDRESS = 'tts-service:50052';
 const CAPABILITIES_TTL_MS = 60_000;

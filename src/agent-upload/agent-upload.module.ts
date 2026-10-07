@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common'
 import { MulterModule } from '@nestjs/platform-express'
-import { PrismaModule } from '../prisma/prisma.module'
-import { StorageModule } from '../storage/storage.module'
-import { AgentPackageModule } from '../agent-package/agent-package.module'
-import { AgentBuildModule } from '../agent-build/agent-build.module'
-import { AgentUploadController } from './agent-upload.controller'
-import { AgentAdminController } from './agent-admin.controller'
+import { PrismaModule } from '../prisma/prisma.module.js'
+import { StorageModule } from '../storage/storage.module.js'
+import { AgentPackageModule } from '../agent-package/agent-package.module.js'
+import { AgentBuildModule } from '../agent-build/agent-build.module.js'
+import { AgentUploadController } from './agent-upload.controller.js'
+import { AgentAdminController } from './agent-admin.controller.js'
 
 @Module({
   imports: [

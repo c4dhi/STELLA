@@ -36,7 +36,10 @@ class PromptVariable:
     description: str
 
 
-_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+# A dotted segment is allowed so namespaced values ({{persona.name}}) can be
+# referenced here too, keeping this engine's vocabulary aligned with the
+# placeholder compiler's. Unknown names stay falsy/empty, as before.
+_VAR_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)?)\s*\}\}")
 
 # Innermost if/unless block: a block whose body contains no further block
 # openers (``{{#``), so iterating resolves nested blocks from the inside out.

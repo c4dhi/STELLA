@@ -63,15 +63,20 @@ This is the clinical-determinism knob: each expert maps each verdict to an actio
 
 | Slot | Type | Default | Rationale |
 |------|------|---------|-----------|
-| `persona` | text | STELLA persona | The agent's identity, behavioral rules, and response constraints. This is the primary customization surface for agent personality. |
-| `conversation_guidelines` | text | Professional interviewer style | Detailed rules for tone, register, response length, and formatting. Separate from persona to allow mixing different identities with the same conversational style. |
+| `conversation_guidelines` | text | Professional interviewer style | Detailed rules for tone, register, response length, and formatting. How the agent speaks — not who it is. |
 | `model` | select | `gpt-4o-mini` | Balances quality and speed. Upgrade to `gpt-4o` for complex domains requiring stronger reasoning. |
 | `temperature` | number | `0.7` | Moderate temperature for natural conversational variation. Lower for more consistent responses, higher for more creative ones. |
 | `max_tokens` | number | `150` | Targets 30-50 spoken words. Voice conversations need short responses — long monologues feel unnatural in speech. |
 
-**Why persona and guidelines are separate**: `persona` defines *who* the agent is ("You are STELLA, a warm AI companion"). `conversation_guidelines` defines *how* it speaks (tone, length, formatting rules). This separation lets you swap personas while keeping the same conversational style, or vice versa.
+:::info Identity is not configured here
+There is no `persona` slot. **Who** the agent is comes from the persona selected at deploy time (Settings → Personas), and from nowhere else — not from this configuration, and not from the plan.
 
-**When to customize**: Always customize persona for domain-specific deployments. Adjust temperature and max_tokens based on whether you need consistent short answers (lower both) or detailed explanations (raise both).
+That is the point of the separation: the same configuration can front any number of personas, and the same persona can run under any configuration. A slot here would have been a second place to define identity, competing with the one an operator actually picked at deploy.
+
+`conversation_guidelines` stays, because delivery is a genuinely different question from identity — you can put a new character behind the same speaking style, or give one character a different register.
+:::
+
+**When to customize**: Adjust temperature and max_tokens based on whether you need consistent short answers (lower both) or detailed explanations (raise both). For personality, edit the persona rather than anything on this screen.
 
 ### Bridge Generator
 

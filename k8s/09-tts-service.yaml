@@ -225,6 +225,12 @@ spec:
               name: stella-ai-config
               key: TTS_PROVIDER
               optional: true
+        - name: STELLA_MODEL_KEEP_WARM
+          valueFrom:
+            configMapKeyRef:
+              name: stella-ai-config
+              key: STELLA_MODEL_KEEP_WARM
+              optional: true
         - name: ONNX_PROVIDER
           valueFrom:
             configMapKeyRef:

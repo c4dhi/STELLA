@@ -1,12 +1,12 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { LiveKitWebhookController } from './livekit-webhook.controller';
-import { WebhooksService } from './webhooks.service';
-import { PrismaModule } from '../prisma/prisma.module';
-import { AgentsModule } from '../agents/agents.module';
-import { SessionsModule } from '../sessions/sessions.module';
-import { LiveKitModule } from '../livekit/livekit.module';
-import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module';
+import { LiveKitWebhookController } from './livekit-webhook.controller.js';
+import { WebhooksService } from './webhooks.service.js';
+import { PrismaModule } from '../prisma/prisma.module.js';
+import { AgentsModule } from '../agents/agents.module.js';
+import { SessionsModule } from '../sessions/sessions.module.js';
+import { LiveKitModule } from '../livekit/livekit.module.js';
+import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
 
 /**
  * Webhooks Module

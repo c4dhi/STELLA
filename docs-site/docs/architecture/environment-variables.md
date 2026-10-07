@@ -155,6 +155,7 @@ The STT service reads these from the platform configuration. It decides when the
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `BARGE_IN_MIN_SPEECH_MS` | No | `600` | Voiced audio (ms) before the user's speech counts as an interruption instead of a backchannel like "mhm". Below it the agent keeps talking; above it the agent stops and listens. Lower yields sooner but lets "mhm" cut it off |
+| `STELLA_MODEL_KEEP_WARM` | No | `true` | Keeps the speech-recognition and voice models warm in the background so the first sentence after an idle spell is not slow. Set to `false` to turn it off. Asked in the setup wizard |
 | `STT_DECODE_DIAGNOSTICS` | No | `0` | `1` logs per-turn decode metrics and fills the STT cards in the session metrics modal. Costs extra GPU work per turn, so leave it at `0` in normal use |
 
 </details>
@@ -306,11 +307,14 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `BARGE_IN_ENABLED` | No | (agent decides) | Unset: barge-in is on for any agent that declares support for it. `true`/`false` forces it on or off for this deployment |
 | `TRANSCRIPT_DEBOUNCE_MS` | No | `0` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Off by default since 1.2.0: neither STT provider can emit a second final inside the window, so the old 300 ms only added delay |
 | `STT_WARMUP_ENABLED` | No | `true` | Warm up the STT model on agent start and when participants join. Set to `false` to skip warmup |
-| `STELLA_TTS_PREROLL_MS` | No | `200` | Jitter buffer (ms) held before the first frame of an utterance plays. Calibrated to the reference deployment's hardware, not a universal constant: raise it if the agent log shows non-zero "bridged" silence or "Playout starved". See [tuning guidance](./tts-pipeline.md#tuning-the-pre-roll-for-your-hardware) |
+| `STELLA_TTS_PLAYBACK` | No | `stream` | Agent setting, per deployment: `stream` starts each sentence as it is generated; `sentence` generates it whole first and then plays it, as 1.1.0 did. Use `sentence` on a TTS slower than real time (e.g. Qwen3 on a T4). See [the TTS pipeline](./tts-pipeline.md) |
+| `STELLA_TTS_PREROLL_MS` | No | auto | Jitter buffer (ms) held before each sentence plays. Unset, the agent picks it from the measured speed of the voice on this hardware (200 ms up to 3 s); setting a value pins it. Watch the agent log for "Pre-roll A -> B", "bridged" silence or "Playout starved". See [tuning guidance](./tts-pipeline.md#tuning-the-pre-roll-for-your-hardware) |
 | `TTS_PROGRESS_TICK_MS` | No | `200` | How often a teleprompter progress envelope is emitted during playback |
 | `TTS_VOICE` | No | provider default | Seed TTS voice, overridable per stream. Honored by voice-selecting providers, ignored by others |
 | `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
 | `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
+
+The SDK also reads two timing settings that neither built-in agent declares in `agent.yaml`: `BARGE_IN_DUCK_TIMEOUT_MS` (default `1200`), after which a duck that was never confirmed as an interruption lifts by itself, so background noise cannot keep the agent quiet; and `STELLA_MUTE_SILENCE_MS` (default `3000`), the silence fed to speech recognition when a participant mutes the microphone, so the sentence in flight is finalized like any pause.
 
 The SDK also reads `BARGE_IN_DUCK_GAIN` (default `0.25`): the volume the agent drops to the moment the user makes a sound, where `1.0` disables ducking. Neither built-in agent declares it in `agent.yaml` yet, so it can't be set from the deploy form and every deployment runs the default.
 

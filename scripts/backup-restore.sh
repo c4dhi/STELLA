@@ -139,7 +139,17 @@ fi
 PASSPHRASE=""
 # Peek the first bytes to see if the bundle is encrypted (matches bundle-crypto's MAGIC).
 if [[ "$(head -c 9 "$BUNDLE" 2>/dev/null)" == "STELLABK2" ]]; then
-    read -r -s -p "Decryption passphrase: " PASSPHRASE; echo
+    if [[ -n "${BACKUP_PASSPHRASE:-}" ]]; then
+        PASSPHRASE="$BACKUP_PASSPHRASE"   # unattended path, mirrors backup-export.sh
+    elif [[ ! -t 0 ]]; then
+        error "No terminal available to prompt for the decryption passphrase."
+        echo -e "  → Set ${BOLD:-}BACKUP_PASSPHRASE${NC:-} in the environment and re-run."
+        exit 1
+    else
+        read -r -s -p "Decryption passphrase: " PASSPHRASE; echo
+    fi
+    # No minimum length here: a bundle encrypted before that rule existed must
+    # still be restorable.
     [[ -z "$PASSPHRASE" ]] && { error "Bundle is encrypted; passphrase required"; exit 1; }
 fi
 
@@ -154,9 +164,15 @@ BACKUP_PASSPHRASE="$PASSPHRASE" \
 # 1. Restore config: back up the current env file, install the restored one,
 #    reload it, and recreate the secret with the restored values.
 if [[ -f "$ENV_FILE" ]]; then
-    cp "$ENV_FILE" "${ENV_FILE}.pre-restore.$(date +%s)"
+    # This snapshot is a full plaintext credential. Create it owner-only BEFORE
+    # copying anything into it, so the secrets are never briefly world-readable.
+    PRE_RESTORE="${ENV_FILE}.pre-restore.$(date +%s)"
+    ( umask 077 && cp "$ENV_FILE" "$PRE_RESTORE" )
+    chmod 600 "$PRE_RESTORE" 2>/dev/null || true
+    info "Previous config saved to $(basename "$PRE_RESTORE") — delete it once the restore is verified."
 fi
-cp "$RESTORED_ENV" "$ENV_FILE"
+( umask 077 && cp "$RESTORED_ENV" "$ENV_FILE" )
+chmod 600 "$ENV_FILE" 2>/dev/null || true
 load_env_file "$ENV_FILE" "$NODE_ENV"
 
 info "Recreating stella-ai-secrets from restored config ..."
@@ -191,9 +207,13 @@ POD_IN="/tmp/stella-restore-$(date +%s).zip"
 kubectl cp "$DATA_BUNDLE" "$KUBERNETES_NAMESPACE/$POD:$POD_IN"
 
 info "Importing data (overwriting) in pod $POD ..."
+# Identify the operator for the audit trail (#380) — the pod has no
+# authenticated user of its own. Best-effort: never block a restore on this.
+AUDIT_ACTOR="$(whoami 2>/dev/null || echo unknown)@$(hostname -s 2>/dev/null || echo unknown)"
 # Render the CLI's JSON report as a readable table (formatter runs host-side, so
 # it works with any pod image). pipefail preserves the import's exit code.
 kubectl exec -n "$KUBERNETES_NAMESPACE" "$POD" -- \
+    env STELLA_AUDIT_ACTOR="$AUDIT_ACTOR" \
     node dist/src/backup/backup.cli.js import --in "$POD_IN" --confirm $ALLOW_KEY_MISMATCH \
     | node "$LIB_DIR/backup_report.js"
 kubectl exec -n "$KUBERNETES_NAMESPACE" "$POD" -- rm -f "$POD_IN" 2>/dev/null || true

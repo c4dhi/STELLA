@@ -17,6 +17,7 @@ STELLA uses Caddy as its sole reverse proxy. Do **not** install nginx. All TLS t
 - NVIDIA drivers and CUDA toolkit installed
 - A domain name with DNS access
 - At least 100GB root disk + an external volume (400GB+ recommended)
+- **Node.js** 20.19+, 22.12+ or 24+ on the host: `./scripts/start-k8s.sh` runs the database migration there with Prisma 7. Check with `node --version`. The GitHub deploy workflows install Node 26 themselves
 
 ## 1. External Volume Setup
 

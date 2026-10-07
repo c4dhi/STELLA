@@ -23,6 +23,9 @@ Available placeholders:
   {{history_N}}               Last N messages from conversation (e.g. {{history_10}})
   {{user_message}}            The current user message
   {{language}}                Resolved session language (e.g. "German")
+  {{persona.<key>}}           A value defined once on the deployed Persona, so
+                              identity is stated in one place and referenced
+                              everywhere. Built-ins: name, voice, language.
 
 Unknown placeholders are left as-is to avoid silently breaking prompts.
 """
@@ -33,9 +36,18 @@ from typing import Dict, Any, List, Optional
 from stella_agent_sdk.prompts.base import PromptCompiler
 
 
-# Matches both simple {{name}} and parameterized {{history_10}} placeholders
-PLACEHOLDER_PATTERN = re.compile(r"\{\{(\w+)\}\}")
+# Matches simple {{name}}, parameterized {{history_10}}, and namespaced
+# {{persona.key}} placeholders. The optional dotted segment is what lets a
+# persona's author-defined variables be referenced without colliding with — or
+# having to be registered alongside — the fixed runtime palette.
+PLACEHOLDER_PATTERN = re.compile(r"\{\{(\w+(?:\.\w+)?)\}\}")
 HISTORY_PATTERN = re.compile(r"\{\{history_(\d+)\}\}")
+PERSONA_PATTERN = re.compile(r"^persona\.(\w+)$")
+
+# Persona fields exposed as {{persona.*}} on top of the author-defined variables.
+# Kept to identity facts: a prompt may want to name the agent, not to introspect
+# its configuration.
+PERSONA_BUILTIN_KEYS = ("name", "voice", "language")
 
 
 # ---------------------------------------------------------------------------
@@ -397,7 +409,36 @@ PLACEHOLDER_SPECS: List[Dict[str, Any]] = [
     {"name": "language", "label": "language", "parametric": False,
      "description": "Resolved session language (single source of truth, #214)",
      "preview": "German"},
+    {"name": "persona", "label": "persona.key", "parametric": True,
+     "description": "A value defined on the deployed Persona (e.g. {{persona.name}}). "
+                    "Built-ins: name, voice, language; anything else comes from the "
+                    "persona's own variables.",
+     "preview": "Grace"},
 ]
+
+
+def _resolve_persona(ctx: Dict[str, Any], key: str) -> str:
+    """Resolve {{persona.<key>}} from the deployed persona.
+
+    Author-defined variables win over the built-in identity fields, so a persona
+    that defines its own ``name`` variable gets that one rather than the row's
+    display name.
+
+    An unknown key resolves to the EMPTY STRING rather than being left as-is,
+    which is the opposite of the policy for the fixed palette. The reasoning is
+    the same one arbitration already applies to verdict templates: a literal
+    ``{{persona.nickname}}`` reaching an LLM — or being spoken aloud — is worse
+    than the sentence simply not containing it. The namespace is known, so a
+    typo inside it is an authoring bug we should absorb quietly, not broadcast.
+    """
+    persona = ctx.get("persona") or {}
+    variables = persona.get("variables") or {}
+
+    if key in variables:
+        return str(variables[key])
+    if key in PERSONA_BUILTIN_KEYS:
+        return str(persona.get(key) or "")
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +446,11 @@ PLACEHOLDER_SPECS: List[Dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
-def _compile_prompt(template: str, sm_context: Optional[Dict[str, Any]] = None) -> str:
+def _compile_prompt(
+    template: str,
+    sm_context: Optional[Dict[str, Any]] = None,
+    resolve_persona: bool = False,
+) -> str:
     """Replace {{placeholder}} tokens in a prompt with resolved runtime values.
 
     Internal resolver. Agents must NOT call this directly — go through the
@@ -439,6 +484,13 @@ def _compile_prompt(template: str, sm_context: Optional[Dict[str, Any]] = None) 
         history_match = HISTORY_PATTERN.fullmatch(token)
         if history_match:
             return _resolve_history(sm_context, int(history_match.group(1)))
+        persona_match = PERSONA_PATTERN.match(match.group(1)) if resolve_persona else None
+        if persona_match:
+            # Resolved in THIS pass, so the substituted value is never re-scanned
+            # for placeholders — same guarantee the comment above relies on. A
+            # persona variable is author-supplied text and must not be able to
+            # smuggle in a {{collected_deliverables}} of its own.
+            return _resolve_persona(sm_context, persona_match.group(1))
         resolver = PLACEHOLDER_REGISTRY.get(match.group(1))
         if resolver is None:
             return token  # Unknown placeholder — leave as-is
@@ -452,6 +504,36 @@ def has_user_message_placeholder(template: str) -> bool:
     return "{{user_message}}" in template if template else False
 
 
+def resolve_persona_tokens(text: Optional[str], persona: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Resolve ONLY {{persona.*}} tokens in author-written text.
+
+    Used for plan-authored strings (state descriptions, task instructions,
+    deliverable acceptance criteria), which are data rather than prompts: they get
+    formatted INTO {{plan}} and {{current_focus}}, so running the full palette
+    over them would let a plan reference the very placeholder it is rendered into.
+    Restricting substitution to the persona namespace gives a plan author the one
+    thing they actually need — the ability to name the agent without restating who
+    it is — with no recursion and no access to conversation state.
+
+    Single pass, and the substituted value is never re-scanned, so a persona
+    variable cannot smuggle in a placeholder of its own.
+
+    With no persona deployed every key is unknown, so tokens empty out rather than
+    being left literal — the same trade as an unknown key, for the same reason.
+    """
+    if not text or "{{" not in text:
+        return text
+    ctx = {"persona": persona or {}}
+
+    def replacer(match: "re.Match") -> str:
+        persona_match = PERSONA_PATTERN.match(match.group(1))
+        if persona_match is None:
+            return match.group(0)  # not ours — leave every other token untouched
+        return _resolve_persona(ctx, persona_match.group(1))
+
+    return PLACEHOLDER_PATTERN.sub(replacer, text)
+
+
 # ---------------------------------------------------------------------------
 # Versioning primitives
 # ---------------------------------------------------------------------------
@@ -460,6 +542,12 @@ def has_user_message_placeholder(template: str) -> bool:
 # added/removed or their rendering changes, so prompts/configs can be reconciled
 # against the grammar they were authored for.
 COMPILER_VERSION = "1.0.0"
+
+# 1.1.0 adds the {{persona.*}} namespace. It ships as a SEPARATE registered
+# version rather than as a bump of 1.0.0, because get_compiler() raises on an
+# unknown version — mutating COMPILER_VERSION in place would unregister 1.0.0 and
+# break every prompt and saved configuration pinned to it.
+COMPILER_VERSION_PERSONA = "1.1.0"
 
 # The full set of placeholder names this compiler resolves. `history_N` is
 # parameterized (any positive integer N), represented here by the sentinel
@@ -476,7 +564,10 @@ def palette() -> List[Dict[str, Any]]:
     return [dict(spec) for spec in PLACEHOLDER_SPECS]
 
 
-def validate_template(template: Optional[str]) -> List[str]:
+def validate_template(
+    template: Optional[str],
+    resolve_persona: bool = False,
+) -> List[str]:
     """Return the sorted, de-duplicated list of UNKNOWN placeholder names in a prompt.
 
     An empty list means every {{token}} in the template is resolvable by this
@@ -491,6 +582,8 @@ def validate_template(template: Optional[str]) -> List[str]:
         name = match.group(1)
         if HISTORY_PATTERN.fullmatch(match.group(0)):
             continue  # {{history_N}} — always valid
+        if resolve_persona and PERSONA_PATTERN.match(name):
+            continue  # {{persona.*}} — the namespace is open by design
         if name not in PLACEHOLDER_REGISTRY:
             unknown.add(name)
     return sorted(unknown)
@@ -535,18 +628,39 @@ class PlaceholderPromptCompiler(PromptCompiler):
         # the output is safe to speak verbatim (used for arbitration verdict templates).
         self._ctx["_speech_safe"] = speech_safe
 
+    #: Whether this compiler version resolves the {{persona.*}} namespace.
+    RESOLVES_PERSONA = False
+
     def compile(self, template: Optional[str]) -> Optional[str]:
         if not template:
             return template
-        return _compile_prompt(template, self._ctx)
+        return _compile_prompt(template, self._ctx, resolve_persona=self.RESOLVES_PERSONA)
 
     @classmethod
     def known_placeholders(cls) -> frozenset:
         """The set of placeholder names this compiler resolves."""
         return KNOWN_PLACEHOLDERS
 
-    @staticmethod
-    def validate(template: Optional[str]) -> List[str]:
+    @classmethod
+    def validate(cls, template: Optional[str]) -> List[str]:
         """Unknown placeholders in ``template`` (see :func:`validate_template`)."""
-        return validate_template(template)
+        return validate_template(template, resolve_persona=cls.RESOLVES_PERSONA)
+
+
+class PersonaAwarePlaceholderCompiler(PlaceholderPromptCompiler):
+    """1.1.0 — everything 1.0.0 resolves, plus the {{persona.*}} namespace.
+
+    Lets identity be stated once on the Persona and referenced from an agent
+    configuration's prompts or from a plan's own text, instead of being restated
+    in each place. 1.0.0 keeps its exact behaviour (a {{persona.x}} token is left
+    as-is there, like any other unknown placeholder), so nothing pinned to it
+    changes.
+    """
+
+    VERSION = COMPILER_VERSION_PERSONA
+    RESOLVES_PERSONA = True
+
+    @classmethod
+    def known_placeholders(cls) -> frozenset:
+        return KNOWN_PLACEHOLDERS | {"persona.*"}
 

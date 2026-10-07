@@ -7,6 +7,21 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { MulterError } from 'multer';
+
+/**
+ * HTTP status for a raw multer error, decided by its `code`, never its message.
+ *
+ * `@nestjs/platform-express` turns multer errors into HttpExceptions by matching
+ * the message text, and multer 2.4.0 reworded `LIMIT_UNEXPECTED_FILE` ("Unexpected
+ * field" -> "Unexpected file field"), so a wrong upload field name fell through to
+ * a 500. Matching the code keeps a client mistake a 4xx whatever multer's wording.
+ */
+export function statusForMulterError(error: MulterError): number {
+  return error.code === 'LIMIT_FILE_SIZE'
+    ? HttpStatus.PAYLOAD_TOO_LARGE
+    : HttpStatus.BAD_REQUEST;
+}
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
@@ -20,7 +35,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const status =
       exception instanceof HttpException
         ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
+        : exception instanceof MulterError
+          ? statusForMulterError(exception)
+          : HttpStatus.INTERNAL_SERVER_ERROR;
 
     // Extract the actual error message for logging
     let errorMessage: string;

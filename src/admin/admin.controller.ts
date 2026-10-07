@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Patch,
+  Post,
   Param,
   Query,
   Body,
@@ -12,9 +13,11 @@ import {
   DefaultValuePipe,
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
-import { AdminService, DashboardMetrics, SessionActivityDay, HistoricalUsageData, UserListItem, SessionStatusItem } from './admin.service';
-import { SystemAdminGuard } from '../auth/guards/system-admin.guard';
-import { ServerMetrics } from './services/server-metrics.service';
+import { AdminService, DashboardMetrics, SessionActivityDay, HistoricalUsageData, UserListItem, SessionStatusItem } from './admin.service.js';
+import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js';
+import { ServerMetrics } from './services/server-metrics.service.js';
+import { CapacityService, CapacityMeasurementView } from './services/capacity.service.js';
+import { RecordCapacityDto } from './dto/capacity.dto.js';
 
 interface MessageEvent {
   data: string;
@@ -38,7 +41,10 @@ interface ToggleAdminDto {
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly capacityService: CapacityService,
+  ) {}
 
   /**
    * GET /admin/dashboard
@@ -111,6 +117,28 @@ export class AdminController {
   ): Promise<HistoricalUsageData[]> {
     this.logger.log(`Getting usage history for ${days} days`);
     return this.adminService.getUsageHistory(days);
+  }
+
+  /**
+   * GET /admin/capacity
+   * Measured voice capacity: the newest load-test result for each
+   * environment + GPU pair.
+   */
+  @Get('capacity')
+  async getCapacity(): Promise<CapacityMeasurementView[]> {
+    return this.capacityService.latest();
+  }
+
+  /**
+   * POST /admin/capacity
+   * Record a finished load-test run (scripts/load-test/load_test.py --publish-url).
+   */
+  @Post('capacity')
+  async recordCapacity(@Body() body: RecordCapacityDto): Promise<CapacityMeasurementView> {
+    this.logger.log(
+      `Recording capacity: ${body.maxSessions} sessions on ${body.gpuName} (${body.environment})`,
+    );
+    return this.capacityService.record(body);
   }
 
   /**

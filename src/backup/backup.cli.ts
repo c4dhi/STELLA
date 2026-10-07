@@ -16,10 +16,10 @@ import { NestFactory } from '@nestjs/core'
 import { Module } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config'
 import * as fs from 'fs/promises'
-import { PrismaModule } from '../prisma/prisma.module'
-import { StorageModule } from '../storage/storage.module'
-import { BackupModule } from './backup.module'
-import { BackupService } from './backup.service'
+import { PrismaModule } from '../prisma/prisma.module.js'
+import { StorageModule } from '../storage/storage.module.js'
+import { BackupModule } from './backup.module.js'
+import { BackupService } from './backup.service.js'
 
 // Minimal context: just the backup engine and the globals it relies on. Avoids
 // booting the full app (HTTP/gRPC/LiveKit) for a one-off command.
@@ -97,6 +97,9 @@ async function main(): Promise<void> {
         bundlePath: args.in,
         confirmOverwrite: args.confirm,
         allowKeyMismatch: args.allowKeyMismatch,
+        // No authenticated user in a pod; the wrapper script passes the operator
+        // identity so the audit trail (#380) is not just "cli".
+        actor: { type: 'cli', label: process.env.STELLA_AUDIT_ACTOR || null },
       })
       process.stdout.write(JSON.stringify({ ok: true, report }) + '\n')
     } else {

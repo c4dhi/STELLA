@@ -11,11 +11,11 @@ import {
   UsePipes,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ProjectsService } from './projects.service';
-import { CreateProjectDto } from './dto/create-project.dto';
-import { UpdateProjectDto } from './dto/update-project.dto';
-import { UpdatePublicConfigDto } from './dto/update-public-config.dto';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { ProjectsService } from './projects.service.js';
+import { CreateProjectDto } from './dto/create-project.dto.js';
+import { UpdateProjectDto } from './dto/update-project.dto.js';
+import { UpdatePublicConfigDto } from './dto/update-public-config.dto.js';
+import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 
 @Controller('projects')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))

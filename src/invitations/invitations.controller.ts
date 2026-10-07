@@ -7,10 +7,10 @@ import {
   Param,
   UseGuards,
 } from '@nestjs/common';
-import { InvitationsService } from './invitations.service';
-import { CreateInvitationDto } from './dto/create-invitation.dto';
-import { AcceptInvitationDto } from './dto/accept-invitation.dto';
-import { Public } from '../common/decorators/public.decorator';
+import { InvitationsService } from './invitations.service.js';
+import { CreateInvitationDto } from './dto/create-invitation.dto.js';
+import { AcceptInvitationDto } from './dto/accept-invitation.dto.js';
+import { Public } from '../common/decorators/public.decorator.js';
 
 @Controller()
 export class InvitationsController {

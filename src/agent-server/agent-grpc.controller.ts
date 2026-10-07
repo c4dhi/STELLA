@@ -1,7 +1,7 @@
 import { Controller, Logger } from '@nestjs/common';
 import { GrpcMethod, GrpcStreamMethod } from '@nestjs/microservices';
 import * as grpc from '@grpc/grpc-js';
-import { AgentServerService } from './agent-server.service';
+import { AgentServerService } from './agent-server.service.js';
 import { Observable, Subject } from 'rxjs';
 
 /**

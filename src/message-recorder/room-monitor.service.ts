@@ -2,8 +2,8 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { Room, RoomEvent, RemoteParticipant } from '@livekit/rtc-node';
 import { AccessToken } from 'livekit-server-sdk';
-import { PrismaService } from '../prisma/prisma.service';
-import { MessageRecorderService } from './message-recorder.service';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { MessageRecorderService } from './message-recorder.service.js';
 
 interface RoomConnection {
   room: Room;

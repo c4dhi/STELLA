@@ -45,6 +45,9 @@ import type {
   PlanTemplate,
   CreatePlanTemplateDto,
   UpdatePlanTemplateDto,
+  Persona,
+  CreatePersonaDto,
+  UpdatePersonaDto,
   GeneratePlanTemplateDto,
   GeneratePlanTemplateResponse,
   EnvVarTemplate,
@@ -64,6 +67,7 @@ import type {
   ProjectInvitationResponse,
   UserNotificationEvent,
   AdminDashboardMetrics,
+  CapacityMeasurement,
   SessionActivityDay,
   HistoricalUsageData,
   ServerMetrics,
@@ -1312,6 +1316,43 @@ class SessionManagementClient {
   }
 
   // ============================================================================
+  // Personas API (agent identity)
+  // ============================================================================
+
+  /**
+   * List the current user's personas plus the system default, which is returned
+   * last so a picker shows authored identities first and the fallback as a floor.
+   */
+  async listPersonas(): Promise<Persona[]> {
+    return this.get<Persona[]>('/personas')
+  }
+
+  async getPersona(id: string): Promise<Persona> {
+    return this.get<Persona>(`/personas/${id}`)
+  }
+
+  async createPersona(data: CreatePersonaDto): Promise<Persona> {
+    return this.post<Persona>('/personas', data)
+  }
+
+  /** Rejected with 400 for the system default persona; duplicate it instead. */
+  async updatePersona(id: string, data: UpdatePersonaDto): Promise<Persona> {
+    return this.request<Persona>(`/personas/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  }
+
+  /** Rejected with 400 for the system default persona. */
+  async deletePersona(id: string): Promise<DeleteResponse> {
+    return this.delete<DeleteResponse>(`/personas/${id}`)
+  }
+
+  async duplicatePersona(id: string): Promise<Persona> {
+    return this.post<Persona>(`/personas/${id}/duplicate`)
+  }
+
+  // ============================================================================
   // Environment Variable Templates API
   // ============================================================================
 
@@ -1598,6 +1639,13 @@ class SessionManagementClient {
    */
   async getAllSessions(): Promise<SessionStatusItem[]> {
     return this.get<SessionStatusItem[]>('/admin/sessions')
+  }
+
+  /**
+   * Measured voice capacity: the newest load-test result per environment and GPU.
+   */
+  async getCapacityMeasurements(): Promise<CapacityMeasurement[]> {
+    return this.get<CapacityMeasurement[]>('/admin/capacity')
   }
 
   /**

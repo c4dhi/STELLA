@@ -261,11 +261,13 @@ function KeyValueField({
               <tr key={key} className={isDark ? 'border-t border-zinc-600' : 'border-t border-neutral-200'}>
                 <td className={cellClass}>{key}</td>
                 <td className={cellClass}>
-                  <input
-                    type="text"
+                  {/* A textarea, so sentence-long values (reply instructions)
+                      can be read and edited; short ones still take one row. */}
+                  <textarea
+                    rows={Math.min(8, Math.max(1, Math.ceil(String(val).length / 60)))}
                     value={val}
                     onChange={(e) => updateEntry(key, e.target.value)}
-                    className={`w-full bg-transparent focus:outline-none ${isDark ? 'text-zinc-200' : 'text-neutral-900'}`}
+                    className={`w-full bg-transparent resize-y focus:outline-none ${isDark ? 'text-zinc-200' : 'text-neutral-900'}`}
                   />
                 </td>
                 <td className={cellClass}>

@@ -28,6 +28,7 @@ from providers.whisper_provider import (  # noqa: E402
     _collect_segments,
     _normalize_for_compare,
     _text_delta,
+    _transcript_confidence,
     _trailing_silence_samples,
 )
 
@@ -219,3 +220,33 @@ def test_thresholds_follow_the_configured_ones():
     assert strict._looks_hallucinated(_metrics(0.92, -1.8)) is False
     loose = _session(no_speech_threshold=0.1, log_prob_threshold=-0.1)
     assert loose._looks_hallucinated(_metrics(0.92, -1.8)) is True
+
+
+# ── _transcript_confidence ───────────────────────────────────────────────────
+
+def _confidence_metrics(logprob, no_speech):
+    return {
+        "avg_logprob": {"mean": logprob, "worst": logprob},
+        "no_speech_prob": {"mean": no_speech, "worst": no_speech},
+    }
+
+
+def test_clear_speech_scores_high():
+    assert _transcript_confidence(_confidence_metrics(-0.1, 0.02)) > 0.85
+
+
+def test_confident_filler_over_silence_scores_low():
+    """"Thank you." over near-silence: decoded confidently, but not speech."""
+    assert _transcript_confidence(_confidence_metrics(-0.2, 0.9)) < 0.1
+
+
+def test_mumbled_speech_scores_low():
+    assert _transcript_confidence(_confidence_metrics(-1.5, 0.05)) < 0.3
+
+
+def test_a_decode_without_signal_is_unknown_not_certain():
+    assert _transcript_confidence({"avg_logprob": None, "no_speech_prob": None}) == 0.0
+
+
+def test_confidence_stays_within_zero_and_one():
+    assert 0.0 <= _transcript_confidence(_confidence_metrics(0.3, -0.2)) <= 1.0
