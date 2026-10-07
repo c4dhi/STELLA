@@ -106,6 +106,7 @@ export default function ProjectModal({
   const [selectedConfiguration, setSelectedConfiguration] = useState<AgentConfiguration | null>(null)
   // Persona (agent identity). Null = the system default, resolved server-side.
   const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null)
+  const [personaPickedByUser, setPersonaPickedByUser] = useState(false)
   const [personas, setPersonas] = useState<Persona[]>([])
 
   // Env var state (EnvVarsSelectionStep handles fetching templates)
@@ -245,6 +246,7 @@ export default function ProjectModal({
         // Not reset when the agent type changes, unlike the configuration: a
         // persona is deliberately agent-type independent (#467).
         setSelectedPersona(null)
+        setPersonaPickedByUser(false)
         setSelectedEnvVarTemplate(null)
         setEnvVars({})
         setEnvVarsView('select')
@@ -1025,7 +1027,11 @@ export default function ProjectModal({
                 >
                   <PersonaSelectionStep
                     selectedPersona={selectedPersona}
-                    onSelectPersona={setSelectedPersona}
+                    pickedByUser={personaPickedByUser}
+                    onSelectPersona={(persona, pickedByUser) => {
+                      setSelectedPersona(persona)
+                      setPersonaPickedByUser(pickedByUser)
+                    }}
                     personas={personas}
                     onPersonasChange={setPersonas}
                   />
