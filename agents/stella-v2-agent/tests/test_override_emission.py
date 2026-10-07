@@ -88,7 +88,7 @@ def test_override_chunk_reuses_bridge_transcript_id(monkeypatch):
 
     chunks = _text_chunks(outputs)
     bridge = next(c for c in chunks if c.metadata.get("tts_source") == "bridge")
-    override = next(c for c in chunks if c.content == OVERRIDE_TEMPLATE)
+    override = next(c for c in chunks if c.content.endswith(OVERRIDE_TEMPLATE))
 
     # The deterministic safety line is the SAME logical utterance as the bridge.
     assert override.transcript_id == bridge.transcript_id
@@ -98,6 +98,20 @@ def test_override_chunk_reuses_bridge_transcript_id(monkeypatch):
     assert chunks[-1] is override
     # Language metadata is stamped so TTS speaks it in the coherent turn voice.
     assert "language" in override.metadata
+    # Same rate as the bridge — a rate change mid-utterance reads as a glitch.
+    assert override.metadata["speed"] == bridge.metadata["speed"]
+
+
+def test_override_keeps_the_bridge_as_prefix(monkeypatch):
+    """Every TEXT_CHUNK carries the FULL text so far. An override chunk holding
+    only the template replaced the bridge mid-playout in the chat bubble and the
+    teleprompter, and broke the TTS prefix diff. It must extend the bridge."""
+    agent = _build_agent(monkeypatch, action="override")
+    chunks = _text_chunks(asyncio.run(_collect(agent)))
+    bridge = next(c for c in chunks if c.metadata.get("tts_source") == "bridge")
+
+    assert chunks[-1].content == f"{BRIDGE_TEXT} {OVERRIDE_TEMPLATE}"
+    assert chunks[-1].content.startswith(bridge.content)
 
 
 def test_short_circuit_chunk_reuses_bridge_transcript_id_and_ends_turn(monkeypatch):
@@ -108,8 +122,9 @@ def test_short_circuit_chunk_reuses_bridge_transcript_id_and_ends_turn(monkeypat
 
     chunks = _text_chunks(outputs)
     bridge = next(c for c in chunks if c.metadata.get("tts_source") == "bridge")
-    short_circuit = next(c for c in chunks if c.content == OVERRIDE_TEMPLATE)
+    short_circuit = next(c for c in chunks if c.content.endswith(OVERRIDE_TEMPLATE))
 
+    assert short_circuit.content == f"{BRIDGE_TEXT} {OVERRIDE_TEMPLATE}"
     assert short_circuit.transcript_id == bridge.transcript_id
     assert short_circuit.is_final is True
     # Turn ends immediately after the short-circuit line — nothing downstream.
