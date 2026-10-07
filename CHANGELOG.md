@@ -96,13 +96,14 @@ plans" under Changed.**
 - A tool-calling expert is offered only the tools on its own list again. Loading a configuration dropped that list, so every such expert was offered every tool
 - The Plan Builder keeps highlighted text aligned with what is typed
 - The deploy dialog keeps a built-in persona the user picked when the mode changes
-- Companion mode: speech recognition stays on the session language once the agent is sure of it, and a clear yes to "do you mean X?" starts the activity
+- Companion mode: a clear yes to "do you mean X?" starts the activity
 - Security updates for npm dependencies (Dependabot alerts), and upload errors are reported as a client error again
 
 ### Known limitations
 
 - On the development server's Tesla T4 with the Qwen3 voice in streaming playback, one session already starves the voice (9.7% of playback against a 5% limit, judged with an 800 ms player pre-roll) and two sessions collapse, so its measured capacity is 0 (see the Voice capacity card). This is the T4 only; production's GPU has not been measured, and the sentence-by-sentence playback mode was not tested
 - Dependency updates for the voice service (`transformers`, `huggingface-hub`, `faster-qwen3-tts`) are held until they have been tested on a GPU host; `transformers` stays pinned below 5.17 ([#665](https://github.com/c4dhi/STELLA/issues/665))
+- In companion free conversation, speech recognition detects the language anew for each utterance unless the persona or the deployment declares one, so a short or unclear utterance can be heard in the wrong language. Declare a language for companion deployments
 
 ---
 
