@@ -7,7 +7,7 @@
 #   torch itself is installed by the Dockerfile so it can be pinned to the
 #   matching CUDA wheel index.
 
-faster-qwen3-tts>=0.1.0
+faster-qwen3-tts>=0.5.3
 
 # transformers 5.17.0 breaks model loading. Its Mimi weight init calls
 # qwen-tts's rope compat shim, which reads MimiConfig.rope_theta and raises
