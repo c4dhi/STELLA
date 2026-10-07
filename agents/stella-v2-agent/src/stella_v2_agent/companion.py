@@ -128,6 +128,12 @@ class Companion:
     # "Do you mean X?" is open: the activity she asked about, and how often.
     pending_start: Optional[Dict[str, Any]] = None
     start_asks: int = 0
+    # The activity start_asks counts against. Unlike pending_start, this
+    # survives a decline: a router that re-proposes the same activity right
+    # after a "no" must still run into max_start_asks rather than restarting
+    # the count at 0 (#52). Cleared only when it actually starts, or when a
+    # different activity is asked about instead.
+    _asked_activity: Optional[Dict[str, Any]] = None
     # Since she last woke: has she asked how they are, and offered the
     # activities? Both are done once, then she leaves the talking to them.
     greeted: bool = False
@@ -225,6 +231,18 @@ class Companion:
         command = commands[0] if commands else None
         kind = command.get("command") if command else None
         if asked and kind not in ("start", "list"):
+            # A "no" the judge concluded on its own is a real answer and ends
+            # the question. But a transcript heard too poorly to trust is not
+            # evidence of anything, "no" included — the symmetric doubtful-yes
+            # case above already asks again rather than acting on it; a
+            # doubtful non-yes must do the same, or a single garbled turn
+            # silently closes a question the user never actually answered
+            # (#50/#52: a clearly-heard "yes" the very next turn never got
+            # the chance to confirm, because the turn before it — a
+            # mistranscription — had already dropped the question it would
+            # have answered).
+            if doubtful and self.start_asks < self.settings.max_start_asks:
+                return Transition(Change.START_ASKED, activity=asked)
             return Transition(Change.START_DECLINED, activity=asked)
         if not command:
             return self._unprompted()
@@ -240,8 +258,12 @@ class Companion:
                 if not doubtful and self._named(activity, said):
                     return Transition(Change.STARTED, activity=activity)
                 # The router proposing the one just asked about is not a yes,
-                # and asking again is bounded like every other question.
-                if activity is asked and self.start_asks >= self.settings.max_start_asks:
+                # and asking again is bounded like every other question — by
+                # how often THIS activity has been asked about, not only by
+                # whether a question on it happens to be open right now (a
+                # decline already closed it once; re-proposing it must not
+                # restart the count, #52).
+                if self._asked_activity is activity and self.start_asks >= self.settings.max_start_asks:
                     return Transition(Change.START_DECLINED, activity=activity)
                 return Transition(Change.START_ASKED, activity=activity)
             logger.warning("start_activity for unknown or plan-less activity %r", command)
@@ -258,11 +280,37 @@ class Companion:
             return Transition(Change.OFFERED, offered=list(self.activities), unasked=True)
         return NO_CHANGE
 
-    @staticmethod
-    def _named(activity: Dict[str, Any], said: str) -> bool:
-        """Whether the user's own words contain the activity's title."""
+    def _named(self, activity: Dict[str, Any], said: str) -> bool:
+        """Whether the user's own words contain the activity's title — or
+        enough of it.
+
+        The full title is the strongest match. Failing that, the title minus
+        its FIRST word also counts, as long as two words of it are still
+        left: a leading qualifier ("Prolific Fitness Check-in") is not
+        something a user asking for "the Fitness Check-in" would ever say,
+        and its absence alone must not fall back to asking "do you mean X?"
+        every time (#50/#52). Short of two remaining words this is switched
+        off — "Memory Game" minus "Memory" is just "Game", too common a word
+        to mean much on its own.
+
+        The shortened form only counts when it names this activity alone: two
+        activities sharing the same tail ("Prolific Fitness Check-in" and
+        "Extended Fitness Check-in") must not let it silently start whichever
+        one the router happened to propose (#52) — that stays a question.
+        """
+        said = _plain(said)
         title = _plain(activity.get("title") or "")
-        return bool(title) and title in _plain(said)
+        if not title:
+            return False
+        if title in said:
+            return True
+        rest = " ".join(title.split()[1:])
+        if len(rest.split()) < 2 or rest not in said:
+            return False
+        return not any(
+            other is not activity and rest in _plain(other.get("title") or "")
+            for other in self.activities
+        )
 
     def _decide_in_activity(self, step: Optional[ExitStep], doubtful: bool) -> Transition:
         # A failed judgment changes nothing, whichever question was open: ending
@@ -300,6 +348,8 @@ class Companion:
         self.pending_exit = False
         self.exit_asks = 0
         self.drop_start()
+        self.start_asks = 0
+        self._asked_activity = None
         self.started_at = now
         self.collected = {}
 
@@ -346,14 +396,18 @@ class Companion:
         return text
 
     def ask_start(self, activity: Dict[str, Any]) -> None:
-        if self.pending_start is not activity:
+        if self._asked_activity is not activity:
             self.start_asks = 0
+            self._asked_activity = activity
         self.pending_start = activity
         self.start_asks += 1
 
     def drop_start(self) -> None:
+        """Close the open question. The count against ``_asked_activity`` is
+        kept: a decline that gets re-proposed must still run into
+        max_start_asks, not restart at 0 (#52). Only actually starting
+        (``enter``) or asking about a different activity clears it."""
         self.pending_start = None
-        self.start_asks = 0
 
     def ask_exit(self) -> None:
         self.pending_exit = True
