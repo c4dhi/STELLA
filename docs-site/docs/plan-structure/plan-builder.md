@@ -139,7 +139,7 @@ During save, the builder warns if a state has no outgoing transition and is not 
 
 ## Plan Language
 
-The **Language** field sits under the System Prompt. Leave it empty to let Stella detect the participant's language. Enter an ISO 639-1 code (`de`, `en`, `fr`, …) to fix the whole session to that language. The suggestions are only shortcuts, and any code the speech recognizer supports works. The value is stored as `language` at the root of the plan JSON, and the AI plan generator fills it with the language it wrote the plan in.
+The **Language** field sits in the plan's general settings, under the note that the agent's personality lives in Settings → Personas. Leave it empty to let Stella detect the participant's language. Enter an ISO 639-1 code (`de`, `en`, `fr`, …) to fix the whole session to that language. The suggestions are only shortcuts, and any code the speech recognizer supports works. The value is stored as `language` at the root of the plan JSON, and the AI plan generator fills it with the language it wrote the plan in.
 
 Set it whenever a plan is written for one language. Without it, a short or unclear first sentence can be detected as the wrong language, and speech recognition then transcribes, or even translates, into that language for the rest of the session.
 
@@ -355,7 +355,7 @@ Execution-level fields:
 - `states`
 - `initial_state_id`
 - `session_context`
-- `system_prompt`
+- `language`
 
 Canvas metadata fields:
 

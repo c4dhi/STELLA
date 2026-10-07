@@ -7,6 +7,10 @@ title: "Examples"
 
 This page provides complete, copy-pasteable plan examples for common use cases.
 
+:::note Personas, since 1.3.0
+A plan no longer carries a `system_prompt` or a `voice`. Who the agent is lives in a [persona](../agents/personas.md), chosen when deploying. Saving a plan with either field is rejected. A plan can still name the agent with persona variables such as `{{persona.name}}`.
+:::
+
 ## Linear Flow Example
 
 Use this pattern when every state should move forward in a single direction, with no branching paths.
@@ -17,7 +21,6 @@ Use this pattern when every state should move forward in a single direction, wit
   "title": "Linear Check-In Flow",
   "description": "A straightforward greeting -> intake -> close flow",
   "initial_state_id": "state_greeting",
-  "system_prompt": "You are a concise and supportive assistant.",
   "states": [
     {
       "id": "state_greeting",
@@ -126,7 +129,6 @@ Use this pattern when one intake state should route to different paths based on 
   "title": "Branching Support Triage",
   "description": "Routes users into priority, strategy, or closure states",
   "initial_state_id": "state_intake",
-  "system_prompt": "You are a calm triage assistant. Route clearly and keep responses concise.",
   "states": [
     {
       "id": "state_intake",
@@ -304,7 +306,6 @@ Use this pattern when a state may need repeated clarification, but must still ex
   "title": "Circular Clarification with Guard",
   "description": "Loops for clarification and exits through a guard transition when progress stalls",
   "initial_state_id": "state_collect",
-  "system_prompt": "You are a focused assistant. Clarify only when needed, then move forward.",
   "states": [
     {
       "id": "state_collect",
@@ -465,7 +466,6 @@ A minimal three-state conversation: greeting, data collection, and farewell.
   "title": "Simple Greeting Flow",
   "description": "Basic conversation with greeting and farewell",
   "initial_state_id": "greeting",
-  "system_prompt": "You are a friendly virtual assistant named Stella. Be warm, professional, and helpful. Keep responses concise.",
   "states": [
     {
       "id": "greeting",
@@ -556,7 +556,6 @@ A health-focused plan that collects fitness metrics using various deliverable ty
   "title": "Daily Fitness Check-In",
   "description": "Collect daily fitness metrics and provide encouragement",
   "initial_state_id": "greeting",
-  "system_prompt": "You are a supportive fitness coach assistant. Be encouraging but not pushy. Celebrate achievements and provide gentle motivation. Keep your responses brief and energetic.",
   "session_context": {
     "fields": [
       {
@@ -739,7 +738,6 @@ A customer support plan with conditional routing based on issue type.
   "title": "Customer Support Flow",
   "description": "Route customers to appropriate support based on issue type",
   "initial_state_id": "intake",
-  "system_prompt": "You are a professional customer support agent. Be helpful, patient, and efficient. Gather information systematically but conversationally. Never make promises about specific outcomes.",
   "states": [
     {
       "id": "intake",
