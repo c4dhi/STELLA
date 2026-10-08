@@ -49,6 +49,7 @@
   },
   "overrides": {
     "js-yaml@4": "^4.3.0",
-    "postcss": "^8.5.18"
+    "postcss": "^8.5.18",
+    "postcss-selector-parser": "^7.1.6"
   }
 }
