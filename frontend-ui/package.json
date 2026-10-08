@@ -16,7 +16,6 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@types/js-cookie": "^3.0.6",
-    "@vitest/mocker": "^5.0.3",
     "@vladmandic/face-api": "^1.7.15",
     "@xyflow/react": "^12.12.0",
     "framer-motion": "^14.0.0",
@@ -46,7 +45,8 @@
     "tailwindcss": "^3.4.10",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "@vitest/mocker": "^5.0.3"
   },
   "overrides": {
     "js-yaml@4": "^4.3.0",

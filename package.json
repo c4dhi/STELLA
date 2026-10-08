@@ -51,7 +51,7 @@
     "@babel/core": "^7.29.7",
     "multer": "$multer",
     "ajv@8": "^8.20.0",
-    "mysql2": "^3.23.1",
+    "mysql2": "^3.24.5",
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "^4.3.1"
     }
