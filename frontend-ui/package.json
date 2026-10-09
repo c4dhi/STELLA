@@ -18,7 +18,7 @@
     "@types/js-cookie": "^3.0.6",
     "@vladmandic/face-api": "^1.7.15",
     "@xyflow/react": "^12.12.0",
-    "framer-motion": "^13.5.0",
+    "framer-motion": "^14.0.0",
     "js-cookie": "^3.0.8",
     "livekit-client": "^2.22.3",
     "lucide-react": "^1.49.0",
@@ -27,7 +27,7 @@
     "react-dom": "^19.3.0",
     "react-router-dom": "^7.18.4",
     "recharts": "^3.10.1",
-    "zustand": "^4.5.2"
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",
@@ -38,17 +38,19 @@
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
     "eslint": "^10.11.0",
-    "eslint-config-prettier": "^9.1.0",
+    "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",
     "postcss": "^8.5.18",
     "prettier": "^3.9.9",
     "tailwindcss": "^3.4.10",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
-    "vitest": "^4.1.0"
+    "vitest": "^5.0.3",
+    "@vitest/mocker": "^5.0.3"
   },
   "overrides": {
     "js-yaml@4": "^4.3.0",
-    "postcss": "^8.5.18"
+    "postcss": "^8.5.18",
+    "postcss-selector-parser": "^7.1.6"
   }
 }
