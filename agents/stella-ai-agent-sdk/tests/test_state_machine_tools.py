@@ -267,3 +267,12 @@ async def test_batch_update_forwards_correction_per_deliverable():
     )
     assert ("correction", "b") in client.calls
     assert ("correction", "a") not in client.calls
+
+
+def test_guidance_says_how_a_goal_phase_ends():
+    """A goal phase is closed through its one task, never through a deliverable (#706)."""
+    from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
+
+    assert "complete_task `__goal__`" in STATE_MACHINE_TOOL_GUIDANCE
+    assert "skip_task `__goal__`" in STATE_MACHINE_TOOL_GUIDANCE
+    assert "never use it as a deliverable key" in STATE_MACHINE_TOOL_GUIDANCE

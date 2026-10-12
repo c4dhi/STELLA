@@ -501,7 +501,7 @@ describe('goal_achieved condition', () => {
     expect(result.newStateId).toBeUndefined();
   });
 
-  it('treats required goal tasks without deliverables as auto-complete in state completion checks', async () => {
+  it('does not count a goal state as complete because its scaffolding tasks need nothing (#706)', async () => {
     const sessionId = 'session-goal-action-task-auto-complete';
     const { prisma } = createPrismaMock();
     const svc = new StateMachineService(prisma);
@@ -518,7 +518,7 @@ describe('goal_achieved condition', () => {
     const planState = (state.planData as PlanData).states.find((s) => s.id === 'state-goal');
     const isComplete = (svc as any).isCurrentStateComplete(state, planState);
 
-    expect(isComplete).toBe(true);
+    expect(isComplete).toBe(false);
   });
 
   it('transitions when __goal_achieved__ is set truthy', async () => {
@@ -600,8 +600,9 @@ describe('goal_achieved condition', () => {
     const pendingTasks = await svc.getPendingTasks(sessionId);
     const goalTask = pendingTasks.find((task) => task.id === '__goal__');
 
-    expect(goalTask?.instruction).toContain('success criteria is met');
-    expect(goalTask?.instruction).toContain('setDeliverable("__goal_achieved__", true)');
+    expect(goalTask?.instruction).toContain('This goal is reached when: Participant states');
+    expect(goalTask?.instruction).toContain('complete the task "__goal__"');
+    expect(goalTask?.instruction).toContain('skip_task "__goal__"');
   });
 
   it('migrates goal all_tasks_complete transitions to goal_achieved', async () => {
@@ -2971,5 +2972,259 @@ describe('StateMachineService — the last state ends the conversation (#452)', 
     let last: any;
     for (let i = 0; i < 30; i++) last = await svc.incrementTurn('s');
     expect(last.sessionCompleted).toBeFalsy();
+  });
+});
+
+// The goal of a goal state is one task, `__goal__`, closed per state (#706).
+describe('goal state completion (#706)', () => {
+  const sessionId = 'session-706';
+  const goalState = (id: string, goal: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({
+    id, title: id, type: 'goal' as const, tasks: [], transitions: [],
+    goal: { objective: `objective of ${id}`, success_description: `success of ${id}`, ...goal },
+    ...extra,
+  });
+  const looseState = (id: string, tasks: unknown[] = []) =>
+    ({ id, title: id, type: 'loose' as const, tasks, transitions: [] });
+  // A loose state with a task, so the conversation rests in it (an empty one advances at once).
+  const resting = (id: string) => looseState(id, [{ id: `task-${id}`, description: 'talk' }]);
+  const planOf = (...states: unknown[]): PlanData =>
+    ({ id: 'p', title: 'p', initial_state_id: (states[0] as { id: string }).id, states }) as PlanData;
+
+  async function start(plan: PlanData) {
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    await svc.initializeForSession(sessionId, plan);
+    return svc;
+  }
+  const where = async (svc: StateMachineService) => (await svc.getCurrentState(sessionId))?.stateId;
+  const counter = async (svc: StateMachineService) => (await svc.getFullState(sessionId))?.turnsWithoutProgress;
+
+  it.each(['__goal__', '__goal_deliverables__'])('completing %s ends the goal state', async (id) => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.completeTask(sessionId, id, 'they named a step');
+    expect(result).toMatchObject({ success: true, transitioned: true, newStateId: 'next' });
+  });
+
+  it('skipping the goal ends the state too', async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.skipTask(sessionId, '__goal__', 'they would rather not');
+    expect(result).toMatchObject({ success: true, transitioned: true, newStateId: 'next' });
+  });
+
+  it('skip_state on a goal state moves on', async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.skipState(sessionId, undefined, 'not relevant');
+    expect(result).toMatchObject({ success: true, transitioned: true, newStateId: 'next' });
+  });
+
+  it('is not a task id outside a goal state', async () => {
+    const svc = await start(planOf(looseState('a', [{ id: 't1', description: 'x' }]), looseState('b')));
+    expect((await svc.completeTask(sessionId, '__goal__', 'x')).success).toBe(false);
+  });
+
+  it('each goal state has its own goal: reaching the first does not finish the next', async () => {
+    const svc = await start(planOf(goalState('g1'), goalState('g2'), goalState('g3'), looseState('after')));
+    expect((await svc.completeTask(sessionId, '__goal__', 'g1 done')).newStateId).toBe('g2');
+    expect(await where(svc)).toBe('g2');
+    expect((await svc.completeTask(sessionId, '__goal__', 'g2 done')).newStateId).toBe('g3');
+  });
+
+  it('a goal state after another kind of state still has to be reached', async () => {
+    const svc = await start(planOf(
+      goalState('g1'), looseState('mid', [{ id: 't1', description: 'say something' }]), goalState('g2'), looseState('after'),
+    ));
+    await svc.completeTask(sessionId, '__goal__', 'g1 done');
+    await svc.completeTask(sessionId, 't1', 'said');
+    expect(await where(svc)).toBe('g2');
+  });
+
+  it('ends the session when the last state is a goal state', async () => {
+    const svc = await start(planOf(goalState('g1')));
+    const result = await svc.completeTask(sessionId, '__goal__', 'done');
+    expect(result).toMatchObject({ success: true, sessionCompleted: true, newStateId: '__end__' });
+  });
+
+  it('still understands the old marker when it says yes', async () => {
+    const svc = await start(planOf(goalState('g1'), goalState('g2'), looseState('after')));
+    const result = await svc.setDeliverable(sessionId, '__goal_achieved__', true, 'old instruction');
+    expect(result).toMatchObject({ success: true, newStateId: 'g2' });
+    expect(await svc.getCollectedDeliverables(sessionId)).not.toHaveProperty('__goal_achieved__');
+  });
+
+  it("drops the user's answer written into the old marker: no value, no progress, no move", async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    for (let i = 0; i < 4; i++) await svc.incrementTurn(sessionId);
+    const result = await svc.setDeliverable(sessionId, '__goal_achieved__', 'Walk to the bakery on Tuesday', 'x');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("complete_task '__goal__'");
+    expect(await where(svc)).toBe('g1');
+    expect(await counter(svc)).toBe(4);
+    expect(await svc.getCollectedDeliverables(sessionId)).toEqual({});
+  });
+
+  it('refuses the goal task id as a deliverable key', async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.setDeliverable(sessionId, '__goal__', 'Dancing', 'x');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('task id');
+  });
+
+  describe('with required goal deliverables', () => {
+    const plan = () => planOf(
+      goalState('g1', { deliverables: [
+        { key: 'next_step', description: 'the step', required: true },
+        { key: 'why', description: 'the reason', required: false },
+      ] }),
+      looseState('next'),
+    );
+
+    it('cannot be completed while one is missing, and says which', async () => {
+      const svc = await start(plan());
+      const result = await svc.completeTask(sessionId, '__goal__', 'they seemed done');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('next_step');
+      expect(result.error).not.toContain('why');
+      expect(await where(svc)).toBe('g1');
+      const [task] = await svc.getPendingTasks(sessionId);
+      expect(task.instruction).toContain('cannot be completed before these are recorded: next_step');
+    });
+
+    it('a rejected completion is not progress', async () => {
+      const svc = await start(plan());
+      for (let i = 0; i < 3; i++) await svc.incrementTurn(sessionId);
+      await svc.completeTask(sessionId, '__goal__', 'too early');
+      expect(await counter(svc)).toBe(3);
+    });
+
+    it('can be completed once they are collected', async () => {
+      const svc = await start(plan());
+      // Collecting the answer alone does not end the state: reaching the goal is a judgment.
+      expect((await svc.setDeliverable(sessionId, 'next_step', 'walk on Tuesday', 'said so')).transitioned).toBe(false);
+      const [task] = await svc.getPendingTasks(sessionId);
+      expect(task.instruction).not.toContain('cannot be completed before');
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('next');
+    });
+
+    it('can always be skipped', async () => {
+      const svc = await start(plan());
+      expect((await svc.skipTask(sessionId, '__goal__', 'declined')).newStateId).toBe('next');
+    });
+
+    it('an insight under the same key does not stand in for the required answer', async () => {
+      const svc = await start(planOf(goalState('g0'), plan().states[0], looseState('next')));
+      await svc.setDeliverable(sessionId, 'next_step', 'maybe a walk', 'insight while in g0');
+      await svc.completeTask(sessionId, '__goal__', 'g0 done');
+      expect((await svc.completeTask(sessionId, '__goal__', 'g1 done')).success).toBe(false);
+    });
+  });
+
+  describe('insights', () => {
+    it('do not count as progress, so the stuck-state net still releases the state', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      let turn = 0;
+      while ((await where(svc)) === 'g1' && turn < 40) {
+        turn++;
+        await svc.setDeliverable(sessionId, `noticed_${turn}`, 'x', 'noticed');
+        await svc.incrementTurn(sessionId); // the agent counts an insight-only turn
+      }
+      expect(turn).toBe(10);
+      expect(await where(svc)).toBe('next');
+    });
+
+    it('a state the net released shows as left behind, not as open', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      for (let i = 0; i < 10; i++) await svc.incrementTurn(sessionId);
+      const full = await svc.getFullState(sessionId);
+      expect(full?.states.find(s => s.id === 'g1')?.status).toBe('completed');
+    });
+
+    it('are capped per session', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      for (let i = 0; i < 25; i++) {
+        expect((await svc.setDeliverable(sessionId, `k${i}`, 'v', 'r')).success).toBe(true);
+      }
+      expect((await svc.setDeliverable(sessionId, 'one_more', 'v', 'r')).success).toBe(false);
+      // An insight already kept can still be updated.
+      expect((await svc.setDeliverable(sessionId, 'k3', 'v2', 'r')).success).toBe(true);
+    });
+
+    it('are shown back in the plan view even when the goal declares no deliverables', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      await svc.setDeliverable(sessionId, 'likes_gardening', 'yes', 'said so');
+      const full = await svc.getFullState(sessionId);
+      const keys = full!.states[0].tasks.flatMap(t => t.deliverables.map(d => d.key));
+      expect(keys).toEqual(['likes_gardening']);
+    });
+  });
+
+  describe('a goal state whose routes read a deliverable', () => {
+    const plan = () => planOf(
+      goalState('g1', {}, { transitions: [
+        { target_state_id: 'yes_branch', condition_type: 'deliverable_value', condition_config: { key: 'wants_followup', value: 'yes' } },
+        { target_state_id: 'no_branch', condition_type: 'deliverable_value', condition_config: { key: 'wants_followup', value: 'no' } },
+      ] }),
+      resting('fallback'), resting('yes_branch'), resting('no_branch'),
+    );
+
+    it('cannot be completed before the routing answer exists', async () => {
+      const svc = await start(plan());
+      const result = await svc.completeTask(sessionId, '__goal__', 'done');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('wants_followup');
+    });
+
+    it('routes on the answer once it is there', async () => {
+      const svc = await start(plan());
+      const result = await svc.setDeliverable(sessionId, 'wants_followup', 'no', 'said no');
+      // Recording the answer does not move the conversation; closing the goal does.
+      expect(result.success).toBe(true);
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('no_branch');
+    });
+
+    it('takes the next state in plan order when the answer matches no route', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'wants_followup', 'maybe', 'unsure');
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('fallback');
+    });
+
+    it('takes the next state in plan order when the goal is skipped without the answer', async () => {
+      const svc = await start(plan());
+      expect((await svc.skipTask(sessionId, '__goal__', 'declined')).newStateId).toBe('fallback');
+    });
+
+    it('an escape route beside a completion route does not block completion', async () => {
+      const svc = await start(planOf(
+        goalState('g1', {}, { transitions: [
+          { target_state_id: 'support', condition_type: 'deliverable_value', condition_config: { key: 'distress', value: 'yes' }, priority: 1 },
+          { target_state_id: 'next', condition_type: 'goal_achieved', priority: 2 },
+        ] }),
+        resting('next'), resting('support'),
+      ));
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('next');
+    });
+  });
+
+  it('is not complete on entry, however little it requires (#400)', async () => {
+    const svc = await start(planOf(
+      looseState('first', [{ id: 't1', description: 'greet' }]),
+      goalState('g1', { deliverables: [{ key: 'opt', description: 'optional', required: false }] }),
+    ));
+    const full = await svc.getFullState(sessionId);
+    expect(full?.states.find(s => s.id === 'g1')?.status).toBe('pending');
+  });
+
+  it('a goal state entered again has to be reached again', async () => {
+    const svc = await start(planOf(
+      goalState('g1'),
+      { ...looseState('review', [{ id: 't1', description: 'check' }]),
+        transitions: [{ target_state_id: 'g1', condition_type: 'all_tasks_complete' }] },
+    ));
+    await svc.completeTask(sessionId, '__goal__', 'first time');
+    expect(await where(svc)).toBe('review');
+    await svc.completeTask(sessionId, 't1', 'send them back');
+    expect(await where(svc)).toBe('g1');
+    // It rests there instead of bouncing straight back out.
+    await svc.incrementTurn(sessionId);
+    expect(await where(svc)).toBe('g1');
   });
 });
