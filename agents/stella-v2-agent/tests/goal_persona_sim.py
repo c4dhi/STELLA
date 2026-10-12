@@ -108,6 +108,22 @@ PERSONAS = {
         "plan_coaching": {2: "your name is Lee", 5: "you drive a bus"},
         "plan_next_step": {},
     },
+    # Two built to tempt a goal closed too early.
+    "past_habits": {
+        "brief": ("Chatty about what you already do and used to do: your walks last summer, the swimming you did "
+                  "for years, how you always take the stairs. Whatever you are asked about plans or wishes, you "
+                  "answer with something from the past or something you already do, never with something new "
+                  "you will do."),
+        "plan_coaching": {2: "your name is Alex and you deliver the post"},
+        "plan_next_step": {},
+    },
+    "agreeable": {
+        "brief": ("Pleasant and vague. You go along with whatever is suggested without taking it on: 'sounds nice', "
+                  "'that could be good', 'why not', 'we'll see'. You never say you will do it, and you never "
+                  "name a day, a time or an activity yourself."),
+        "plan_coaching": {2: "your name is Pat and you work in a shop"},
+        "plan_next_step": {},
+    },
     "declines": {
         "brief": ("Polite but firm. You do not want to go into this topic today. From your third message on you "
                   "say so plainly ('I'd rather not get into that', 'can we move on') each time it comes up."),
@@ -200,6 +216,7 @@ async def run_one(llm, expert: ExpertConfig, plan: dict, persona_name: str, max_
             "n": number, "user": text, "assistant": reply, "state_before": state_before, "state_after": state_after,
             "calls": calls, "expert_error": verdict.error_message,
             "set": raw.get("deliverables_set", []), "turns_without_progress": full.get("turns_without_progress"),
+            "goal_close": raw.get("goal_close"),
             "revealed": persona[plan["id"]].get(number),
         })
         if state_after == "__end__" or not context:

@@ -3086,7 +3086,7 @@ describe('goal state completion (#706)', () => {
       expect(result.error).not.toContain('why');
       expect(await where(svc)).toBe('g1');
       const [task] = await svc.getPendingTasks(sessionId);
-      expect(task.instruction).toContain('cannot be completed before these are recorded: next_step');
+      expect(task.instruction).toContain('cannot be completed before these are recorded and confirmed: next_step.');
     });
 
     it('a rejected completion is not progress', async () => {
@@ -3102,6 +3102,27 @@ describe('goal state completion (#706)', () => {
       expect((await svc.setDeliverable(sessionId, 'next_step', 'walk on Tuesday', 'said so')).transitioned).toBe(false);
       const [task] = await svc.getPendingTasks(sessionId);
       expect(task.instruction).not.toContain('cannot be completed before');
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('next');
+    });
+
+    it('an answer only mentioned in passing does not carry the goal', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'next_step', 'maybe a picnic', 'said in passing', true);
+      const result = await svc.completeTask(sessionId, '__goal__', 'they have a step');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('next_step (recorded but not confirmed by the participant)');
+      const [task] = await svc.getPendingTasks(sessionId);
+      expect(task.instruction).toContain('next_step (recorded but not confirmed by the participant)');
+
+      // Confirming it — the same key again, without the flag — is what unlocks the goal.
+      await svc.setDeliverable(sessionId, 'next_step', 'a picnic on Sunday', 'confirmed when asked');
+      expect((await svc.completeTask(sessionId, '__goal__', 'confirmed')).newStateId).toBe('next');
+    });
+
+    it('an unconfirmed optional answer does not hold the goal', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'next_step', 'walk on Tuesday', 'said so');
+      await svc.setDeliverable(sessionId, 'why', 'fresh air, perhaps', 'in passing', true);
       expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('next');
     });
 

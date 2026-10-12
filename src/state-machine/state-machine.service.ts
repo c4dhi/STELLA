@@ -779,15 +779,36 @@ export class StateMachineService {
    * Without those the state would be finished with nowhere to go.
    */
   private goalStillNeeds(plan: PlanData, state: SessionState, currentState: PlanState): string[] {
+    return this.goalOpenAnswers(plan, state, currentState).map(a => a.key);
+  }
+
+  /** What the goal still needs, said so the agent knows what to do about each. */
+  private describeGoalNeeds(plan: PlanData, state: SessionState, currentState: PlanState): string {
+    return this.goalOpenAnswers(plan, state, currentState)
+      .map(a => (a.unconfirmed ? `${a.key} (recorded but not confirmed by the participant)` : a.key))
+      .join(', ');
+  }
+
+  private goalOpenAnswers(
+    plan: PlanData,
+    state: SessionState,
+    currentState: PlanState,
+  ): Array<{ key: string; unconfirmed: boolean }> {
     const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
-    const collected = (key: string) => key in deliverables && !deliverables[key]?.discovered;
+    // An answer the agent only picked up in passing (`unconfirmed`) is recorded,
+    // but it does not carry a goal: the agent has to check it back first.
+    const settled = (key: string) =>
+      key in deliverables && !deliverables[key]?.discovered && !deliverables[key]?.unconfirmed;
     const addressed = new Set([...state.completedTasks, ...state.skippedTasks]);
 
     const needed = (currentState.goal?.deliverables ?? [])
-      .filter(d => d.required !== false && !collected(d.key))
+      .filter(d => d.required !== false && !settled(d.key))
       .map(d => d.key);
     for (const task of currentState.tasks) {
-      if (!addressed.has(task.id)) needed.push(...this.uncollectedRequiredDeliverables(task, deliverables));
+      if (addressed.has(task.id)) continue;
+      needed.push(
+        ...(task.deliverables ?? []).filter(d => d.required !== false && !settled(d.key)).map(d => d.key),
+      );
     }
 
     const transitions =
@@ -798,7 +819,7 @@ export class StateMachineService {
         needed.push(...this.conditionKeys(t.condition_type, t.condition_config).filter(k => !(k in deliverables)));
       }
     }
-    return [...new Set(needed)];
+    return [...new Set(needed)].map(key => ({ key, unconfirmed: Boolean(deliverables[key]?.unconfirmed) }));
   }
 
   /**
@@ -819,16 +840,16 @@ export class StateMachineService {
     }
 
     if (outcome === 'reached') {
-      const needs = this.goalStillNeeds(plan, state, currentState);
-      if (needs.length > 0) {
+      const needs = this.describeGoalNeeds(plan, state, currentState);
+      if (needs) {
         this.logger.warn(
-          `Rejected completing the goal of '${currentState.id}' for session ${sessionId}: still needs ${needs.join(', ')}`,
+          `Rejected completing the goal of '${currentState.id}' for session ${sessionId}: still needs ${needs}`,
         );
         return {
           success: false,
           error:
-            `The goal cannot be completed yet; still needed: ${needs.join(', ')}. ` +
-            `Record them with set_deliverable first, or skip_task '${GOAL_TASK_ID}' to move on without them.`,
+            `The goal cannot be completed yet; still needed: ${needs}. ` +
+            `Record or confirm them with set_deliverable first, or skip_task '${GOAL_TASK_ID}' to move on without them.`,
         };
       }
     }
@@ -1473,7 +1494,7 @@ export class StateMachineService {
         .map(d => d.key);
 
       const allDeliverableKeys = [...new Set([...taskDeliverableKeys, ...goalDeliverableKeys])];
-      const stillNeeded = this.goalStillNeeds(plan, state, currentState);
+      const stillNeeded = this.describeGoalNeeds(plan, state, currentState);
 
       return [{
         id: '__goal__',
@@ -1486,8 +1507,8 @@ export class StateMachineService {
           `When it is reached, complete the task "${GOAL_TASK_ID}" (complete_task, or the tasks list of batch_update). ` +
             `If the participant does not want to pursue it or clearly will not get there, skip_task "${GOAL_TASK_ID}". ` +
             `"${GOAL_TASK_ID}" is a task id, never a deliverable key.`,
-          stillNeeded.length > 0
-            ? `It cannot be completed before these are recorded: ${stillNeeded.join(', ')}.`
+          stillNeeded
+            ? `It cannot be completed before these are recorded and confirmed: ${stillNeeded}.`
             : undefined,
         ].filter(Boolean).join('\n\n'),
         required: true,

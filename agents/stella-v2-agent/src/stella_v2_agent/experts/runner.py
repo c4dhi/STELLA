@@ -18,6 +18,7 @@ from stella_agent_sdk.tools import BaseTool
 from stella_agent_sdk import prompts as sdk_prompts
 
 from stella_v2_agent.experts.base import ExpertConfig
+from stella_v2_agent.experts.goal_check import GoalCloseCheck
 from stella_v2_agent.experts.template_compiler import (
     has_user_message_placeholder,
     HISTORY_PATTERN,
@@ -55,6 +56,7 @@ class ExpertRunner:
         """
         self._llm_service = llm_service
         self._compiler_version = compiler_version
+        self._goal_check = GoalCloseCheck(llm_service)
 
     async def run(
         self,
@@ -172,7 +174,18 @@ class ExpertRunner:
             # even when the LLM returns no tool calls.
             results: List[Dict[str, Any]] = []
 
-            if response.tool_calls:
+            # Closing a goal as reached gets a second, single-purpose opinion
+            # first (#706). Held back, the completion is dropped from the calls
+            # and the rest of them still runs.
+            tool_calls = response.tool_calls or []
+            goal_close = None
+            goal_check = getattr(self, "_goal_check", None)
+            if tool_calls and goal_check:
+                tool_calls, goal_close = await goal_check.filter(
+                    tool_calls, user_input, conversation_history, sm_context, config.model
+                )
+
+            if tool_calls:
                 tool_map = {t.name: t for t in tools}
 
                 async def _execute_single(tc):
@@ -193,7 +206,7 @@ class ExpertRunner:
                     except Exception as e:
                         return {"name": tc.name, "arguments": tc.arguments, "error": str(e), "success": False}
 
-                results = await asyncio.gather(*[_execute_single(tc) for tc in response.tool_calls])
+                results = await asyncio.gather(*[_execute_single(tc) for tc in tool_calls])
 
                 for r in results:
                     tool_calls_made.append(r)
@@ -274,6 +287,9 @@ class ExpertRunner:
                     # post-transition response re-anchoring in agent.py.
                     "transitioned": transitioned,
                     "new_state_id": new_state_id,
+                    # Set when the expert tried to close a goal: whether the
+                    # check let it, and the user's words it rested on.
+                    "goal_close": goal_close.as_dict() if goal_close else None,
                 },
             )
 
