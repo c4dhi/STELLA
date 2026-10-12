@@ -3,7 +3,7 @@
   "description": "Detects inaudible, garbled, or nonsensical transcription and triggers clarification",
   "priority": 100,
   "enabled": true,
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.4-mini",
   "temperature": 0.1,
   "max_tokens": 200,
   "can_call_functions": false,

@@ -3,7 +3,7 @@
   "description": "Flags health and medical safety concerns requiring cautious handling",
   "priority": 95,
   "enabled": true,
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.4-mini",
   "temperature": 0.1,
   "max_tokens": 200,
   "can_call_functions": false,
