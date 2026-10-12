@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 from stella_agent_sdk.llm.service import LLMToolCall
-from stella_v2_agent.experts.goal_check import GoalCloseCheck, split_goal_close
+from stella_v2_agent.experts.goal_check import GoalCloseCheck, split_goal_close, split_goal_skip
 
 GOAL_CONTEXT = {
     "processing_mode": "goal",
@@ -60,7 +60,14 @@ STEP = {"key": "next_step", "value": "walk to the bakery on Tuesday", "reasoning
 
 
 def run(llm, calls, context=GOAL_CONTEXT, said=SAID):
-    return asyncio.run(GoalCloseCheck(llm).filter(calls, said, HISTORY, context, "gpt-4o"))
+    """The calls that may run, and the single check made (None when there was none)."""
+    kept, results = run_all(llm, calls, context, said)
+    assert len(results) <= 1
+    return kept, (results[0] if results else None)
+
+
+def run_all(llm, calls, context=GOAL_CONTEXT, said=SAID):
+    return asyncio.run(GoalCloseCheck(llm).filter(calls, said, HISTORY, context, "gpt-5.4-mini"))
 
 
 # --- what counts as closing ----------------------------------------------------
@@ -83,13 +90,33 @@ def test_complete_task_and_the_old_marker_are_closes_too():
     assert split_goal_close([call("set_deliverable", key="__goal_achieved__", value="true")]) == ([], True)
 
 
-def test_skipping_a_goal_and_ordinary_calls_are_left_alone():
+def test_skipping_a_goal_is_not_a_close():
     calls = [
         batch(deliverables=[STEP], tasks=[], skip_tasks=[{"task_id": "__goal__"}]),
         call("skip_task", task_id="__goal__"),
         call("complete_task", task_id="t1"),
     ]
     assert split_goal_close(calls) == (calls, False)
+
+
+# --- what counts as giving the goal up -------------------------------------------
+
+def test_a_batch_loses_only_the_goal_skip():
+    kept, skipping = split_goal_skip([batch(deliverables=[STEP], tasks=[], skip_tasks=[{"task_id": "__goal__"}, {"task_id": "t2"}])])
+    assert skipping
+    assert kept[0].arguments["skip_tasks"] == [{"task_id": "t2"}]
+    assert kept[0].arguments["deliverables"] == [STEP]
+
+
+def test_skip_task_and_skip_state_give_the_goal_up():
+    assert split_goal_skip([call("skip_task", task_id="__goal__")]) == ([], True)
+    assert split_goal_skip([call("skip_state", reasoning="not relevant")]) == ([], True)
+    assert split_goal_skip([batch(deliverables=[], tasks=[], skip_tasks=[{"task_id": "__goal__"}])]) == ([], True)
+
+
+def test_skipping_another_task_is_left_alone():
+    calls = [call("skip_task", task_id="t1"), batch(deliverables=[STEP], tasks=[CLOSE], skip_tasks=[{"task_id": "t2"}])]
+    assert split_goal_skip(calls) == (calls, False)
 
 
 # --- the check -------------------------------------------------------------------
@@ -156,3 +183,69 @@ def test_the_check_sees_the_criteria_and_what_this_turn_records():
     assert "Must look like: A specific activity with a day." in prompt
     assert 'Recorded: "walk to the bakery on Tuesday"' in prompt
     assert f"USER: {SAID}" in prompt
+
+
+# --- giving a goal up ---------------------------------------------------------------
+
+def test_a_skip_goes_through_when_the_user_said_they_want_to_move_on():
+    llm = FakeLLM({"quote": "can we move on", "refused": True, "reason": "asked to move on"})
+    calls = [call("skip_task", task_id="__goal__")]
+    kept, result = run(llm, calls, said="I'd rather not get into that, can we move on?")
+    assert kept == calls and result.allowed and result.kind == "skip"
+
+
+def test_a_skip_is_held_back_when_the_user_only_left_one_question_open():
+    llm = FakeLLM({"quote": "", "refused": False, "reason": "only declined to give a name"})
+    step_and_skip = batch(deliverables=[STEP], tasks=[], skip_tasks=[{"task_id": "__goal__"}])
+    kept, result = run(llm, [step_and_skip], said="I'd rather keep my name private, but happy to chat.")
+    assert not result.allowed and result.kind == "skip"
+    assert kept[0].arguments["skip_tasks"] == [] and kept[0].arguments["deliverables"] == [STEP]
+
+
+def test_a_skip_needs_the_users_own_words_too():
+    llm = FakeLLM({"quote": "please stop asking me", "refused": True, "reason": "x"})
+    kept, result = run(llm, [call("skip_state", reasoning="x")])
+    assert kept == [] and not result.allowed
+
+
+def test_the_skip_question_is_about_refusing_not_about_reaching():
+    llm = FakeLLM({"quote": "", "refused": False, "reason": "x"})
+    run(llm, [call("skip_task", task_id="__goal__")])
+    assert "has the user turned this part of the conversation down?" in llm.prompts[0]
+    assert "Help the participant define a next step" in llm.prompts[0]
+
+
+def test_a_close_and_a_skip_in_one_turn_are_each_checked():
+    llm = FakeLLM({"quote": "", "reached": False, "refused": False, "reason": "x"})
+    kept, results = run_all(llm, [call("complete_task", task_id="__goal__"), call("skip_task", task_id="__goal__")])
+    assert kept == [] and [r.kind for r in results] == ["close", "skip"]
+    assert len(llm.prompts) == 2
+
+
+# --- telling the expert what became of its last attempt -----------------------------
+
+def test_a_held_back_close_is_remembered_for_the_experts_next_prompt():
+    check = GoalCloseCheck(FakeLLM({"quote": "", "reached": False, "reason": "Only a maybe so far."}))
+    assert check.note_for(GOAL_CONTEXT) == ""
+    asyncio.run(check.filter([call("complete_task", task_id="__goal__")], SAID, HISTORY, GOAL_CONTEXT, "m"))
+    note = check.note_for(GOAL_CONTEXT)
+    assert "tried to complete `__goal__`" in note and "Only a maybe so far." in note
+    # It belongs to that goal state only.
+    other = {**GOAL_CONTEXT, "state": {**GOAL_CONTEXT["state"], "id": "another"}}
+    assert check.note_for(other) == ""
+    assert check.note_for({**GOAL_CONTEXT, "processing_mode": "loose"}) == ""
+
+
+def test_the_note_goes_once_an_attempt_is_allowed():
+    llm = FakeLLM({"quote": "", "reached": False, "reason": "no"})
+    check = GoalCloseCheck(llm)
+    asyncio.run(check.filter([call("complete_task", task_id="__goal__")], SAID, HISTORY, GOAL_CONTEXT, "m"))
+    llm.answer = {"quote": "I will walk to the bakery on Tuesday morning", "reached": True, "reason": "yes"}
+    asyncio.run(check.filter([call("complete_task", task_id="__goal__")], SAID, HISTORY, GOAL_CONTEXT, "m"))
+    assert check.note_for(GOAL_CONTEXT) == ""
+
+
+def test_a_held_back_skip_is_remembered_as_a_skip():
+    check = GoalCloseCheck(FakeLLM({"quote": "", "refused": False, "reason": "They only left one question open."}))
+    asyncio.run(check.filter([call("skip_task", task_id="__goal__")], SAID, HISTORY, GOAL_CONTEXT, "m"))
+    assert "tried to skip `__goal__`" in check.note_for(GOAL_CONTEXT)

@@ -146,6 +146,12 @@ class ExpertRunner:
                 append_output_format=False,
                 tools=tools,
             )
+            # What became of the expert's last attempt to close or skip a goal:
+            # it never sees its tool results otherwise (#706).
+            goal_check = getattr(self, "_goal_check", None)
+            note = goal_check.note_for(sm_context) if goal_check else ""
+            if note and messages:
+                messages[0] = LLMMessage(role=messages[0].role, content=f"{messages[0].content}\n\n{note}")
 
             # Use OPENAI_DIRECT provider (supports tool calling, unlike LANGCHAIN)
             tool_schemas = [t.to_openai_schema() for t in tools]
@@ -174,14 +180,13 @@ class ExpertRunner:
             # even when the LLM returns no tool calls.
             results: List[Dict[str, Any]] = []
 
-            # Closing a goal as reached gets a second, single-purpose opinion
-            # first (#706). Held back, the completion is dropped from the calls
-            # and the rest of them still runs.
+            # Closing a goal as reached, or giving it up, gets a second,
+            # single-purpose opinion first (#706). Held back, that one action is
+            # dropped from the calls and the rest of them still runs.
             tool_calls = response.tool_calls or []
-            goal_close = None
-            goal_check = getattr(self, "_goal_check", None)
+            goal_checks: list = []
             if tool_calls and goal_check:
-                tool_calls, goal_close = await goal_check.filter(
+                tool_calls, goal_checks = await goal_check.filter(
                     tool_calls, user_input, conversation_history, sm_context, config.model
                 )
 
@@ -287,9 +292,10 @@ class ExpertRunner:
                     # post-transition response re-anchoring in agent.py.
                     "transitioned": transitioned,
                     "new_state_id": new_state_id,
-                    # Set when the expert tried to close a goal: whether the
-                    # check let it, and the user's words it rested on.
-                    "goal_close": goal_close.as_dict() if goal_close else None,
+                    # Set when the expert tried to close a goal or give it up:
+                    # whether the check let it, and the user's words it rested on.
+                    "goal_close": next((c.as_dict() for c in goal_checks if c.kind == "close"), None),
+                    "goal_skip": next((c.as_dict() for c in goal_checks if c.kind == "skip"), None),
                 },
             )
 

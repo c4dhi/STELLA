@@ -36,6 +36,7 @@ from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 
 ROOT = Path(__file__).resolve().parents[3]
 ADDRESS = "127.0.0.1:50999"
+USER_MODEL = "gpt-5.4-mini"   # plays the user
 
 
 def coaching_plan() -> dict:
@@ -149,7 +150,7 @@ async def user_says(llm, persona: dict, plan_id: str, history: list, number: int
     )
     response = await llm.generate(
         messages=[LLMMessage(role="user", content=prompt)],
-        config=LLMConfig(model="gpt-4o-mini", temperature=0.8, max_tokens=160, provider=LLMProvider.OPENAI_LANGCHAIN),
+        config=LLMConfig(model=USER_MODEL, temperature=0.8, max_tokens=160, provider=LLMProvider.OPENAI_LANGCHAIN),
         component_name="sim:user",
     )
     return re.sub(r"^(You|User):\s*", "", response.content.strip().strip(chr(34)))
@@ -171,6 +172,7 @@ async def run_one(llm, expert: ExpertConfig, plan: dict, persona_name: str, max_
     declared = {d["key"] for s in plan["states"] for d in (s.get("goal") or {}).get("deliverables", [])}
 
     history, turns = [], []
+    statuses_before = None
     # The agent speaks first, as in a session.
     context = await StellaV2Agent._fetch_sm_context(agent)
     opening = "Hello, nice to talk with you. How are you today?"
@@ -194,8 +196,10 @@ async def run_one(llm, expert: ExpertConfig, plan: dict, persona_name: str, max_
                 calls.append({"tool": result["name"], "args": args, "ok": result.get("success"), "error": result.get("error")})
         full = await client.get_full_state()
         # The agent's own rule for "this turn made progress".
-        progressed = bool(raw.get("tasks_completed")) or StellaV2Agent._wrote_defined_deliverable(
-            raw.get("deliverables_set", []), full)
+        statuses = StellaV2Agent._deliverable_statuses(full)
+        progressed = bool(raw.get("tasks_completed")) or StellaV2Agent._deliverables_moved_forward(
+            raw.get("deliverables_set", []), statuses_before, statuses)
+        statuses_before = statuses
         if not progressed and full.get("current_state_id") != "__end__":
             await client.increment_turn()      # what the agent does after a turn without progress
         context = await StellaV2Agent._fetch_sm_context(agent)
@@ -217,6 +221,7 @@ async def run_one(llm, expert: ExpertConfig, plan: dict, persona_name: str, max_
             "calls": calls, "expert_error": verdict.error_message,
             "set": raw.get("deliverables_set", []), "turns_without_progress": full.get("turns_without_progress"),
             "goal_close": raw.get("goal_close"),
+            "goal_skip": raw.get("goal_skip"),
             "revealed": persona[plan["id"]].get(number),
         })
         if state_after == "__end__" or not context:

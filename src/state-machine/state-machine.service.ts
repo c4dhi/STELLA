@@ -1203,6 +1203,15 @@ export class StateMachineService {
       ...this.historyFor(sessionId, key, existing, value, correction),
     };
 
+    // Progress is an answer that is new, newly confirmed, or corrected. Writing
+    // an unconfirmed guess over an unconfirmed guess (or the same value again) is
+    // not: an agent that re-records a hesitant answer every turn would otherwise
+    // keep the no-progress counter at zero and hold the state open forever (#706).
+    const storesUnconfirmed = unconfirmed && !correction && !staysSettled;
+    const isProgress =
+      existing === undefined || correction || (Boolean(existing.unconfirmed) && !storesUnconfirmed);
+    const turnsWithoutProgress = isProgress ? 0 : state.turnsWithoutProgress;
+
     // Setting a deliverable ONLY records data — it never auto-completes a task or
     // goal. Completion is an explicit agent action via complete_task / skip_task
     // (#291 redesign: no state mutation is ever derived from deliverable presence).
@@ -1210,7 +1219,7 @@ export class StateMachineService {
       where: { sessionId },
       data: {
         deliverables: deliverables as unknown as Prisma.InputJsonValue,
-        turnsWithoutProgress: 0,
+        turnsWithoutProgress,
       },
     });
 
@@ -1234,7 +1243,7 @@ export class StateMachineService {
       progress: await this.calculateProgress(sessionId, {
         ...state,
         deliverables: deliverables as unknown as Prisma.JsonValue,
-        turnsWithoutProgress: 0,
+        turnsWithoutProgress,
       } as SessionState),
     };
   }

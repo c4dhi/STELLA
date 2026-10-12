@@ -13,7 +13,12 @@ taken out of the tool calls; everything else in them still runs.
 
 It leans to "not reached" on purpose. Closing a goal late costs a few turns and
 the stuck-state net still catches it; closing it early skips the state and
-loses its answers. Skipping a goal is not checked here.
+loses its answers.
+
+Skipping a goal gets the same treatment, with its own question: did the user
+refuse this part of the conversation or ask to move on? A smaller model gave a
+goal up because the user had not answered one question yet, in the same call
+that recorded two of their answers.
 """
 
 import json
@@ -43,14 +48,32 @@ It is reached when: {success}
 {deliverables}
 Rules:
 - Find the user's own words that meet the criteria and copy them exactly into "quote". If there are none, the goal is not reached.
+- The quote must be the words behind the hardest part of the criteria: the reason, the decision or the plan itself. A name, a greeting or a pleasantry is never the quote. If any required part has no words of the user behind it, the goal is not reached.
 - A hesitant or hypothetical answer ("maybe", "I suppose", "I could", "that could be nice", "I'll see how I feel") does not reach a goal that asks for a decision, a commitment or a plan.
 - Something the user already does, or did in the past, is not a plan or a next step.
 - A remark made in passing while talking about something else does not reach the goal. The user must be answering to the goal's subject.
 - A clear "yes" to a specific proposal the assistant just made does count; quote the user's "yes".
 - Where an answer is listed with what it must look like, hold the recorded value to that. A value taken from small talk does not meet it.
+- Conditional talk ("if the weather behaves", "that would be the sort of day for it", "one could") and finding a suggestion pleasant ("sounds sensible", "that would be nice") are not taking it on. The quote itself must show the user deciding.
 - If you are unsure, the goal is not reached.
 
 Reply with JSON only: {{"quote": "<the user's exact words, or empty>", "reached": true or false, "reason": "<one short sentence>"}}
+
+Conversation:
+{conversation}"""
+
+SKIP_PROMPT = """You check one thing about a conversation between an assistant and a user: has the user turned this part of the conversation down?
+
+This part is about: {objective}
+
+Rules:
+- Find the user's own words that refuse it, or ask to move on, change the subject or stop, and copy them exactly into "quote". If there are none, the answer is no.
+- Declining ONE question (not giving a name, "I'd rather not say") while staying in the conversation is not turning this part down.
+- Being unsure, vague, brief or quiet, or talking about something else, is not turning it down. Neither is not having answered yet.
+- The one exception: the assistant has brought the subject up three or more times and each time the user gave no answer to it. Then the answer is yes; quote the user's latest non-answer.
+- If you are unsure, the answer is no.
+
+Reply with JSON only: {{"quote": "<the user's exact words, or empty>", "refused": true or false, "reason": "<one short sentence>"}}
 
 Conversation:
 {conversation}"""
@@ -61,6 +84,8 @@ class GoalCheckResult:
     allowed: bool
     quote: str = ""
     reason: str = ""
+
+    kind: str = "close"   # "close" (reached) or "skip" (given up)
 
     def as_dict(self) -> Dict[str, Any]:
         return {"attempted": True, "allowed": self.allowed, "quote": self.quote, "reason": self.reason}
@@ -101,6 +126,28 @@ def split_goal_close(tool_calls: List[Any]) -> Tuple[List[Any], bool]:
     return kept, closing
 
 
+def split_goal_skip(tool_calls: List[Any]) -> Tuple[List[Any], bool]:
+    """The tool calls without any that would give the goal up (skip its task,
+    or skip the whole state), and whether there was one."""
+    kept: List[Any] = []
+    skipping = False
+    for call in tool_calls:
+        args = call.arguments or {}
+        if call.name == "skip_state" or (call.name == "skip_task" and args.get("task_id") in GOAL_TASK_IDS):
+            skipping = True
+            continue
+        if call.name == "batch_update":
+            skips = args.get("skip_tasks") or []
+            other_skips = [t for t in skips if t.get("task_id") not in GOAL_TASK_IDS]
+            if len(other_skips) != len(skips):
+                skipping = True
+                if not (other_skips or args.get("tasks") or args.get("deliverables")):
+                    continue
+                call = replace(call, arguments={**args, "skip_tasks": other_skips})
+        kept.append(call)
+    return kept, skipping
+
+
 def _proposed_values(tool_calls: List[Any]) -> Dict[str, Any]:
     values: Dict[str, Any] = {}
     for call in tool_calls:
@@ -139,6 +186,24 @@ class GoalCloseCheck:
 
     def __init__(self, llm_service: LLMService):
         self._llm_service = llm_service
+        # What was held back last, per goal state. The expert makes one call a
+        # turn and never sees what became of its tool calls; told nothing, it
+        # tries the same close again every turn.
+        self._held: Dict[str, GoalCheckResult] = {}
+
+    def note_for(self, sm_context: Dict[str, Any]) -> str:
+        """A line for the expert's prompt about its last held-back attempt in
+        the current goal state, or "" when there was none."""
+        if sm_context.get("processing_mode") != "goal":
+            return ""
+        held = self._held.get((sm_context.get("state") or {}).get("id") or "")
+        if not held:
+            return ""
+        action = "complete" if held.kind == "close" else "skip"
+        return (
+            f"YOUR LAST ATTEMPT: you tried to {action} `__goal__` and it was held back: {held.reason} "
+            f"Do not try to {action} it again unless the user's NEW message changes that."
+        )
 
     async def filter(
         self,
@@ -147,19 +212,93 @@ class GoalCloseCheck:
         conversation_history: List[Dict[str, str]],
         sm_context: Dict[str, Any],
         model: str,
-    ) -> Tuple[List[Any], Optional[GoalCheckResult]]:
-        """``tool_calls`` as they may run, and the check's result if there was
-        a close to check (None otherwise — the common case, with no model call)."""
+    ) -> Tuple[List[Any], List[GoalCheckResult]]:
+        """``tool_calls`` as they may run, and the result of each check made:
+        one for a close, one for a skip. Empty in the common case, with no
+        model call."""
         if sm_context.get("processing_mode") != "goal":
-            return tool_calls, None
+            return tool_calls, []
+        results: List[GoalCheckResult] = []
+
         without_close, closing = split_goal_close(tool_calls)
-        if not closing:
-            return tool_calls, None
-        result = await self._check(tool_calls, user_input, conversation_history, sm_context, model)
-        logger.info(
-            "Goal close %s: %s", "allowed" if result.allowed else "held back", result.reason or result.quote
+        if closing:
+            result = await self._check(tool_calls, user_input, conversation_history, sm_context, model)
+            results.append(result)
+            if not result.allowed:
+                tool_calls = without_close
+
+        without_skip, skipping = split_goal_skip(tool_calls)
+        if skipping:
+            result = await self._check_skip(user_input, conversation_history, sm_context, model)
+            results.append(result)
+            if not result.allowed:
+                tool_calls = without_skip
+
+        state_id = (sm_context.get("state") or {}).get("id") or ""
+        held = next((r for r in results if not r.allowed), None)
+        if held:
+            self._held = {state_id: held}
+        elif results:
+            self._held = {}
+
+        for result in results:
+            logger.info(
+                "Goal %s %s: %s", result.kind, "allowed" if result.allowed else "held back",
+                result.reason or result.quote,
+            )
+        return tool_calls, results
+
+    @staticmethod
+    def _conversation(conversation_history: List[Dict[str, str]], user_input: str) -> List[Dict[str, str]]:
+        return [*conversation_history[-HISTORY_TURNS:], {"role": "user", "content": user_input}]
+
+    async def _ask(self, prompt: str, turns: List[Dict[str, str]], yes_field: str, model: str, kind: str) -> GoalCheckResult:
+        """One yes/no answer with a quote. Yes only counts when the quote is
+        something the user said; no answer at all leaves the goal as it is."""
+        try:
+            response = await self._llm_service.generate(
+                messages=[LLMMessage(role="user", content=prompt)],
+                config=LLMConfig(
+                    model=model, temperature=0.0, max_tokens=200,
+                    provider=LLMProvider.OPENAI_LANGCHAIN, json_mode=True,
+                ),
+                component_name=f"expert:goal_{kind}_check",
+            )
+            answer = json.loads(response.content)
+        except Exception as error:
+            # Without an answer the goal stays open; the expert will try again.
+            logger.warning("Goal %s check failed, holding the goal open: %s", kind, error)
+            return GoalCheckResult(False, reason=f"check failed: {str(error)[:80]}", kind=kind)
+
+        quote = str(answer.get("quote") or "").strip()
+        reason = str(answer.get("reason") or "").strip()
+        if answer.get(yes_field) is not True:
+            return GoalCheckResult(False, quote, reason, kind)
+        said = _norm(" ".join(m.get("content", "") for m in turns if m.get("role") == "user"))
+        if not quote or _norm(quote) not in said:
+            return GoalCheckResult(False, quote, "the quoted words are not something the user said", kind)
+        return GoalCheckResult(True, quote, reason, kind)
+
+    @staticmethod
+    def _render(turns: List[Dict[str, str]]) -> str:
+        return "\n".join(
+            f"{'USER' if m.get('role') == 'user' else 'ASSISTANT'}: {m.get('content', '')}" for m in turns
         )
-        return (tool_calls if result.allowed else without_close), result
+
+    async def _check_skip(
+        self,
+        user_input: str,
+        conversation_history: List[Dict[str, str]],
+        sm_context: Dict[str, Any],
+        model: str,
+    ) -> GoalCheckResult:
+        state = sm_context.get("state") or {}
+        turns = self._conversation(conversation_history, user_input)
+        prompt = SKIP_PROMPT.format(
+            objective=state.get("goal_objective") or state.get("description") or state.get("title") or "",
+            conversation=self._render(turns),
+        )
+        return await self._ask(prompt, turns, "refused", model, "skip")
 
     async def _check(
         self,
@@ -170,35 +309,11 @@ class GoalCloseCheck:
         model: str,
     ) -> GoalCheckResult:
         state = sm_context.get("state") or {}
-        turns = [*conversation_history[-HISTORY_TURNS:], {"role": "user", "content": user_input}]
+        turns = self._conversation(conversation_history, user_input)
         prompt = PROMPT.format(
             objective=state.get("goal_objective") or state.get("description") or state.get("title") or "",
             success=state.get("goal_success_description") or "the objective is met",
             deliverables=_deliverable_lines(sm_context, _proposed_values(tool_calls)),
-            conversation="\n".join(
-                f"{'USER' if m.get('role') == 'user' else 'ASSISTANT'}: {m.get('content', '')}" for m in turns
-            ),
+            conversation=self._render(turns),
         )
-        try:
-            response = await self._llm_service.generate(
-                messages=[LLMMessage(role="user", content=prompt)],
-                config=LLMConfig(
-                    model=model, temperature=0.0, max_tokens=200,
-                    provider=LLMProvider.OPENAI_LANGCHAIN, json_mode=True,
-                ),
-                component_name="expert:goal_close_check",
-            )
-            answer = json.loads(response.content)
-        except Exception as error:
-            # Without an answer the goal stays open; the expert will try again.
-            logger.warning("Goal close check failed, holding the goal open: %s", error)
-            return GoalCheckResult(False, reason=f"check failed: {str(error)[:80]}")
-
-        quote = str(answer.get("quote") or "").strip()
-        reason = str(answer.get("reason") or "").strip()
-        if answer.get("reached") is not True:
-            return GoalCheckResult(False, quote, reason)
-        said = _norm(" ".join(m.get("content", "") for m in turns if m.get("role") == "user"))
-        if not quote or _norm(quote) not in said:
-            return GoalCheckResult(False, quote, "the quoted words are not something the user said")
-        return GoalCheckResult(True, quote, reason)
+        return await self._ask(prompt, turns, "reached", model, "close")

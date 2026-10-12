@@ -926,13 +926,17 @@ class StellaV2Agent(BaseAgent):
                 )
 
         # Increment turn counter only when no progress was made and session is still active.
-        # A discovered insight (a key the plan does not define) is a note, not
-        # progress: counting it would let an agent that keeps noticing things hold
-        # a goal state open forever (#706).
-        deliverables_found = self._wrote_defined_deliverable(
+        # Progress is a defined answer that moved forward: newly recorded, or
+        # confirmed. A discovered insight, or a hesitant answer re-recorded as
+        # hesitant, is not — counting those would let an agent that keeps noting
+        # things hold a goal state open forever (#706).
+        statuses = self._deliverable_statuses(full_state)
+        deliverables_found = self._deliverables_moved_forward(
             (task_verdict.raw_output or {}).get("deliverables_set", []) if task_verdict else [],
-            full_state,
+            getattr(self, "_deliverable_statuses_before", None),
+            statuses,
         )
+        self._deliverable_statuses_before = statuses
         if not deliverables_found and not tasks_completed and not reached_end_state:
             await self.sm_client.increment_turn()
             # Refresh state after counter update so the published progress is current.
@@ -1837,24 +1841,43 @@ class StellaV2Agent(BaseAgent):
         return refreshed
 
     @staticmethod
-    def _wrote_defined_deliverable(keys: List[str], full_state: Optional[Dict[str, Any]]) -> bool:
-        """Whether any of ``keys`` is a deliverable the plan defines.
-
-        Without the plan view there is nothing to check against, so any write
-        counts, as it did before.
-        """
-        if not keys:
-            return False
+    def _deliverable_statuses(full_state: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+        """Status of every deliverable the plan defines (insights left out), or
+        None when there is no plan view to read."""
         if not full_state:
-            return True
-        defined = {
-            d.get("key")
+            return None
+        return {
+            d.get("key"): d.get("status", "pending")
             for state in full_state.get("states", [])
             for task in state.get("tasks", [])
             for d in task.get("deliverables", [])
-            if not d.get("discovered")
+            if d.get("key") and not d.get("discovered")
         }
-        return any(key in defined for key in keys)
+
+    @staticmethod
+    def _deliverables_moved_forward(
+        keys: List[str],
+        before: Optional[Dict[str, str]],
+        after: Optional[Dict[str, str]],
+    ) -> bool:
+        """Whether any of the ``keys`` written this turn is a defined deliverable
+        that got further than it was: recorded for the first time, or confirmed.
+
+        Mirrors the state machine's own rule for resetting its no-progress
+        counter. Without a plan view any write counts, as it did before; without
+        the view from before the turn, any defined key does.
+        """
+        if not keys:
+            return False
+        if after is None:
+            return True
+        rank = {"pending": 0, "skipped": 0, "partial": 1, "completed": 2}
+        if before is None:
+            return any(key in after for key in keys)
+        return any(
+            key in after and rank.get(after[key], 0) > rank.get(before.get(key, "pending"), 0)
+            for key in keys
+        )
 
     async def _fetch_sm_context(self) -> Dict[str, Any]:
         """Fetch state from gRPC backend and build sm_context for the pipeline.

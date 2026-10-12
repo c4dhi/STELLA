@@ -3119,6 +3119,28 @@ describe('goal state completion (#706)', () => {
       expect((await svc.completeTask(sessionId, '__goal__', 'confirmed')).newStateId).toBe('next');
     });
 
+    it('re-recording a hesitant answer as hesitant is not progress; confirming it is', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'next_step', 'maybe a walk', 'hesitant', true);
+      for (let i = 0; i < 3; i++) await svc.incrementTurn(sessionId);
+      await svc.setDeliverable(sessionId, 'next_step', 'perhaps the park', 'still hesitant', true);
+      expect(await counter(svc)).toBe(3);
+      await svc.setDeliverable(sessionId, 'next_step', 'the park on Sunday', 'confirmed');
+      expect(await counter(svc)).toBe(0);
+    });
+
+    it('a state where the same hesitant answer keeps coming is still released', async () => {
+      const svc = await start(plan());
+      let turn = 0;
+      while ((await where(svc)) === 'g1' && turn < 40) {
+        turn++;
+        await svc.setDeliverable(sessionId, 'next_step', `maybe ${turn}`, 'hesitant', true);
+        if (turn > 1) await svc.incrementTurn(sessionId); // the first write is progress
+      }
+      expect(turn).toBe(11);
+      expect(await where(svc)).toBe('next');
+    });
+
     it('an unconfirmed optional answer does not hold the goal', async () => {
       const svc = await start(plan());
       await svc.setDeliverable(sessionId, 'next_step', 'walk on Tuesday', 'said so');
