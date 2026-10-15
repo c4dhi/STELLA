@@ -73,7 +73,7 @@ const AgentTypes = () => {
               <div className="agent-card-custom-content">
                 <ul className="agent-card-custom-list">
                   <li>Build your own workflows and custom tools</li>
-                  <li>Plugin any LLM provider</li>
+                  <li>Plug in any LLM provider</li>
                 </ul>
                 <div className="agent-card-custom-link">
                   Read the guide

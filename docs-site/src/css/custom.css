@@ -5962,10 +5962,6 @@ tr:nth-child(even) td {
   }
 }
 
-.agents-grid--three {
-  max-width: 1100px;
-}
-
 .agents-deprecated-note {
   max-width: 900px;
   margin: 2rem auto 0;
@@ -5973,12 +5969,6 @@ tr:nth-child(even) td {
   font-size: 0.9rem;
   line-height: 1.6;
   color: #a1a1aa;
-}
-
-@media (min-width: 1024px) {
-  .agents-grid--three {
-    grid-template-columns: repeat(3, 1fr);
-  }
 }
 
 .agent-card {
