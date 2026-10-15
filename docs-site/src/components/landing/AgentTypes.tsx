@@ -1,4 +1,4 @@
-import { Zap, Feather, Wrench, Check, X, ArrowRight } from 'lucide-react';
+import { Zap, Wrench, Check, ArrowRight } from 'lucide-react';
 import Link from '@docusaurus/Link';
 import { AnimatedSection } from './AnimatedSection';
 
@@ -18,8 +18,8 @@ const AgentTypes = () => {
           </div>
         </AnimatedSection>
 
-        <div className="agents-grid agents-grid--three">
-          {/* stella-agent */}
+        <div className="agents-grid">
+          {/* stella-v2 */}
           <AnimatedSection animation="fade-up" delay={100}>
             <Link to="/docs/agents/stella-v2" className="agent-card">
               <div className="agent-card-badge agent-card-badge--primary">Full Featured</div>
@@ -29,24 +29,24 @@ const AgentTypes = () => {
                 </div>
                 <h3 className="agent-card-title">stella-v2</h3>
                 <p className="agent-card-desc">
-                  Rich, guided conversations with multiple reasoning stages—built for high-stakes interviews and interventions where every response matters
+                  Follows a plan through a guided conversation, or runs as a companion that keeps someone company and starts activities on request. Its persona sets the name, voice and identity.
                 </p>
               </div>
               <div className="agent-card-features">
                 <div className="agent-card-feature">
-                  <span>Tool Calling</span>
+                  <span>Plan mode</span>
                   <Check className="agent-card-feature-check" />
                 </div>
                 <div className="agent-card-feature">
-                  <span>Plans</span>
+                  <span>Companion mode</span>
                   <Check className="agent-card-feature-check" />
                 </div>
                 <div className="agent-card-feature">
-                  <span>Experts</span>
+                  <span>Personas</span>
                   <Check className="agent-card-feature-check" />
                 </div>
                 <div className="agent-card-feature">
-                  <span>Backchannel</span>
+                  <span>Experts and tool calling</span>
                   <Check className="agent-card-feature-check" />
                 </div>
               </div>
@@ -57,46 +57,8 @@ const AgentTypes = () => {
             </Link>
           </AnimatedSection>
 
-          {/* stella-light */}
-          <AnimatedSection animation="fade-up" delay={200}>
-            <Link to="/docs/agents/stella-light-agent" className="agent-card agent-card--green">
-              <div className="agent-card-badge agent-card-badge--green">Lightweight</div>
-              <div className="agent-card-header">
-                <div className="agent-card-icon agent-card-icon--green">
-                  <Feather className="w-7 h-7" />
-                </div>
-                <h3 className="agent-card-title">stella-light</h3>
-                <p className="agent-card-desc">
-                  Fast, single-step responses—great for lightweight conversations and quick check-ins
-                </p>
-              </div>
-              <div className="agent-card-features">
-                <div className="agent-card-feature">
-                  <span>Tool Calling</span>
-                  <Check className="agent-card-feature-check" />
-                </div>
-                <div className="agent-card-feature">
-                  <span>Plans</span>
-                  <Check className="agent-card-feature-check" />
-                </div>
-                <div className="agent-card-feature">
-                  <span>Experts</span>
-                  <X className="agent-card-feature-x" />
-                </div>
-                <div className="agent-card-feature">
-                  <span>Backchannel</span>
-                  <X className="agent-card-feature-x" />
-                </div>
-              </div>
-              <div className="agent-card-link agent-card-link--green">
-                Read the docs
-                <ArrowRight className="w-4 h-4" />
-              </div>
-            </Link>
-          </AnimatedSection>
-
           {/* Build Your Own */}
-          <AnimatedSection animation="fade-up" delay={300}>
+          <AnimatedSection animation="fade-up" delay={200}>
             <Link to="/docs/guides/build-your-own-agent" className="agent-card agent-card--custom">
               <div className="agent-card-badge agent-card-badge--blue">Customizable</div>
               <div className="agent-card-header">
@@ -121,6 +83,13 @@ const AgentTypes = () => {
             </Link>
           </AnimatedSection>
         </div>
+
+        <AnimatedSection animation="fade-up" delay={300}>
+          <p className="agents-deprecated-note">
+            stella-light is deprecated since 1.3.0: existing deployments keep running, but new work should use stella-v2.{' '}
+            <Link to="/docs/agents/stella-light-agent">Why, and how to migrate</Link>
+          </p>
+        </AnimatedSection>
       </div>
     </section>
   );
