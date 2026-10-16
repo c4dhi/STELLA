@@ -39,7 +39,7 @@ A plan or a pipeline configuration sometimes has to name the agent. Instead of r
 Introduce yourself as {{persona.name}} and explain that you are a {{persona.role}}.
 ```
 
-`{{persona.name}}`, `{{persona.voice}}` and `{{persona.language}}` always exist. Anything else, such as `role` above, is a variable you define on the persona; a variable of your own with the same key wins over the built-in one. The Plan Builder lists the available variables and highlights them in the text.
+`{{persona.name}}`, `{{persona.voice}}` and `{{persona.language}}` always exist. Anything else, such as `role` above, is a variable you define on the persona; a variable of your own with the same key wins over the built-in one. A key the persona does not have resolves to an empty string, so a misspelt `{{persona.<key>}}` silently disappears from the sentence rather than being spoken. The Plan Builder lists the available variables and highlights them in the text.
 
 The persona's own prompt is not a template: a placeholder written there is passed through as text.
 
@@ -59,6 +59,6 @@ npx ts-node scripts/migrations/extract-plan-personas.ts
 npx ts-node scripts/migrations/extract-plan-personas.ts --apply
 ```
 
-Add `--show-prompts` to the dry run to also print the prompt text. The script turns each plan's and each public project's prompt and voice into a persona and links the plan to it, so existing plans keep their personality. It is safe to run again. A custom persona that a saved configuration set in the old configurator slot is not carried over. [Back up the database](../deployment/backup-restore.md) before you upgrade.
+Add `--show-prompts` to the dry run to also print the prompt text. The script turns each plan's and each public project's prompt and voice into a persona and links the plan to it, so existing plans keep their personality. It is safe to run again. A custom persona that a saved configuration set in the old configurator slot is not carried over. [Back up the database](../deployment/backup-restore.md) before you upgrade. [Upgrading Stella](../deployment/upgrading.md#130) shows how to point the script at the database with `DATABASE_URL`.
 
 Sessions that were paused before the upgrade keep their plan's own personality when they wake up. That fallback is temporary and is removed one release after 1.3.0.
