@@ -772,28 +772,34 @@ def test_fade_in_ramps_up_and_leaves_the_tail_alone():
 from stella_agent_sdk.audio.pipeline import _parse_tts_playback  # noqa: E402
 
 
-def test_playback_mode_defaults_to_stream_and_parses_values(caplog):
-    assert _parse_tts_playback(None) == "stream"
-    assert _parse_tts_playback("") == "stream"
-    assert _parse_tts_playback("  ") == "stream"
+def test_playback_mode_defaults_to_auto_and_parses_values(caplog):
+    assert _parse_tts_playback(None) == "auto"
+    assert _parse_tts_playback("") == "auto"
+    assert _parse_tts_playback("  ") == "auto"
+    assert _parse_tts_playback("auto") == "auto"
+    assert _parse_tts_playback("Auto") == "auto"
     assert _parse_tts_playback("stream") == "stream"
     assert _parse_tts_playback("Sentence") == "sentence"
     assert _parse_tts_playback(" sentence ") == "sentence"
 
 
-def test_unknown_playback_mode_warns_and_falls_back_to_stream(caplog):
+def test_unknown_playback_mode_warns_and_falls_back_to_auto(caplog):
     with caplog.at_level("WARNING"):
-        assert _parse_tts_playback("chunky") == "stream"
+        assert _parse_tts_playback("chunky") == "auto"
     assert "chunky" in caplog.text
 
 
 def test_pipeline_reads_the_playback_env_once(monkeypatch):
     monkeypatch.setenv("STELLA_TTS_PLAYBACK", "sentence")
     pipe, _ = make_pipeline(SlowTTS())
+    assert pipe._tts_playback_configured == "sentence"
     assert pipe._tts_playback == "sentence"
 
     monkeypatch.delenv("STELLA_TTS_PLAYBACK")
     pipe, _ = make_pipeline(SlowTTS())
+    assert pipe._tts_playback_configured == "auto"
+    # auto starts a session in stream, exactly like the old default — it only
+    # ever moves to sentence after measured evidence (see the auto-switch tests).
     assert pipe._tts_playback == "stream"
 
 
@@ -927,6 +933,98 @@ async def test_stream_mode_latency_alarms_are_unchanged(caplog):
     assert [r for r in caplog.records if r.levelname == "ERROR"]
     published = [d for d in room.data if d.get("type") == "analytics"]
     assert published[-1]["data"]["playback"] == "stream"
+
+
+# ── STELLA_TTS_PLAYBACK=auto: switches to sentence after sustained slowness ──
+# One rule, shared with the pre-roll controller above: 3 consecutive sentences
+# measuring slower than real time (RTF > 1), each long enough to carry the
+# signal, and `auto` gives up on `stream` for the rest of the session — never
+# back (#669, Felix 8 Oct 2026).
+
+from types import SimpleNamespace
+
+from stella_agent_sdk.audio.pipeline import _TTS_SAMPLE_RATE  # noqa: E402
+
+
+def _fake_utt(audio_ms: float, rtf: float):
+    """A finished utterance with exactly `audio_ms` of audio and the given RTF
+    (synth_ms = audio_ms * rtf) — just enough for _learn_preroll to read."""
+    n_bytes = int(audio_ms / 1000.0 * _TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE)
+    return SimpleNamespace(data=b"\x00" * n_bytes, synth_ms=audio_ms * rtf, error=None)
+
+
+def test_auto_mode_starts_a_session_in_stream():
+    pipe, _ = make_pipeline(SlowTTS())
+    assert pipe._tts_playback_configured == "auto"
+    assert pipe._tts_playback == "stream"
+
+
+def test_auto_switches_to_sentence_after_three_consecutive_slow_sentences(caplog):
+    pipe, _ = make_pipeline(SlowTTS())
+    with caplog.at_level("INFO"):
+        for _ in range(2):
+            pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+            assert pipe._tts_playback == "stream", "switched before the third slow sentence"
+        pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "sentence"
+    assert "stream -> sentence" in caplog.text
+
+
+def test_auto_does_not_switch_on_two_slow_sentences():
+    pipe, _ = make_pipeline(SlowTTS())
+    for _ in range(2):
+        pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "stream"
+
+
+def test_auto_switch_streak_resets_on_a_fast_sentence_in_between():
+    pipe, _ = make_pipeline(SlowTTS())
+    pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    pipe._learn_preroll(_fake_utt(1000, rtf=0.5), bridged_ms=0.0)  # fast: resets
+    pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "stream", "two slow sentences after a reset should not be enough"
+
+
+def test_auto_never_switches_back_to_stream():
+    pipe, _ = make_pipeline(SlowTTS())
+    for _ in range(3):
+        pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "sentence"
+    for _ in range(5):
+        pipe._learn_preroll(_fake_utt(1000, rtf=0.3), bridged_ms=0.0)  # provider recovers
+    assert pipe._tts_playback == "sentence", "auto must never switch back mid-session"
+
+
+def test_sentences_too_short_to_measure_do_not_count_either_way():
+    pipe, _ = make_pipeline(SlowTTS())
+    # Below _MIN_MEASURABLE_AUDIO_MS (800ms): neither advances the streak...
+    for _ in range(5):
+        pipe._learn_preroll(_fake_utt(200, rtf=3.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "stream"
+    # ...nor resets a real streak already in progress.
+    pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    pipe._learn_preroll(_fake_utt(200, rtf=3.0), bridged_ms=0.0)  # too short — ignored
+    pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "sentence"
+
+
+def test_an_explicit_stream_pin_never_auto_switches(monkeypatch):
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "stream")
+    pipe, _ = make_pipeline(SlowTTS())
+    for _ in range(10):
+        pipe._learn_preroll(_fake_utt(1000, rtf=5.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "stream"
+
+
+def test_an_explicit_sentence_pin_is_unaffected_by_the_switch(monkeypatch):
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "sentence")
+    pipe, _ = make_pipeline(SlowTTS())
+    for _ in range(10):
+        pipe._learn_preroll(_fake_utt(1000, rtf=0.1), bridged_ms=0.0)  # fast, irrelevant
+    assert pipe._tts_playback == "sentence"
 
 
 @pytest.mark.asyncio
