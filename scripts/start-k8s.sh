@@ -152,10 +152,12 @@ parse_args() {
             --namespace)
                 shift
                 KUBERNETES_NAMESPACE="$1"
+                STELLA_CLI_NAMESPACE="$1"
                 ;;
             --port-offset)
                 shift
                 PORT_OFFSET="$1"
+                STELLA_CLI_PORT_OFFSET="$1"
                 ;;
             --help|-h)
                 show_help
@@ -176,6 +178,8 @@ parse_args() {
     export SKIP_BUILD_MODE DRY_RUN_MODE VERBOSE_MODE ENV_FLAG
     export SETUP_MODE CONFIG_MODE
     export KUBERNETES_NAMESPACE PORT_OFFSET
+    # Kept apart so load_env_file can put them back after the env file (#729).
+    export STELLA_CLI_NAMESPACE STELLA_CLI_PORT_OFFSET
 }
 
 show_help() {
