@@ -53,7 +53,7 @@ configSchema:
       properties:
         model:
           type: string
-          default: "gpt-4o-mini"
+          default: "gpt-5.4-mini"
         temperature:
           type: number
           default: 0.7
@@ -238,8 +238,8 @@ pipelineSchema:
         - id: model
           label: "Model"
           type: select
-          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
-          default: "gpt-4o-mini"
+          options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-5.4-mini"
         - id: temperature
           label: "Temperature"
           type: number
@@ -294,8 +294,8 @@ pipelineSchema:
         - id: model
           label: "Model"
           type: select
-          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
-          default: "gpt-4o-mini"
+          options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-5.4-mini"
         - id: temperature
           label: "Temperature"
           type: number
@@ -366,8 +366,8 @@ pipelineSchema:
         - id: model
           label: "Model"
           type: select
-          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
-          default: "gpt-4o-mini"
+          options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-5.4-mini"
         - id: temperature
           label: "Temperature"
           type: number

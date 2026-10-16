@@ -89,7 +89,7 @@ export default function AgentConfiguratorModal({
         lines: [`${state.inputGateRules.length} trigger rules`],
         receivesPlanData: true,
         receivesProgressData: true,
-        modelBadge: (nodeConfig('input_gate').model as string) || 'gpt-4o-mini',
+        modelBadge: (nodeConfig('input_gate').model as string) || 'gpt-5.4-mini',
       },
       expert_pool: {
         type: 'expert_pool',
@@ -110,13 +110,13 @@ export default function AgentConfiguratorModal({
         type: 'response_generator',
         lines: ['Persona + guidelines'],
         receivesPlanData: true,
-        modelBadge: (nodeConfig('response_generator').model as string) || 'gpt-4o-mini',
+        modelBadge: (nodeConfig('response_generator').model as string) || 'gpt-5.4-mini',
       },
       bridge_generator: {
         type: 'bridge_generator',
         lines: ['Ultra-short bridge phrase'],
         receivesPlanData: false,
-        modelBadge: (nodeConfig('bridge_generator').model as string) || 'gpt-4o-mini',
+        modelBadge: (nodeConfig('bridge_generator').model as string) || 'gpt-5.4-mini',
       },
     }
   }, [state.inputGateRules, state.poolExperts, state.bgExperts, state.arbitrationOrder, configuration])

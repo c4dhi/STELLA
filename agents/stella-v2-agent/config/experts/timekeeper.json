@@ -3,7 +3,7 @@
   "description": "Monitors conversation flow and detects stuck states where no progress is being made",
   "priority": 50,
   "enabled": true,
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.4-mini",
   "temperature": 0.1,
   "can_call_functions": false,
   "max_tokens": 300,

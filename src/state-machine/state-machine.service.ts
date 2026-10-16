@@ -10,6 +10,13 @@ import { SessionState, Prisma } from '@prisma/client';
 export const END_STATE_ID = '__end__';
 
 /**
+ * The one task every goal state has: reach the goal. It is not a plan task; the
+ * agent is shown it by getPendingTasks and closes the goal by completing or
+ * skipping it, exactly as it would any other task.
+ */
+export const GOAL_TASK_ID = '__goal__';
+
+/**
  * Plan data structure (matches SDK Plan type)
  */
 export interface PlanData {
@@ -81,7 +88,7 @@ export interface StateTransition {
    *
    * Simple:
    *   all_tasks_complete       – all required tasks/deliverables in the state are done
-   *   goal_achieved           – __goal_achieved__ deliverable is truthy
+   *   goal_achieved           – the state's goal task was completed or skipped
    *   deliverable_value        – a deliverable key equals a specific value (loose equality)
    *   deliverable_value_in     – a deliverable key matches any value in an array
    *   deliverable_value_numeric – a deliverable key satisfies a numeric comparison
@@ -296,6 +303,15 @@ export class StateMachineService {
   // floor, not the primary mechanism — set high enough that a well-behaved agent
   // never hits it, and every firing is logged loudly so stuck agents are visible.
   private static readonly STUCK_STATE_TURN_LIMIT = 10;
+  // Ids the agent may use for a goal state's one task. `__goal_deliverables__` is
+  // the id the same goal carries in getFullState, so it reaches the agent too.
+  private static readonly GOAL_TASK_ALIASES = new Set([GOAL_TASK_ID, '__goal_deliverables__']);
+  // How the goal was closed before it became a task: a deliverable with this key.
+  // Still understood, so an agent on the old instruction keeps working.
+  private static readonly LEGACY_GOAL_MARKER = '__goal_achieved__';
+  // Insights are free-form keys the agent makes up; without a ceiling one
+  // session can collect any number of them.
+  private static readonly MAX_DISCOVERED_INSIGHTS = 25;
 
   // Priority for the implicit `all_tasks_complete` fallback transition that
   // ensureTransitions guarantees on every non-goal state (#291 follow-up). It is
@@ -620,6 +636,10 @@ export class StateMachineService {
       return { success: false, error: `Current state ${state.currentStateId} not found in plan` };
     }
 
+    if (this.isGoalTask(currentState, taskId)) {
+      return this.closeGoal(sessionId, state, plan, currentState, 'reached');
+    }
+
     // Find the task
     const task = currentState.tasks.find(t => t.id === taskId);
     if (!task) {
@@ -705,6 +725,177 @@ export class StateMachineService {
         turnsWithoutProgress: 0,
       } as SessionState),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Goal states (#706)
+  //
+  // Whether a goal state is finished is a fact about THAT state, stored like a
+  // task tick: `__goal__:<stateId>` in completedTasks (reached) or skippedTasks
+  // (given up, or released by the stuck-state net). It used to be one
+  // session-wide deliverable, which made every later goal state finished the
+  // moment the first one was, and which the model filled with the user's answer
+  // instead of `true`.
+  // ---------------------------------------------------------------------------
+
+  private goalKey(stateId: string): string {
+    return `${GOAL_TASK_ID}:${stateId}`;
+  }
+
+  private isGoalTask(currentState: PlanState, taskId: string): boolean {
+    return currentState.type === 'goal' && StateMachineService.GOAL_TASK_ALIASES.has(taskId);
+  }
+
+  private goalOutcome(state: SessionState, planState: PlanState): 'reached' | 'skipped' | null {
+    const key = this.goalKey(planState.id);
+    if (state.completedTasks.includes(key)) return 'reached';
+    if (state.skippedTasks.includes(key)) return 'skipped';
+    return null;
+  }
+
+  /** Deliverable keys a condition reads, through any nesting. */
+  private conditionKeys(
+    conditionType: string,
+    config: Record<string, unknown> | undefined,
+    depth = 0,
+  ): string[] {
+    if (depth > StateMachineService.MAX_CONDITION_DEPTH) return [];
+    if (conditionType.startsWith('deliverable_')) {
+      return typeof config?.key === 'string' ? [config.key] : [];
+    }
+    const children = Array.isArray(config?.conditions) ? config.conditions : [];
+    return children.flatMap(child => {
+      const record = (child ?? {}) as Record<string, unknown>;
+      const type = record.condition_type ?? record.type;
+      const childConfig = (record.condition_config ?? record.config) as Record<string, unknown> | undefined;
+      return typeof type === 'string' ? this.conditionKeys(type, childConfig, depth + 1) : [];
+    });
+  }
+
+  /**
+   * What still has to be collected before the goal can be marked reached:
+   * required deliverables of the goal and of its tasks, and — when the state has
+   * no route that fires on completion alone — the deliverables its routes read.
+   * Without those the state would be finished with nowhere to go.
+   */
+  private goalStillNeeds(plan: PlanData, state: SessionState, currentState: PlanState): string[] {
+    return this.goalOpenAnswers(plan, state, currentState).map(a => a.key);
+  }
+
+  /** What the goal still needs, said so the agent knows what to do about each. */
+  private describeGoalNeeds(plan: PlanData, state: SessionState, currentState: PlanState): string {
+    return this.goalOpenAnswers(plan, state, currentState)
+      .map(a => (a.unconfirmed ? `${a.key} (recorded but not confirmed by the participant)` : a.key))
+      .join(', ');
+  }
+
+  private goalOpenAnswers(
+    plan: PlanData,
+    state: SessionState,
+    currentState: PlanState,
+  ): Array<{ key: string; unconfirmed: boolean }> {
+    const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
+    // An answer the agent only picked up in passing (`unconfirmed`) is recorded,
+    // but it does not carry a goal: the agent has to check it back first.
+    const settled = (key: string) =>
+      key in deliverables && !deliverables[key]?.discovered && !deliverables[key]?.unconfirmed;
+    const addressed = new Set([...state.completedTasks, ...state.skippedTasks]);
+
+    const needed = (currentState.goal?.deliverables ?? [])
+      .filter(d => d.required !== false && !settled(d.key))
+      .map(d => d.key);
+    for (const task of currentState.tasks) {
+      if (addressed.has(task.id)) continue;
+      needed.push(
+        ...(task.deliverables ?? []).filter(d => d.required !== false && !settled(d.key)).map(d => d.key),
+      );
+    }
+
+    const transitions =
+      this.ensureTransitions(plan).states.find(s => s.id === currentState.id)?.transitions ?? [];
+    if (!transitions.some(t => t.condition_type === 'goal_achieved')) {
+      for (const t of transitions) {
+        // A route may read an insight, so presence is enough here.
+        needed.push(...this.conditionKeys(t.condition_type, t.condition_config).filter(k => !(k in deliverables)));
+      }
+    }
+    return [...new Set(needed)].map(key => ({ key, unconfirmed: Boolean(deliverables[key]?.unconfirmed) }));
+  }
+
+  /**
+   * Close the current goal state. 'reached' is refused while something it needs
+   * is missing; 'skipped' always goes through — it is how the agent moves on
+   * when the participant will not or cannot get there.
+   */
+  private async closeGoal(
+    sessionId: string,
+    state: SessionState,
+    plan: PlanData,
+    currentState: PlanState,
+    outcome: 'reached' | 'skipped',
+  ): Promise<StateMachineResult> {
+    const done = outcome === 'reached' ? { taskCompleted: GOAL_TASK_ID } : { taskSkipped: GOAL_TASK_ID };
+    if (this.goalOutcome(state, currentState)) {
+      return { success: true, ...done };
+    }
+
+    if (outcome === 'reached') {
+      const needs = this.describeGoalNeeds(plan, state, currentState);
+      if (needs) {
+        this.logger.warn(
+          `Rejected completing the goal of '${currentState.id}' for session ${sessionId}: still needs ${needs}`,
+        );
+        return {
+          success: false,
+          error:
+            `The goal cannot be completed yet; still needed: ${needs}. ` +
+            `Record or confirm them with set_deliverable first, or skip_task '${GOAL_TASK_ID}' to move on without them.`,
+        };
+      }
+    }
+
+    const key = this.goalKey(currentState.id);
+    const completedTasks = outcome === 'reached' ? [...state.completedTasks, key] : state.completedTasks;
+    const skippedTasks = outcome === 'skipped' ? [...state.skippedTasks, key] : state.skippedTasks;
+    await this.prisma.sessionState.update({
+      where: { sessionId },
+      data: { completedTasks, skippedTasks, turnsWithoutProgress: 0 },
+    });
+    this.logger.log(`Goal of state '${currentState.id}' ${outcome} for session ${sessionId}`);
+
+    const transitionResult = await this.evaluateAndTransition(sessionId);
+    return {
+      success: true,
+      ...done,
+      transitioned: transitionResult.transitioned,
+      newStateId: transitionResult.newStateId,
+      newStateTitle: transitionResult.newStateTitle,
+      sessionCompleted: transitionResult.sessionCompleted,
+      farewellMessage: transitionResult.farewellMessage,
+      summaryBehavior: transitionResult.summaryBehavior,
+      progress: await this.calculateProgress(sessionId, {
+        ...state,
+        completedTasks,
+        skippedTasks,
+        turnsWithoutProgress: 0,
+      } as SessionState),
+    };
+  }
+
+  /**
+   * Where a closed goal state goes when none of its routes matched: the next
+   * state in plan order (the end, for the last state). Only reachable when the
+   * author wrote data-driven routes and the data matches none of them.
+   */
+  private closedGoalDefaultTarget(
+    plan: PlanData,
+    currentState: PlanState,
+    state: SessionState,
+  ): string | undefined {
+    if (currentState.type !== 'goal' || !this.goalOutcome(state, currentState)) return undefined;
+    const index = plan.states.findIndex(s => s.id === currentState.id);
+    if (index < 0) return undefined;
+    return index >= plan.states.length - 1 ? END_STATE_ID : plan.states[index + 1].id;
   }
 
   /** The plan's definition of a deliverable, searched across every state. */
@@ -875,6 +1066,34 @@ export class StateMachineService {
     const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
 
     if (!foundDeliverable && currentState.type === 'goal') {
+      // The goal is closed by completing its task, not by writing a value. The
+      // old marker is still honoured when it says "yes"; anything else written
+      // to it (the model used to put the user's answer here) is dropped, so it
+      // neither ends the state nor counts as progress.
+      if (key === StateMachineService.LEGACY_GOAL_MARKER) {
+        if (this.isGoalAchievedValue(value)) {
+          return this.closeGoal(sessionId, state, plan, currentState, 'reached');
+        }
+        return {
+          success: false,
+          error:
+            `'${key}' is not a deliverable. When the goal is reached, complete_task '${GOAL_TASK_ID}'.`,
+        };
+      }
+      if (StateMachineService.GOAL_TASK_ALIASES.has(key)) {
+        return {
+          success: false,
+          error: `'${key}' is a task id, not a deliverable key. Use complete_task or skip_task with it.`,
+        };
+      }
+      const insightCount = Object.values(deliverables).filter(d => d.discovered).length;
+      if (!(key in deliverables) && insightCount >= StateMachineService.MAX_DISCOVERED_INSIGHTS) {
+        return {
+          success: false,
+          error: `No more than ${StateMachineService.MAX_DISCOVERED_INSIGHTS} discovered insights are kept per session.`,
+        };
+      }
+
       // Goal mode: accept as discovered insight
       this.logger.log(`[setDeliverable] Discovered insight '${key}' in goal state for session ${sessionId}`);
       // Insights stay freely overwritable, but a replaced one is still logged.
@@ -905,39 +1124,27 @@ export class StateMachineService {
         ...this.historyFor(sessionId, key, prior, value, correction),
       };
 
+      // An insight is a note, not progress toward the goal: it must not reset
+      // the no-progress counter, or an agent that keeps noticing things holds
+      // the state open forever (the stuck-state net never fires). Correcting a
+      // defined deliverable from here is progress like anywhere else.
+      const turnsWithoutProgress = settledDefined ? 0 : state.turnsWithoutProgress;
       await this.prisma.sessionState.update({
         where: { sessionId },
         data: {
           deliverables: deliverables as unknown as Prisma.InputJsonValue,
-          turnsWithoutProgress: 0,
+          turnsWithoutProgress,
         },
       });
 
-      // Preserve existing semantics for generic discovered insights:
-      // only the explicit goal completion marker should trigger transition evaluation.
-      if (key !== '__goal_achieved__') {
-        return {
-          success: true,
-          transitioned: false,
-          progress: await this.calculateProgress(sessionId, {
-            ...state,
-            deliverables: deliverables as unknown as Prisma.JsonValue,
-            turnsWithoutProgress: 0,
-          } as SessionState),
-        };
-      }
-
-      const transitionResult = await this.evaluateAndTransition(sessionId);
-
+      // Recording an insight never moves the conversation.
       return {
         success: true,
-        transitioned: transitionResult.transitioned,
-        newStateId: transitionResult.newStateId,
-        newStateTitle: transitionResult.newStateTitle,
+        transitioned: false,
         progress: await this.calculateProgress(sessionId, {
           ...state,
           deliverables: deliverables as unknown as Prisma.JsonValue,
-          turnsWithoutProgress: 0,
+          turnsWithoutProgress,
         } as SessionState),
       };
     }
@@ -996,6 +1203,15 @@ export class StateMachineService {
       ...this.historyFor(sessionId, key, existing, value, correction),
     };
 
+    // Progress is an answer that is new, newly confirmed, or corrected. Writing
+    // an unconfirmed guess over an unconfirmed guess (or the same value again) is
+    // not: an agent that re-records a hesitant answer every turn would otherwise
+    // keep the no-progress counter at zero and hold the state open forever (#706).
+    const storesUnconfirmed = unconfirmed && !correction && !staysSettled;
+    const isProgress =
+      existing === undefined || correction || (Boolean(existing.unconfirmed) && !storesUnconfirmed);
+    const turnsWithoutProgress = isProgress ? 0 : state.turnsWithoutProgress;
+
     // Setting a deliverable ONLY records data — it never auto-completes a task or
     // goal. Completion is an explicit agent action via complete_task / skip_task
     // (#291 redesign: no state mutation is ever derived from deliverable presence).
@@ -1003,7 +1219,7 @@ export class StateMachineService {
       where: { sessionId },
       data: {
         deliverables: deliverables as unknown as Prisma.InputJsonValue,
-        turnsWithoutProgress: 0,
+        turnsWithoutProgress,
       },
     });
 
@@ -1027,7 +1243,7 @@ export class StateMachineService {
       progress: await this.calculateProgress(sessionId, {
         ...state,
         deliverables: deliverables as unknown as Prisma.JsonValue,
-        turnsWithoutProgress: 0,
+        turnsWithoutProgress,
       } as SessionState),
     };
   }
@@ -1063,6 +1279,10 @@ export class StateMachineService {
     const currentState = this.getCurrentPlanState(plan, state.currentStateId);
     if (!currentState) {
       return { success: false, error: `Current state ${state.currentStateId} not found in plan` };
+    }
+
+    if (this.isGoalTask(currentState, taskId)) {
+      return this.closeGoal(sessionId, state, plan, currentState, 'skipped');
     }
 
     const task = currentState.tasks.find(t => t.id === taskId);
@@ -1159,6 +1379,9 @@ export class StateMachineService {
     const newlySkipped = currentState.tasks
       .map(t => t.id)
       .filter(id => !addressed.has(id));
+    if (currentState.type === 'goal' && !this.goalOutcome(state, currentState)) {
+      newlySkipped.push(this.goalKey(currentState.id));
+    }
 
     const updatedSkippedTasks = [...state.skippedTasks, ...newlySkipped];
 
@@ -1280,6 +1503,7 @@ export class StateMachineService {
         .map(d => d.key);
 
       const allDeliverableKeys = [...new Set([...taskDeliverableKeys, ...goalDeliverableKeys])];
+      const stillNeeded = this.describeGoalNeeds(plan, state, currentState);
 
       return [{
         id: '__goal__',
@@ -1287,8 +1511,14 @@ export class StateMachineService {
         instruction: [
           currentState.goal?.depth_guidance,
           currentState.goal?.success_description
-            ? `Mark this goal as achieved when this success criteria is met: ${currentState.goal.success_description}\nWhen met, call setDeliverable("__goal_achieved__", true).`
-            : 'Mark this goal as achieved when the objective is met.\nWhen met, call setDeliverable("__goal_achieved__", true).',
+            ? `This goal is reached when: ${currentState.goal.success_description}`
+            : 'This goal is reached when the objective is met.',
+          `When it is reached, complete the task "${GOAL_TASK_ID}" (complete_task, or the tasks list of batch_update). ` +
+            `If the participant does not want to pursue it or clearly will not get there, skip_task "${GOAL_TASK_ID}". ` +
+            `"${GOAL_TASK_ID}" is a task id, never a deliverable key.`,
+          stillNeeded
+            ? `It cannot be completed before these are recorded and confirmed: ${stillNeeded}.`
+            : undefined,
         ].filter(Boolean).join('\n\n'),
         required: true,
         hasDeliverables: true,
@@ -1558,9 +1788,8 @@ export class StateMachineService {
    *   has to be addressed (ticked or skipped) — it is not silently auto-satisfied.
    * - There is no vacuous-truth case: a state with tasks is never "complete" on
    *   entry, because no task has been addressed yet.
-   * - Goal states keep their own semantics: deliverable-less tasks are guidance
-   *   scaffolding (non-blocking) and completion is driven by `goal_achieved` /
-   *   goal-level deliverables, not task ticks.
+   * - Goal states have their own rule: complete once the goal task was completed
+   *   or skipped (see closeGoal), whatever their scaffolding tasks say.
    */
   /**
    * #291 hybrid completion. A task that OWNS deliverables is treated as
@@ -1629,6 +1858,8 @@ export class StateMachineService {
   ): boolean {
     const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
     const stateType = currentState.type || 'loose';
+    // A goal state is complete when its goal was closed, and only then (#706).
+    if (stateType === 'goal') return this.goalOutcome(state, currentState) !== null;
     const addressed = new Set([...state.completedTasks, ...state.skippedTasks]);
 
     this.logger.log(
@@ -1638,12 +1869,6 @@ export class StateMachineService {
 
     for (const task of currentState.tasks) {
       if (addressed.has(task.id)) continue; // agent completed or skipped it
-
-      // In goal mode, deliverable-less tasks are guidance/action scaffolding and
-      // do not block; goal completion is driven by goal markers/deliverables.
-      if (stateType === 'goal' && (!task.deliverables || task.deliverables.length === 0)) {
-        continue;
-      }
 
       // #291 hybrid: a deliverable-bearing task is addressed once all its
       // required deliverables are collected, even without an explicit
@@ -1659,19 +1884,6 @@ export class StateMachineService {
         `[isCurrentStateComplete] Task '${task.id}' not completed/skipped — state NOT complete`,
       );
       return false;
-    }
-
-    // For goal states, also require goal-level required deliverables.
-    if (stateType === 'goal' && currentState.goal?.deliverables) {
-      for (const d of currentState.goal.deliverables) {
-        if (d.required === false) continue;
-        if (!(d.key in deliverables)) {
-          this.logger.log(
-            `[isCurrentStateComplete] Required goal deliverable '${d.key}' NOT found - state NOT complete`,
-          );
-          return false;
-        }
-      }
     }
 
     this.logger.log(`[isCurrentStateComplete] All tasks addressed - state IS complete`);
@@ -1691,14 +1903,14 @@ export class StateMachineService {
   private isPlanStateComplete(state: SessionState, planState: PlanState): boolean {
     const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
     const stateType = planState.type || 'loose';
+    // A goal state is complete when its goal was closed, and only then — not on
+    // entry because nothing is required (#400), and not because some other goal
+    // state was reached (#706).
+    if (stateType === 'goal') return this.goalOutcome(state, planState) !== null;
     const addressed = new Set([...state.completedTasks, ...state.skippedTasks]);
 
     for (const task of planState.tasks) {
       if (addressed.has(task.id)) continue;
-      // Goal-mode deliverable-less tasks are non-blocking scaffolding.
-      if (stateType === 'goal' && (!task.deliverables || task.deliverables.length === 0)) {
-        continue;
-      }
       // #291 hybrid: deliverable-bearing task is addressed when all its required
       // deliverables are collected (mirrors isCurrentStateComplete).
       if (this.deliverablesSatisfyTask(task, deliverables)) {
@@ -1706,13 +1918,6 @@ export class StateMachineService {
       }
       // An unaddressed task (required or optional) means the state is not complete.
       return false;
-    }
-
-    if (planState.type === 'goal' && planState.goal?.deliverables) {
-      for (const d of planState.goal.deliverables) {
-        if (d.required === false) continue;
-        if (!(d.key in deliverables)) return false;
-      }
     }
 
     return true;
@@ -2023,7 +2228,7 @@ export class StateMachineService {
           );
           return false;
         }
-        return this.isGoalAchievedValue(deliverables.__goal_achieved__?.value);
+        return this.goalOutcome(state, currentState) !== null;
       }
 
       case 'turn_count_exceeded': {
@@ -2418,8 +2623,24 @@ export class StateMachineService {
         // many no-progress turns, force the default forward transition so the
         // conversation can always recover (#291). Falls through to the normal
         // transition-application code below (cycle guard, end-state handling, etc.).
-        const stuckReleaseId = this.stuckStateReleaseTarget(plan, currentState, state);
-        if (stuckReleaseId) {
+        const closedGoalTarget = this.closedGoalDefaultTarget(plan, currentState, state);
+        const stuckReleaseId = closedGoalTarget
+          ? undefined
+          : this.stuckStateReleaseTarget(plan, currentState, state);
+        if (closedGoalTarget) {
+          this.logger.warn(
+            `[evaluateAndTransition] DEFAULT ROUTE: the goal of '${currentState.id}' is closed but none of ` +
+              `its routes matched — advancing to '${closedGoalTarget}' (next in plan order).`,
+          );
+          matchedTargetId = closedGoalTarget;
+          matchedTargetTitle =
+            plan.states.find(s => s.id === closedGoalTarget)?.title ?? closedGoalTarget;
+        } else if (stuckReleaseId) {
+          // A goal state the net releases was not reached: record it as skipped,
+          // so it shows as left behind rather than as still open.
+          if (currentState.type === 'goal') {
+            state.skippedTasks = [...state.skippedTasks, this.goalKey(currentState.id)];
+          }
           this.logger.warn(
             `[evaluateAndTransition] SAFETY NET: state '${currentState.id}' stuck for ` +
               `${state.turnsWithoutProgress} turns without progress (limit ` +
@@ -2446,10 +2667,17 @@ export class StateMachineService {
         `[evaluateAndTransition] Condition met! Transitioning from '${currentStateId}' to '${matchedTargetId}'`,
       );
 
+      // Entering a goal state opens its goal afresh, also on a jump back to it.
+      const enteredGoalKey = this.goalKey(matchedTargetId);
+      state.completedTasks = state.completedTasks.filter(id => id !== enteredGoalKey);
+      state.skippedTasks = state.skippedTasks.filter(id => id !== enteredGoalKey);
+
       await this.prisma.sessionState.update({
         where: { sessionId },
         data: {
           currentStateId: matchedTargetId,
+          completedTasks: state.completedTasks,
+          skippedTasks: state.skippedTasks,
           turnsWithoutProgress: 0,
           lastTransitionAt: new Date(),
         },
@@ -2601,12 +2829,13 @@ export class StateMachineService {
       });
 
       // For goal states, prepend a synthetic task for goal-level deliverables
-      if (planState.type === 'goal' && planState.goal?.deliverables?.length) {
+      if (planState.type === 'goal') {
         const taskKeys = new Set(
           planState.tasks.flatMap(t => (t.deliverables || []).map(d => d.key)),
         );
 
-        const goalDeliverableInfos: FullStateDeliverableInfo[] = planState.goal.deliverables
+        const goalDeliverables = planState.goal?.deliverables ?? [];
+        const goalDeliverableInfos: FullStateDeliverableInfo[] = goalDeliverables
           .filter(d => !taskKeys.has(d.key)) // Deduplicate with task deliverables
           .map(d => {
             const collected = deliverables[d.key];
@@ -2641,10 +2870,10 @@ export class StateMachineService {
         if (planState.id === state.currentStateId) {
           const knownKeys = new Set([
             ...taskKeys,
-            ...planState.goal.deliverables.map(d => d.key),
+            ...goalDeliverables.map(d => d.key),
           ]);
           for (const [key, val] of Object.entries(deliverables)) {
-            if (!knownKeys.has(key) && val.discovered) {
+            if (!knownKeys.has(key) && val.discovered && key !== StateMachineService.LEGACY_GOAL_MARKER) {
               goalDeliverableInfos.push({
                 key,
                 description: key.replace(/_/g, ' '),
@@ -2673,7 +2902,7 @@ export class StateMachineService {
 
           tasks.unshift({
             id: '__goal_deliverables__',
-            description: planState.goal.objective || 'Goal Deliverables',
+            description: planState.goal?.objective || 'Goal Deliverables',
             required: true,
             status: goalTaskStatus,
             deliverables: goalDeliverableInfos,

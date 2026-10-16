@@ -187,7 +187,7 @@ class ExpertRegistry:
                         name=name,
                         description=expert_def.get("description", ""),
                         system_prompt=expert_def.get("system_prompt", ""),
-                        model=expert_def.get("model", "gpt-4o-mini"),
+                        model=expert_def.get("model", "gpt-5.4-mini"),
                         max_tokens=int(expert_def.get("max_tokens", 200)),
                         temperature=float(expert_def.get("temperature", 0.3)),
                         priority=priority,

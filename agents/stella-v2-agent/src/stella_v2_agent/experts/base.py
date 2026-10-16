@@ -135,7 +135,7 @@ class ExpertConfig:
     description: str = ""
     priority: int = 50
     enabled: bool = True
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5.4-mini"
     temperature: float = 0.1
     max_tokens: int = 150
     can_call_functions: bool = False
@@ -163,7 +163,7 @@ class ExpertConfig:
             description=data.get("description", ""),
             priority=data.get("priority", 50),
             enabled=data.get("enabled", True),
-            model=data.get("model", "gpt-4o-mini"),
+            model=data.get("model", "gpt-5.4-mini"),
             temperature=data.get("temperature", 0.1),
             max_tokens=data.get("max_tokens", 150),
             can_call_functions=data.get("can_call_functions", False),
