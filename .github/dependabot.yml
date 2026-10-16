@@ -80,11 +80,18 @@ updates:
       # and raises AttributeError, so tts-service starts anyway with
       # "Provider: none" and every session goes silent (#625). Production
       # loads the model on 5.16.1 with the same qwen-tts-hf. Lift this only
-      # after loading the model on a GPU host. See
+      # after loading the model on a GPU host. 5.20.0 fails too (#665). See
       # tts-service/requirements-qwen3.txt.
       - dependency-name: "transformers"
         versions:
           - ">=5.17"
+      # huggingface-hub 2 cannot be installed next to the Qwen3 stack:
+      # faster-qwen3-tts (>=0.4.0) and transformers 5.16 both require
+      # huggingface-hub <2.0, so tts-service's requirements would not resolve
+      # (#710, #665). Lift together with the transformers cap.
+      - dependency-name: "huggingface-hub"
+        versions:
+          - ">=2"
     groups:
       pip-minor-and-patch:
         applies-to: version-updates

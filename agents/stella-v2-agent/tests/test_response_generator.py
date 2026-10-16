@@ -80,6 +80,20 @@ def test_deliverable_signals_produce_acknowledgment_line():
     assert "Acknowledge" in result
 
 
+def test_a_cautious_tone_holds_back_tips_and_praise():
+    # #705: a flagged medical/legal concern must stop the reply from offering
+    # a suggestion, tip or praise — in EITHER mode, since both guidelines
+    # templates surface {{directive}}.
+    result = ResponseDirective(tone="cautious", primary_action="x").to_prompt_section()
+    assert "do not offer a suggestion" in result
+    assert "praise" in result
+
+
+def test_a_neutral_tone_does_not_hold_back_anything():
+    result = ResponseDirective(tone="neutral", primary_action="x").to_prompt_section()
+    assert "do not offer a suggestion" not in result
+
+
 # ---------------------------------------------------------------------------
 # build_response_system_prompt()
 # ---------------------------------------------------------------------------
@@ -495,8 +509,27 @@ def test_task_instruction_survives():
     assert "Ask how often they train" in result
 
 
+def test_task_instruction_is_subordinated_when_the_directive_is_cautious():
+    # #705: a plan step's own instruction ("give a small personal suggestion")
+    # must not read as a plain directive to act on while a medical/legal flag
+    # is active — it was winning outright over the caution.
+    result = build_response_system_prompt(
+        _sm_with_backlog(), ResponseDirective(tone="cautious", primary_action="x"),
+    )
+    assert "Instruction: Ask how often they train" not in result
+    assert "subordinate to the caution" in result
+    assert "Ask how often they train" in result  # still visible, just not a bare directive
+
+
+def test_task_instruction_is_unqualified_without_a_cautious_tone():
+    result = _state_machine_section(_sm_with_backlog())
+    assert "Instruction: Ask how often they train" in result
+    assert "subordinate" not in result
+
+
 def test_empty_context_renders_nothing():
     assert _state_machine_section({}) == ""
+    assert _state_machine_section({}, tone="cautious") == ""
 
 
 # ---------------------------------------------------------------------------
