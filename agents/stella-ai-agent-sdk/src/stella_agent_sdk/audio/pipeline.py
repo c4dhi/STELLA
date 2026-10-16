@@ -48,7 +48,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, O
 
 from stella_agent_sdk.emotion.tags import EmotionCue
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
-from stella_agent_sdk.audio.preroll import PrerollController
+from stella_agent_sdk.audio.preroll import PrerollController, _MIN_MEASURABLE_AUDIO_MS
 from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
@@ -271,13 +271,26 @@ _DEFAULT_TTS_PREROLL_MS = 200
 #               behaviour). Costs first-audio latency but a sentence can never
 #               run dry mid-word, which is what a GPU slower than real time
 #               (a T4 running Qwen3) does to `stream`.
-_TTS_PLAYBACK_MODES = ("stream", "sentence")
-_DEFAULT_TTS_PLAYBACK = "stream"
+#   auto     -- the default, and what unset means (#669). Starts the session in
+#               `stream`, exactly as today, and switches once to `sentence` if
+#               the measured real-time factor says the provider cannot keep up
+#               — never back. `stream`/`sentence` still pin the mode outright,
+#               with no switching, for an operator who wants the old behaviour.
+_TTS_PLAYBACK_MODES = ("stream", "sentence", "auto")
+_DEFAULT_TTS_PLAYBACK = "auto"
+
+# How many consecutive sentences slower than real time (RTF > 1, i.e.
+# synth_ms > audio_ms) `auto` waits for before giving up on `stream` for the
+# rest of the session (Felix, 8 Oct 2026). One rule, one measurement, shared
+# with PrerollController: a sentence shorter than _MIN_MEASURABLE_AUDIO_MS
+# carries too little signal to count either way (same floor, same reason), so
+# it neither advances nor resets the streak.
+_AUTO_SWITCH_AFTER_SLOW_SENTENCES = 3
 
 
 def _parse_tts_playback(raw: Optional[str]) -> str:
-    """Resolve STELLA_TTS_PLAYBACK; unset/empty means the default, and an
-    unknown value logs a warning and falls back to it (never fails an agent)."""
+    """Resolve STELLA_TTS_PLAYBACK; unset/empty means the default (`auto`), and
+    an unknown value logs a warning and falls back to it (never fails an agent)."""
     if raw is None or not raw.strip():
         return _DEFAULT_TTS_PLAYBACK
     value = raw.strip().lower()
@@ -285,7 +298,7 @@ def _parse_tts_playback(raw: Optional[str]) -> str:
         return value
     logger.warning(
         f"[TTS] Unknown STELLA_TTS_PLAYBACK={raw!r} "
-        f"(expected {' or '.join(_TTS_PLAYBACK_MODES)}); using {_DEFAULT_TTS_PLAYBACK!r}"
+        f"(expected {', '.join(_TTS_PLAYBACK_MODES)}); using {_DEFAULT_TTS_PLAYBACK!r}"
     )
     return _DEFAULT_TTS_PLAYBACK
 
@@ -640,10 +653,24 @@ class AudioPipeline:
             else f"[TTS] Pre-roll: auto, starting at {self._preroll.current_ms} ms "
             "(adapts from measured synthesis speed)"
         )
-        # Read once: stream (default) or sentence. See _TTS_PLAYBACK_MODES.
-        self._tts_playback: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
-        if self._tts_playback != _DEFAULT_TTS_PLAYBACK:
-            logger.info(f"[TTS] Playback mode: {self._tts_playback}")
+        # Read once: stream, sentence, or auto (default). See _TTS_PLAYBACK_MODES.
+        # ``_tts_playback`` is the EFFECTIVE mode _play_utterance reads, and is
+        # the only one of the two that ever changes, exactly once, mid-session
+        # — ``_tts_playback_configured`` stays what the operator asked for, so
+        # an explicit stream/sentence pin is never touched by the auto-switch.
+        self._tts_playback_configured: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
+        self._tts_playback: str = (
+            "stream" if self._tts_playback_configured == "auto"
+            else self._tts_playback_configured
+        )
+        self._auto_slow_streak = 0
+        logger.info(
+            f"[TTS] Playback mode: auto, starting in stream "
+            f"(switches to sentence after {_AUTO_SWITCH_AFTER_SLOW_SENTENCES} "
+            "consecutive sentences slower than real time)"
+            if self._tts_playback_configured == "auto"
+            else f"[TTS] Playback mode: {self._tts_playback_configured}"
+        )
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -3644,11 +3671,17 @@ class AudioPipeline:
             self._cur_promised = 0
 
     def _learn_preroll(self, utt: "_StreamingUtterance", bridged_ms: float) -> None:
-        """Feed a finished sentence to the pre-roll controller (no-op when pinned)."""
-        if self._preroll.fixed or utt.error is not None or not utt.synth_ms:
+        """Feed a finished sentence's measured pace to the pre-roll controller
+        and the `auto` playback-mode switch (#669) — one measurement, both
+        rules. No-op (for both) when the sentence carries no usable timing."""
+        if utt.error is not None or not utt.synth_ms:
+            return
+        audio_ms = len(utt.data) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000.0
+        self._maybe_switch_to_sentence_mode(audio_ms, utt.synth_ms)
+
+        if self._preroll.fixed:
             return
         before = self._preroll.current_ms
-        audio_ms = len(utt.data) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000.0
         self._preroll.observe(audio_ms, utt.synth_ms, bridged_ms)
         if self._preroll.current_ms != before:
             rtf = self._preroll.rtf
@@ -3658,6 +3691,27 @@ class AudioPipeline:
                 if rtf is not None
                 else f"[TTS] Pre-roll {before}ms -> {self._preroll.current_ms}ms"
             )
+
+    def _maybe_switch_to_sentence_mode(self, audio_ms: float, synth_ms: float) -> None:
+        """`auto` only: after _AUTO_SWITCH_AFTER_SLOW_SENTENCES consecutive
+        sentences slower than real time, give up on `stream` for the rest of
+        the session — never back (Felix, 8 Oct 2026). An explicit `stream` or
+        `sentence` pin (`_tts_playback_configured`) is never touched."""
+        if self._tts_playback_configured != "auto" or self._tts_playback == "sentence":
+            return
+        if audio_ms < _MIN_MEASURABLE_AUDIO_MS:
+            return  # too short to carry the signal either way (see PrerollController)
+        rtf = synth_ms / audio_ms
+        if rtf <= 1.0:
+            self._auto_slow_streak = 0
+            return
+        self._auto_slow_streak += 1
+        if self._auto_slow_streak >= _AUTO_SWITCH_AFTER_SLOW_SENTENCES:
+            logger.info(
+                f"[TTS] Playback mode: stream -> sentence (RTF {rtf:.2f} on "
+                f"{self._auto_slow_streak} consecutive sentences slower than real time)"
+            )
+            self._tts_playback = "sentence"
 
     async def _bridge_underrun(self, fade_from: int = 0) -> float:
         """Push silence when the output source is about to run dry.
