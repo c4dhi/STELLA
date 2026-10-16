@@ -36,7 +36,7 @@ node --version
 ./scripts/start-k8s.sh --backup
 ```
 
-Choose **Export**. The wizard asks whether to include metrics and logs (not needed to get a working system back) and for a passphrase, and writes `stella-backup-<timestamp>.zip.enc` to the current directory. Releases before 1.3.0 ask whether to encrypt at all: say yes. This is the same backup for a local instance and a production server. Before you go on:
+Choose **Export**. The wizard asks whether to include metrics and logs (not needed to get a working system back) and for a passphrase, and writes `stella-backup-<timestamp>.zip.enc` into the Stella directory, next to `scripts/`. Releases before 1.3.0 ask whether to encrypt at all: say yes. This is the same backup for a local instance and a production server. Before you go on:
 
 - Check the file exists and is not empty: `ls -lh stella-backup-*.zip.enc`.
 - Keep the passphrase somewhere other than next to the file. Without it, the backup cannot be restored.
@@ -46,12 +46,15 @@ Choose **Export**. The wizard asks whether to include metrics and logs (not need
 
 ## The upgrade
 
-Fetch the release and check out its tag, for example `v1.3.0`:
+Fetch the release, check out its tag, for example `v1.3.0`, and install that release's Node packages:
 
 ```bash
 git fetch --tags
 git checkout v1.3.0
+npm ci
 ```
+
+Do not skip `npm ci`. The deploy runs the database migrations on this machine with these packages, and with the previous release's packages it stops at "Database migrations" (see [Troubleshooting](#troubleshooting)).
 
 Then redeploy:
 
@@ -65,20 +68,13 @@ The deploy applies the release's database migrations by itself before the backen
 
 ### Check that it worked
 
-All pods should be `Running` and ready:
+All pods should be `Running` and ready, and started just now (the `AGE` column):
 
 ```bash
 kubectl -n ai-agents get pods
 ```
 
-The backend should report the new version:
-
-```bash
-kubectl -n ai-agents exec deploy/session-management-server -- \
-  node -e "fetch('http://localhost:3000/version').then(r=>r.json()).then(v=>console.log(v.version))"
-```
-
-The version starts with the release number, for example `1.3.0-…`. Then open the web interface, sign in, and start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
+Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v1.3.0`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
 
 ## Manual steps per version
 
@@ -90,7 +86,7 @@ Filled in with the release.
 
 ### 1.3.0
 
-**Turn plan prompts into personas.** In 1.3.0 an agent's identity (name, prompt, voice) moved from the plan to a [persona](../agents/personas.md). A one-time script carries each existing plan's own prompt and voice over, so your plans keep their personality. Run it after the upgrade, with the new version running.
+**Turn plan prompts into personas.** In 1.3.0 an agent's identity (name, prompt, voice) moved from the plan to a [persona](../agents/personas.md). A one-time script carries each existing plan's and public project's own prompt and voice over to a persona, so they keep their personality. Run it after the upgrade, with the new version running.
 
 The script talks to the database directly and reads its address from the environment variable `DATABASE_URL`. Open a connection to the database and set the variable from the deployment's own secret:
 
@@ -100,17 +96,25 @@ export DATABASE_URL=$(kubectl -n ai-agents get secret stella-ai-secrets \
   -o jsonpath='{.data.database-url}' | base64 -d | sed 's/@postgres:5432/@localhost:5433/')
 ```
 
-Install the repository's Node packages if you have not yet (`npm ci`). Then do a dry run. It changes nothing and prints, for each plan, the persona it would create:
+The script needs the database client generated on this machine (the deploy only generates it inside its images):
 
 ```bash
-npx ts-node scripts/migrations/extract-plan-personas.ts
+npx prisma generate
 ```
 
-Read the output. Add `--show-prompts` to see the start of each prompt as well. If it looks right, run it again with `--apply`:
+Then do a dry run. It changes nothing and prints, for each plan, the persona it would create:
 
 ```bash
-npx ts-node scripts/migrations/extract-plan-personas.ts --apply
+node --import ./scripts/register-ts-node-esm.mjs scripts/migrations/extract-plan-personas.ts
 ```
+
+Read the output. Add `--show-prompts` to see each prompt as well. If it looks right, run it again with `--apply`:
+
+```bash
+node --import ./scripts/register-ts-node-esm.mjs scripts/migrations/extract-plan-personas.ts --apply
+```
+
+It prints how many personas it created and how many plans it linked. The comment at the top of the script says `npx ts-node`; that does not work since 1.3.0, so use the command above.
 
 It is safe to run again; a second dry run then has nothing left to do. Afterwards, stop the connection with `kill %1`.
 
@@ -120,29 +124,45 @@ Saved agent configurations that set a custom persona in the old configurator slo
 
 Database migrations only go forward. To go back, you return to the previous release **and** restore the backup you took before the upgrade. Everything recorded after the backup is lost: sessions, messages, plans and settings changed since then.
 
-1. Check out the release you came from, for example:
+1. Check out the release you came from and install its packages, for example:
 
    ```bash
    git checkout v1.2.0
+   npm ci
    ```
 
-2. Redeploy it with an empty database. `--reset-db` deletes the database; the older release cannot run on the upgraded one:
+2. Scale everything down, the database included. While the database runs, step 3 waits forever for its volume to be deleted:
+
+   ```bash
+   kubectl -n ai-agents scale deploy --all --replicas=0
+   ```
+
+3. Redeploy with an empty database. `--reset-db` deletes the database; the older release cannot run on the upgraded one:
 
    ```bash
    ./scripts/start-k8s.sh --reset-db -d
    ```
 
-3. Restore the backup:
+   If it stops at "Database migrations" with `Script exited with code 1`, the new, empty database was not ready yet. Run `./scripts/start-k8s.sh -d` once more.
+
+4. Restore the backup:
 
    ```bash
    ./scripts/start-k8s.sh --backup
    ```
 
-   Choose **Restore**, give the path of the `stella-backup-<timestamp>.zip.enc` you made before the upgrade, confirm, and enter its passphrase. The restore refuses a bundle whose database version does not match the running release, which is why step 2 comes first.
+   Choose **Restore**, give the path of the `stella-backup-<timestamp>.zip.enc` you made before the upgrade, type `overwrite` to confirm, and enter its passphrase. It ends with a table of row counts per table and `Restore complete`. The restore refuses a bundle whose database version does not match the running release, which is why step 3 comes first.
 
-4. Check it worked as in [Check that it worked](#check-that-it-worked); the version now shows the release you came from.
+5. Check it worked as in [Check that it worked](#check-that-it-worked); Settings now shows the release you came from.
 
 ## Troubleshooting
+
+**The deploy stops at "Database migrations" with only `Script exited with code 1`.** The migration failed, but the deploy does not print why. Two causes are common:
+
+- The Node packages are still the previous release's. Run `npm ci` and deploy again.
+- The database had only just started (a first deploy, or after `--reset-db`). Deploy again.
+
+If the next attempt says `Port 5433 already in use`, the failed attempt left its database connection open. Close it with `pkill -f "port-forward svc/postgres 5433"` and deploy again. To see the actual error, run the migration yourself with the connection from [1.3.0](#130) open: `npx prisma migrate deploy`.
 
 **The deploy stops at the database migration with `P3009`** ("found failed migrations"). An earlier migration attempt failed halfway. The deploy prints the name of the failed migration and the commands to resolve it. Read which case applies before running them: marking a migration as applied when it was not leaves the database inconsistent. If in doubt, roll back.
 
