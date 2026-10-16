@@ -508,6 +508,13 @@ _DECISIONS = {
 }
 
 
+def started_label(title: str) -> str:
+    """The exact label the "Started" decision tag carries for `title` (#640):
+    the curly quotes here must match `_DECISIONS[Change.STARTED]` exactly, so
+    a rehydrating agent can find its own tag back by this same string."""
+    return _DECISIONS[Change.STARTED][1].format(title=title)
+
+
 def woken_tag(session_id: str) -> AgentOutput:
     """The transcript's note that the user woke her, the counterpart of
     "Going to sleep"."""

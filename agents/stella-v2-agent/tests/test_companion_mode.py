@@ -25,6 +25,7 @@ from stella_v2_agent.companion import (
     decision,
     directive,
     exit_dialogue,
+    started_label,
 )
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 
@@ -748,8 +749,25 @@ async def test_a_restart_mid_activity_recovers_the_real_start_time():
     agent = _agent()
     agent._history_client = object()
     agent.get_chat_history = AsyncMock(return_value=[
-        _decision_message("2026-10-16T01:00:00Z", 'Started "Fitness Check-in"'),
-        _decision_message("2026-10-16T01:00:00Z", 'Started "Memory Game"'),
+        _decision_message("2026-10-16T01:00:00Z", started_label("Fitness Check-in")),
+        _decision_message("2026-10-16T01:00:00Z", started_label("Memory Game")),
+    ])
+    await agent._rehydrate_active_activity({"plan_id": "memory"})
+    assert agent.companion.started_at == datetime(2026, 10, 16, 1, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_a_restart_mid_activity_finds_the_tag_the_real_decision_function_writes():
+    # The label `_find_activity_start` looks for must match what `decision()`
+    # actually persists, curly quotes included — a straight-quote comparison
+    # string would never find it. Goes through `decision()` itself, not just
+    # `started_label`, so the two can't silently drift apart again.
+    tag = decision("s1", Transition(Change.STARTED, activity=ACTIVITIES[0]))
+    label = tag.metadata["decision"]["label"]
+    agent = _agent()
+    agent._history_client = object()
+    agent.get_chat_history = AsyncMock(return_value=[
+        _decision_message("2026-10-16T01:00:00Z", label),
     ])
     await agent._rehydrate_active_activity({"plan_id": "memory"})
     assert agent.companion.started_at == datetime(2026, 10, 16, 1, 0, 0, tzinfo=timezone.utc)

@@ -62,6 +62,7 @@ from stella_v2_agent.companion import (
     ExitStep,
     commands_from,
     decision as companion_decision,
+    started_label,
     woken_tag,
     exit_dialogue,
     start_dialogue,
@@ -1430,7 +1431,7 @@ class StellaV2Agent(BaseAgent):
         except Exception as e:
             logger.warning("Could not look up when %r started: %s", title, e)
             return None
-        label = f'Started "{title}"'
+        label = started_label(title)
         for msg in reversed(messages):
             decision = ((msg.envelope.get("data") or {}).get("metadata") or {}).get("decision") or {}
             if decision.get("kind") == "activity_started" and decision.get("label") == label:
