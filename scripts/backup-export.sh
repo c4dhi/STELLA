@@ -193,6 +193,7 @@ if [[ -z "$POD" ]]; then
     error "No running backend pod found in namespace '$KUBERNETES_NAMESPACE'. Deploy first."
     exit 1
 fi
+info "Exporting namespace '$KUBERNETES_NAMESPACE'."
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 [[ -z "$OUT" ]] && OUT="$PROJECT_DIR/stella-backup-${STAMP}.zip"

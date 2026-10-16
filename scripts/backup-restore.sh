@@ -130,6 +130,7 @@ load_environment
 
 ENV_FILE="$PROJECT_DIR/.env.$([[ "$NODE_ENV" == "production" ]] && echo production || echo local)"
 
+info "Restoring into namespace '$KUBERNETES_NAMESPACE'."
 if [[ "$ASSUME_YES" != "true" ]]; then
     echo -e "${YELLOW:-}WARNING:${NC:-} this OVERWRITES all data and config in namespace '$KUBERNETES_NAMESPACE'."
     read -r -p "Type 'overwrite' to continue: " CONFIRM
