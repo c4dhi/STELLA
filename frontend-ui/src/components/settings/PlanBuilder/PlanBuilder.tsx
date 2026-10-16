@@ -25,6 +25,7 @@ import PlanEndEditor from './PlanEndEditor'
 import PlanJsonViewer from './PlanJsonViewer'
 import PlanCanvas from './PlanCanvas'
 import { getDefaultStatePosition } from './planCanvasLayout'
+import LanguageSelect, { languageForSave } from '../LanguageSelect'
 import {
   DEFAULT_JOIN_MESSAGE,
   DEFAULT_LEFT_MESSAGE,
@@ -609,7 +610,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
         },
       },
     },
-    ...(planLanguage.trim() ? { language: planLanguage.trim().toLowerCase() } : {}),
+    ...(languageForSave(planLanguage) ? { language: languageForSave(planLanguage) } : {}),
   })
 
   const handleAddState = () => {
@@ -1402,28 +1403,16 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
               }`}>
                 Language
               </label>
-              <input
-                type="text"
-                list="plan-language-suggestions"
+              <LanguageSelect
                 value={planLanguage}
-                onChange={(e) => { setPlanLanguage(e.target.value); markChanged() }}
-                placeholder="Auto-detect — or an ISO code, e.g. de"
+                onChange={(v) => { setPlanLanguage(v); markChanged() }}
+                emptyLabel="Auto-detect"
                 className={`w-full px-3 py-2.5 rounded-lg text-[13px] border transition-colors ${
                   isDark
                     ? 'bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500'
                     : 'bg-white border-neutral-200 text-neutral-900 placeholder:text-neutral-400'
                 } focus:outline-none`}
               />
-              {/* Suggestions only — any ISO 639-1 code Whisper supports works,
-                  so this must not become a closed list that silently rejects
-                  the language someone actually needs. */}
-              <datalist id="plan-language-suggestions">
-                <option value="de">German</option>
-                <option value="en">English</option>
-                <option value="fr">French</option>
-                <option value="it">Italian</option>
-                <option value="es">Spanish</option>
-              </datalist>
               <p className={`text-[11px] font-light mt-1.5 ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
                 Set this whenever you know it. Left blank, the language is
                 detected per utterance from a very short window — and a wrong
