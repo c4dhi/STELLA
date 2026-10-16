@@ -833,8 +833,11 @@ run_database_migrations() {
             sleep 0.1
         done
 
-        wait $migration_pid
-        migration_exit_code=$?
+        # Capture the exit code without tripping set -e: a bare `wait` on a
+        # failed migration ended the deploy right here, before the output,
+        # the diagnostics and the port-forward cleanup below (#735).
+        migration_exit_code=0
+        wait $migration_pid || migration_exit_code=$?
         migration_output=$(cat "$migration_log" 2>/dev/null)
 
         # Success - we're done
@@ -873,7 +876,8 @@ run_database_migrations() {
         # =======================================================================
         set +e
         local failed_migration
-        failed_migration=$(echo "$migration_output" | grep -oP "Migration name: \K[0-9_a-zA-Z]+" 2>/dev/null | head -1)
+        # sed rather than grep -P, which BSD grep (macOS) does not have.
+        failed_migration=$(echo "$migration_output" | sed -n 's/.*Migration name: \([0-9_a-zA-Z]*\).*/\1/p' | head -1)
 
         # =======================================================================
         # Auto-recovery attempt
@@ -905,6 +909,19 @@ run_database_migrations() {
                 fi
             fi
         fi
+
+        # A database that has only just started can refuse connections for a
+        # few seconds (a first deploy, or after --reset-db). Wait and retry.
+        if echo "$migration_output" | grep -qE "P1001|P1017|Can't reach database server" 2>/dev/null; then
+            retry_count=$((retry_count + 1))
+            if [[ $retry_count -lt $max_retries ]]; then
+                printf "\r   ${ARROW} Database migrations... ${YELLOW}waiting for the database${NC} ($retry_count/$max_retries)\n"
+                sleep "${MIGRATION_RETRY_DELAY:-5}"
+                echo -ne "   ${ARROW} Database migrations... "
+                set -e
+                continue
+            fi
+        fi
         set -e
 
         # =======================================================================
@@ -919,6 +936,8 @@ run_database_migrations() {
 
     rm -f "$migration_log" 2>/dev/null
     cd - > /dev/null 2>&1 || true
+    # Close the port-forward first, so nothing below can leave it running.
+    cleanup_port_forward
     printf "\r   ${ARROW} Database migrations... ${RED}${CROSS}${NC}    \n"
 
     # Show the raw output first
@@ -928,9 +947,8 @@ run_database_migrations() {
     echo -e "${DIM}----------------------------${NC}"
 
     # Run detailed diagnostics
-    diagnose_migration_error "$migration_output" "$failed_migration"
+    diagnose_migration_error "$migration_output" "$failed_migration" || true
 
-    cleanup_port_forward
     exit 1
 }
 
