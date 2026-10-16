@@ -23,7 +23,11 @@ NAMESPACE="${KUBERNETES_NAMESPACE:-ai-agents}"
 _ns_suffix=""
 [[ "$NAMESPACE" != "ai-agents" ]] && _ns_suffix="-${NAMESPACE}"
 # start-k8s.sh exports its PID_DIR; use it, so its --stop finds our pid file.
-PID_DIR="${PID_DIR:-${STELLA_AI_TEMP_DIR:-/tmp}/stella-ai-k8s${_ns_suffix}}"
+# Before #737 the daemon always used LEGACY_PID_DIR, which differs from
+# start-k8s's when STELLA_DATA_ROOT is set; stop_all reads both, so loops
+# started before the update are still stopped.
+LEGACY_PID_DIR="${STELLA_AI_TEMP_DIR:-/tmp}/stella-ai-k8s${_ns_suffix}"
+PID_DIR="${PID_DIR:-$LEGACY_PID_DIR}"
 FOREGROUND=true  # Default to foreground mode
 mkdir -p "$PID_DIR"
 
@@ -180,12 +184,13 @@ start_all() {
 stop_all() {
     echo -e "${YELLOW}Stopping port-forward daemons...${NC}"
 
-    # Kill daemon loops. Read the pid file in one go first: rm -f, because
+    # Kill daemon loops. Read each pid file in one go first: rm -f, because
     # the file must not decide whether the remaining loops are stopped (#737).
-    if [ -f "$PID_DIR/daemon-pids.txt" ]; then
-        local pids
-        pids=$(cat "$PID_DIR/daemon-pids.txt")
-        rm -f "$PID_DIR/daemon-pids.txt"
+    local dir pids
+    for dir in "$PID_DIR" "$LEGACY_PID_DIR"; do
+        [ -f "$dir/daemon-pids.txt" ] || continue
+        pids=$(cat "$dir/daemon-pids.txt")
+        rm -f "$dir/daemon-pids.txt"
         for pid in $pids; do
             if ps -p "$pid" > /dev/null 2>&1; then
                 kill "$pid" 2>/dev/null || true
@@ -193,7 +198,7 @@ stop_all() {
                 echo -e "  ${GREEN}✓${NC} Stopped daemon PID: $pid"
             fi
         done
-    fi
+    done
 
     # Also kill any stray kubectl port-forward processes. The space after the
     # namespace matters: without it, stopping ai-agents also hit ai-agents-*.

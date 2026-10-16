@@ -85,4 +85,17 @@ sleep 2
 check "SIGTERM ends a loop within 2 s"         '[[ -z "$(daemon_loops)" ]]'
 check "SIGTERM ends its forward too"           '! running'
 
+# Loops started before this fix kept their pid file under
+# ${STELLA_AI_TEMP_DIR:-/tmp}, while start-k8s now hands the daemon its own
+# PID_DIR (under STELLA_DATA_ROOT on a server). The first stop after the update
+# must still find them, or they fight the new loops for the ports.
+pkill -9 -f "$WORK/bin/kubectl" 2>/dev/null; for port in 18080 13000 15432; do pkill -9 -f "_forward-loop [a-z-]* $port " 2>/dev/null; done
+start_daemon   # no PID_DIR: the pid file lands in the legacy place
+mkdir -p "$WORK/data-root-pids"
+env -i HOME="$HOME" PATH="$WORK/bin:$PATH" KUBERNETES_NAMESPACE="$NS" STELLA_AI_TEMP_DIR="$WORK/tmp" \
+    PID_DIR="$WORK/data-root-pids" "$REPO/scripts/port-forward-daemon.sh" stop >/dev/null 2>&1
+sleep 3
+check "stop also ends loops from the old pid dir" '[[ -z "$(daemon_loops)" ]]'
+check "stop also ends their forwards"             '! running'
+
 exit "$FAILED"
