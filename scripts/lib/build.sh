@@ -1335,8 +1335,18 @@ cleanup_for_rebuild() {
 
     # Delete application pods (keep postgres unless reset-db)
     if [[ "$RESET_DB_MODE" == "true" ]]; then
-        kubectl delete pods -n "$KUBERNETES_NAMESPACE" --all --grace-period=5 2>/dev/null || true
-        kubectl delete pvc -n "$KUBERNETES_NAMESPACE" --all 2>/dev/null || true
+        # Scale everything to 0 and let the pods go before deleting the
+        # volumes. Deleting only the pods made the deployments recreate them at
+        # once, the new pods held the PVCs, and `delete pvc` waited for ever
+        # (#734). The deploy's apply scales them back up (replicas: 1).
+        kubectl scale deploy --all -n "$KUBERNETES_NAMESPACE" --replicas=0 2>/dev/null || true
+        kubectl delete pods -n "$KUBERNETES_NAMESPACE" --all --grace-period=5 --wait=false 2>/dev/null || true
+        kubectl wait --for=delete pod --all -n "$KUBERNETES_NAMESPACE" --timeout=120s 2>/dev/null || true
+        if ! kubectl delete pvc -n "$KUBERNETES_NAMESPACE" --all --timeout=180s 2>/dev/null; then
+            warning "Could not delete the volumes in '$KUBERNETES_NAMESPACE' within 3 minutes."
+            echo "  Check what still holds them: kubectl get pods,pvc -n $KUBERNETES_NAMESPACE"
+            exit 1
+        fi
     else
         kubectl delete pods -n "$KUBERNETES_NAMESPACE" -l app!=postgres --grace-period=5 2>/dev/null || true
     fi
@@ -1372,6 +1382,10 @@ cleanup_for_rebuild() {
 
     verbose "Cleanup complete"
     [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: complete"
+    # The test above returns 1 when not verbose; as the last command it was
+    # the function's status, and set -e ended every --rebuild and --reset-db
+    # right here (#734).
+    return 0
 }
 
 # =============================================================================

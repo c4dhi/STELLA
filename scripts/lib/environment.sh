@@ -193,6 +193,10 @@ load_environment() {
         configure_temp_dirs "$STELLA_AI_TEMP_DIR"
     elif [[ -n "${STELLA_DATA_ROOT:-}" ]]; then
         configure_temp_dirs "${STELLA_DATA_ROOT}/tmp"
+    else
+        # The PID/log dirs carry the namespace, which the env file may have
+        # just set; setup_directories ran before it was known (#736).
+        configure_temp_dirs "/tmp"
     fi
 
     # Set hardcoded defaults (must come before configure_urls — URLs depend on computed ports)

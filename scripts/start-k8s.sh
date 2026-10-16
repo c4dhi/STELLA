@@ -266,23 +266,25 @@ main() {
     echo -e "${EMOJI_ROCKET} ${BOLD}STELLA - Kubernetes Deployment${NC}${mode_suffix}"
     echo ""
 
-    # Phase 2: Handle stop mode early
+    # Phase 2: Load configuration. Before stopping, so that --stop and the
+    # stop half of --restart act on the namespace the env file names, not
+    # always ai-agents (#736).
+    load_environment
+
+    # Phase 2b: Handle stop mode early
     if [[ "$STOP_MODE" == "true" ]]; then
         stop_services
         exit 0
     fi
 
-    # Phase 2b: Handle restart mode - stop first, then continue with normal startup
+    # Phase 2c: Handle restart mode - stop first, then continue with normal startup
     if [[ "$RESTART_MODE" == "true" ]]; then
         info "Restart mode: stopping existing services first..."
         stop_services
         echo ""
     fi
 
-    # Phase 3: Load Configuration
-    load_environment
-
-    # Phase 3b: Check if setup is complete, offer wizard if not
+    # Phase 3: Check if setup is complete, offer wizard if not
     if ! check_setup_status; then
         echo ""
         warning "Setup not complete or missing required configuration"
