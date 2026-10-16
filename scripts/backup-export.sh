@@ -83,13 +83,6 @@ backup_helper_unavailable() {
     exit 1
 }
 
-# Preflight the host-side bundle helper by actually loading it through ts-node
-# BEFORE the (slow) in-pod export runs. Compiling backup-bundle.ts exercises its
-# whole toolchain — ts-node, typescript, and every import (archiver, yauzl,
-# crypto) — so this catches the entire class of "host can't run the helper"
-# problems (stale/missing node_modules, a production --omit=dev install without
-# ts-node, a future added dependency) up front, with one real check instead of a
-# hardcoded package list.
 # Run the host-side bundle helper. The backend is ESM, so plain `npx ts-node`
 # cannot load it; register ts-node's ESM loader the way package.json does
 # (#730). Run from the project root: the loader resolves from the cwd.
@@ -97,6 +90,13 @@ bundle_helper() {
     node --import "$SCRIPT_DIR/register-ts-node-esm.mjs" "$SCRIPT_DIR/backup-bundle.ts" "$@"
 }
 
+# Preflight the host-side bundle helper by actually loading it through ts-node
+# BEFORE the (slow) in-pod export runs. Compiling backup-bundle.ts exercises its
+# whole toolchain — ts-node, typescript, and every import (archiver, yauzl,
+# crypto) — so this catches the entire class of "host can't run the helper"
+# problems (stale/missing node_modules, a production --omit=dev install without
+# ts-node, a future added dependency) up front, with one real check instead of a
+# hardcoded package list.
 preflight_backup_helper() {
     local root; root="$(cd "$SCRIPT_DIR/.." && pwd)"
     # Verify ts-node/typescript resolve first, for a clear message if they are missing.

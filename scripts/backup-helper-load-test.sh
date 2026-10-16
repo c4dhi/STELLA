@@ -40,6 +40,8 @@ check() {
     if grep -q "failed to load\|not installed" <<<"$out"; then
         echo "FAIL $name: helper did not load"
         sed 's/^/     /' <<<"$out" | grep -v '^ *$' | tail -6
+        echo "     (the 'npm install' hint names this test's temp copy; if node_modules is"
+        echo "     stale, run 'npm ci' in $REPO instead)"
         FAILED=1
     elif grep -q "$want" <<<"$out"; then
         echo "ok   $name"
