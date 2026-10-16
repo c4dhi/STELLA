@@ -1382,6 +1382,10 @@ cleanup_for_rebuild() {
 
     verbose "Cleanup complete"
     [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: complete"
+    # The test above returns 1 when not verbose; as the last command it was
+    # the function's status, and set -e ended every --rebuild and --reset-db
+    # right here (#734).
+    return 0
 }
 
 # =============================================================================
