@@ -1198,7 +1198,7 @@ print_k3s_image_line() {
 }
 
 # Release the GC pins on our images from earlier tags, once the release that
-# replaced them is running. Without this, every release would stay pinned and
+# replaced them is running. :latest is kept pinned (see below). Without this, every release would stay pinned and
 # the disk would only ever fill.
 unpin_previous_k3s_images() {
     [[ "$DRY_RUN_MODE" == "true" || "$OS_TYPE" != "linux" ]] && return 0
@@ -1207,7 +1207,11 @@ unpin_previous_k3s_images() {
     while read -r ref; do
         [[ -z "$ref" ]] && continue
         for img in "${all_images[@]}"; do
-            if [[ "$ref" == "docker.io/library/${img}:"* && "$ref" != "$(k3s_image_ref "$img")" ]]; then
+            # :latest is the agents' per-config fast path (tag_agent_images_latest)
+            # and shares the current release's digest; agent images sit unused
+            # between sessions, so they are the most exposed to image GC.
+            if [[ "$ref" == "docker.io/library/${img}:"* && "$ref" != "$(k3s_image_ref "$img")" \
+                  && "$ref" != "docker.io/library/${img}:latest" ]]; then
                 sudo k3s ctr -n k8s.io images label "$ref" "${K3S_PIN_LABEL}=" >/dev/null 2>&1 || true
                 verbose "unpinned ${ref}"
             fi
