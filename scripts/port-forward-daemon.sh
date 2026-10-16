@@ -22,7 +22,8 @@ NC='\033[0m'
 NAMESPACE="${KUBERNETES_NAMESPACE:-ai-agents}"
 _ns_suffix=""
 [[ "$NAMESPACE" != "ai-agents" ]] && _ns_suffix="-${NAMESPACE}"
-PID_DIR="${STELLA_AI_TEMP_DIR:-/tmp}/stella-ai-k8s${_ns_suffix}"
+# start-k8s.sh exports its PID_DIR; use it, so its --stop finds our pid file.
+PID_DIR="${PID_DIR:-${STELLA_AI_TEMP_DIR:-/tmp}/stella-ai-k8s${_ns_suffix}}"
 FOREGROUND=true  # Default to foreground mode
 mkdir -p "$PID_DIR"
 
@@ -50,7 +51,7 @@ cleanup() {
     done
 
     # Also kill any stray kubectl port-forward processes we started
-    pkill -f "kubectl port-forward -n $NAMESPACE" 2>/dev/null || true
+    pkill -f "kubectl port-forward -n $NAMESPACE " 2>/dev/null || true
 
     # Clean up PID file
     rm -f "$PID_DIR/daemon-pids.txt"
@@ -75,16 +76,25 @@ start_port_forward_loop() {
     # Disable set -e in this function - we expect kubectl to fail and want to handle it
     set +e
 
+    # Run kubectl and sleep in the background and `wait` for them: bash only
+    # runs a trap once a foreground child returns, so SIGTERM used to be
+    # ignored for as long as the forward stayed up (#737). On TERM/INT, end the
+    # current child and the loop.
+    local child=""
+    trap 'kill "$child" 2>/dev/null; exit 0' TERM INT
+
     echo "[$(date '+%H:%M:%S')] Starting port-forward loop for $service" >> "$log_file"
 
     while true; do
         echo "[$(date '+%H:%M:%S')] Connecting $service:$remote_port -> localhost:$local_port" >> "$log_file"
         last_start_time=$(date +%s)
 
-        # Run kubectl port-forward (blocks until it dies)
+        # Run kubectl port-forward (wait blocks until it dies)
         kubectl port-forward -n "$NAMESPACE" \
             --address 127.0.0.1 \
-            "svc/$service" "$local_port:$remote_port" >> "$log_file" 2>&1
+            "svc/$service" "$local_port:$remote_port" >> "$log_file" 2>&1 &
+        child=$!
+        wait "$child"
 
         exit_code=$?
         current_time=$(date +%s)
@@ -92,7 +102,9 @@ start_port_forward_loop() {
 
         echo "[$(date '+%H:%M:%S')] Port-forward died (exit: $exit_code, ran for ${runtime}s), restarting in ${backoff}s..." >> "$log_file"
 
-        sleep $backoff
+        sleep $backoff &
+        child=$!
+        wait "$child"
 
         # Exponential backoff up to max
         backoff=$((backoff * 2))
@@ -168,21 +180,24 @@ start_all() {
 stop_all() {
     echo -e "${YELLOW}Stopping port-forward daemons...${NC}"
 
-    # Kill daemon loops
+    # Kill daemon loops. Read the pid file in one go first: rm -f, because
+    # the file must not decide whether the remaining loops are stopped (#737).
     if [ -f "$PID_DIR/daemon-pids.txt" ]; then
-        while read pid; do
-            if [ ! -z "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
-                # Kill the entire process group
-                pkill -P "$pid" 2>/dev/null || true
+        local pids
+        pids=$(cat "$PID_DIR/daemon-pids.txt")
+        rm -f "$PID_DIR/daemon-pids.txt"
+        for pid in $pids; do
+            if ps -p "$pid" > /dev/null 2>&1; then
                 kill "$pid" 2>/dev/null || true
+                pkill -P "$pid" 2>/dev/null || true
                 echo -e "  ${GREEN}✓${NC} Stopped daemon PID: $pid"
             fi
-        done < "$PID_DIR/daemon-pids.txt"
-        rm "$PID_DIR/daemon-pids.txt"
+        done
     fi
 
-    # Also kill any stray kubectl port-forward processes
-    pkill -f "kubectl port-forward -n $NAMESPACE" 2>/dev/null || true
+    # Also kill any stray kubectl port-forward processes. The space after the
+    # namespace matters: without it, stopping ai-agents also hit ai-agents-*.
+    pkill -f "kubectl port-forward -n $NAMESPACE " 2>/dev/null || true
 
     echo -e "${GREEN}All port-forwards stopped${NC}"
 }
