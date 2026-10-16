@@ -137,7 +137,7 @@ Database migrations only go forward. To go back, you return to the previous rele
    kubectl -n ai-agents scale deploy --all --replicas=0
    ```
 
-3. Redeploy with an empty database. `--reset-db` deletes the database; the older release cannot run on the upgraded one:
+3. Redeploy with an empty database. `--reset-db` deletes the database, since the older release cannot run on the upgraded one. It also deletes the stored voice and speech models, so they download again on the next start, which takes a while:
 
    ```bash
    ./scripts/start-k8s.sh --reset-db -d

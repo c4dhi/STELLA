@@ -52,11 +52,14 @@ Saving a plan that contains `system_prompt` or `voice` is rejected, and the AI p
 Existing plans carried their own prompt and voice. After updating, run this once on the host:
 
 ```bash
+# Once: generate the database client on this machine
+npx prisma generate
+
 # Dry run: prints plan names, counts and persona names
-npx ts-node scripts/migrations/extract-plan-personas.ts
+node --import ./scripts/register-ts-node-esm.mjs scripts/migrations/extract-plan-personas.ts
 
 # Read the output, then apply
-npx ts-node scripts/migrations/extract-plan-personas.ts --apply
+node --import ./scripts/register-ts-node-esm.mjs scripts/migrations/extract-plan-personas.ts --apply
 ```
 
 Add `--show-prompts` to the dry run to also print the prompt text. The script turns each plan's and each public project's prompt and voice into a persona and links the plan to it, so existing plans keep their personality. It is safe to run again. A custom persona that a saved configuration set in the old configurator slot is not carried over. [Back up the database](../deployment/backup-restore.md) before you upgrade. [Upgrading Stella](../deployment/upgrading.md#130) shows how to point the script at the database with `DATABASE_URL`.
