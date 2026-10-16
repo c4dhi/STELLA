@@ -21,7 +21,7 @@ If it goes wrong, [roll back](#rolling-back) to the backup.
 **Read the changelog** section of every version between the one you run and the one you want, especially its "Upgrade notes". Find the version you run now with:
 
 ```bash
-git describe --tags
+git describe --tags --match 'v*'
 ```
 
 **Check Node on the host.** Since 1.3.0 the deploy runs database migrations with Prisma 7 on the host, and Prisma 7 needs Node 20.19+, 22.12+ or 24+:
