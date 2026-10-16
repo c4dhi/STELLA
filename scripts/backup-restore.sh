@@ -91,12 +91,19 @@ backup_helper_unavailable() {
 # (stale/missing node_modules, a production --omit=dev install without ts-node, a
 # future added dependency) up front, with one real check instead of a hardcoded
 # package list.
+# Run the host-side bundle helper. The backend is ESM, so plain `npx ts-node`
+# cannot load it; register ts-node's ESM loader the way package.json does
+# (#730). Run from the project root: the loader resolves from the cwd.
+bundle_helper() {
+    node --import "$SCRIPT_DIR/register-ts-node-esm.mjs" "$SCRIPT_DIR/backup-bundle.ts" "$@"
+}
+
 preflight_backup_helper() {
     local root; root="$(cd "$SCRIPT_DIR/.." && pwd)"
     ( cd "$root" && node -e "require.resolve('ts-node'); require.resolve('typescript')" ) >/dev/null 2>&1 \
         || backup_helper_unavailable "$root" "ts-node / typescript are not installed"
     local out
-    out="$( cd "$root" && npx --no-install ts-node "$SCRIPT_DIR/backup-bundle.ts" check 2>&1 )" \
+    out="$( cd "$root" && bundle_helper check 2>&1 )" \
         || backup_helper_unavailable "$root" "the backup helper failed to load" "$out"
 }
 require_host_tools
@@ -160,7 +167,7 @@ RESTORED_ENV="$WORK/restored.env"
 
 info "${EMOJI_GEAR:-} Unpacking bundle ..."
 BACKUP_PASSPHRASE="$PASSPHRASE" \
-    npx ts-node "$SCRIPT_DIR/backup-bundle.ts" prepare-restore "$BUNDLE" "$DATA_BUNDLE" "$RESTORED_ENV"
+    bundle_helper prepare-restore "$BUNDLE" "$DATA_BUNDLE" "$RESTORED_ENV"
 
 # 1. Restore config: back up the current env file, install the restored one,
 #    reload it, and recreate the secret with the restored values.
