@@ -155,6 +155,23 @@ def test_legal_critical_verdict_adds_must_avoid():
     assert any("legal" in item for item in result.directive.must_avoid)
 
 
+def test_medical_high_verdict_also_avoids_personal_tips():
+    # #705: a flagged medical concern must also hold back home remedies and
+    # personal tips, not just diagnoses/treatment plans — that's the gap that
+    # let a plan step's "give a small personal suggestion" through unchecked.
+    arb = Arbitration()
+    result = arb.resolve([_verdict("medical", "high", priority=95)])
+
+    assert any("tip" in item for item in result.directive.must_avoid)
+
+
+def test_legal_critical_verdict_also_avoids_personal_tips():
+    arb = Arbitration()
+    result = arb.resolve([_verdict("legal", "critical", priority=90)])
+
+    assert any("tip" in item for item in result.directive.must_avoid)
+
+
 def test_medical_low_verdict_does_not_add_must_avoid():
     # "low" risk from medical does not add a must_avoid constraint —
     # only "high" and "critical" trigger it.
@@ -486,6 +503,66 @@ def test_template_placeholders_compile():
     )
 
     assert result.directive.resolved_response == "Re: my chest hurts"
+
+
+def _multilingual_medical_config() -> dict:
+    directive = VerdictDirective(
+        action="override", template="Call for help.", template_i18n={"de": "Hol Hilfe."},
+    )
+    return {"medical": _expert("medical", 95, {"critical": directive})}
+
+
+def test_a_language_keyed_template_resolves_to_the_turns_language():
+    # #705: a verdict directive may carry template_i18n overrides of its plain
+    # template, resolved from sm_context["language"] — same pattern as
+    # _GATE_FAILURE_MESSAGES_BY_LANG. Kept as a separate field (not a dict
+    # template) because the Agent Configurator's TypeScript contract assumes
+    # template is always a plain string.
+    arb = Arbitration()
+
+    result = arb.resolve(
+        [_verdict("medical", "critical", priority=95)],
+        sm_context={"language": "de"},
+        expert_configs=_multilingual_medical_config(),
+    )
+
+    assert result.directive.resolved_response == "Hol Hilfe."
+
+
+def test_a_language_keyed_template_falls_back_to_english_for_an_unknown_language():
+    arb = Arbitration()
+
+    result = arb.resolve(
+        [_verdict("medical", "critical", priority=95)],
+        sm_context={"language": "fr"},
+        expert_configs=_multilingual_medical_config(),
+    )
+
+    assert result.directive.resolved_response == "Call for help."
+
+
+def test_a_language_keyed_template_falls_back_to_english_with_no_language_at_all():
+    arb = Arbitration()
+
+    result = arb.resolve(
+        [_verdict("medical", "critical", priority=95)],
+        expert_configs=_multilingual_medical_config(),
+    )
+
+    assert result.directive.resolved_response == "Call for help."
+
+
+def test_a_plain_string_template_is_unaffected_by_language_resolution():
+    arb = Arbitration()
+    configs = {"medical": _expert("medical", 95, {"critical": VerdictDirective("override", "Call for help.")})}
+
+    result = arb.resolve(
+        [_verdict("medical", "critical", priority=95)],
+        sm_context={"language": "de"},
+        expert_configs=configs,
+    )
+
+    assert result.directive.resolved_response == "Call for help."
 
 
 def test_explicit_inform_directive_suppresses_noise_fallback():

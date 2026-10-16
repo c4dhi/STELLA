@@ -70,6 +70,17 @@ class ResponseDirective:
             for item in self.must_avoid:
                 lines.append(f"Avoid: {item}")
 
+        # A flagged medical/legal concern is active this turn: no suggestion,
+        # personal tip, home remedy, or praise — in EITHER mode. Emitted here,
+        # not duplicated in the plan-mode and companion free-conversation
+        # guidelines templates, because both already surface {{directive}} (#705).
+        if self.tone == "cautious":
+            lines.append(
+                "A flagged concern is active: do not offer a suggestion, "
+                "personal tip, or home remedy, and do not praise what they "
+                "said — presence and care this turn, not advice."
+            )
+
         # Acknowledge what the user just provided
         if self.deliverable_signals:
             signals_str = ", ".join(self.deliverable_signals)
