@@ -38,7 +38,9 @@ env -i HOME="$HOME" PATH="$WORK/bin:$PATH" bash -c '
     KUBERNETES_NAMESPACE=reset-test RESET_DB_MODE=true DRY_RUN_MODE=false VERBOSE_MODE=false
     IMAGE_TAG=reset-test OS_TYPE=macos CHECKSUM_DIR="$2/checksums"
     get_all_image_names() { echo ""; }
+    set -e
     cleanup_for_rebuild
+    touch "$2/returned-ok"
 ' _ "$REPO" "$WORK" >/dev/null 2>&1 &
 pid=$!
 for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
@@ -51,6 +53,9 @@ check "the reset finishes within 30 s"             '! kill -0 "$pid" 2>/dev/null
 check "deployments are scaled to 0 before the PVCs" \
     'grep -n "" "$WORK/calls.log" | awk "/scale deploy.*replicas=0/{s=NR} /delete pvc/{d=NR} END{exit !(s && d && s<d)}"'
 check "the PVC delete has a timeout"                'grep -q "delete pvc.*--timeout" "$WORK/calls.log"'
+# Without --verbose its last line, `[[ $VERBOSE_MODE == true ]] && echo ...`,
+# returned 1, and under set -e every --rebuild and --reset-db died right after.
+check "it returns success under set -e"            '[[ -f "$WORK/returned-ok" ]]'
 
 if [[ $FAILED -ne 0 ]]; then echo "--- kubectl calls ---"; cat "$WORK/calls.log" 2>/dev/null; fi
 kill "$pid" 2>/dev/null
