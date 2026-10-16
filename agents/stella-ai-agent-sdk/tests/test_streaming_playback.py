@@ -1027,6 +1027,80 @@ def test_an_explicit_sentence_pin_is_unaffected_by_the_switch(monkeypatch):
     assert pipe._tts_playback == "sentence"
 
 
+def test_rtf_exactly_at_the_threshold_never_counts_as_slow():
+    # The code switches on `> 1.0`, never `>= 1.0` — real time itself is not slow.
+    pipe, _ = make_pipeline(SlowTTS())
+    for _ in range(10):
+        pipe._learn_preroll(_fake_utt(1000, rtf=1.0), bridged_ms=0.0)
+    assert pipe._tts_playback == "stream"
+
+
+def test_alternating_just_above_and_just_below_threshold_never_switches():
+    pipe, _ = make_pipeline(SlowTTS())
+    for _ in range(10):
+        pipe._learn_preroll(_fake_utt(1000, rtf=1.01), bridged_ms=0.0)
+        pipe._learn_preroll(_fake_utt(1000, rtf=0.99), bridged_ms=0.0)
+    assert pipe._tts_playback == "stream"
+
+
+@pytest.mark.asyncio
+async def test_auto_switches_through_real_playback_and_then_waits_for_whole_sentences():
+    """End-to-end through the real path, not _learn_preroll directly: a paced
+    SlowTTS slower than real time, three sentences through _play_utterance,
+    then confirm the NEXT one actually holds its first frame for the whole
+    synthesis — the behavioural effect of the switch, not just the flag."""
+    slow = SlowTTS(frames=45, gap=_PLAYOUT_FRAME_MS / 1000.0 * 2.0)  # RTF ~2
+    pipe, room = make_paced_pipeline(slow)
+
+    for i in range(3):
+        utt = pipe._begin_synthesis(f"slow sentence {i}")
+        await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=30)
+        if i < 2:
+            assert pipe._tts_playback == "stream", f"switched too early after sentence {i + 1}"
+    assert pipe._tts_playback == "sentence"
+
+    room.published.clear()
+    utt = pipe._begin_synthesis("a sentence after the switch")
+    play = asyncio.create_task(pipe._play_utterance(utt, source="response"))
+    await asyncio.sleep(slow.gap * 2)  # well into synthesis, nowhere near complete
+    assert not utt.complete, "test is not exercising the in-flight case"
+    assert len(room.published) == 0, "played before the post-switch sentence was complete"
+    await asyncio.wait_for(play, timeout=30)
+    assert len(room.published) > 0
+
+
+@pytest.mark.asyncio
+async def test_a_fast_run_through_real_playback_never_switches():
+    fast = SlowTTS(frames=45, gap=_PLAYOUT_FRAME_MS / 1000.0 * 0.3)  # RTF ~0.3
+    pipe, room = make_paced_pipeline(fast)
+    for i in range(5):
+        utt = pipe._begin_synthesis(f"fast sentence {i}")
+        await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=30)
+    assert pipe._tts_playback == "stream"
+
+
+@pytest.mark.asyncio
+async def test_pinned_preroll_does_not_block_the_auto_switch(monkeypatch):
+    monkeypatch.setenv("STELLA_TTS_PREROLL_MS", "300")
+    monkeypatch.delenv("STELLA_TTS_PLAYBACK", raising=False)
+    tts = SlowTTS(frames=45, gap=_PLAYOUT_FRAME_MS / 1000.0 * 2.0)
+    room = PacedRoom()
+    pipe = AudioPipeline(room, stt_client=None, tts_client=tts, session_id="s")
+    pipe._is_speaking = True
+    pipe._stop_speaking_event.clear()
+    pipe._play_allowed.set()
+    assert pipe._preroll.fixed and pipe._preroll.current_ms == 300
+    assert pipe._tts_playback_configured == "auto"
+
+    for _ in range(3):
+        utt = pipe._begin_synthesis("a sentence the provider cannot keep up with")
+        await asyncio.wait_for(pipe._play_utterance(utt, source="response"), timeout=30)
+
+    assert pipe._tts_playback == "sentence"
+    assert pipe._preroll.fixed and pipe._preroll.current_ms == 300, \
+        "the pre-roll pin must stay untouched by the playback-mode switch"
+
+
 @pytest.mark.asyncio
 async def test_unpinned_preroll_grows_after_a_slow_sentence(monkeypatch):
     """No STELLA_TTS_PREROLL_MS: a sentence synthesized slower than real time
