@@ -1279,6 +1279,9 @@ deploy_services() {
     restart_services
     wait_for_services
 
+    # The new release is running, so the images it replaced may be collected.
+    unpin_previous_k3s_images
+
     success "Deployment complete"
 }
 

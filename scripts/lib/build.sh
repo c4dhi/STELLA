@@ -1107,12 +1107,13 @@ build_images() {
     fi
     tag_agent_images_latest
 
-    # Prune build cache after rebuild to reclaim disk space
-    # Only on --rebuild since incremental builds benefit from the cache
-    if [[ "$REBUILD_MODE" == "true" && ${#REBUILT_SERVICES[@]} -gt 0 ]]; then
+    # Bound the build cache after every build that rebuilt something, not
+    # only on --rebuild: incremental deploys never trimmed it, and on the
+    # development server it reached 214 GB and pushed the image filesystem
+    # past the kubelet's 85% image-GC threshold (#725).
+    if [[ ${#REBUILT_SERVICES[@]} -gt 0 ]]; then
         # Bound the cache, do not delete it. A full prune meant the next
-        # build recompiled the entire CUDA/torch stack from nothing; the
-        # disk it was protecting has hundreds of GB free.
+        # build recompiled the entire CUDA/torch stack from nothing.
         docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
         verbose "build_images: build cache trimmed to 50GB"
     fi
@@ -1140,7 +1141,7 @@ tag_agent_images_latest() {
         if [[ "$OS_TYPE" == "linux" ]]; then
             # Tag inside containerd; the layers are already imported under
             # ${IMAGE_TAG}, so no second docker save/import.
-            sudo k3s ctr images tag --force \
+            sudo k3s ctr -n k8s.io images tag --force \
                 "docker.io/library/${agent}:${IMAGE_TAG}" \
                 "docker.io/library/${agent}:latest" >/dev/null 2>&1 \
                 || warning "Failed to tag ${agent}:latest in K3s containerd"
@@ -1153,10 +1154,69 @@ tag_agent_images_latest() {
 # K3s Image Import (Linux only)
 # =============================================================================
 
-# Import a single image to K3s with spinner
+# The kubelet's image GC deletes every image no pod uses yet once the image
+# filesystem passes 85%, and an image imported here is unused until rollout.
+# On the development server that deleted tts/stt/backend images minutes after
+# a successful import, so pods sat in ImagePullBackOff behind a green import
+# (#725). So every import is checked, retried once, and pinned: the CRI
+# reports an image labelled io.cri-containerd.pinned=pinned as pinned and the
+# kubelet never garbage-collects it. unpin_previous_k3s_images releases the
+# pins of older tags once a rollout is ready.
+K3S_PIN_LABEL="io.cri-containerd.pinned"
+
+k3s_image_ref() {
+    echo "docker.io/library/${1}:${IMAGE_TAG}"
+}
+
+k3s_has_image() {
+    sudo k3s ctr -n k8s.io images ls -q 2>/dev/null | grep -Fxq "$(k3s_image_ref "$1")"
+}
+
+# Import one image into K3s containerd, check it arrived, and pin it.
+# Retries the import once. Prints ctr's output and returns 1 on failure.
 import_single_image_to_k3s() {
-    local service="$1"
-    docker save "${service}:${IMAGE_TAG}" | sudo k3s ctr images import - >/dev/null 2>&1
+    local image="$1"
+    local ref out attempt
+    ref="$(k3s_image_ref "$image")"
+    for attempt in 1 2; do
+        out=$( { docker save "${image}:${IMAGE_TAG}" 2>/dev/null || echo "docker save ${image}:${IMAGE_TAG} failed" >&2; } \
+            | sudo k3s ctr -n k8s.io images import - 2>&1 )
+        if k3s_has_image "$image"; then
+            sudo k3s ctr -n k8s.io images label "$ref" "${K3S_PIN_LABEL}=pinned" >/dev/null 2>&1 \
+                || warning "Imported ${ref} but could not pin it against image GC"
+            return 0
+        fi
+        [[ $attempt -eq 1 ]] && warning "${ref} is not in K3s after import; retrying once"
+    done
+    echo "$out" | tail -5 >&2
+    return 1
+}
+
+# The per-image line that shows an image really is in K3s containerd.
+print_k3s_image_line() {
+    sudo k3s ctr -n k8s.io images ls 2>/dev/null | grep -F "$(k3s_image_ref "$1") " || true
+}
+
+# Release the GC pins on our images from earlier tags, once the release that
+# replaced them is running. :latest is kept pinned (see below). Without this, every release would stay pinned and
+# the disk would only ever fill.
+unpin_previous_k3s_images() {
+    [[ "$DRY_RUN_MODE" == "true" || "$OS_TYPE" != "linux" ]] && return 0
+    local all_images img ref
+    read -ra all_images <<< "$(get_all_image_names)"
+    while read -r ref; do
+        [[ -z "$ref" ]] && continue
+        for img in "${all_images[@]}"; do
+            # :latest is the agents' per-config fast path (tag_agent_images_latest)
+            # and shares the current release's digest; agent images sit unused
+            # between sessions, so they are the most exposed to image GC.
+            if [[ "$ref" == "docker.io/library/${img}:"* && "$ref" != "$(k3s_image_ref "$img")" \
+                  && "$ref" != "docker.io/library/${img}:latest" ]]; then
+                sudo k3s ctr -n k8s.io images label "$ref" "${K3S_PIN_LABEL}=" >/dev/null 2>&1 || true
+                verbose "unpinned ${ref}"
+            fi
+        done
+    done < <(sudo k3s ctr -n k8s.io images ls -q "labels.\"${K3S_PIN_LABEL}\"==pinned" 2>/dev/null)
 }
 
 import_images_to_k3s() {
@@ -1170,7 +1230,7 @@ import_images_to_k3s() {
         echo -ne "   ${ARROW} ${service}... "
 
         # Start import in background
-        docker save "${service}:${IMAGE_TAG}" 2>/dev/null | sudo k3s ctr images import - >/dev/null 2>&1 &
+        import_single_image_to_k3s "$service" 2>"/tmp/stella-k3s-import-${service}.log" &
         local pid=$!
 
         # Spinner animation
@@ -1187,10 +1247,15 @@ import_images_to_k3s() {
 
         if [[ $exit_code -eq 0 ]]; then
             printf "\r   ${ARROW} ${service}... ${GREEN}${CHECK}${NC}    \n"
+            echo "     $(print_k3s_image_line "$service")"
         else
             printf "\r   ${ARROW} ${service}... ${RED}${CROSS}${NC}    \n"
-            warning "Failed to import ${service} to K3s"
+            cat "/tmp/stella-k3s-import-${service}.log" >&2
+            error "$(k3s_image_ref "$service") did not reach K3s after two imports; its pods would sit in ImagePullBackOff. Check free space on the image filesystem (df -h /var/lib/rancher)."
+            rm -f "/tmp/stella-k3s-import-${service}.log"
+            exit 1
         fi
+        rm -f "/tmp/stella-k3s-import-${service}.log"
     done
 }
 
@@ -1214,7 +1279,7 @@ sync_images_to_k3s() {
         # Check if image exists in Docker
         if docker images -q "${img}:${IMAGE_TAG}" 2>/dev/null | grep -q .; then
             # Check if image exists in K3s containerd
-            if ! sudo k3s ctr images ls -q 2>/dev/null | grep -q "docker.io/library/${img}:${IMAGE_TAG}"; then
+            if ! k3s_has_image "$img"; then
                 images_to_sync+=("$img")
             fi
         fi
@@ -1228,7 +1293,7 @@ sync_images_to_k3s() {
             echo -ne "   ${ARROW} ${img}... "
 
             # Start sync in background
-            docker save "${img}:${IMAGE_TAG}" 2>/dev/null | sudo k3s ctr images import - >/dev/null 2>&1 &
+            import_single_image_to_k3s "$img" 2>"/tmp/stella-k3s-import-${img}.log" &
             local pid=$!
 
             # Spinner animation
@@ -1245,9 +1310,15 @@ sync_images_to_k3s() {
 
             if [[ $exit_code -eq 0 ]]; then
                 printf "\r   ${ARROW} ${img}... ${GREEN}${CHECK}${NC}    \n"
+                echo "     $(print_k3s_image_line "$img")"
             else
                 printf "\r   ${ARROW} ${img}... ${RED}${CROSS}${NC}    \n"
+                cat "/tmp/stella-k3s-import-${img}.log" >&2
+                error "$(k3s_image_ref "$img") did not reach K3s after two imports."
+                rm -f "/tmp/stella-k3s-import-${img}.log"
+                exit 1
             fi
+            rm -f "/tmp/stella-k3s-import-${img}.log"
         done
     fi
 }
@@ -1285,7 +1356,7 @@ cleanup_for_rebuild() {
     # Clean K3s containerd images (Linux)
     if [[ "$OS_TYPE" == "linux" ]]; then
         for img in "${images[@]}"; do
-            sudo k3s ctr images rm "docker.io/library/${img}:${IMAGE_TAG}" 2>/dev/null || true
+            sudo k3s ctr -n k8s.io images rm "docker.io/library/${img}:${IMAGE_TAG}" 2>/dev/null || true
         done
         [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: k3s images removed"
     fi
