@@ -390,4 +390,7 @@ cleanup() {
 # Run Main
 # =============================================================================
 
-main "$@"
+# Sourcing the script (scripts/namespace-flag-test.sh) loads its functions only.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
