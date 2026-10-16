@@ -5,7 +5,7 @@ title: "🏭 Production Deployment"
 
 # Production Deployment Guide
 
-This guide walks you through deploying STELLA on a production server with GPU support, Kubernetes (K3s), and LiveKit for real-time voice interactions.
+This guide walks you through deploying STELLA on a production server with GPU support, Kubernetes (K3s), and LiveKit for real-time voice interactions. To update a server that already runs Stella, see [Upgrading Stella](./upgrading.md).
 
 :::warning
 STELLA uses Caddy as its sole reverse proxy. Do **not** install nginx. All TLS termination and routing is handled by Caddy via the [STELLA_livekit](https://github.com/c4dhi/STELLA_livekit) repository.
