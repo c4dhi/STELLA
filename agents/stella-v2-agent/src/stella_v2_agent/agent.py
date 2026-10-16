@@ -62,6 +62,7 @@ from stella_v2_agent.companion import (
     ExitStep,
     commands_from,
     decision as companion_decision,
+    started_label,
     woken_tag,
     exit_dialogue,
     start_dialogue,
@@ -1388,10 +1389,14 @@ class StellaV2Agent(BaseAgent):
             return
         activity = self.companion.find(plan_id)
         if activity and activity.get("plan"):
-            self.companion.resume(activity)
+            started_at = await self._find_activity_start(activity)
+            self.companion.resume(activity, started_at=started_at)
             self._plan_config = activity["plan"]
             self._resolve_persona_in_plan_text(self._plan_config)
-            logger.info("Resumed mid-activity after restart: %s", self.companion.running_title)
+            logger.info(
+                "Resumed mid-activity after restart: %s (started_at=%s)",
+                self.companion.running_title, started_at,
+            )
             await self._set_sleep_allowed(False)
             return
         # The allow-list changed under a running activity (redeploy with a
@@ -1405,6 +1410,33 @@ class StellaV2Agent(BaseAgent):
         )
         if self.sm_client and not await self._cleared():
             logger.error("Could not clear the stale activity %s", plan_id)
+
+    async def _find_activity_start(self, activity: Dict[str, Any]) -> Optional[datetime]:
+        """When this activity actually began, for a companion rehydrating
+        mid-activity (#640): the state-machine row says only that a plan is
+        loaded, not since when, and the pod's own clock remembers nothing
+        from before the restart.
+
+        Its own "Started" decision tag does survive — debug messages are
+        persisted like any other turn — so the most recent one naming this
+        activity is read back. None when none is found (pruned history, or a
+        session old enough to predate the tag), in which case the caller
+        falls back to the unscoped history this always used to have.
+        """
+        title = activity.get("title")
+        if not title or not self.has_history:
+            return None
+        try:
+            messages = await self.get_chat_history(include_debug=True, limit=200)
+        except Exception as e:
+            logger.warning("Could not look up when %r started: %s", title, e)
+            return None
+        label = started_label(title)
+        for msg in reversed(messages):
+            decision = ((msg.envelope.get("data") or {}).get("metadata") or {}).get("decision") or {}
+            if decision.get("kind") == "activity_started" and decision.get("label") == label:
+                return parse_timestamp(msg.timestamp)
+        return None
 
     def _companion_progress_metadata(self) -> Optional[Dict[str, Any]]:
         """What the progress panel needs to know about companion state, on every
