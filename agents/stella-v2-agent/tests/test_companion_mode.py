@@ -6,9 +6,11 @@ process() are in test_companion_turns.py.
 """
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 
+from stella_agent_sdk.messages.types import ChatMessage
 from stella_v2_agent.agent import StellaV2Agent
 from stella_v2_agent.companion import (
     Change,
@@ -415,10 +417,17 @@ def test_leaving_folds_the_run_into_one_segment():
     assert companion.segments[-1].collected == {"nickname": "Fee"}
 
 
-def test_a_resumed_activity_has_no_known_start():
+def test_a_resumed_activity_has_no_known_start_by_default():
     companion = _free()
     companion.resume(ACTIVITIES[0])
     assert companion.running_title == "Memory Game" and companion.started_at is None
+
+
+def test_a_resumed_activity_can_be_given_its_real_start():
+    companion = _free()
+    then = datetime.now(timezone.utc) - timedelta(minutes=20)
+    companion.resume(ACTIVITIES[0], started_at=then)
+    assert companion.started_at == then
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +678,7 @@ def _agent(companion=True):
     agent._newest_history_at = None
     agent._persona_config = None
     agent.sm_client = _FakeSM()
+    agent._history_client = None
     return agent
 
 
@@ -704,6 +714,57 @@ async def test_an_activity_no_longer_offered_is_cleared_not_left_running():
     await agent._rehydrate_active_activity({"plan_id": "removed-plan"})
     assert agent.companion.active is None
     assert agent.sm_client.cleared is True
+
+
+def _decision_message(timestamp: str, label: str) -> ChatMessage:
+    """A persisted debug message carrying a decision tag, as the backend
+    hands it back from ``get_chat_history(include_debug=True)``."""
+    return ChatMessage(
+        id="d1",
+        timestamp=timestamp,
+        envelope={
+            "type": "debug",
+            "data": {
+                "content": label,
+                "component": "companion_router",
+                "level": "info",
+                "metadata": {
+                    "component": "companion_router",
+                    "level": "info",
+                    "decision": {"kind": "activity_started", "label": label},
+                },
+            },
+        },
+        role="system",
+        content=label,
+        message_type="debug",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_restart_mid_activity_recovers_the_real_start_time():
+    # #640: the state-machine row says only that a plan is loaded, not since
+    # when — its own "Started" decision tag is what survives the pod.
+    agent = _agent()
+    agent._history_client = object()
+    agent.get_chat_history = AsyncMock(return_value=[
+        _decision_message("2026-10-16T01:00:00Z", 'Started "Fitness Check-in"'),
+        _decision_message("2026-10-16T01:00:00Z", 'Started "Memory Game"'),
+    ])
+    await agent._rehydrate_active_activity({"plan_id": "memory"})
+    assert agent.companion.started_at == datetime(2026, 10, 16, 1, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_a_restart_mid_activity_falls_back_when_no_tag_survives():
+    # Pruned history, or a session old enough to predate the tag: unscoped
+    # history, exactly as before this was recoverable at all.
+    agent = _agent()
+    agent._history_client = object()
+    agent.get_chat_history = AsyncMock(return_value=[])
+    await agent._rehydrate_active_activity({"plan_id": "memory"})
+    assert agent.companion.running_title == "Memory Game"
+    assert agent.companion.started_at is None
 
 
 @pytest.mark.asyncio
