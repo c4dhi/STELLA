@@ -566,7 +566,7 @@ EOF
 # =============================================================================
 
 stop_services() {
-    info "${EMOJI_STOP} Stopping STELLA services..."
+    info "${EMOJI_STOP} Stopping STELLA services in namespace '${KUBERNETES_NAMESPACE:-ai-agents}'..."
 
     # Kill port-forward processes
     if [[ -f "${PID_DIR}/port-forward.pid" ]]; then
