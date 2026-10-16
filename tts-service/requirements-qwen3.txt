@@ -12,6 +12,8 @@ faster-qwen3-tts>=0.5.4
 # transformers 5.17.0 breaks model loading. Its Mimi weight init calls
 # qwen-tts's rope compat shim, which reads MimiConfig.rope_theta and raises
 # AttributeError; tts-service then starts anyway with "Provider: none" and
-# every session is silent. Production loads the model on 5.16.1 with the same
-# qwen-tts-hf. Lift this only after loading the model on a GPU host.
+# every session is silent. 5.20.0 is no better: importing qwen_tts fails with
+# "NameError: name 'nn' is not defined" (tested on the development T4 with
+# faster-qwen3-tts 0.5.4, 16 Oct 2026, #665). Production and development load
+# the model on 5.16.1. Lift this only after loading the model on a GPU host.
 transformers>=5.16.1,<5.17
