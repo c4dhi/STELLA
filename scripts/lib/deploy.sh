@@ -910,16 +910,21 @@ run_database_migrations() {
             fi
         fi
 
-        # A database that has only just started can refuse connections for a
-        # few seconds (a first deploy, or after --reset-db). Wait and retry.
+        # On a database that has only just started (a first deploy, or after
+        # --reset-db) the port-forward opened during startup stays broken:
+        # every retry through it gets P1001, while a new one connects. So
+        # reopen the port-forward, then retry.
         if echo "$migration_output" | grep -qE "P1001|P1017|Can't reach database server" 2>/dev/null; then
             retry_count=$((retry_count + 1))
             if [[ $retry_count -lt $max_retries ]]; then
                 printf "\r   ${ARROW} Database migrations... ${YELLOW}waiting for the database${NC} ($retry_count/$max_retries)\n"
+                cleanup_port_forward
                 sleep "${MIGRATION_RETRY_DELAY:-5}"
-                echo -ne "   ${ARROW} Database migrations... "
-                set -e
-                continue
+                if setup_port_forward; then
+                    echo -ne "   ${ARROW} Database migrations... "
+                    set -e
+                    continue
+                fi
             fi
         fi
         set -e

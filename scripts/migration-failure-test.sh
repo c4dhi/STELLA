@@ -30,10 +30,10 @@ cat > "$WORK/bin/kubectl" <<EOF
 touch "$WORK/forward-started"
 while :; do sleep 1; done
 EOF
-# nc -z: the port is free until the forward has started, then "open".
+# nc -z: the port is open while a port-forward stub is running.
 cat > "$WORK/bin/nc" <<EOF
 #!/usr/bin/env bash
-[[ -f "$WORK/forward-started" ]]
+pgrep -f "$WORK/bin/kubectl" >/dev/null
 EOF
 chmod +x "$WORK/bin/"*
 
