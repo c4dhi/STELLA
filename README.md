@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/c4dhi/STELLA/stargazers"><img src="https://img.shields.io/github/stars/c4dhi/STELLA?style=flat-square" alt="GitHub Stars"></a>
+  <a href="https://github.com/c4dhi/STELLA"><img src="https://img.shields.io/github/stars/c4dhi/STELLA?style=flat-square" alt="GitHub Stars"></a>
   <a href="https://github.com/c4dhi/STELLA/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-a855f7?style=flat-square" alt="License: MIT"></a>
   <!-- Query-param badge, not the path form: in "badge/version-1.1.0-blue"
        release-please reads "1.1.0-blue" as a semver with a "blue" prerelease and
@@ -63,7 +63,7 @@ git clone https://github.com/c4dhi/STELLA.git && cd STELLA
 
 **Frontend** at `http://localhost:5173` · **API** at `http://localhost:3000`
 
-> New here? The [Getting Started](https://c4dhi.github.io/STELLA/docs/getting-started/prerequisites) guide walks you through everything — prerequisites, LiveKit setup, and deploying your first agent.
+> New here? The [Getting Started](https://c4dhi.github.io/STELLA/docs/getting-started/quick-start) guide walks you through everything — prerequisites, LiveKit setup, and deploying your first agent.
 
 ## 🏗️ Architecture
 
@@ -83,11 +83,11 @@ Full docs live at **[c4dhi.github.io/STELLA](https://c4dhi.github.io/STELLA/)**.
 
 | | Section | What you'll find |
 |---|---------|-----------------|
-| 🚀 | [Getting Started](https://c4dhi.github.io/STELLA/docs/getting-started/prerequisites) | Prerequisites, installation, first agent |
+| 🚀 | [Getting Started](https://c4dhi.github.io/STELLA/docs/getting-started/quick-start) | Prerequisites, installation, first agent |
 | 🏗️ | [Architecture](https://c4dhi.github.io/STELLA/docs/architecture/overview) | System design and component deep-dive |
-| 🤖 | [Building Agents](https://c4dhi.github.io/STELLA/docs/building-agents/agent-overview) | Create your own conversational agents |
+| 🤖 | [Building Agents](https://c4dhi.github.io/STELLA/docs/agent-sdk/building-custom-agent) | Create your own conversational agents |
 | 📦 | [Agent SDK Reference](https://c4dhi.github.io/STELLA/docs/agent-sdk/overview) | Python SDK API reference |
-| 🚢 | [Deployment](https://c4dhi.github.io/STELLA/docs/deployment/overview) | Production deployment guide |
+| 🚢 | [Deployment](https://c4dhi.github.io/STELLA/docs/deployment/production) | Production deployment guide |
 | 🤝 | [Contributing](https://c4dhi.github.io/STELLA/docs/contributing) | How to get involved |
 
 ## 🤝 Contributing

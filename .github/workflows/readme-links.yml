@@ -1,0 +1,31 @@
+name: README links
+
+# The README links into the published docs site, so a renamed docs page breaks
+# it without the README changing. Checked when the README changes and weekly
+# against the live site.
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - '.github/workflows/readme-links.yml'
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check README links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # localhost URLs are setup instructions, not links.
+          args: --no-progress --exclude '^https?://localhost' README.md
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
