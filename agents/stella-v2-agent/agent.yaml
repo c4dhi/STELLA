@@ -268,7 +268,7 @@ pipelineSchema:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "System prompt for the bridge. Supports {{conversationHistory}}, {{isBargeIn}}, {{allowAppraisal}}, {{userInput}} and {{bridgeMode}} — the per-turn instruction saying whether this turn wants a bare beat, a full reception, or a visible pause. If your prompt omits {{bridgeMode}} it is appended automatically, so the per-turn behaviour still applies."
+          description: "System prompt for the bridge. Supports {{conversationHistory}}, {{isBargeIn}}, {{activitiesOnOffer}} (companion mode, free conversation, activities on offer — true before the system has decided whether a named activity matches precisely enough to start outright, #87), {{allowAppraisal}}, {{userInput}} and {{bridgeMode}} — the per-turn instruction saying whether this turn wants a bare beat, a full reception, or a visible pause. If your prompt omits {{bridgeMode}} it is appended automatically, so the per-turn behaviour still applies."
           default: |
             You just heard the user and you're about to answer. First you say the opening beat of your reply the way a real person would — spoken aloud on its own, while the rest of the answer is still being prepared.
             {{#if conversationHistory}}
@@ -293,6 +293,10 @@ pipelineSchema:
             {{#if bridgeMode}}
 
             {{bridgeMode}}
+            {{/if}}
+            {{#if activitiesOnOffer}}
+
+            OVERRIDING EVERY RULE ABOVE, INCLUDING "react to the specific thing they said": they may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on, and that decision is made after you speak — a confirmation question may follow what you say. So say nothing about what they just asked for: do not acknowledge it, do not confirm you understood it, do not repeat any part of it back in your own words either, do not offer to help with it, and do not say you will or can do it — that is also a promise, and it is not yours to make here. The shortest possible neutral beat is all that's wanted here — no example is given, for the same reason as above.
             {{/if}}
             Output ONLY the bridge. No quotes, no labels.
         - id: model

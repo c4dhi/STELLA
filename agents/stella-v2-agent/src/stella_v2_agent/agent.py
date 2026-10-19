@@ -276,6 +276,7 @@ class StellaV2Agent(BaseAgent):
             "isBargeIn": is_barge_in,
             "bargeInTranscript": input.text if is_barge_in else "",
             "userInput": input.text,
+            "activitiesOnOffer": self._activities_on_offer(),
         }
 
         # Handle on the concurrently-running Expert Pool (#455). Declared out
@@ -1757,6 +1758,19 @@ class StellaV2Agent(BaseAgent):
         if activity_language and activity_language != resolved_language:
             return activity_language
         return None
+
+    def _activities_on_offer(self) -> bool:
+        """Whether this turn could be the user trying to pick an offered
+        activity (#87): companion mode, not already in one, with activities
+        actually on offer. The bridge reads this (``{{activitiesOnOffer}}``)
+        to never agree to or name a specific activity as settled, because
+        ``companion.decide()`` — which alone judges whether the title was
+        said precisely enough to start it outright, or only closely enough to
+        ask about — has not run yet when the bridge is generated, and a
+        bridge that already committed cannot be un-said once the answer
+        turns out to be "ask first".
+        """
+        return bool(self._companion_mode and not self.companion.active and self.companion.activities)
 
     async def _resolve_language(self, input: AgentInput) -> str:
         """Resolve this turn's language and, if the free decode was doubtful,
