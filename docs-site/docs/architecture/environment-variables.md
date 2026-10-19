@@ -332,6 +332,10 @@ While the gate is closed:
 - **No barge-in** callbacks fired (when `INTERRUPT_MODE=none`)
 - **STT stream stays alive** (no reconnection cost when gate re-opens)
 
+A short utterance that begins and ends while the gate is closed, without passing `BARGE_IN_MIN_SPEECH_MS`, is not taken as a turn, even when it was a real answer like "okay" spoken while the agent was still waiting for its reply. It still appears in the transcript, marked "not counted as a turn", and the agent log has a `[GATE] Not taken as a turn` line for it.
+
+In the v2 agent the gate stays closed from the bridge until the reply has been spoken, so a slow reply call keeps it closed longer. The reply call gets 4 s to its first streamed token, then one retry with 2 s (`[REPLY-TIMEOUT]` and `[REPLY-RETRY]` in the agent log, with the turn). If the retry stalls too, the agent says a short fallback line, the gate opens and it listens again. A reply that has started streaming is never cut off for being long.
+
 When `TTS_ENABLED=false`, the gate still discards finals during processing but allows partials through to LiveKit (lighter turn management since processing completes quickly without narration).
 
 ### Manifest Declaration

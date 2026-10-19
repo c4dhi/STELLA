@@ -1453,8 +1453,12 @@ class AudioPipeline:
                 # Turn-based mode — either configured that way, or voice
                 # interruptions are in a post-storm cooldown. Ignore user audio
                 # while speaking; anything they said that mattered is carried
-                # over as the next turn by the branch above.
+                # over as the next turn by the branch above. A final that gets
+                # here is dropped, so it is shown and logged as such (#684).
                 if not self._barge_in_available():
+                    if event.is_final and (event.text or "").strip():
+                        self._log_not_taken(event)
+                        await self._publish_user_transcript(event, discarded=True)
                     continue
 
                 text = (event.text or "").strip()
@@ -1533,6 +1537,8 @@ class AudioPipeline:
                 #
                 # Partials stay unmarked: they are still live, and the final
                 # replaces them by transcript_id.
+                if event.is_final and text:
+                    self._log_not_taken(event)
                 await self._publish_user_transcript(event, discarded=event.is_final)
                 continue
 
@@ -1615,6 +1621,19 @@ class AudioPipeline:
                     await self._debounce_transcript(event)
                 else:
                     await self._transcript_queue.put(event)
+
+    def _log_not_taken(self, event: TranscriptEvent) -> None:
+        """Log a final dropped because the agent held the floor (#684).
+
+        Short, never past the interruption threshold, begun and ended while the
+        gate was closed: a backchannel by design. But when the reply call
+        stalls, that window is long enough for a real answer ("okay") to fall
+        into it, and the drop used to leave no line in the log at all.
+        """
+        logger.info(
+            f"[GATE] Not taken as a turn (agent's turn, gate closed): "
+            f"'{(event.text or '').strip()[:60]}'"
+        )
 
     async def _resolve_voice_barge_in(self, event: TranscriptEvent) -> None:
         """Decide what a confirmed voice interruption actually was, now that its

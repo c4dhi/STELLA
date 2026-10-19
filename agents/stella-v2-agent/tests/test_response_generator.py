@@ -798,7 +798,7 @@ async def _messages_sent(monkeypatch, directive, bridge=""):
 
     sent = {}
 
-    async def fake_stream(_service, messages, _config, component_name=""):
+    async def fake_stream(_service, messages, _config, component_name="", **_budgets):
         sent["messages"] = messages
         yield "Sleep well.", True
 
