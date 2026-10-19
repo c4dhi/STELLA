@@ -1816,8 +1816,9 @@ class StellaV2Agent(BaseAgent):
                 )
                 input.text = redecoded_text
         # Kept with the turn's stored message so the switching rule can be
-        # checked against real sessions (#91). Never fails the turn.
-        await self.publish_turn_language(
+        # checked against real sessions (#91). Sent in the background, so it
+        # neither delays nor fails the turn.
+        self.send_turn_language(
             input,
             original_text=original_text,
             resolved_language=resolved_language,

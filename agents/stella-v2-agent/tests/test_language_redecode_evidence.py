@@ -11,6 +11,7 @@ resolver ends up in exactly the state a free-decode-only run would reach —
 while the turn's displayed text was still corrected.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -106,7 +107,8 @@ async def test_redecode_result_only_replaces_text_when_non_empty():
 @pytest.mark.asyncio
 async def test_a_redecoded_turn_publishes_its_language_record():
     agent = _agent_with_locked_german()
-    agent.audio.redecode_utterance_audio = AsyncMock(return_value="ja das stimmt so")
+    # Five words against the free decode's four, so counting the wrong text fails.
+    agent.audio.redecode_utterance_audio = AsyncMock(return_value="ja das stimmt so genau")
     agent.audio.utterance_speech_seconds = MagicMock(return_value=1.234)
     agent.audio.publish_turn_language = AsyncMock()
 
@@ -114,6 +116,8 @@ async def test_a_redecoded_turn_publishes_its_language_record():
         "s1", "yeah that is right", turn_id="t9", detected_language="en", language_confidence=0.6,
     )
     await agent._resolve_language(doubtful)
+    assert doubtful.text == "ja das stimmt so genau"  # the re-decode did replace it
+    await asyncio.sleep(0)  # the record is sent off the turn's path
 
     agent.audio.publish_turn_language.assert_awaited_once_with({
         "transcript_id": "t9",
@@ -139,6 +143,7 @@ async def test_a_free_decoded_turn_publishes_redecoded_false():
         detected_language="de", language_confidence=0.98,
     )
     await agent._resolve_language(confident)
+    await asyncio.sleep(0)
 
     record = agent.audio.publish_turn_language.await_args.args[0]
     assert record["redecoded"] is False
@@ -158,3 +163,22 @@ async def test_a_failed_publish_does_not_cost_the_turn():
         detected_language="de", language_confidence=0.98,
     )
     assert await agent._resolve_language(turn) == "de"
+    await asyncio.sleep(0)
+    agent.audio.publish_turn_language.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_the_record_does_not_hold_up_the_turn():
+    # Sent in the background: _resolve_language returns before the publish runs.
+    agent = _agent_with_locked_german()
+    agent.audio.utterance_speech_seconds = MagicMock(return_value=None)
+    agent.audio.publish_turn_language = AsyncMock()
+
+    turn = AgentInput.text_input(
+        "s1", "Ich gehe heute im Park spazieren", turn_id="t12",
+        detected_language="de", language_confidence=0.98,
+    )
+    await agent._resolve_language(turn)
+    agent.audio.publish_turn_language.assert_not_awaited()
+    await asyncio.sleep(0)
+    agent.audio.publish_turn_language.assert_awaited_once()

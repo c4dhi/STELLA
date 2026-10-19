@@ -298,6 +298,29 @@ class BaseAgent(ABC):
         """Whether the audio pipeline is available."""
         return self._audio_pipeline is not None
 
+    def send_turn_language(
+        self,
+        input: AgentInput,
+        *,
+        original_text: str,
+        resolved_language: str,
+        redecoded: bool,
+    ) -> None:
+        """Send this turn's language record in the background, so the publish
+        never sits on the turn's path to its reply (see ``publish_turn_language``)."""
+        if not self.has_audio:
+            return
+        task = asyncio.create_task(self.publish_turn_language(
+            input,
+            original_text=original_text,
+            resolved_language=resolved_language,
+            redecoded=redecoded,
+        ))
+        # Hold a reference until it finishes, or the task can be collected early.
+        pending = self.__dict__.setdefault("_turn_language_tasks", set())
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
     async def publish_turn_language(
         self,
         input: AgentInput,
