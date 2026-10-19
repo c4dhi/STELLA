@@ -30,6 +30,7 @@ import { ProjectInvitationsModule } from './project-invitations/project-invitati
 import { AgentRegistryModule } from './agent-registry/agent-registry.module.js';
 import { StateMachineModule } from './state-machine/state-machine.module.js';
 import { AdminModule } from './admin/admin.module.js';
+import { PlatformSettingsModule } from './platform-settings/platform-settings.module.js';
 import { AgentConfigurationsModule } from './agent-configurations/agent-configurations.module.js';
 import { HealthModule } from './health/health.module.js';
 import { TtsModule } from './tts/tts.module.js';
@@ -69,6 +70,7 @@ const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : 
     AgentRegistryModule,
     StateMachineModule,
     AdminModule,
+    PlatformSettingsModule,
     AgentConfigurationsModule,
     HealthModule,
     TtsModule,
