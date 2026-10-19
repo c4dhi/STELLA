@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
-
-export type TtsPlaybackMode = 'auto' | 'stream' | 'sentence'
+import { useToastStore } from '../../store/toastStore'
+import { apiClient } from '../../services/ApiClient'
+import type { PlatformSettings, TtsPlaybackMode } from '../../lib/api-types'
 
 const containerVariants = {
   hidden: {},
@@ -43,31 +44,46 @@ const playbackOptions: { value: TtsPlaybackMode; label: string; description: str
   },
 ]
 
-interface PinnedDeployment {
-  name: string
-  project: string
-  mode: TtsPlaybackMode
-}
-
-interface PlatformSettingsSectionProps {
-  // Mockup data for #89; the build replaces these with GET /admin/platform-settings.
-  initialMode?: TtsPlaybackMode
-  updatedBy?: string
-  updatedAt?: string
-  pinned?: PinnedDeployment[]
-}
-
-export default function PlatformSettingsSection({
-  initialMode = 'auto',
-  updatedBy,
-  updatedAt,
-  pinned = [],
-}: PlatformSettingsSectionProps) {
+export default function PlatformSettingsSection() {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
-  const [savedMode, setSavedMode] = useState<TtsPlaybackMode>(initialMode)
-  const [mode, setMode] = useState<TtsPlaybackMode>(initialMode)
+  const { addToast } = useToastStore()
+  const [settings, setSettings] = useState<PlatformSettings | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [savedMode, setSavedMode] = useState<TtsPlaybackMode>('auto')
+  const [mode, setMode] = useState<TtsPlaybackMode>('auto')
+  const [saving, setSaving] = useState(false)
   const [showPinned, setShowPinned] = useState(false)
+
+  const apply = (next: PlatformSettings) => {
+    setSettings(next)
+    setSavedMode(next.ttsPlayback ?? 'auto')
+    setMode(next.ttsPlayback ?? 'auto')
+  }
+
+  useEffect(() => {
+    apiClient.getPlatformSettings()
+      .then(apply)
+      .catch(err => setLoadError(err instanceof Error ? err.message : 'Could not load platform defaults'))
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      apply(await apiClient.updatePlatformSettings(mode))
+      addToast({ message: 'Voice playback default saved. It applies from the next session.', type: 'success' })
+    } catch (err) {
+      addToast({ message: err instanceof Error ? err.message : 'Could not save', type: 'error' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const pinned = settings?.pinnedDeployments ?? []
+  const updatedBy = settings?.updatedBy
+  const updatedAt = settings?.updatedAt
+    ? new Date(settings.updatedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+    : null
   const dirty = mode !== savedMode
   const labelOf = (m: TtsPlaybackMode) => playbackOptions.find(o => o.value === m)?.label ?? m
 
@@ -86,6 +102,10 @@ export default function PlatformSettingsSection({
           Apply to every deployment that doesn’t set its own value. Only system admins see this page.
         </p>
       </motion.div>
+
+      {loadError && (
+        <p className="text-body-sm text-red-500 mb-4">{loadError}</p>
+      )}
 
       <motion.div
         className={`p-6 rounded-2xl ${
@@ -109,6 +129,7 @@ export default function PlatformSettingsSection({
                 role="radio"
                 aria-checked={isSelected}
                 onClick={() => setMode(option.value)}
+                disabled={!settings}
                 className={`w-full flex items-start gap-4 p-4 rounded-xl text-left transition-all duration-200 ${
                   isSelected
                     ? isDark
@@ -216,11 +237,11 @@ export default function PlatformSettingsSection({
               </button>
             )}
             <button
-              onClick={() => setSavedMode(mode)}
-              disabled={!dirty}
-              className={`btn-primary ${dirty ? '' : 'opacity-40 cursor-not-allowed'}`}
+              onClick={() => void save()}
+              disabled={!dirty || saving}
+              className={`btn-primary ${dirty && !saving ? '' : 'opacity-40 cursor-not-allowed'}`}
             >
-              Save
+              {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>

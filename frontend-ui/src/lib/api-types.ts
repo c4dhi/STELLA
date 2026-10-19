@@ -1779,3 +1779,24 @@ export interface MediaTestSession {
   expiresAt: string
   ttlSeconds: number
 }
+
+// ============================================================================
+// Platform defaults (Settings → Platform Defaults, system admins only)
+// ============================================================================
+
+export type TtsPlaybackMode = 'auto' | 'stream' | 'sentence'
+
+export interface PinnedDeployment {
+  name: string
+  project: string
+  mode: TtsPlaybackMode
+}
+
+export interface PlatformSettings {
+  /** null = never set: the built-in default (auto) applies. */
+  ttsPlayback: TtsPlaybackMode | null
+  updatedAt: string | null
+  updatedBy: string | null
+  /** Deployments that set their own mode and so keep it. */
+  pinnedDeployments: PinnedDeployment[]
+}
