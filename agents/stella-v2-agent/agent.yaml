@@ -564,20 +564,29 @@ pipelineSchema:
       max: 1
       step: 0.05
       default: 0.4
-    switch_threshold:
-      label: "Switch threshold"
-      description: "Min confidence to switch an already-confirmed language (higher than detect, so a stray word can't flip it)."
+    text_bar:
+      label: "Keep-text bar"
+      description: "Below this confidence (or too short), a turn's own transcript is re-decoded forced into the current lock for display; at or above it, the turn's own free decode is shown as-is. Cosmetic only — does not gate whether the lock itself moves (see switch_score)."
       type: number
       min: 0
       max: 1
       step: 0.05
-      default: 0.6
-    debounce:
-      label: "Switch debounce"
-      description: "Consecutive confident detections required before switching language."
-      type: integer
-      min: 1
-      default: 1
+      default: 0.85
+    decay:
+      label: "Challenger decay"
+      description: "How much of a building challenger-language score survives a turn that isn't itself a vote for it. Lower = evidence fades faster between confident off-language turns."
+      type: number
+      min: 0
+      max: 1
+      step: 0.05
+      default: 0.5
+    switch_score:
+      label: "Switch score"
+      description: "An already-confirmed language switches once a challenger language's running score (decaying each turn, rising by each vote's own confidence) crosses this. Replaces a fixed consecutive-turn count: evidence accumulates across a mixed run rather than needing a streak."
+      type: number
+      min: 0
+      step: 0.05
+      default: 1.5
 
 # SDK prompt-compiler version this agent resolves {{placeholder}} tokens with.
 # 1.1.0 adds the {{persona.*}} namespace. 1.0.0 stays registered in the SDK, so

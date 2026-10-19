@@ -11,6 +11,12 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `LanguageResolver` switches the session language on a decaying confidence score (`text_bar` / `decay` / `switch_score`) instead of a fixed confidence threshold plus a count of consecutive turns (`switch_threshold` / `debounce`, removed). Evidence against the current lock now accumulates across a mixed run of turns rather than needing a streak, and a genuine switch spoken at merely moderate, sustained confidence can no longer be structurally unable to switch at all. A doubtful turn's own transcript can also be re-decoded forced into the current lock for display, via a new STT `Redecode` RPC — this never feeds back into the switching decision, which only ever sees the original free decode.
+
+  **For researchers running multilingual studies:** a session's transcription no longer re-guesses the language on every turn in free conversation (no declared plan language); it holds the detected language through short or ambiguous turns and follows a real language switch within a few turns, the same way spoken replies already did. `switch_threshold`/`debounce` in a pipeline configuration are now silently ignored — see the platform changelog for the equivalent `text_bar`/`decay`/`switch_score` values if you set them explicitly.
+
 ## [0.7.0] - 2026-10-07
 
 Ships with STELLA 1.3.0. What changes for agent authors:

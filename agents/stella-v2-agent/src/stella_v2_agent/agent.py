@@ -317,33 +317,11 @@ class StellaV2Agent(BaseAgent):
                 self.audio.set_stt_language(self.language_resolver.forced)
             # Prefer STT's independent acoustic detection (voice); fall back to
             # the text classifier when absent (typed input / no signal, §8.3).
-            meta = input.metadata or {}
-            # Logged on every turn so a threshold for "too doubtful to act on"
-            # can be set from real sessions rather than guessed.
-            stt_confidence = float(meta.get("stt_confidence") or 0.0)
-            logger.info("Transcript confidence %.2f for %r", stt_confidence, input.text[:60])
-            detected_language = meta.get("detected_language") or None
-            language_confidence = float(meta.get("language_confidence") or 0.0)
-            language_signal = (detected_language, language_confidence) if detected_language else None
-            # Decide BEFORE resolve(): the gate reads the ORIGINAL free decode's
-            # own signal and length, never a corrected one — #57's hard rule is
-            # that a forced re-decode must never become its own evidence, and
-            # that starts with never letting it influence this check either.
-            needs_redecode = bool(
-                self.has_audio and detected_language
-                and self.language_resolver.needs_redecode(
-                    detected_language, language_confidence, input.text
-                )
-            )
-            resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
-            if needs_redecode:
-                redecoded = await self.audio.redecode_utterance_audio(resolved_language)
-                if redecoded:
-                    logger.info(
-                        "[Language] Re-decoded doubtful turn forced into %r: %r -> %r",
-                        resolved_language, input.text, redecoded,
-                    )
-                    input.text = redecoded
+            resolved_language = await self._resolve_language(input)
+            # How far the transcript itself can be trusted — read again here
+            # (not reused from inside _resolve_language) since companion mode
+            # below decides whether this turn was heard too poorly to act on.
+            stt_confidence = float((input.metadata or {}).get("stt_confidence") or 0.0)
             self._session_language = resolved_language
             sm_context["language"] = resolved_language
             # Tell the response prompt whether this is a fixed-language deployment
@@ -1696,6 +1674,49 @@ class StellaV2Agent(BaseAgent):
         elif isinstance(node, list):
             for item in node:
                 self._resolve_persona_in_plan_text(item)
+
+    async def _resolve_language(self, input: AgentInput) -> str:
+        """Resolve this turn's language and, if the free decode was doubtful,
+        re-decode its audio forced into the lock for display only (#57).
+
+        Split out of ``process()`` so the hard rule — a forced re-decode must
+        never become its own evidence — is independently testable: this
+        method is the whole guarantee, since ``resolve()`` only ever sees the
+        turn's ORIGINAL free-decode signal, decided (``needs_redecode``)
+        before any re-decode happens and never revisited after.
+        """
+        meta = input.metadata or {}
+        # Logged on every turn so a threshold for "too doubtful to act on"
+        # can be set from real sessions rather than guessed.
+        stt_confidence = float(meta.get("stt_confidence") or 0.0)
+        logger.info("Transcript confidence %.2f for %r", stt_confidence, input.text[:60])
+        detected_language = meta.get("detected_language") or None
+        language_confidence = float(meta.get("language_confidence") or 0.0)
+        language_signal = (detected_language, language_confidence) if detected_language else None
+        # Decide BEFORE resolve(): the gate reads the ORIGINAL free decode's
+        # own signal and length, never a corrected one — #57's hard rule is
+        # that a forced re-decode must never become its own evidence, and
+        # that starts with never letting it influence this check either.
+        needs_redecode = bool(
+            self.has_audio and detected_language
+            and self.language_resolver.needs_redecode(
+                detected_language, language_confidence, input.text
+            )
+        )
+        resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
+        if needs_redecode:
+            turn_id = meta.get("turn_id")
+            redecoded = (
+                await self.audio.redecode_utterance_audio(turn_id, resolved_language)
+                if turn_id else None
+            )
+            if redecoded:
+                logger.info(
+                    "[Language] Re-decoded doubtful turn forced into %r: %r -> %r",
+                    resolved_language, input.text, redecoded,
+                )
+                input.text = redecoded
+        return resolved_language
 
     def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
         """The declared language for the session, or None to detect per turn.
