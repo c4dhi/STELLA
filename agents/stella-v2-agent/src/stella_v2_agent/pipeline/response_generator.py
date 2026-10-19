@@ -36,8 +36,20 @@ _LEADING_PUNCT_RE = re.compile(r"^[\s.,!?;:]+")
 
 
 # Spoken when the reply cannot be produced, including when the call stalls on
-# its retry as well (#684): the turn ends and Stella listens again.
+# its retry as well (#684): the turn ends and Stella listens again. Chosen by
+# the turn's resolved language, the same way as the arbitration's
+# "didn't catch that" line; anything else falls back to English.
 FALLBACK_LINE = "I'm sorry, I encountered an issue. Could you try again?"
+_FALLBACK_LINES_BY_LANG: Dict[str, str] = {
+    "en": FALLBACK_LINE,
+    "de": "Entschuldige, da ist bei mir gerade etwas schiefgelaufen. Kannst du es nochmal versuchen?",
+}
+
+
+def fallback_line_for(language: Optional[str]) -> str:
+    """The fallback line in ``language`` ("de", "de-CH", ...), else English."""
+    key = (language or "").split("-")[0].lower()
+    return _FALLBACK_LINES_BY_LANG.get(key, FALLBACK_LINE)
 
 
 # A "[tag" the stream has not closed yet.
@@ -319,7 +331,7 @@ class ResponseGenerator:
             # may only grow, or the SDK speaks the whole utterance again.
             yield AgentOutput.text_chunk(
                 session_id,
-                f"{sent} {FALLBACK_LINE}".strip(),
+                f"{sent} {fallback_line_for((sm_context or {}).get('language'))}".strip(),
                 transcript_id=transcript_id,
                 is_final=True,
             )

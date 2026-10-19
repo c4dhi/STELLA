@@ -13,7 +13,9 @@ import time
 
 from stella_agent_sdk.llm import LLMResponse
 from stella_v2_agent.models.arbitration_result import ResponseDirective
-from stella_v2_agent.pipeline.response_generator import ResponseGenerator, FALLBACK_LINE
+from stella_v2_agent.pipeline.response_generator import (
+    ResponseGenerator, FALLBACK_LINE, fallback_line_for,
+)
 
 BRIDGE = "Alright, let's stop the activity here."
 
@@ -34,7 +36,7 @@ class _PacedService:
         return resp
 
 
-def _generate(svc, bridge=BRIDGE):
+def _generate(svc, bridge=BRIDGE, language=None):
     gen = ResponseGenerator(llm_service=svc)
     gen.first_token_timeout = 0.3
     gen.retry_first_token_timeout = 0.2
@@ -43,7 +45,8 @@ def _generate(svc, bridge=BRIDGE):
         t0 = time.monotonic()
         out = [o async for o in gen.generate(
             session_id="s", user_input="Let's stop", directive=ResponseDirective(),
-            conversation_history=[], sm_context={}, bridge=bridge, transcript_id="tr1",
+            conversation_history=[], sm_context={"language": language} if language else {},
+            bridge=bridge, transcript_id="tr1",
         )]
         return out, time.monotonic() - t0
 
@@ -74,3 +77,20 @@ def test_two_stalls_end_the_turn_with_the_fallback_line():
 def test_the_fallback_line_without_a_bridge():
     out, _ = _generate(_PacedService([30.0, 30.0]), bridge="")
     assert [o.content for o in out] == [FALLBACK_LINE]
+
+
+def test_a_german_session_hears_the_fallback_line_in_german():
+    """Felix's participants speak German, and a double stall now reaches this
+    line in about 6s: an English apology would break the session's language."""
+    out, _ = _generate(_PacedService([30.0, 30.0]), bridge="Gut, dann hören wir hier auf.",
+                       language="de")
+    german = fallback_line_for("de")
+    assert german != FALLBACK_LINE
+    assert out[-1].content == f"Gut, dann hören wir hier auf. {german}"
+
+
+def test_the_fallback_line_follows_the_base_language_and_defaults_to_english():
+    assert fallback_line_for("de-CH") == fallback_line_for("de")
+    assert fallback_line_for("en") == FALLBACK_LINE
+    assert fallback_line_for("xx") == FALLBACK_LINE
+    assert fallback_line_for(None) == FALLBACK_LINE
