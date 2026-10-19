@@ -20,6 +20,7 @@ def _agent_with_locked_german():
     agent.language_resolver = LanguageResolver(supported=("de", "en", "es"))
     agent.language_resolver.resolve("Ich habe heute wirklich keine Motivation", signal=("de", 0.99))
     agent._audio_pipeline = MagicMock()
+    agent._audio_pipeline.typed_correlation_id.return_value = None  # a spoken turn
     return agent
 
 
@@ -64,3 +65,62 @@ async def test_a_confident_turn_is_never_sent_for_redecode_at_all():
     await agent._resolve_language(confident)
     agent.audio.redecode_utterance_audio.assert_not_called()
     assert confident.text == "ich bin heute ganz gut drauf"
+
+
+# ── #91: the turn's language record is published once it is resolved ────────
+
+@pytest.mark.asyncio
+async def test_a_redecoded_turn_publishes_its_language_record():
+    agent = _agent_with_locked_german()
+    agent.audio.redecode_utterance_audio = AsyncMock(return_value="ja das stimmt so")
+    agent.audio.utterance_speech_seconds = MagicMock(return_value=1.234)
+    agent.audio.publish_turn_language = AsyncMock()
+
+    doubtful = AgentInput.text_input(
+        "s1", "yeah that is right", turn_id="t9", detected_language="en", language_confidence=0.6,
+    )
+    await agent._resolve_language(doubtful)
+
+    agent.audio.publish_turn_language.assert_awaited_once_with({
+        "transcript_id": "t9",
+        "detected_language": "en",
+        "language_confidence": 0.6,
+        "duration_s": 1.23,
+        # The free decode's words, not the re-decode's.
+        "word_count": 4,
+        "resolved_language": "de",
+        "redecoded": True,
+    })
+
+
+@pytest.mark.asyncio
+async def test_a_free_decoded_turn_publishes_redecoded_false():
+    agent = _agent_with_locked_german()
+    agent.audio.redecode_utterance_audio = AsyncMock(return_value="never")
+    agent.audio.utterance_speech_seconds = MagicMock(return_value=2.0)
+    agent.audio.publish_turn_language = AsyncMock()
+
+    confident = AgentInput.text_input(
+        "s1", "Ich gehe heute im Park spazieren", turn_id="t10",
+        detected_language="de", language_confidence=0.98,
+    )
+    await agent._resolve_language(confident)
+
+    record = agent.audio.publish_turn_language.await_args.args[0]
+    assert record["redecoded"] is False
+    assert record["resolved_language"] == "de"
+    assert record["word_count"] == 6
+    assert record["duration_s"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_publish_does_not_cost_the_turn():
+    agent = _agent_with_locked_german()
+    agent.audio.utterance_speech_seconds = MagicMock(return_value=None)
+    agent.audio.publish_turn_language = AsyncMock(side_effect=RuntimeError("room gone"))
+
+    turn = AgentInput.text_input(
+        "s1", "Ich gehe heute im Park spazieren", turn_id="t11",
+        detected_language="de", language_confidence=0.98,
+    )
+    assert await agent._resolve_language(turn) == "de"
