@@ -291,6 +291,11 @@ class StellaV2Agent(BaseAgent):
             # as a plan-mode session starts with nothing before it. Bridge,
             # experts and response all read the same scoped history.
             history_limit = self._custom_history_limit
+            # Two gRPC round-trips that run before anything else on every turn
+            # (#454): bracketed so the timeline shows what they cost.
+            yield AgentOutput.analytics_event(
+                input.session_id, "context_fetch_start", turn_id, self._elapsed_ms(),
+            )
             history = await self._fetch_conversation_history(limit=history_limit)
 
             # Fetch state from gRPC backend (parallel calls for performance)
@@ -302,6 +307,9 @@ class StellaV2Agent(BaseAgent):
                     if isinstance(collected_now, dict):
                         # Read now: clearing the plan takes its deliverables with it.
                         self.companion.collected = dict(collected_now)
+            yield AgentOutput.analytics_event(
+                input.session_id, "context_fetch_done", turn_id, self._elapsed_ms(),
+            )
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
@@ -381,8 +389,9 @@ class StellaV2Agent(BaseAgent):
             # Emitted next to bridge_start on purpose: the two elapsed_ms values
             # being equal IS the property this change buys, and drift between
             # them is how a regression would show up in the analytics timeline.
+            pool_start_ms = self._elapsed_ms()
             yield AgentOutput.analytics_event(
-                input.session_id, "expert_pool_start", turn_id, self._elapsed_ms(),
+                input.session_id, "expert_pool_start", turn_id, pool_start_ms,
             )
 
             logger.info(f"Stage 1: Bridge for: '{input.text}'")
@@ -437,6 +446,13 @@ class StellaV2Agent(BaseAgent):
                 bridge_output.metadata["speed"] = turn_speed
                 yield bridge_output
 
+            # Generation of the whole bridge, not its playback: bridge_ready is
+            # the first sentence, bridge_tts_done (audio pipeline) the end of
+            # playback. Also emitted on a silent turn, where nothing was said.
+            yield AgentOutput.analytics_event(
+                input.session_id, "bridge_done", turn_id, self._elapsed_ms(),
+            )
+
             # Covers the silent turn too, where the loop above never ran.
             turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_mode", None))
 
@@ -490,6 +506,17 @@ class StellaV2Agent(BaseAgent):
                     component=f"expert:{v.expert_name}",
                     **v.to_debug_dict(),
                 )
+                # The debug row above has no turn_id and can't be charted. One
+                # stage per expert, so each gets its own lane: experts start
+                # together with the pool, so each finished at pool start plus
+                # its own latency.
+                yield AgentOutput.analytics_event(
+                    input.session_id, f"expert_done:{v.expert_name}", turn_id,
+                    pool_start_ms + v.latency_ms,
+                    expert_name=v.expert_name, verdict=v.verdict,
+                    confidence=v.confidence, latency_ms=round(v.latency_ms, 1),
+                    success=v.success, priority=v.priority,
+                )
                 # A verdict says what an expert concluded, not what it DID. Tool
                 # calls are the actual side effects of the turn — setting a
                 # deliverable, advancing the plan, starting an activity — and
@@ -535,6 +562,14 @@ class StellaV2Agent(BaseAgent):
                 sm_context,
                 expert_configs=self.expert_registry.as_map(),
                 user_input=input.text,
+            )
+            # Stamped before the companion's exit/start judges are awaited
+            # below: those are their own LLM calls, not arbitration.
+            yield AgentOutput.analytics_event(
+                input.session_id, "arbitration_done", turn_id, self._elapsed_ms(),
+                latency_ms=round(arb_result.latency_ms, 1),
+                favored_expert=arb_result.favored_expert,
+                action=arb_result.directive.action,
             )
 
             # Companion mode (#36): the mode's judge has answered — the router

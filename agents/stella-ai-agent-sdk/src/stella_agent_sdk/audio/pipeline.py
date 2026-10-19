@@ -866,6 +866,8 @@ class AudioPipeline:
         self._turn_bridge_tts_first_byte_emitted: bool = False
         self._turn_response_tts_first_byte_emitted: bool = False
         self._last_response_tts_done_elapsed: float = 0
+        self._last_bridge_tts_done_elapsed: float = 0
+        self._turn_bridge_first_byte_elapsed: Optional[float] = None
 
         # Register data message handler for text input from frontend
         self._room.on_data_received(self._handle_data_message)
@@ -1019,6 +1021,7 @@ class AudioPipeline:
         self._turn_id = turn_id
         self._turn_bridge_tts_first_byte_emitted = False
         self._turn_response_tts_first_byte_emitted = False
+        self._turn_bridge_first_byte_elapsed = None
 
     def _anchor_turn_if_unanchored(self, event: "TranscriptEvent") -> None:
         """Anchor a turn that reached the agent without passing the STT branch.
@@ -3286,6 +3289,8 @@ class AudioPipeline:
         self._turn_bridge_tts_first_byte_emitted = False
         self._turn_response_tts_first_byte_emitted = False
         self._last_response_tts_done_elapsed = 0
+        self._last_bridge_tts_done_elapsed = 0
+        self._turn_bridge_first_byte_elapsed = None
 
     @staticmethod
     def _preroll_ms_to_bytes(ms: int) -> int:
@@ -3352,6 +3357,38 @@ class AudioPipeline:
         utt.task = asyncio.create_task(_pump())
         return utt
 
+    def _note_tts_done(self, source: str, elapsed_ms: float) -> None:
+        """Record that a bridge or response sentence finished playing."""
+        if source == "bridge":
+            self._last_bridge_tts_done_elapsed = elapsed_ms
+        else:
+            self._last_response_tts_done_elapsed = elapsed_ms
+
+    def _flush_tts_done(self) -> None:
+        """Emit bridge_tts_done and response_tts_done once each for the turn.
+
+        Each carries its LAST sentence's completion time. bridge_tts_done used
+        to go out after every bridge sentence (#454), so a two-sentence bridge
+        had two end points. It now also carries bridge_playback_ms, from the
+        bridge's first audible byte to its end: how much of the expert wait the
+        participant spent listening rather than waiting.
+        """
+        if self._last_bridge_tts_done_elapsed > 0:
+            extra = {}
+            if self._turn_bridge_first_byte_elapsed is not None:
+                extra["bridge_playback_ms"] = round(
+                    self._last_bridge_tts_done_elapsed - self._turn_bridge_first_byte_elapsed, 2
+                )
+            asyncio.create_task(self._emit_analytics_event(
+                "bridge_tts_done", self._last_bridge_tts_done_elapsed, **extra
+            ))
+            self._last_bridge_tts_done_elapsed = 0
+        if self._last_response_tts_done_elapsed > 0:
+            asyncio.create_task(self._emit_analytics_event(
+                "response_tts_done", self._last_response_tts_done_elapsed
+            ))
+            self._last_response_tts_done_elapsed = 0
+
     def _emit_first_byte(self, source: str) -> None:
         """Emit the TTS first-byte analytics event once per source per turn.
 
@@ -3364,6 +3401,7 @@ class AudioPipeline:
             self._turn_bridge_tts_first_byte_emitted = True
             if self.turn_anchor_ts > 0:
                 elapsed = (time.perf_counter() - self.turn_anchor_ts) * 1000
+                self._turn_bridge_first_byte_elapsed = elapsed
                 self._report_first_byte_latency("bridge", elapsed)
         elif source == "response" and not self._turn_response_tts_first_byte_emitted:
             self._turn_response_tts_first_byte_emitted = True
@@ -3774,13 +3812,12 @@ class AudioPipeline:
                 # Play the current sentence as it synthesizes
                 await self._play_utterance(utt, source=source, meta=meta)
 
-                # Emit tts_done events after each sentence completes
+                # Note when each sentence finished; the *_tts_done events go
+                # out once, with the last one, when the worker exits.
                 if self.turn_anchor_ts > 0:
-                    elapsed = (time.perf_counter() - self.turn_anchor_ts) * 1000
-                    if source == "bridge":
-                        asyncio.create_task(self._emit_analytics_event("bridge_tts_done", elapsed))
-                    else:
-                        self._last_response_tts_done_elapsed = elapsed
+                    self._note_tts_done(
+                        source, (time.perf_counter() - self.turn_anchor_ts) * 1000
+                    )
 
         except asyncio.CancelledError:
             logger.info("[TTS] Speech worker cancelled")
@@ -3791,10 +3828,7 @@ class AudioPipeline:
             if pending:
                 pending.cancel()
         finally:
-            # Emit response_tts_done with the last response sentence's completion time
-            if hasattr(self, '_last_response_tts_done_elapsed') and self._last_response_tts_done_elapsed > 0:
-                asyncio.create_task(self._emit_analytics_event("response_tts_done", self._last_response_tts_done_elapsed))
-                self._last_response_tts_done_elapsed = 0
+            self._flush_tts_done()
             self._is_speaking = False
             self._audio_active = False
             self.open_transcript_gate()

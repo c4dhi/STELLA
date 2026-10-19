@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `bridge_tts_done` is emitted once per turn, when the bridge's last sentence has played, instead of after every bridge sentence. It carries `bridge_playback_ms`, the time from the bridge's first audible byte to its end.
+
 ## [0.7.0] - 2026-10-07
 
 Ships with STELLA 1.3.0. What changes for agent authors:
