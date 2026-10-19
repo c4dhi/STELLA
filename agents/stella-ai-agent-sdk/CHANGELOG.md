@@ -19,6 +19,7 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `STELLA_TTS_PLAYBACK` defaults to `auto` (unset means `auto` too). A session starts in `stream` and switches once to `sentence` — never back — after 3 consecutive sentences synthesize slower than real time. `stream`/`sentence` still pin the mode outright with no switching (#669)
 - A short utterance dropped because the agent held the floor is now logged (`[GATE] Not taken as a turn`). In turn-based mode it is now also published to the transcript, marked as discarded, as it already was with barge-in.
+- `bridge_tts_done` is emitted once per turn, when the bridge's last sentence has played, instead of after every bridge sentence. It carries `bridge_playback_ms`, the time from the bridge's first audible byte to its end.
 
 ## [0.7.0] - 2026-10-07
 
