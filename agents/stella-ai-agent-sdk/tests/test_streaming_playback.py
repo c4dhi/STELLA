@@ -803,6 +803,33 @@ def test_pipeline_reads_the_playback_env_once(monkeypatch):
     assert pipe._tts_playback == "stream"
 
 
+def test_playback_log_names_where_the_mode_came_from(monkeypatch, caplog):
+    # The backend writes STELLA_TTS_PLAYBACK_SOURCE (deployment | platform |
+    # default) next to the mode it injects (#89), so the log says which won.
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "sentence")
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK_SOURCE", "platform")
+    with caplog.at_level("INFO"):
+        make_pipeline(SlowTTS())
+    assert "[TTS] Playback mode: sentence (from the platform default)" in caplog.text
+
+    caplog.clear()
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "auto")
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK_SOURCE", "default")
+    with caplog.at_level("INFO"):
+        make_pipeline(SlowTTS())
+    assert "(from the built-in default)" in caplog.text
+
+    # An agent started without the backend (local run, older backend) has no
+    # source and logs exactly as before.
+    caplog.clear()
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "stream")
+    monkeypatch.delenv("STELLA_TTS_PLAYBACK_SOURCE")
+    with caplog.at_level("INFO"):
+        make_pipeline(SlowTTS())
+    assert "[TTS] Playback mode: stream\n" in caplog.text + "\n"
+    assert "(from" not in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_sentence_mode_publishes_nothing_until_synthesis_completes():
     tts = SlowTTS(frames=6, gap=0.03)  # ~180 ms to synthesize
