@@ -566,12 +566,12 @@ pipelineSchema:
       default: "en"
     detect_threshold:
       label: "Detect threshold"
-      description: "Min confidence to adopt a detected language (and to override a provisional default/seed lock)."
+      description: "Min confidence to confirm a provisional first lock, and to switch a confirmed lock outright on a single long-enough off-lock turn. A less confident off-lock turn still votes, just through the decay build-up below (text_bar/decay/switch_score)."
       type: number
       min: 0
       max: 1
       step: 0.05
-      default: 0.4
+      default: 0.9
     text_bar:
       label: "Keep-text bar"
       description: "Below this confidence (or too short), a turn's own transcript is re-decoded forced into the current lock for display; at or above it, the turn's own free decode is shown as-is. Cosmetic only — does not gate whether the lock itself moves (see switch_score)."

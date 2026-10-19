@@ -14,7 +14,10 @@ Design (see RFC §8):
 - Hold a session lock; switch only once a decaying confidence score for some
   other language crosses a bar (#57, Felix's model, 19 Oct 2026) — evidence
   accumulates rather than needing a consecutive streak, but still fades if not
-  reinforced. Utterances too short to carry any signal never vote either way.
+  reinforced. A single off-lock detection confident enough (≥0.9) skips the
+  build-up and switches outright (#90, Felix's model, 20 Oct 2026), and the
+  same bar gates the first lock itself. Utterances too short to carry any
+  signal never vote either way.
 - Clamp to the supported set — never resolve to a language we cannot speak (§7).
 - Fallback chain: confident signal → session lock → plan seed → default.
 
@@ -163,7 +166,7 @@ class LanguageResolver:
         supported: Tuple[str, ...] = ("de", "en"),
         default: str = "en",
         seed: Optional[str] = None,
-        detect_threshold: float = 0.4,
+        detect_threshold: float = 0.9,
         text_bar: float = 0.85,
         decay: float = 0.5,
         switch_score: float = 1.5,
@@ -171,6 +174,13 @@ class LanguageResolver:
     ) -> None:
         self.supported = set(supported)
         self.default = default if default in self.supported else next(iter(self.supported))
+        # Doubles as the bar for an INSTANT switch of a confirmed lock, below
+        # (#90, Felix's model, 20 Oct 2026): a long-enough off-lock detection
+        # this sure of itself needs no build-up at all. 0.4 let a single 0.52
+        # guess confirm the first lock outright (the 19 Oct dev-session bug);
+        # 0.9 means only a genuinely confident decode ever settles anything on
+        # one turn, first lock or later switch alike. A less confident
+        # off-lock turn still votes, just through the decay build-up below.
         self.detect_threshold = detect_threshold
         # The three numbers behind the confidence build-up (#57, Felix's model,
         # replay-set 19 Oct 2026). A CONFIRMED lock only moves once a running
@@ -402,6 +412,13 @@ class LanguageResolver:
         # is where STT guesses, so it is simply not evidence either way: it
         # neither builds a challenger nor decays one.
         if _too_short_to_switch(text):
+            return self.locked
+
+        # A long-enough, off-lock detection this confident needs no build-up —
+        # it switches on its own, same bar as the first lock (#90).
+        if lang is not None and lang != self.locked and confidence >= self.detect_threshold:
+            self.locked = lang
+            self._reset_challenger()
             return self.locked
 
         if lang is None or lang == self.locked:
