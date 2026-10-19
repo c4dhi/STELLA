@@ -170,6 +170,36 @@ def test_reset_clears_session_lock():
     assert r.resolve("...") == "en"
 
 
+# ──────────── deployment_pin: the companion-mode precedence anchor (#58) ────────────
+
+def test_deployment_pin_is_captured_at_construction():
+    assert LanguageResolver(forced="de").deployment_pin == "de"
+    assert LanguageResolver().deployment_pin is None
+
+
+def test_deployment_pin_survives_set_plan_language():
+    r = LanguageResolver(forced="de")
+    r.set_plan_language("en")
+    assert r.forced == "en"  # the plan's own call still wins for `forced`
+    assert r.deployment_pin == "de"  # but the deployment tier is untouched
+
+
+def test_deployment_pin_survives_reset():
+    r = LanguageResolver(forced="de")
+    r.set_plan_language("en")
+    r.reset()
+    assert r.deployment_pin == "de"
+
+
+def test_apply_config_force_updates_the_deployment_pin_too():
+    # A configured `force` is the same operator tier as the env var, just
+    # delivered through the pipeline config instead.
+    r = LanguageResolver()
+    assert r.deployment_pin is None
+    r.apply_config({"force": "de"})
+    assert r.deployment_pin == "de"
+
+
 def test_reset_preserves_config():
     r = LanguageResolver(default="en")
     r.apply_config({"text_bar": 0.9})

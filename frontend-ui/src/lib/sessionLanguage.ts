@@ -1,7 +1,12 @@
 /**
  * Who decides the session language, and what the deploy UI does about it.
  *
- * There are two places a language can come from, and they are not equal:
+ * This file is about a PLAN-FOLLOWING deployment only — one plan, run from
+ * start to finish. (Companion mode's precedence — deployment pin, then
+ * persona, then detection, with an activity's plan never pinning the session
+ * at all — is a different rule, decided in the agent itself; see #58.)
+ *
+ * There are two places a language can come from here, and they are not equal:
  *
  *   - The PLAN declares it. A plan whose prompts and acceptance criteria are
  *     written in German is German wherever it is deployed. This is a property
@@ -10,9 +15,12 @@
  *     plans that declare nothing — without it, a short or garbled first
  *     utterance decides the language of the whole conversation by coin flip.
  *
- * The plan wins. STELLA_LANGUAGE outranks the plan's pin in the agent, so
- * writing both would let a stale picker value silently contradict the plan —
- * which is precisely the bug this shape prevents.
+ * The plan wins — not because STELLA_LANGUAGE is outranked in some
+ * precedence check, but because the agent applies the plan's declaration
+ * itself at session start (unconditionally, before the first utterance),
+ * which would silently overwrite whatever STELLA_LANGUAGE had set anyway.
+ * So setting it here too would be redundant at best, and a stale picker
+ * value sitting unused is confusing at worst — hence leaving it empty below.
  *
  * Both deploy modals (DeployAgentModal, ProjectModal) share these rules; they
  * live here so the two cannot drift apart.
@@ -45,7 +53,8 @@ export function showsVoiceStep(
  *
  * Empty when the plan declares a language: the agent applies the plan's pin at
  * session start, before the first utterance, so nothing needs pinning here —
- * and pinning anyway would override the plan.
+ * and the plan's own pin would silently overwrite a stale picker value here
+ * anyway, so leaving it set would just be confusing, not functional.
  */
 export function languageEnvVars(
   pickedLanguage: string,

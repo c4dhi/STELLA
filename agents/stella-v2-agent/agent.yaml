@@ -149,7 +149,7 @@ pipelineSchema:
         - id: conversation_guidelines
           label: "Conversation Guidelines"
           type: text
-          description: "Custom conversation style guidelines (overrides defaults). In companion mode these apply inside an activity only; outside one the Companion node's Free Conversation Guidelines are used instead. Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
+          description: "Custom conversation style guidelines (overrides defaults). In companion mode these apply inside an activity only; outside one the Companion node's Free Conversation Guidelines are used instead. Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{contentLanguage}} (companion mode only: present when this activity's own plan was declared in a different language than the conversation — a translation note, never an instruction to switch; the conversation's own language in {{language}} always wins, and this disappears again the turn after the activity ends, #58), {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
           default: |
             CONVERSATIONAL STYLE (spoken aloud via TTS — follow strictly):
 
@@ -218,6 +218,10 @@ pipelineSchema:
             {{#if language}}
 
             {{language}}
+            {{/if}}
+            {{#if contentLanguage}}
+
+            {{contentLanguage}}
             {{/if}}
             {{#if emotionTags}}
 

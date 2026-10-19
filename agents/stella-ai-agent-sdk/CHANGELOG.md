@@ -17,6 +17,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   **For researchers running multilingual studies:** a session's transcription no longer re-guesses the language on every turn in free conversation (no declared plan language); it holds the detected language through short or ambiguous turns and follows a real language switch within a few turns, the same way spoken replies already did. `switch_threshold`/`debounce` in a pipeline configuration are now silently ignored — see the platform changelog for the equivalent `text_bar`/`decay`/`switch_score` values if you set them explicitly.
 
+- `LanguageResolver.deployment_pin` (#58): the deployment's own language pin (`STELLA_LANGUAGE`, or a configured `force`), captured once and never overwritten by a later `set_plan_language` call — unlike `forced`, which still reflects whichever source called most recently. Lets a companion-mode caller tell "the operator pinned this deployment" apart from "a plan or persona happened to set `forced`", since only the former outranks the persona.
+
+  **For researchers running companion-mode studies with mixed-language activities:** a companion conversation no longer gets stuck in an activity's language after that activity ends. The session keeps the language it was pinned to (by the deployment, or the persona) or had detected, through an activity whose own content was written in a different language, inside it and after it — the activity's language is only ever mentioned to the model as a translation note, never applied to speech recognition or the voice.
+
 ## [0.7.0] - 2026-10-07
 
 Ships with STELLA 1.3.0. What changes for agent authors:

@@ -201,6 +201,12 @@ class LanguageResolver:
         # the pin from the shared SDK with no per-agent wiring.
         self._forced_request = (forced if forced is not None else forced_language())
         self.forced = self._validate_forced()
+        # Captured once, here, and never touched again by set_plan_language or
+        # apply_config — unlike `forced`, which later calls freely overwrite.
+        # A companion-mode caller needs to tell "the operator pinned this
+        # deployment" apart from "a plan or persona happened to set `forced`",
+        # since only the former outranks the persona (#58).
+        self.deployment_pin: Optional[str] = self.forced
         self.locked: Optional[str] = self.forced
         # True once the lock came from a real detection (not the default/seed).
         # A provisional lock yields to the first genuine detection at
@@ -266,6 +272,12 @@ class LanguageResolver:
         self.forced = self._validate_forced()
         if self.forced:
             self.locked, self._confirmed = self.forced, True
+        if "force" in config:
+            # A configured force is the same tier as the deployment env var —
+            # both are the operator's own decision, applied here rather than
+            # at construction (#58). Re-validated against the current
+            # supported set, same as `forced` just above.
+            self.deployment_pin = self.forced
 
     def set_plan_language(self, lang: Optional[str]) -> None:
         """Declare the language this plan is written in — a PIN, not a hint.
