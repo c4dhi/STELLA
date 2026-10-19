@@ -16,6 +16,7 @@ from stella_agent_sdk.llm.service import (
     LLMProviderInterface,
     LLMUsageStats,
     stream_completion,
+    FirstTokenTimeout,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "LLMProviderInterface",
     "LLMUsageStats",
     "stream_completion",
+    "FirstTokenTimeout",
 ]
