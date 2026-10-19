@@ -22,7 +22,10 @@ from stella_v2_agent.agent import StellaV2Agent
 
 def _agent_with_locked_german():
     agent = StellaV2Agent.__new__(StellaV2Agent)
-    agent.language_resolver = LanguageResolver()
+    # "es" supported too, so a vote for it is a real vote, not clamped away
+    # (#7 of the resolver's fallback chain) -- the test needs the challenger
+    # to actually move for the comparison below to prove anything.
+    agent.language_resolver = LanguageResolver(supported=("de", "en", "es"))
     agent.language_resolver.resolve("Ich habe heute wirklich keine Motivation", signal=("de", 0.99))
     agent._audio_pipeline = MagicMock()
     return agent
@@ -30,22 +33,33 @@ def _agent_with_locked_german():
 
 @pytest.mark.asyncio
 async def test_forced_redecode_text_never_becomes_detection_evidence():
+    # The doubtful turn must be 4 words or more (@sable, ref b0364e6c): under
+    # the length floor, resolve() never votes regardless of what signal it is
+    # given, so a 1-2 word turn can't actually distinguish "evidence fed back"
+    # from "evidence not fed back" -- both look identical (no vote either
+    # way). Confidence 0.75 (< the 0.85 text_bar) is what makes this turn
+    # doubtful here, not its length.
     agent = _agent_with_locked_german()
     # If this ever reached resolve() as evidence, the lock would move toward
     # "es" -- it's a different language than the one it was forced into,
     # which is exactly what a self-confirming forced decode could never do,
     # and exactly what a bug feeding it back in WOULD do.
-    agent.audio.redecode_utterance_audio = AsyncMock(return_value="hola, que tal")
+    agent.audio.redecode_utterance_audio = AsyncMock(return_value="hola, como estas hoy")
 
+    doubtful_text = "ja genau das stimmt"
     doubtful = AgentInput.text_input(
-        "s1", "ja", turn_id="t1", detected_language="es", language_confidence=0.75,
+        "s1", doubtful_text, turn_id="t1", detected_language="es", language_confidence=0.75,
     )
 
     # Reference: what the free decode ALONE (no redecode at all) does to an
     # identical, freshly-locked resolver.
-    reference = LanguageResolver()
+    reference = LanguageResolver(supported=("de", "en", "es"))
     reference.resolve("Ich habe heute wirklich keine Motivation", signal=("de", 0.99))
-    reference_locked = reference.resolve("ja", signal=("es", 0.75))
+    reference_locked = reference.resolve(doubtful_text, signal=("es", 0.75))
+    # Sanity check on the test itself: the turn must actually vote (a
+    # non-zero challenger score), or this proves nothing either.
+    assert reference.challenger_lang == "es"
+    assert reference.challenger_score > 0
 
     resolved = await agent._resolve_language(doubtful)
 
@@ -55,7 +69,7 @@ async def test_forced_redecode_text_never_becomes_detection_evidence():
     assert agent.language_resolver.challenger_score == reference.challenger_score
     # The display text WAS corrected -- the point is that this never leaked
     # into the comparison above.
-    assert doubtful.text == "hola, que tal"
+    assert doubtful.text == "hola, como estas hoy"
 
 
 @pytest.mark.asyncio
