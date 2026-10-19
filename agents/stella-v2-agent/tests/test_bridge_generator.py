@@ -376,6 +376,20 @@ class TestConfigCarriesTheImprovements:
         from stella_v2_agent.pipeline.bridge_generator import BRIDGE_SYSTEM_PROMPT
         assert _slot_default("bridge_generator", "system_prompt").strip() == BRIDGE_SYSTEM_PROMPT.strip()
 
+    def test_activities_on_offer_never_commits_to_a_specific_activity(self):
+        # #87: the bridge used to agree to and name an activity before
+        # companion.decide() had judged whether the title was said precisely
+        # enough — a commitment it could not take back once the system went
+        # on to ask "did you mean X?" instead. The directive must fire only
+        # conditionally (never when the flag is absent) and tell the bridge
+        # to stay generic rather than settle anything.
+        prompt = _slot_default("bridge_generator", "system_prompt")
+        assert "{{#if activitiesOnOffer}}" in prompt
+        rendered_on = render_prompt(prompt, {"activitiesOnOffer": True})
+        rendered_off = render_prompt(prompt, {"activitiesOnOffer": False})
+        assert "NEVER agree to start it" in rendered_on
+        assert "NEVER agree to start it" not in rendered_off
+
 
 
 class TestNoEcho:
