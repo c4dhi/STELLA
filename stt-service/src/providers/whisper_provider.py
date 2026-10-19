@@ -24,7 +24,7 @@ import numpy as np
 
 from .base import STTProvider, STTSession
 import stt_pb2
-from vad.speech_gate import GateConfig, GateSignal, SpeechGate, SpeechState
+from vad.speech_gate import GateConfig, GateSignal, SpeechGate, SpeechState, clamp_endpointing_ceiling
 
 # ── Decode diagnostics (STT_DECODE_DIAGNOSTICS) ──────────────────────────────
 # Logging-only instrumentation for the endpointing/hallucination investigation.
@@ -257,6 +257,8 @@ class WhisperSession(STTSession):
             max_endpointing_delay_ms=self.max_endpointing_delay_ms,
             sample_rate=16000,
         ))
+        # The gate clamps a ceiling shorter than the window up to it.
+        self.max_endpointing_delay_ms = self.gate.config.max_endpointing_delay_ms
 
         # Tracking
         self.last_partial_time = 0
@@ -470,17 +472,19 @@ class WhisperSession(STTSession):
                 self._reset()
                 return events
 
-        # MAYBE_ENDING timeout check (handles case where audio stream ends during MAYBE_ENDING)
-        if self.state == "MAYBE_ENDING" and self.pending_final_time:
+        # MAYBE_ENDING timeout check (handles case where audio stream ends during
+        # MAYBE_ENDING). Decided by the gate, so the ceiling holds here too (#469).
+        reason = self.gate.hold_expired(current_time)
+        if reason:
             time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
-            if time_in_maybe_ending >= self.continuation_window_ms:
-                total_silence = (current_time - self.silence_start_time) * 1000 if self.silence_start_time else time_in_maybe_ending
-                print(f"[WhisperSession] Continuation window expired ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
-                final_event = self._generate_final(current_time)
-                if final_event:
-                    events.append(final_event)
-                self._reset()
-                return events
+            total_silence = (current_time - self.silence_start_time) * 1000 if self.silence_start_time else time_in_maybe_ending
+            what = "Endpointing ceiling reached" if reason == "ceiling" else "Continuation window expired"
+            print(f"[WhisperSession] {what} ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
+            final_event = self._generate_final(current_time)
+            if final_event:
+                events.append(final_event)
+            self._reset()
+            return events
 
         try:
             # Convert bytes to numpy array (16-bit PCM)
@@ -637,7 +641,9 @@ class WhisperSession(STTSession):
                     events.append(self._speech_boundary_event(current_time, ended=True))
 
                 elif signal == GateSignal.FINALIZE:
-                    print("[WhisperSession] Continuation window expired")
+                    print("[WhisperSession] Endpointing ceiling reached"
+                          if self.gate.last_exit_reason == "ceiling"
+                          else "[WhisperSession] Continuation window expired")
                     final_event = self._generate_final(current_time)
                     if final_event:
                         events.append(final_event)
@@ -1195,7 +1201,10 @@ class WhisperProvider(STTProvider):
         self.vad_threshold = float(os.getenv("VAD_THRESHOLD", "0.5"))
         self.silence_duration_ms = int(os.getenv("VAD_SILENCE_DURATION_MS", "800"))
         self.continuation_window_ms = int(os.getenv("VAD_CONTINUATION_WINDOW_MS", "1000"))
-        self.max_endpointing_delay_ms = int(os.getenv("VAD_MAX_ENDPOINTING_DELAY_MS", "2000"))
+        # Clamped here as well as in the gate, so the banner below is truthful.
+        self.max_endpointing_delay_ms = clamp_endpointing_ceiling(
+            int(os.getenv("VAD_MAX_ENDPOINTING_DELAY_MS", "2000")), self.continuation_window_ms
+        )
         self.min_speech_ms = int(os.getenv("VAD_MIN_SPEECH_MS", "500"))
         self.max_speech_duration_ms = int(os.getenv("VAD_MAX_SPEECH_DURATION_MS", "30000"))
         self.partial_interval_ms = int(os.getenv("PARTIAL_INTERVAL_MS", "1000"))
