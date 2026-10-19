@@ -26,7 +26,7 @@ confidence. Swapping in a broader detector only changes ``detect_language``.
 import logging
 import os
 import re
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -435,3 +435,44 @@ def language_name(code: Optional[str]) -> str:
     if not code or code == "auto":
         return "the user's language"
     return LANGUAGE_NAMES.get(code, code)
+
+
+def turn_language_record(
+    metadata: Dict[str, Any],
+    *,
+    original_text: str,
+    resolved_language: str,
+    redecoded: bool,
+    duration_s: Optional[float],
+    correlation_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """What one user turn said about its language, for the stored message (#91).
+
+    Published as a ``turn_language`` envelope once the agent has resolved the
+    turn, and merged by the backend into that turn's transcript message, so the
+    switching rule can be checked against real sessions afterwards. Carries no
+    transcript text. ``original_text`` is the free decode the signal belongs
+    to, so a re-decoded turn is still counted by what was first heard.
+
+    ``correlation_id`` is set for typed text: the frontend stores a typed
+    message under its own envelope, which the backend finds by that id.
+
+    Returns None when there is no turn id to attach it to.
+    """
+    transcript_id = (metadata or {}).get("turn_id")
+    if not transcript_id:
+        return None
+    detected = (metadata or {}).get("detected_language") or None
+    confidence = float((metadata or {}).get("language_confidence") or 0.0)
+    record = {
+        "transcript_id": transcript_id,
+        "detected_language": detected,
+        "language_confidence": round(confidence, 3) if detected else None,
+        "duration_s": round(duration_s, 2) if duration_s is not None else None,
+        "word_count": len((original_text or "").split()),
+        "resolved_language": resolved_language,
+        "redecoded": bool(redecoded),
+    }
+    if correlation_id:
+        record["correlation_id"] = correlation_id
+    return record

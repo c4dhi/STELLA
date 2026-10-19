@@ -639,6 +639,14 @@ class AudioPipeline:
         # its own 200ms pre-buffer (`whisper_provider.py`).
         self._utterance_preroll_audio = bytearray()
         self._utterance_preroll_max_bytes = 0
+        # Each utterance's speech span from VAD (first speech_started to last
+        # speech_ended), keyed by transcript id, for the turn's language record
+        # (#91). Bounded like the audio buffers above.
+        self._speech_span_by_id: Dict[str, List[Optional[float]]] = {}
+        # A typed turn's frontend correlation_id, by the transcript id the SDK
+        # gave it: the stored message is the frontend's envelope, which only
+        # that id identifies (#91).
+        self._typed_correlation_by_id: Dict[str, str] = {}
 
         # TTS language. Seeded from the env var for backward compatibility, then
         # from the deployment pin, so the first synthesis of a pinned deployment
@@ -1407,6 +1415,7 @@ class AudioPipeline:
                 self._begin_utterance_capture(event.transcript_id)
             elif event.is_final:
                 self._end_utterance_capture()
+            self._note_speech_span(event)
 
             # A voice barge-in was committed for this utterance: its final IS
             # the interrupting turn. Handled before the gate check because
@@ -2109,6 +2118,7 @@ class AudioPipeline:
                     # recorded user turn, exactly like a voice transcript, and
                     # the agent's barge-in verdict is recorded alongside it.
                     asyncio.create_task(self._echo_received_text(text, envelope_participant_id, envelope_transcript_id, correlation_id))
+                    self._note_typed_correlation(envelope_transcript_id, correlation_id)
 
                     # Text barge-in (#278): if barge-in is enabled and a turn is
                     # in flight (still generating or audibly speaking), interrupt
@@ -3303,6 +3313,48 @@ class AudioPipeline:
         overflow = len(self._utterance_preroll_audio) - self._utterance_preroll_max_bytes
         if overflow > 0:
             del self._utterance_preroll_audio[:overflow]
+
+    def _note_speech_span(self, event: TranscriptEvent, now: Optional[float] = None) -> None:
+        """Record an utterance's VAD boundaries: its first ``speech_started``
+        and its last ``speech_ended`` (a pause inside one utterance starts the
+        same id again)."""
+        tid = event.transcript_id
+        if not tid or not (event.speech_started or event.speech_ended):
+            return
+        now = time.monotonic() if now is None else now
+        span = self._speech_span_by_id.get(tid)
+        if span is None:
+            if not event.speech_started:
+                return
+            span = self._speech_span_by_id[tid] = [now, None]
+            while len(self._speech_span_by_id) > 8:
+                del self._speech_span_by_id[next(iter(self._speech_span_by_id))]
+        if event.speech_ended:
+            span[1] = now
+
+    def utterance_speech_seconds(self, transcript_id: Optional[str]) -> Optional[float]:
+        """How long the user spoke in this utterance, from VAD; None if unknown."""
+        span = self._speech_span_by_id.get(transcript_id) if transcript_id else None
+        if not span or span[1] is None:
+            return None
+        return max(0.0, span[1] - span[0])
+
+    def _note_typed_correlation(self, transcript_id: str, correlation_id: Optional[str]) -> None:
+        if not correlation_id:
+            return
+        self._typed_correlation_by_id[transcript_id] = correlation_id
+        while len(self._typed_correlation_by_id) > 8:
+            del self._typed_correlation_by_id[next(iter(self._typed_correlation_by_id))]
+
+    def typed_correlation_id(self, transcript_id: Optional[str]) -> Optional[str]:
+        """The frontend correlation_id of a typed turn, or None."""
+        return self._typed_correlation_by_id.get(transcript_id) if transcript_id else None
+
+    async def publish_turn_language(self, record: Dict[str, Any]) -> None:
+        """Publish one turn's language record (#91, see
+        ``language.turn_language_record``). The message recorder forwards it and
+        the backend merges it into the turn's stored transcript message."""
+        await self._room.publish_data({"type": "turn_language", "data": record})
 
     async def redecode_utterance_audio(self, transcript_id: str, language: str) -> Optional[str]:
         """Re-decode the utterance named by ``transcript_id``, forced to
