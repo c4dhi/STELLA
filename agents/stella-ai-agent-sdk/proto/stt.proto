@@ -13,6 +13,15 @@ service SpeechToText {
 
   // Warmup the STT model to eliminate cold-start latency
   rpc Warmup(WarmupRequest) returns (WarmupResponse);
+
+  // One-shot: re-decode a specific utterance's own audio, forced to a
+  // language the agent has already locked (#57). Used only for a turn whose
+  // free decode in StreamTranscribe was doubtful -- too short, or below the
+  // keep-text confidence bar. Never a second call on a confident turn, and
+  // its result is never fed back into StreamTranscribe's language detection
+  // -- only the original free decode is ever evidence (the self-confirming-
+  // pin bug this guards against: see LanguageResolver.needs_redecode).
+  rpc Redecode(RedecodeRequest) returns (RedecodeResponse);
 }
 
 message Empty {}
@@ -33,6 +42,20 @@ message WarmupResponse {
   int32 warmup_time_ms = 2;  // Time taken for warmup
   string provider = 3;       // "whisper" or "sherpa"
   string message = 4;        // Status or error message
+}
+
+message RedecodeRequest {
+  bytes audio_data = 1;      // The SAME utterance's raw PCM (16-bit, mono)
+  string session_id = 2;     // Logging only
+  string language = 3;       // Forced ISO 639-1 language (the resolver's lock)
+  int32 sample_rate = 4;     // Sample rate of audio_data (default: 16000)
+}
+
+message RedecodeResponse {
+  string text = 1;           // "" when the provider cannot force-redecode
+                              // (e.g. a lightweight dev provider with no
+                              // language steering) -- caller keeps the
+                              // original free-decode text in that case.
 }
 
 // Audio data sent from client to STT service

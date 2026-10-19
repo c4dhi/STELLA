@@ -323,12 +323,27 @@ class StellaV2Agent(BaseAgent):
             stt_confidence = float(meta.get("stt_confidence") or 0.0)
             logger.info("Transcript confidence %.2f for %r", stt_confidence, input.text[:60])
             detected_language = meta.get("detected_language") or None
-            language_signal = (
-                (detected_language, float(meta.get("language_confidence") or 0.0))
-                if detected_language
-                else None
+            language_confidence = float(meta.get("language_confidence") or 0.0)
+            language_signal = (detected_language, language_confidence) if detected_language else None
+            # Decide BEFORE resolve(): the gate reads the ORIGINAL free decode's
+            # own signal and length, never a corrected one — #57's hard rule is
+            # that a forced re-decode must never become its own evidence, and
+            # that starts with never letting it influence this check either.
+            needs_redecode = bool(
+                self.has_audio and detected_language
+                and self.language_resolver.needs_redecode(
+                    detected_language, language_confidence, input.text
+                )
             )
             resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
+            if needs_redecode:
+                redecoded = await self.audio.redecode_utterance_audio(resolved_language)
+                if redecoded:
+                    logger.info(
+                        "[Language] Re-decoded doubtful turn forced into %r: %r -> %r",
+                        resolved_language, input.text, redecoded,
+                    )
+                    input.text = redecoded
             self._session_language = resolved_language
             sm_context["language"] = resolved_language
             # Tell the response prompt whether this is a fixed-language deployment

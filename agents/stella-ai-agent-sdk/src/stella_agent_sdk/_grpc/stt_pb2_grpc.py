@@ -5,7 +5,7 @@ import warnings
 
 from . import stt_pb2 as stt__pb2
 
-GRPC_GENERATED_VERSION = '1.83.0'
+GRPC_GENERATED_VERSION = '1.84.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -51,6 +51,11 @@ class SpeechToTextStub:
                 request_serializer=stt__pb2.WarmupRequest.SerializeToString,
                 response_deserializer=stt__pb2.WarmupResponse.FromString,
                 _registered_method=True)
+        self.Redecode = channel.unary_unary(
+                '/stt.SpeechToText/Redecode',
+                request_serializer=stt__pb2.RedecodeRequest.SerializeToString,
+                response_deserializer=stt__pb2.RedecodeResponse.FromString,
+                _registered_method=True)
 
 
 class SpeechToTextServicer:
@@ -79,6 +84,19 @@ class SpeechToTextServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Redecode(self, request, context):
+        """One-shot: re-decode a specific utterance's own audio, forced to a
+        language the agent has already locked (#57). Used only for a turn whose
+        free decode in StreamTranscribe was doubtful -- too short, or below the
+        keep-text confidence bar. Never a second call on a confident turn, and
+        its result is never fed back into StreamTranscribe's language detection
+        -- only the original free decode is ever evidence (the self-confirming-
+        pin bug this guards against: see LanguageResolver.needs_redecode).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SpeechToTextServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -96,6 +114,11 @@ def add_SpeechToTextServicer_to_server(servicer, server):
                     servicer.Warmup,
                     request_deserializer=stt__pb2.WarmupRequest.FromString,
                     response_serializer=stt__pb2.WarmupResponse.SerializeToString,
+            ),
+            'Redecode': grpc.unary_unary_rpc_method_handler(
+                    servicer.Redecode,
+                    request_deserializer=stt__pb2.RedecodeRequest.FromString,
+                    response_serializer=stt__pb2.RedecodeResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -181,6 +204,33 @@ class SpeechToText:
             '/stt.SpeechToText/Warmup',
             stt__pb2.WarmupRequest.SerializeToString,
             stt__pb2.WarmupResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Redecode(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/stt.SpeechToText/Redecode',
+            stt__pb2.RedecodeRequest.SerializeToString,
+            stt__pb2.RedecodeResponse.FromString,
             options,
             channel_credentials,
             insecure,

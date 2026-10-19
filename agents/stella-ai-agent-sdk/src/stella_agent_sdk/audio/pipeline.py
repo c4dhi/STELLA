@@ -590,6 +590,16 @@ class AudioPipeline:
         # would make a wrong guess permanent and self-confirming.
         self._stt_language: Optional[str] = None
 
+        # The CURRENT utterance's own raw audio, retained client-side so a
+        # doubtful turn (#57, LanguageResolver.needs_redecode) can be
+        # re-decoded forced into the locked language after the fact — STT
+        # itself does not keep an utterance's audio past its own final event.
+        # Captured from `speech_started` to `is_final` only; bounded the same
+        # way the server bounds its own buffer (see redecode_utterance_audio).
+        self._capturing_utterance_audio = False
+        self._utterance_audio = bytearray()
+        self._utterance_audio_max_bytes = 0
+
         # TTS language. Seeded from the env var for backward compatibility, then
         # from the deployment pin, so the first synthesis of a pinned deployment
         # is already correct before any turn has been resolved. The agent
@@ -1288,6 +1298,11 @@ class AudioPipeline:
                     logger.info(f"First audio chunk received ({len(audio_data)} bytes)")
                 elif chunk_count % 100 == 0:
                     logger.debug(f"Streamed {chunk_count} audio chunks to STT")
+                if self._capturing_utterance_audio:
+                    self._utterance_audio.extend(audio_data)
+                    overflow = len(self._utterance_audio) - self._utterance_audio_max_bytes
+                    if overflow > 0:
+                        del self._utterance_audio[:overflow]
                 yield audio_data
             logger.info(f"Audio generator ended after {chunk_count} chunks")
 
@@ -1295,6 +1310,10 @@ class AudioPipeline:
         # Pass sample_rate from LiveKit (STT service will resample if needed)
         sample_rate = self._room.audio_sample_rate
         logger.info(f"Starting STT stream_transcribe with sample_rate={sample_rate}Hz...")
+        # 16-bit mono: 2 bytes/sample. Same 35s headroom reasoning as the
+        # server's own max_speech_buffer_samples (#57 needs the audio for
+        # whatever the server was willing to let the user say).
+        self._utterance_audio_max_bytes = sample_rate * 2 * 35
         async for event in self._stt.stream_transcribe(
             audio_generator(),
             session_id=self._session_id,
@@ -1321,6 +1340,17 @@ class AudioPipeline:
             # consume the final and `continue`, and the record has to be
             # retired by it either way.
             utt = self._track_utterance(event)
+
+            # Mirror the utterance boundary into the client-side audio
+            # capture (see __init__): start fresh on speech_started, stop
+            # (but keep the buffer) on is_final so redecode_utterance_audio
+            # can still reach it right after this loop body is done with the
+            # event.
+            if event.speech_started:
+                self._utterance_audio = bytearray()
+                self._capturing_utterance_audio = True
+            elif event.is_final:
+                self._capturing_utterance_audio = False
 
             # A voice barge-in was committed for this utterance: its final IS
             # the interrupting turn. Handled before the gate check because
@@ -3152,6 +3182,29 @@ class AudioPipeline:
         if want != self._stt_language:
             logger.info(f"[STT] language pinned to '{want}' (was '{self._stt_language}')")
             self._stt_language = want
+
+    async def redecode_utterance_audio(self, language: str) -> Optional[str]:
+        """Re-decode the utterance that JUST finalized, forced to ``language``
+        (#57) — call this only when the agent's ``LanguageResolver.
+        needs_redecode`` says the turn's free decode was doubtful, right after
+        receiving its final event and before the next one arrives (the buffer
+        is reset on the next ``speech_started``).
+
+        Returns ``None`` when there is nothing retained, or the STT service
+        could not force-decode it (the lightweight dev provider has no
+        language steering) — the caller keeps the turn's original text in
+        that case. The result must never be fed back into ``resolve()`` as a
+        signal; only the original free decode is ever evidence.
+        """
+        audio = bytes(self._utterance_audio)
+        if not audio:
+            return None
+        return await self._stt.redecode(
+            audio,
+            language,
+            session_id=self._session_id,
+            sample_rate=self._room.audio_sample_rate,
+        )
 
     def set_tts_language(self, language: Optional[str]) -> None:
         """Set the language used for subsequent TTS synthesis.

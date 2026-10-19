@@ -613,14 +613,29 @@ class StellaLightAgent(BaseAgent):
             self.audio.set_stt_language(self.language_resolver.forced)
         meta = getattr(input, "metadata", None) or {}
         detected_language = meta.get("detected_language") or None
-        language_signal = (
-            (detected_language, float(meta.get("language_confidence") or 0.0))
-            if detected_language
-            else None
+        language_confidence = float(meta.get("language_confidence") or 0.0)
+        language_signal = (detected_language, language_confidence) if detected_language else None
+        # Decide BEFORE resolve(): the gate reads the ORIGINAL free decode's
+        # own signal and length, never a corrected one — #57's hard rule is
+        # that a forced re-decode must never become its own evidence, and
+        # that starts with never letting it influence this check either.
+        needs_redecode = bool(
+            self.has_audio and detected_language
+            and self.language_resolver.needs_redecode(
+                detected_language, language_confidence, input.text
+            )
         )
         self._session_language = self.language_resolver.resolve(
             input.text, signal=language_signal
         )
+        if needs_redecode:
+            redecoded = await self.audio.redecode_utterance_audio(self._session_language)
+            if redecoded:
+                print(
+                    f"[StellaLightAgent] Re-decoded doubtful turn forced into "
+                    f"{self._session_language!r}: {input.text!r} -> {redecoded!r}"
+                )
+                input.text = redecoded
         sm_context["language"] = self._session_language
         print(f"[StellaLightAgent] Resolved language for turn: {self._session_language}")
 
