@@ -85,6 +85,7 @@ def build_response_system_prompt(
         "language": _language_directive(
             sm_context.get("language"), pinned=bool(sm_context.get("language_pinned"))
         ) or "",
+        "contentLanguage": _content_language_directive(sm_context.get("content_language")) or "",
         "bridge": bridge or "",
         "emotionTags": _emotion_tag_directive() if emotion_tags else "",
         # {{persona.*}} in the configured guidelines. This engine and the
@@ -202,6 +203,25 @@ def _language_directive(language: Optional[str], pinned: bool = False) -> Option
         )
     return head + (
         f"- This is the language detected for this conversation; do not switch languages on your own."
+    )
+
+
+def _content_language_directive(content_language: Optional[str]) -> Optional[str]:
+    """A translation hint for an activity whose own content was written in a
+    different language than the conversation (#58). Turn-scoped by the
+    caller: only passed while that specific activity is running (see
+    agent.py's per-turn `content_language`), so it needs no restore when the
+    activity ends — the activity's language never reaches the LANGUAGE
+    directive above at all, only this one, informational note.
+    """
+    if not content_language:
+        return None
+    name = LANGUAGE_NAMES.get(content_language, content_language)
+    return (
+        f"This activity's own material was originally written in {name}. "
+        f"Keep speaking the conversation's language above regardless — "
+        f"translate and adapt the activity's content naturally rather than "
+        f"switching to {name} or mixing the two."
     )
 
 

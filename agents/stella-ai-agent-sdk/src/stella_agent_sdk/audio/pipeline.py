@@ -603,6 +603,28 @@ class AudioPipeline:
         # would make a wrong guess permanent and self-confirming.
         self._stt_language: Optional[str] = None
 
+        # Each utterance's own raw audio, retained client-side so a doubtful
+        # turn (#57, LanguageResolver.needs_redecode) can be re-decoded forced
+        # into the locked language after the fact — STT itself does not keep
+        # an utterance's audio past its own final event. Keyed by transcript
+        # id (never by "whatever is currently accumulating"): `speech_started`
+        # fires both for a genuinely new utterance AND for a resume out of
+        # MAYBE_ENDING (same id), and a turn can be read after a later one has
+        # already started, so "the buffer" is not a single slot (@sable,
+        # PR 750 review).
+        self._capturing_utterance_audio = False
+        self._utterance_audio_by_id: Dict[str, bytearray] = {}
+        self._active_transcript_id: Optional[str] = None
+        self._utterance_audio_max_bytes = 0
+        # A small rolling pre-speech buffer (distinct from `self._preroll`,
+        # which is the TTS playback head-start below) so a NEW utterance's
+        # capture can be seeded with the audio the server's own VAD saw before
+        # the `speech_started` event made its round trip back to the client —
+        # otherwise the first syllable is lost, same reason the server keeps
+        # its own 200ms pre-buffer (`whisper_provider.py`).
+        self._utterance_preroll_audio = bytearray()
+        self._utterance_preroll_max_bytes = 0
+
         # TTS language. Seeded from the env var for backward compatibility, then
         # from the deployment pin, so the first synthesis of a pinned deployment
         # is already correct before any turn has been resolved. The agent
@@ -1318,6 +1340,7 @@ class AudioPipeline:
                     logger.info(f"First audio chunk received ({len(audio_data)} bytes)")
                 elif chunk_count % 100 == 0:
                     logger.debug(f"Streamed {chunk_count} audio chunks to STT")
+                self._accumulate_utterance_audio(audio_data)
                 yield audio_data
             logger.info(f"Audio generator ended after {chunk_count} chunks")
 
@@ -1325,6 +1348,14 @@ class AudioPipeline:
         # Pass sample_rate from LiveKit (STT service will resample if needed)
         sample_rate = self._room.audio_sample_rate
         logger.info(f"Starting STT stream_transcribe with sample_rate={sample_rate}Hz...")
+        # 16-bit mono: 2 bytes/sample. Same 35s headroom reasoning as the
+        # server's own max_speech_buffer_samples (#57 needs the audio for
+        # whatever the server was willing to let the user say).
+        self._utterance_audio_max_bytes = sample_rate * 2 * 35
+        # Generous margin over the server's own 200ms pre-buffer: this also
+        # has to cover the round trip before `speech_started` reaches the
+        # client, not just the server's own VAD window.
+        self._utterance_preroll_max_bytes = sample_rate * 2 * 1
         async for event in self._stt.stream_transcribe(
             audio_generator(),
             session_id=self._session_id,
@@ -1351,6 +1382,13 @@ class AudioPipeline:
             # consume the final and `continue`, and the record has to be
             # retired by it either way.
             utt = self._track_utterance(event)
+
+            # Mirror the utterance boundary into the client-side audio capture
+            # (see __init__ and the two helpers below).
+            if event.speech_started:
+                self._begin_utterance_capture(event.transcript_id)
+            elif event.is_final:
+                self._end_utterance_capture()
 
             # A voice barge-in was committed for this utterance: its final IS
             # the interrupting turn. Handled before the gate check because
@@ -3201,6 +3239,78 @@ class AudioPipeline:
         if want != self._stt_language:
             logger.info(f"[STT] language pinned to '{want}' (was '{self._stt_language}')")
             self._stt_language = want
+
+    def _begin_utterance_capture(self, transcript_id: Optional[str]) -> None:
+        """Call on ``speech_started``.
+
+        A genuinely NEW utterance (an id not already being tracked) starts a
+        fresh buffer seeded with the pre-roll, so the onset lost before this
+        event's round trip is not missing. The SAME id arrives again on a
+        resume out of MAYBE_ENDING — that must keep accumulating into the
+        existing buffer, not restart it, or a re-decode of "Ich weiß nicht …
+        vielleicht morgen" would replace the whole turn with "vielleicht
+        morgen" alone (@sable, PR 750 review).
+        """
+        if transcript_id and transcript_id not in self._utterance_audio_by_id:
+            self._utterance_audio_by_id[transcript_id] = bytearray(self._utterance_preroll_audio)
+            # Bound how many finalized-but-never-read buffers can pile up
+            # (a turn that was never doubtful, or was discarded/barge-in'd,
+            # leaves its buffer unread forever otherwise).
+            while len(self._utterance_audio_by_id) > 4:
+                oldest = next(iter(self._utterance_audio_by_id))
+                if oldest == transcript_id:
+                    break
+                del self._utterance_audio_by_id[oldest]
+        self._active_transcript_id = transcript_id
+        self._capturing_utterance_audio = True
+
+    def _end_utterance_capture(self) -> None:
+        """Call on ``is_final``. Stops appending; the buffer for this
+        transcript id stays available for ``redecode_utterance_audio`` until
+        it is read or aged out by ``_begin_utterance_capture``."""
+        self._capturing_utterance_audio = False
+
+    def _accumulate_utterance_audio(self, audio_data: bytes) -> None:
+        """Call from the audio generator for every outgoing chunk."""
+        if self._capturing_utterance_audio and self._active_transcript_id is not None:
+            buf = self._utterance_audio_by_id.get(self._active_transcript_id)
+            if buf is not None:
+                buf.extend(audio_data)
+                overflow = len(buf) - self._utterance_audio_max_bytes
+                if overflow > 0:
+                    del buf[:overflow]
+        # Always rolling, independent of capture state, so it holds whatever
+        # came right before the NEXT utterance's speech_started.
+        self._utterance_preroll_audio.extend(audio_data)
+        overflow = len(self._utterance_preroll_audio) - self._utterance_preroll_max_bytes
+        if overflow > 0:
+            del self._utterance_preroll_audio[:overflow]
+
+    async def redecode_utterance_audio(self, transcript_id: str, language: str) -> Optional[str]:
+        """Re-decode the utterance named by ``transcript_id``, forced to
+        ``language`` (#57) — call this only when the agent's
+        ``LanguageResolver.needs_redecode`` says that turn's free decode was
+        doubtful. Consumes the buffer: a second call for the same id returns
+        ``None``.
+
+        Returns ``None`` when there is nothing retained for THIS id — a stale
+        or mismatched id never reaches for a different utterance's audio
+        (@sable, PR 750 review) — or when the STT service could not
+        force-decode it (the lightweight dev provider has no language
+        steering). The caller keeps the turn's original text in either case.
+        The result must never be fed back into ``resolve()`` as a signal;
+        only the original free decode is ever evidence.
+        """
+        buf = self._utterance_audio_by_id.pop(transcript_id, None) if transcript_id else None
+        if not buf:
+            return None
+        return await self._stt.redecode(
+            bytes(buf),
+            language,
+            session_id=self._session_id,
+            sample_rate=self._room.audio_sample_rate,
+            timeout=1.5,
+        )
 
     def set_tts_language(self, language: Optional[str]) -> None:
         """Set the language used for subsequent TTS synthesis.

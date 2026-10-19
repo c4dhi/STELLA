@@ -203,6 +203,7 @@ class Session:
             set_plan_language=lambda *_a, **_k: None,
             resolve=lambda *_a, **_k: "en",
             forced=None,
+            deployment_pin=None,
         )
         agent.expert_registry = SimpleNamespace(
             # The router is forced on in companion mode and off in plan mode.
