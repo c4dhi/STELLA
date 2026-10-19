@@ -48,7 +48,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, O
 
 from stella_agent_sdk.emotion.tags import EmotionCue
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
-from stella_agent_sdk.audio.preroll import PrerollController
+from stella_agent_sdk.audio.preroll import PrerollController, _MIN_MEASURABLE_AUDIO_MS
 from stella_agent_sdk.language import forced_language
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
@@ -271,13 +271,26 @@ _DEFAULT_TTS_PREROLL_MS = 200
 #               behaviour). Costs first-audio latency but a sentence can never
 #               run dry mid-word, which is what a GPU slower than real time
 #               (a T4 running Qwen3) does to `stream`.
-_TTS_PLAYBACK_MODES = ("stream", "sentence")
-_DEFAULT_TTS_PLAYBACK = "stream"
+#   auto     -- the default, and what unset means (#669). Starts the session in
+#               `stream`, exactly as today, and switches once to `sentence` if
+#               the measured real-time factor says the provider cannot keep up
+#               — never back. `stream`/`sentence` still pin the mode outright,
+#               with no switching, for an operator who wants the old behaviour.
+_TTS_PLAYBACK_MODES = ("stream", "sentence", "auto")
+_DEFAULT_TTS_PLAYBACK = "auto"
+
+# How many consecutive sentences slower than real time (RTF > 1, i.e.
+# synth_ms > audio_ms) `auto` waits for before giving up on `stream` for the
+# rest of the session (Felix, 8 Oct 2026). One rule, one measurement, shared
+# with PrerollController: a sentence shorter than _MIN_MEASURABLE_AUDIO_MS
+# carries too little signal to count either way (same floor, same reason), so
+# it neither advances nor resets the streak.
+_AUTO_SWITCH_AFTER_SLOW_SENTENCES = 3
 
 
 def _parse_tts_playback(raw: Optional[str]) -> str:
-    """Resolve STELLA_TTS_PLAYBACK; unset/empty means the default, and an
-    unknown value logs a warning and falls back to it (never fails an agent)."""
+    """Resolve STELLA_TTS_PLAYBACK; unset/empty means the default (`auto`), and
+    an unknown value logs a warning and falls back to it (never fails an agent)."""
     if raw is None or not raw.strip():
         return _DEFAULT_TTS_PLAYBACK
     value = raw.strip().lower()
@@ -285,7 +298,7 @@ def _parse_tts_playback(raw: Optional[str]) -> str:
         return value
     logger.warning(
         f"[TTS] Unknown STELLA_TTS_PLAYBACK={raw!r} "
-        f"(expected {' or '.join(_TTS_PLAYBACK_MODES)}); using {_DEFAULT_TTS_PLAYBACK!r}"
+        f"(expected {', '.join(_TTS_PLAYBACK_MODES)}); using {_DEFAULT_TTS_PLAYBACK!r}"
     )
     return _DEFAULT_TTS_PLAYBACK
 
@@ -590,6 +603,28 @@ class AudioPipeline:
         # would make a wrong guess permanent and self-confirming.
         self._stt_language: Optional[str] = None
 
+        # Each utterance's own raw audio, retained client-side so a doubtful
+        # turn (#57, LanguageResolver.needs_redecode) can be re-decoded forced
+        # into the locked language after the fact — STT itself does not keep
+        # an utterance's audio past its own final event. Keyed by transcript
+        # id (never by "whatever is currently accumulating"): `speech_started`
+        # fires both for a genuinely new utterance AND for a resume out of
+        # MAYBE_ENDING (same id), and a turn can be read after a later one has
+        # already started, so "the buffer" is not a single slot (@sable,
+        # PR 750 review).
+        self._capturing_utterance_audio = False
+        self._utterance_audio_by_id: Dict[str, bytearray] = {}
+        self._active_transcript_id: Optional[str] = None
+        self._utterance_audio_max_bytes = 0
+        # A small rolling pre-speech buffer (distinct from `self._preroll`,
+        # which is the TTS playback head-start below) so a NEW utterance's
+        # capture can be seeded with the audio the server's own VAD saw before
+        # the `speech_started` event made its round trip back to the client —
+        # otherwise the first syllable is lost, same reason the server keeps
+        # its own 200ms pre-buffer (`whisper_provider.py`).
+        self._utterance_preroll_audio = bytearray()
+        self._utterance_preroll_max_bytes = 0
+
         # TTS language. Seeded from the env var for backward compatibility, then
         # from the deployment pin, so the first synthesis of a pinned deployment
         # is already correct before any turn has been resolved. The agent
@@ -640,10 +675,24 @@ class AudioPipeline:
             else f"[TTS] Pre-roll: auto, starting at {self._preroll.current_ms} ms "
             "(adapts from measured synthesis speed)"
         )
-        # Read once: stream (default) or sentence. See _TTS_PLAYBACK_MODES.
-        self._tts_playback: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
-        if self._tts_playback != _DEFAULT_TTS_PLAYBACK:
-            logger.info(f"[TTS] Playback mode: {self._tts_playback}")
+        # Read once: stream, sentence, or auto (default). See _TTS_PLAYBACK_MODES.
+        # ``_tts_playback`` is the EFFECTIVE mode _play_utterance reads, and is
+        # the only one of the two that ever changes, exactly once, mid-session
+        # — ``_tts_playback_configured`` stays what the operator asked for, so
+        # an explicit stream/sentence pin is never touched by the auto-switch.
+        self._tts_playback_configured: str = _parse_tts_playback(os.getenv("STELLA_TTS_PLAYBACK"))
+        self._tts_playback: str = (
+            "stream" if self._tts_playback_configured == "auto"
+            else self._tts_playback_configured
+        )
+        self._auto_slow_streak = 0
+        logger.info(
+            f"[TTS] Playback mode: auto, starting in stream "
+            f"(switches to sentence after {_AUTO_SWITCH_AFTER_SLOW_SENTENCES} "
+            "consecutive sentences slower than real time)"
+            if self._tts_playback_configured == "auto"
+            else f"[TTS] Playback mode: {self._tts_playback_configured}"
+        )
         self._speech_worker_task: Optional[asyncio.Task] = None
 
         # ── Barge-in: reversible suspend / resume of playback ──────────────
@@ -866,6 +915,8 @@ class AudioPipeline:
         self._turn_bridge_tts_first_byte_emitted: bool = False
         self._turn_response_tts_first_byte_emitted: bool = False
         self._last_response_tts_done_elapsed: float = 0
+        self._last_bridge_tts_done_elapsed: float = 0
+        self._turn_bridge_first_byte_elapsed: Optional[float] = None
 
         # Register data message handler for text input from frontend
         self._room.on_data_received(self._handle_data_message)
@@ -1019,6 +1070,7 @@ class AudioPipeline:
         self._turn_id = turn_id
         self._turn_bridge_tts_first_byte_emitted = False
         self._turn_response_tts_first_byte_emitted = False
+        self._turn_bridge_first_byte_elapsed = None
 
     def _anchor_turn_if_unanchored(self, event: "TranscriptEvent") -> None:
         """Anchor a turn that reached the agent without passing the STT branch.
@@ -1288,6 +1340,7 @@ class AudioPipeline:
                     logger.info(f"First audio chunk received ({len(audio_data)} bytes)")
                 elif chunk_count % 100 == 0:
                     logger.debug(f"Streamed {chunk_count} audio chunks to STT")
+                self._accumulate_utterance_audio(audio_data)
                 yield audio_data
             logger.info(f"Audio generator ended after {chunk_count} chunks")
 
@@ -1295,6 +1348,14 @@ class AudioPipeline:
         # Pass sample_rate from LiveKit (STT service will resample if needed)
         sample_rate = self._room.audio_sample_rate
         logger.info(f"Starting STT stream_transcribe with sample_rate={sample_rate}Hz...")
+        # 16-bit mono: 2 bytes/sample. Same 35s headroom reasoning as the
+        # server's own max_speech_buffer_samples (#57 needs the audio for
+        # whatever the server was willing to let the user say).
+        self._utterance_audio_max_bytes = sample_rate * 2 * 35
+        # Generous margin over the server's own 200ms pre-buffer: this also
+        # has to cover the round trip before `speech_started` reaches the
+        # client, not just the server's own VAD window.
+        self._utterance_preroll_max_bytes = sample_rate * 2 * 1
         async for event in self._stt.stream_transcribe(
             audio_generator(),
             session_id=self._session_id,
@@ -1321,6 +1382,13 @@ class AudioPipeline:
             # consume the final and `continue`, and the record has to be
             # retired by it either way.
             utt = self._track_utterance(event)
+
+            # Mirror the utterance boundary into the client-side audio capture
+            # (see __init__ and the two helpers below).
+            if event.speech_started:
+                self._begin_utterance_capture(event.transcript_id)
+            elif event.is_final:
+                self._end_utterance_capture()
 
             # A voice barge-in was committed for this utterance: its final IS
             # the interrupting turn. Handled before the gate check because
@@ -1426,8 +1494,12 @@ class AudioPipeline:
                 # Turn-based mode — either configured that way, or voice
                 # interruptions are in a post-storm cooldown. Ignore user audio
                 # while speaking; anything they said that mattered is carried
-                # over as the next turn by the branch above.
+                # over as the next turn by the branch above. A final that gets
+                # here is dropped, so it is shown and logged as such (#684).
                 if not self._barge_in_available():
+                    if event.is_final and (event.text or "").strip():
+                        self._log_not_taken(event)
+                        await self._publish_user_transcript(event, discarded=True)
                     continue
 
                 text = (event.text or "").strip()
@@ -1506,6 +1578,8 @@ class AudioPipeline:
                 #
                 # Partials stay unmarked: they are still live, and the final
                 # replaces them by transcript_id.
+                if event.is_final and text:
+                    self._log_not_taken(event)
                 await self._publish_user_transcript(event, discarded=event.is_final)
                 continue
 
@@ -1588,6 +1662,19 @@ class AudioPipeline:
                     await self._debounce_transcript(event)
                 else:
                     await self._transcript_queue.put(event)
+
+    def _log_not_taken(self, event: TranscriptEvent) -> None:
+        """Log a final dropped because the agent held the floor (#684).
+
+        Short, never past the interruption threshold, begun and ended while the
+        gate was closed: a backchannel by design. But when the reply call
+        stalls, that window is long enough for a real answer ("okay") to fall
+        into it, and the drop used to leave no line in the log at all.
+        """
+        logger.info(
+            f"[GATE] Not taken as a turn (agent's turn, gate closed): "
+            f"'{(event.text or '').strip()[:60]}'"
+        )
 
     async def _resolve_voice_barge_in(self, event: TranscriptEvent) -> None:
         """Decide what a confirmed voice interruption actually was, now that its
@@ -3153,6 +3240,78 @@ class AudioPipeline:
             logger.info(f"[STT] language pinned to '{want}' (was '{self._stt_language}')")
             self._stt_language = want
 
+    def _begin_utterance_capture(self, transcript_id: Optional[str]) -> None:
+        """Call on ``speech_started``.
+
+        A genuinely NEW utterance (an id not already being tracked) starts a
+        fresh buffer seeded with the pre-roll, so the onset lost before this
+        event's round trip is not missing. The SAME id arrives again on a
+        resume out of MAYBE_ENDING — that must keep accumulating into the
+        existing buffer, not restart it, or a re-decode of "Ich weiß nicht …
+        vielleicht morgen" would replace the whole turn with "vielleicht
+        morgen" alone (@sable, PR 750 review).
+        """
+        if transcript_id and transcript_id not in self._utterance_audio_by_id:
+            self._utterance_audio_by_id[transcript_id] = bytearray(self._utterance_preroll_audio)
+            # Bound how many finalized-but-never-read buffers can pile up
+            # (a turn that was never doubtful, or was discarded/barge-in'd,
+            # leaves its buffer unread forever otherwise).
+            while len(self._utterance_audio_by_id) > 4:
+                oldest = next(iter(self._utterance_audio_by_id))
+                if oldest == transcript_id:
+                    break
+                del self._utterance_audio_by_id[oldest]
+        self._active_transcript_id = transcript_id
+        self._capturing_utterance_audio = True
+
+    def _end_utterance_capture(self) -> None:
+        """Call on ``is_final``. Stops appending; the buffer for this
+        transcript id stays available for ``redecode_utterance_audio`` until
+        it is read or aged out by ``_begin_utterance_capture``."""
+        self._capturing_utterance_audio = False
+
+    def _accumulate_utterance_audio(self, audio_data: bytes) -> None:
+        """Call from the audio generator for every outgoing chunk."""
+        if self._capturing_utterance_audio and self._active_transcript_id is not None:
+            buf = self._utterance_audio_by_id.get(self._active_transcript_id)
+            if buf is not None:
+                buf.extend(audio_data)
+                overflow = len(buf) - self._utterance_audio_max_bytes
+                if overflow > 0:
+                    del buf[:overflow]
+        # Always rolling, independent of capture state, so it holds whatever
+        # came right before the NEXT utterance's speech_started.
+        self._utterance_preroll_audio.extend(audio_data)
+        overflow = len(self._utterance_preroll_audio) - self._utterance_preroll_max_bytes
+        if overflow > 0:
+            del self._utterance_preroll_audio[:overflow]
+
+    async def redecode_utterance_audio(self, transcript_id: str, language: str) -> Optional[str]:
+        """Re-decode the utterance named by ``transcript_id``, forced to
+        ``language`` (#57) — call this only when the agent's
+        ``LanguageResolver.needs_redecode`` says that turn's free decode was
+        doubtful. Consumes the buffer: a second call for the same id returns
+        ``None``.
+
+        Returns ``None`` when there is nothing retained for THIS id — a stale
+        or mismatched id never reaches for a different utterance's audio
+        (@sable, PR 750 review) — or when the STT service could not
+        force-decode it (the lightweight dev provider has no language
+        steering). The caller keeps the turn's original text in either case.
+        The result must never be fed back into ``resolve()`` as a signal;
+        only the original free decode is ever evidence.
+        """
+        buf = self._utterance_audio_by_id.pop(transcript_id, None) if transcript_id else None
+        if not buf:
+            return None
+        return await self._stt.redecode(
+            bytes(buf),
+            language,
+            session_id=self._session_id,
+            sample_rate=self._room.audio_sample_rate,
+            timeout=1.5,
+        )
+
     def set_tts_language(self, language: Optional[str]) -> None:
         """Set the language used for subsequent TTS synthesis.
 
@@ -3286,6 +3445,8 @@ class AudioPipeline:
         self._turn_bridge_tts_first_byte_emitted = False
         self._turn_response_tts_first_byte_emitted = False
         self._last_response_tts_done_elapsed = 0
+        self._last_bridge_tts_done_elapsed = 0
+        self._turn_bridge_first_byte_elapsed = None
 
     @staticmethod
     def _preroll_ms_to_bytes(ms: int) -> int:
@@ -3352,6 +3513,49 @@ class AudioPipeline:
         utt.task = asyncio.create_task(_pump())
         return utt
 
+    def _note_tts_done(self, source: str, elapsed_ms: float) -> None:
+        """Record that a bridge or response sentence finished playing.
+
+        ``elapsed_ms`` is when its last frame was pushed. LiveKit's output
+        buffer takes a whole sentence in a few ms and plays it from there, so
+        the participant hears the end only once that buffer has drained: what
+        is still queued is added (#454; a spoken "Alright." measured 7 ms of
+        playback without it).
+        """
+        try:
+            elapsed_ms += float(self._room.queued_playout_ms)
+        except Exception:
+            pass
+        if source == "bridge":
+            self._last_bridge_tts_done_elapsed = elapsed_ms
+        else:
+            self._last_response_tts_done_elapsed = elapsed_ms
+
+    def _flush_tts_done(self) -> None:
+        """Emit bridge_tts_done and response_tts_done once each for the turn.
+
+        Each carries its LAST sentence's completion time. bridge_tts_done used
+        to go out after every bridge sentence (#454), so a two-sentence bridge
+        had two end points. It now also carries bridge_playback_ms, from the
+        bridge's first audible byte to its end: how much of the expert wait the
+        participant spent listening rather than waiting.
+        """
+        if self._last_bridge_tts_done_elapsed > 0:
+            extra = {}
+            if self._turn_bridge_first_byte_elapsed is not None:
+                extra["bridge_playback_ms"] = round(
+                    self._last_bridge_tts_done_elapsed - self._turn_bridge_first_byte_elapsed, 2
+                )
+            asyncio.create_task(self._emit_analytics_event(
+                "bridge_tts_done", self._last_bridge_tts_done_elapsed, **extra
+            ))
+            self._last_bridge_tts_done_elapsed = 0
+        if self._last_response_tts_done_elapsed > 0:
+            asyncio.create_task(self._emit_analytics_event(
+                "response_tts_done", self._last_response_tts_done_elapsed
+            ))
+            self._last_response_tts_done_elapsed = 0
+
     def _emit_first_byte(self, source: str) -> None:
         """Emit the TTS first-byte analytics event once per source per turn.
 
@@ -3364,6 +3568,7 @@ class AudioPipeline:
             self._turn_bridge_tts_first_byte_emitted = True
             if self.turn_anchor_ts > 0:
                 elapsed = (time.perf_counter() - self.turn_anchor_ts) * 1000
+                self._turn_bridge_first_byte_elapsed = elapsed
                 self._report_first_byte_latency("bridge", elapsed)
         elif source == "response" and not self._turn_response_tts_first_byte_emitted:
             self._turn_response_tts_first_byte_emitted = True
@@ -3644,11 +3849,17 @@ class AudioPipeline:
             self._cur_promised = 0
 
     def _learn_preroll(self, utt: "_StreamingUtterance", bridged_ms: float) -> None:
-        """Feed a finished sentence to the pre-roll controller (no-op when pinned)."""
-        if self._preroll.fixed or utt.error is not None or not utt.synth_ms:
+        """Feed a finished sentence's measured pace to the pre-roll controller
+        and the `auto` playback-mode switch (#669) — one measurement, both
+        rules. No-op (for both) when the sentence carries no usable timing."""
+        if utt.error is not None or not utt.synth_ms:
+            return
+        audio_ms = len(utt.data) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000.0
+        self._maybe_switch_to_sentence_mode(audio_ms, utt.synth_ms)
+
+        if self._preroll.fixed:
             return
         before = self._preroll.current_ms
-        audio_ms = len(utt.data) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000.0
         self._preroll.observe(audio_ms, utt.synth_ms, bridged_ms)
         if self._preroll.current_ms != before:
             rtf = self._preroll.rtf
@@ -3658,6 +3869,27 @@ class AudioPipeline:
                 if rtf is not None
                 else f"[TTS] Pre-roll {before}ms -> {self._preroll.current_ms}ms"
             )
+
+    def _maybe_switch_to_sentence_mode(self, audio_ms: float, synth_ms: float) -> None:
+        """`auto` only: after _AUTO_SWITCH_AFTER_SLOW_SENTENCES consecutive
+        sentences slower than real time, give up on `stream` for the rest of
+        the session — never back (Felix, 8 Oct 2026). An explicit `stream` or
+        `sentence` pin (`_tts_playback_configured`) is never touched."""
+        if self._tts_playback_configured != "auto" or self._tts_playback == "sentence":
+            return
+        if audio_ms < _MIN_MEASURABLE_AUDIO_MS:
+            return  # too short to carry the signal either way (see PrerollController)
+        rtf = synth_ms / audio_ms
+        if rtf <= 1.0:
+            self._auto_slow_streak = 0
+            return
+        self._auto_slow_streak += 1
+        if self._auto_slow_streak >= _AUTO_SWITCH_AFTER_SLOW_SENTENCES:
+            logger.info(
+                f"[TTS] Playback mode: stream -> sentence (RTF {rtf:.2f} on "
+                f"{self._auto_slow_streak} consecutive sentences slower than real time)"
+            )
+            self._tts_playback = "sentence"
 
     async def _bridge_underrun(self, fade_from: int = 0) -> float:
         """Push silence when the output source is about to run dry.
@@ -3774,13 +4006,12 @@ class AudioPipeline:
                 # Play the current sentence as it synthesizes
                 await self._play_utterance(utt, source=source, meta=meta)
 
-                # Emit tts_done events after each sentence completes
+                # Note when each sentence finished; the *_tts_done events go
+                # out once, with the last one, when the worker exits.
                 if self.turn_anchor_ts > 0:
-                    elapsed = (time.perf_counter() - self.turn_anchor_ts) * 1000
-                    if source == "bridge":
-                        asyncio.create_task(self._emit_analytics_event("bridge_tts_done", elapsed))
-                    else:
-                        self._last_response_tts_done_elapsed = elapsed
+                    self._note_tts_done(
+                        source, (time.perf_counter() - self.turn_anchor_ts) * 1000
+                    )
 
         except asyncio.CancelledError:
             logger.info("[TTS] Speech worker cancelled")
@@ -3791,10 +4022,7 @@ class AudioPipeline:
             if pending:
                 pending.cancel()
         finally:
-            # Emit response_tts_done with the last response sentence's completion time
-            if hasattr(self, '_last_response_tts_done_elapsed') and self._last_response_tts_done_elapsed > 0:
-                asyncio.create_task(self._emit_analytics_event("response_tts_done", self._last_response_tts_done_elapsed))
-                self._last_response_tts_done_elapsed = 0
+            self._flush_tts_done()
             self._is_speaking = False
             self._audio_active = False
             self.open_transcript_gate()

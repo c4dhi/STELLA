@@ -38,6 +38,7 @@ class FakeRoom:
 
     def __init__(self):
         self.clear_count = 0
+        self.published = []
 
     def on_data_received(self, cb):
         pass
@@ -46,6 +47,7 @@ class FakeRoom:
         await asyncio.sleep(0)
 
     async def publish_data(self, data, *a, **k):
+        self.published.append(data)
         await asyncio.sleep(0)
 
     def publish_data_ordered(self, data, *a, **k):
@@ -286,3 +288,58 @@ async def test_a_confirmed_interruption_is_never_filtered_as_a_backchannel():
 
     assert pipe._pending_barge_in is not None, "a confirmed interruption was discarded"
     assert pipe._pending_barge_in.text == "stopp, das ist falsch"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 3. A short reply while Stella is still working on her answer (#684)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Session of 7 Oct: the bridge was spoken, the reply call stalled for 32s, and
+# the participant's "okay" (never past the interruption threshold) both began
+# and ended inside that wait. Decided 19 Oct: it stays out of the conversation,
+# as any backchannel does, but it is logged and shown in the transcript as not
+# taken, so neither the participant nor a later reader sees it as answered.
+
+def final_transcripts(pipe):
+    return [
+        d["data"] for d in pipe._room.published
+        if d.get("type") == "transcript" and d["data"].get("is_final")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_short_reply_during_the_wait_is_shown_as_not_taken_and_logged(caplog):
+    pipe = talking_pipeline()  # bridge spoken, reply still pending: gate closed
+
+    with caplog.at_level("INFO", logger="stella_agent_sdk.audio.pipeline"):
+        await drive(pipe, [
+            ev(started=True, tid="K"),
+            ev("Okay", tid="K"),
+            ev(ended=True, tid="K"),
+            ev("Okay.", is_final=True, tid="K"),
+        ])
+
+    assert queued(pipe) == [] and pipe._pending_barge_in is None, "it became a turn"
+    assert [(t["text"], t["discarded"]) for t in final_transcripts(pipe)] == [("Okay.", True)]
+    assert any(
+        "[GATE] Not taken as a turn" in r.getMessage() and "Okay." in r.getMessage()
+        for r in caplog.records
+    ), "the dropped reply left no log line"
+
+
+@pytest.mark.asyncio
+async def test_turn_based_mode_also_shows_and_logs_a_short_reply_during_the_wait(caplog):
+    """Without barge-in the same utterance used to vanish without a publish."""
+    pipe = talking_pipeline()
+    pipe._barge_in_enabled = False
+
+    with caplog.at_level("INFO", logger="stella_agent_sdk.audio.pipeline"):
+        await drive(pipe, [
+            ev(started=True, tid="L"),
+            ev(ended=True, tid="L"),
+            ev("Okay.", is_final=True, tid="L"),
+        ])
+
+    assert queued(pipe) == [] and pipe._pending_barge_in is None
+    assert [(t["text"], t["discarded"]) for t in final_transcripts(pipe)] == [("Okay.", True)]
+    assert any("[GATE] Not taken as a turn" in r.getMessage() for r in caplog.records)

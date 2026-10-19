@@ -87,8 +87,8 @@ configSchema:
     - name: STELLA_TTS_PREROLL_MS
       description: "Fix the jitter buffer (ms) of audio held before each sentence plays. Leave unset (recommended): the agent measures how fast the voice is generated on this hardware and picks the head start itself, starting at 200 ms and raising it (up to 3 s) when the voice runs slower than real time or 'Playout starved' / 'bridged Xms' shows up in the agent log, then lowering it slowly when there is slack. Setting a value turns that off. 0 also disables the underrun guard."
     - name: STELLA_TTS_PLAYBACK
-      description: "How synthesized speech is played: 'stream' (default) starts each sentence as it is generated, lowest latency; 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did. Use 'sentence' when the TTS runs slower than real time (e.g. Qwen3 on a T4), where 'stream' can run dry mid-word. Set per deployment, so two deployments can be compared side by side. Unknown values fall back to 'stream'. Leave unset for 'stream'."
-      default: "stream"
+      description: "How synthesized speech is played: 'auto' (default, and what leaving this unset means) starts the session in 'stream' and switches once to 'sentence' if the measured synthesis speed says the provider cannot keep up — never back. 'stream' starts each sentence as it is generated, lowest latency, but can run dry mid-word on a TTS slower than real time (e.g. Qwen3 on a T4). 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did — pin it to skip the auto-switch. Set per deployment, so two deployments can be compared side by side. Unknown values fall back to 'auto'."
+      default: "auto"
     - name: STELLA_TTS_RATE_VARIATION
       description: "Vary the speaking rate slightly by turn character (a heavier turn is taken a little slower, an opening beat a little brisker). ON BY DEFAULT — set 'false' to synthesize every utterance at exactly one rate. Only providers that implement rate honor it (Qwen3 does, by resampling)."
     - name: TTS_SPEED
@@ -149,7 +149,7 @@ pipelineSchema:
         - id: conversation_guidelines
           label: "Conversation Guidelines"
           type: text
-          description: "Custom conversation style guidelines (overrides defaults). In companion mode these apply inside an activity only; outside one the Companion node's Free Conversation Guidelines are used instead. Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
+          description: "Custom conversation style guidelines (overrides defaults). In companion mode these apply inside an activity only; outside one the Companion node's Free Conversation Guidelines are used instead. Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{contentLanguage}} (companion mode only: present when this activity's own plan was declared in a different language than the conversation — a translation note, never an instruction to switch; the conversation's own language in {{language}} always wins, and this disappears again the turn after the activity ends, #58), {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
           default: |
             CONVERSATIONAL STYLE (spoken aloud via TTS — follow strictly):
 
@@ -218,6 +218,10 @@ pipelineSchema:
             {{#if language}}
 
             {{language}}
+            {{/if}}
+            {{#if contentLanguage}}
+
+            {{contentLanguage}}
             {{/if}}
             {{#if emotionTags}}
 
@@ -564,20 +568,29 @@ pipelineSchema:
       max: 1
       step: 0.05
       default: 0.4
-    switch_threshold:
-      label: "Switch threshold"
-      description: "Min confidence to switch an already-confirmed language (higher than detect, so a stray word can't flip it)."
+    text_bar:
+      label: "Keep-text bar"
+      description: "Below this confidence (or too short), a turn's own transcript is re-decoded forced into the current lock for display; at or above it, the turn's own free decode is shown as-is. Cosmetic only — does not gate whether the lock itself moves (see switch_score)."
       type: number
       min: 0
       max: 1
       step: 0.05
-      default: 0.6
-    debounce:
-      label: "Switch debounce"
-      description: "Consecutive confident detections required before switching language."
-      type: integer
-      min: 1
-      default: 1
+      default: 0.85
+    decay:
+      label: "Challenger decay"
+      description: "How much of a building challenger-language score survives a turn that isn't itself a vote for it. Lower = evidence fades faster between confident off-language turns."
+      type: number
+      min: 0
+      max: 1
+      step: 0.05
+      default: 0.5
+    switch_score:
+      label: "Switch score"
+      description: "An already-confirmed language switches once a challenger language's running score (decaying each turn, rising by each vote's own confidence) crosses this. Replaces a fixed consecutive-turn count: evidence accumulates across a mixed run rather than needing a streak."
+      type: number
+      min: 0
+      step: 0.05
+      default: 1.5
 
 # SDK prompt-compiler version this agent resolves {{placeholder}} tokens with.
 # 1.1.0 adds the {{persona.*}} namespace. 1.0.0 stays registered in the SDK, so

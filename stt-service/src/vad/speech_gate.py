@@ -98,11 +98,30 @@ class GateConfig:
     #: Sample rate the voiced-sample counter is measured in.
     sample_rate: int = 16000
 
-    #: Documented ceiling on MAYBE_ENDING that is NOT enforced here, exactly
-    #: as it was not enforced in the whisper machine this replaces. Carried so
-    #: the value has somewhere to live when #469 implements it; wiring it up
-    #: now would smuggle a behaviour change into an extraction.
+    #: Hard ceiling on time in MAYBE_ENDING, measured from entry into it
+    #: (#469). While the window is fixed the window always ends the hold
+    #: first; the ceiling is what still bounds it once something extends the
+    #: hold. Never shorter than the window: a shorter one would end every
+    #: utterance early, so it is clamped up to it. None means no ceiling.
     max_endpointing_delay_ms: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        self.max_endpointing_delay_ms = clamp_endpointing_ceiling(
+            self.max_endpointing_delay_ms, self.continuation_window_ms
+        )
+
+
+def clamp_endpointing_ceiling(
+    ceiling_ms: Optional[float], continuation_window_ms: float
+) -> Optional[float]:
+    """The ceiling, raised to the continuation window if it is shorter."""
+    if ceiling_ms is None or ceiling_ms >= continuation_window_ms:
+        return ceiling_ms
+    print(
+        f"[SpeechGate] max_endpointing_delay_ms={ceiling_ms:g} is shorter than "
+        f"continuation_window_ms={continuation_window_ms:g}; using {continuation_window_ms:g}"
+    )
+    return continuation_window_ms
 
 
 class SpeechGate:
@@ -128,6 +147,8 @@ class SpeechGate:
         self.pending_final_time: Optional[float] = None
         self.voiced_samples = 0
         self.barge_in_signalled = False
+        #: Why the last MAYBE_ENDING ended: "window" or "ceiling".
+        self.last_exit_reason: Optional[str] = None
 
     # -- queries ---------------------------------------------------------
 
@@ -146,6 +167,24 @@ class SpeechGate:
         if self.silence_start_time is None:
             return 0.0
         return (now - self.silence_start_time) * 1000.0
+
+    def hold_expired(self, now: float) -> Optional[str]:
+        """Whether MAYBE_ENDING is over: "ceiling", "window", or None.
+
+        The one place the hold's exit is decided; the provider's stream-end
+        check asks here too. Both bounds are measured from entry into
+        MAYBE_ENDING rather than from the start of the silence, so the full
+        grace period is always granted even if a blocking decode ate part of it.
+        """
+        if self.state != SpeechState.MAYBE_ENDING or self.pending_final_time is None:
+            return None
+        waited = (now - self.pending_final_time) * 1000.0
+        ceiling = self.config.max_endpointing_delay_ms
+        if ceiling is not None and waited >= ceiling:
+            return "ceiling"
+        if waited >= self.config.continuation_window_ms:
+            return "window"
+        return None
 
     # -- the machine -----------------------------------------------------
 
@@ -211,13 +250,11 @@ class SpeechGate:
                 signals.append(GateSignal.SPEECH_ENDED)
 
         elif self.state == SpeechState.MAYBE_ENDING:
-            # Measured from entry into MAYBE_ENDING rather than from the start
-            # of the silence, so the full grace period is always granted even
-            # if a blocking decode ate part of it.
-            waited = (now - (self.pending_final_time or now)) * 1000.0
-            if waited >= self.config.continuation_window_ms:
+            reason = self.hold_expired(now)
+            if reason:
                 signals.append(GateSignal.FINALIZE)
                 self.reset()
+                self.last_exit_reason = reason
 
         return signals
 
