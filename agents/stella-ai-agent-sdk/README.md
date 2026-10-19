@@ -169,7 +169,7 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `TTS_SERVICE_ADDRESS` | `tts-service:50052` | TTS gRPC service address |
 | `TTS_ENABLED` | `true` | Set to `false` to disable TTS entirely. The agent will still receive speech input and send text responses, but no audio will be synthesized — effectively turning it into a text chatbot. |
 | `STT_WARMUP_ENABLED` | `true` | Warm up STT model before first utterance |
-| `STELLA_TTS_PLAYBACK` | `stream` | `stream` plays each sentence as it synthesizes; `sentence` synthesizes the whole sentence first, then plays it (use with a TTS provider slower than real time). Unknown values log a warning and use `stream` |
+| `STELLA_TTS_PLAYBACK` | `auto` | `auto` (and unset) starts in `stream` and switches once to `sentence` if synthesis measures slower than real time for 3 consecutive sentences — never back. `stream` plays each sentence as it synthesizes; `sentence` synthesizes the whole sentence first, then plays it. Unknown values log a warning and use `auto` |
 | `STELLA_TTS_PREROLL_MS` | auto | Audio buffered before an utterance starts playing in `stream` mode. Unset, it adapts to the measured synthesis speed (200 ms to 3 s); set, it is pinned |
 | `SESSION_SERVER_URL` | `http://session-management-server:3000` | Session management HTTP URL |
 | `GRPC_SERVER` | `session-management-server:50051` | Session management gRPC address |
