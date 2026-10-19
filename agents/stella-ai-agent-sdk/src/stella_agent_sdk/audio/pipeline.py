@@ -3358,7 +3358,18 @@ class AudioPipeline:
         return utt
 
     def _note_tts_done(self, source: str, elapsed_ms: float) -> None:
-        """Record that a bridge or response sentence finished playing."""
+        """Record that a bridge or response sentence finished playing.
+
+        ``elapsed_ms`` is when its last frame was pushed. LiveKit's output
+        buffer takes a whole sentence in a few ms and plays it from there, so
+        the participant hears the end only once that buffer has drained: what
+        is still queued is added (#454; a spoken "Alright." measured 7 ms of
+        playback without it).
+        """
+        try:
+            elapsed_ms += float(self._room.queued_playout_ms)
+        except Exception:
+            pass
         if source == "bridge":
             self._last_bridge_tts_done_elapsed = elapsed_ms
         else:

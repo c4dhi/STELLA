@@ -13,7 +13,7 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `bridge_tts_done` is emitted once per turn, when the bridge's last sentence has played, instead of after every bridge sentence. It carries `bridge_playback_ms`, the time from the bridge's first audible byte to its end.
+- `bridge_tts_done` is emitted once per turn, when the bridge's last sentence has played, instead of after every bridge sentence. It carries `bridge_playback_ms`, the time from the bridge's first audible byte to its end. `bridge_tts_done` and `response_tts_done` now mark when the last sentence is heard (push time plus the audio still queued for playout), not when its last frame was handed to LiveKit.
 
 ## [0.7.0] - 2026-10-07
 
