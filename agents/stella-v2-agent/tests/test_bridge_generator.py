@@ -387,8 +387,15 @@ class TestConfigCarriesTheImprovements:
         assert "{{#if activitiesOnOffer}}" in prompt
         rendered_on = render_prompt(prompt, {"activitiesOnOffer": True})
         rendered_off = render_prompt(prompt, {"activitiesOnOffer": False})
-        assert "NEVER agree to start it" in rendered_on
-        assert "NEVER agree to start it" not in rendered_off
+        # Explicit override of "react to the specific thing they said" --
+        # a live re-run (#87) showed the bridge still acknowledging and
+        # offering to help ("Verstanden, ... Ich kann dir dabei helfen.")
+        # when the directive only forbade agreeing/naming/promising; it had
+        # to also forbid acknowledging or confirming understanding.
+        assert "do not acknowledge it" in rendered_on
+        assert "do not confirm you understood it" in rendered_on
+        assert "do not offer to help with it" in rendered_on
+        assert "do not acknowledge it" not in rendered_off
 
 
 

@@ -61,14 +61,15 @@ Always:
 {{#if isBargeIn}}
 - The user just interrupted you. Yield the floor: two or three words that hand it to them, then stop. No example is given here on purpose — a quoted one gets repeated verbatim, in the language it was written in. Do not continue your previous point.
 {{/if}}
-{{#if activitiesOnOffer}}
-- They may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on. NEVER agree to start it, promise anything about it, or repeat its name back as if it were already settled — that decision is made after you speak, and a confirmation question may follow what you say. If you react at all, keep it to a short, non-committal beat. No example is given here either, for the same reason as above.
-{{/if}}
 - Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult. Naming what you hear in it ("that sounds draining") is welcome; judging it is not.
 - Say only what follows from what they actually told you. Do not invent a mood, a motive or a situation they have not mentioned.
 {{#if bridgeMode}}
 
 {{bridgeMode}}
+{{/if}}
+{{#if activitiesOnOffer}}
+
+OVERRIDING EVERY RULE ABOVE, INCLUDING "react to the specific thing they said": they may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on, and that decision is made after you speak — a confirmation question may follow what you say. So say nothing about what they just asked for: do not acknowledge it, do not confirm you understood it, do not repeat any part of it back in your own words either, and do not offer to help with it. The shortest possible neutral beat is all that's wanted here — no example is given, for the same reason as above.
 {{/if}}
 Output ONLY the bridge. No quotes, no labels."""
 
