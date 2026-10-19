@@ -23,6 +23,7 @@ import { EncryptionService } from '../env-var-templates/encryption.service.js';
 import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service.js';
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
 import { PersonasService } from '../personas/personas.service.js';
+import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -50,6 +51,8 @@ export class AgentsService {
     // Resolves the deploy-time persona snapshot (identity), independent of agent type.
     private readonly personasService: PersonasService,
     private readonly eventEmitter: EventEmitter2,
+    // Platform defaults a system admin sets (TTS playback), applied at every pod creation.
+    private readonly platformSettings: PlatformSettingsService,
     @Optional() private agentServerService?: AgentServerService,
     // See the matching comment in SessionsService: typed `any` here (and
     // assigned to the class field below) so TS's emitDecoratorMetadata
@@ -397,11 +400,13 @@ export class AgentsService {
       // Resolve env vars once here, before touching K8s.
       // Decrypts the template (if any), merges manual overrides on top, and returns the final map.
       // KubernetesService receives only the merged plaintext — no business logic leaks into infrastructure.
-      const { merged: resolvedEnvVars } = await this.envVarTemplatesService.resolveEnvVars(
+      const { merged } = await this.envVarTemplatesService.resolveEnvVars(
         createAgentDto.envVarTemplateId,
         userId,
         createAgentDto.envVars,
       );
+      // The deployment's own playback mode wins; otherwise the platform default.
+      const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, agentId);
 
       // Create K8s pod - agent connects directly to LiveKit via SDK
       const { podName, secretName } = await this.k8s.createAgentPod({
@@ -1093,11 +1098,14 @@ export class AgentsService {
 
     // Re-resolve env vars using the same code path as create() to guarantee the restarted pod
     // gets an identical secret to the original deployment.
-    const { merged: resolvedEnvVars } = await this.envVarTemplatesService.resolveEnvVars(
+    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
       agent.envVarTemplateId ?? undefined,
       projectMembership.userId,
       storedManualVars,
     );
+    // Unlike the rest of the env, the platform playback default is read fresh:
+    // a woken session is a new pipeline, so it takes the current default.
+    const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, id);
 
     // Recreate Kubernetes pod with SAME agent ID
     try {
