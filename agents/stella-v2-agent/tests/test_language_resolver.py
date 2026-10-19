@@ -249,6 +249,19 @@ def test_a_3word_off_lock_turn_does_not_instant_switch_even_at_high_confidence()
     assert r.resolve("ja klar doch", signal=("de", 0.97)) == "en"
 
 
+def test_a_low_detect_threshold_does_not_lower_the_instant_switch_bar():
+    # #90 review (@sable, ref 480490b4): detect_threshold and
+    # instant_switch_threshold are deliberately separate. A deployment (the
+    # study configs) pinning detect_threshold to 0.4 for the first-lock
+    # behavior it wants must NOT thereby also let a merely-moderate (.52)
+    # off-lock turn switch a confirmed lock outright — instant_switch_threshold
+    # stays at its own 0.9 default regardless.
+    r = LanguageResolver(detect_threshold=0.4)
+    r.resolve("Ich habe heute wirklich keine Motivation", signal=("de", 0.95))  # lock de
+    got = r.resolve("I really do not know that", signal=("en", 0.52))
+    assert got == "de", "0.52 must not switch a confirmed lock, however low detect_threshold is"
+
+
 def test_score_accumulates_across_a_mixed_run_not_just_consecutive_turns():
     # The point of a decaying score over the old debounce: a weaker turn in
     # between strong ones does not reset progress to zero, it just adds less
@@ -327,12 +340,14 @@ def test_apply_config_overrides_default_and_thresholds():
         "supported": ["en", "de"],
         "default": "en",
         "detect_threshold": 0.5,
+        "instant_switch_threshold": 0.95,
         "text_bar": 0.8,
         "decay": 0.4,
         "switch_score": 1.6,
     })
     assert r.default == "en"
     assert r.detect_threshold == 0.5
+    assert r.instant_switch_threshold == 0.95
     assert r.text_bar == 0.8
     assert r.decay == 0.4
     assert r.switch_score == 1.6

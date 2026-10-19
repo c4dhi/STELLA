@@ -566,7 +566,15 @@ pipelineSchema:
       default: "en"
     detect_threshold:
       label: "Detect threshold"
-      description: "Min confidence to confirm a provisional first lock, and to switch a confirmed lock outright on a single long-enough off-lock turn. A less confident off-lock turn still votes, just through the decay build-up below (text_bar/decay/switch_score)."
+      description: "Min confidence to confirm a provisional first lock."
+      type: number
+      min: 0
+      max: 1
+      step: 0.05
+      default: 0.9
+    instant_switch_threshold:
+      label: "Instant switch threshold"
+      description: "Min confidence for a single long-enough (4+ word) off-lock turn to switch a CONFIRMED lock outright, with no build-up. Kept separate from detect_threshold so a deployment can pin the first-lock bar low without also making every moderate off-lock guess switch the lock on one turn. A less confident off-lock turn still votes, just through the decay build-up below (text_bar/decay/switch_score)."
       type: number
       min: 0
       max: 1

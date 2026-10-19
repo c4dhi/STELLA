@@ -14,10 +14,12 @@ Design (see RFC §8):
 - Hold a session lock; switch only once a decaying confidence score for some
   other language crosses a bar (#57, Felix's model, 19 Oct 2026) — evidence
   accumulates rather than needing a consecutive streak, but still fades if not
-  reinforced. A single off-lock detection confident enough (≥0.9) skips the
-  build-up and switches outright (#90, Felix's model, 20 Oct 2026), and the
-  same bar gates the first lock itself. Utterances too short to carry any
-  signal never vote either way.
+  reinforced. A single off-lock detection confident enough (≥0.9 by default,
+  ``instant_switch_threshold``) skips the build-up and switches outright
+  (#90, Felix's model, 20 Oct 2026) — a separate bar from the one that
+  confirms the first lock (``detect_threshold``), so a deployment can tune
+  one without the other. Utterances too short to carry any signal never vote
+  either way.
 - Clamp to the supported set — never resolve to a language we cannot speak (§7).
 - Fallback chain: confident signal → session lock → plan seed → default.
 
@@ -167,6 +169,7 @@ class LanguageResolver:
         default: str = "en",
         seed: Optional[str] = None,
         detect_threshold: float = 0.9,
+        instant_switch_threshold: float = 0.9,
         text_bar: float = 0.85,
         decay: float = 0.5,
         switch_score: float = 1.5,
@@ -174,14 +177,19 @@ class LanguageResolver:
     ) -> None:
         self.supported = set(supported)
         self.default = default if default in self.supported else next(iter(self.supported))
-        # Doubles as the bar for an INSTANT switch of a confirmed lock, below
-        # (#90, Felix's model, 20 Oct 2026): a long-enough off-lock detection
-        # this sure of itself needs no build-up at all. 0.4 let a single 0.52
-        # guess confirm the first lock outright (the 19 Oct dev-session bug);
-        # 0.9 means only a genuinely confident decode ever settles anything on
-        # one turn, first lock or later switch alike. A less confident
-        # off-lock turn still votes, just through the decay build-up below.
+        # Bar to confirm a PROVISIONAL first lock. 0.4 let a single 0.52 guess
+        # confirm it outright (the 19 Oct dev-session bug, #90); 0.9 means only
+        # a genuinely confident decode ever settles the first lock on one turn.
         self.detect_threshold = detect_threshold
+        # A SEPARATE bar (#90, Felix's model, 20 Oct 2026) for an instant
+        # switch of an already-CONFIRMED lock: a long-enough off-lock
+        # detection this sure of itself needs no build-up at all. Kept apart
+        # from detect_threshold on purpose — some deployments (the study
+        # configs) pin detect_threshold low for the first-lock behavior they
+        # want without that also making every merely-moderate off-lock guess
+        # switch a confirmed lock outright. A less confident off-lock turn
+        # still votes, just through the decay build-up below.
+        self.instant_switch_threshold = instant_switch_threshold
         # The three numbers behind the confidence build-up (#57, Felix's model,
         # replay-set 19 Oct 2026). A CONFIRMED lock only moves once a running
         # ``challenger_score`` (below) for some other language crosses
@@ -257,8 +265,9 @@ class LanguageResolver:
         """Apply resolver configuration overrides from the pipeline config.
 
         Recognized keys (all optional): ``supported`` (list of ISO codes),
-        ``default`` (fallback language), ``detect_threshold``, ``text_bar``,
-        ``decay``, ``switch_score``. Unknown keys are ignored.
+        ``default`` (fallback language), ``detect_threshold``,
+        ``instant_switch_threshold``, ``text_bar``, ``decay``,
+        ``switch_score``. Unknown keys are ignored.
         """
         if "supported" in config and config["supported"]:
             self.supported = set(config["supported"])
@@ -268,6 +277,8 @@ class LanguageResolver:
             self.default = next(iter(self.supported))
         if "detect_threshold" in config:
             self.detect_threshold = float(config["detect_threshold"])
+        if "instant_switch_threshold" in config:
+            self.instant_switch_threshold = float(config["instant_switch_threshold"])
         if "text_bar" in config:
             self.text_bar = float(config["text_bar"])
         if "decay" in config:
@@ -415,8 +426,11 @@ class LanguageResolver:
             return self.locked
 
         # A long-enough, off-lock detection this confident needs no build-up —
-        # it switches on its own, same bar as the first lock (#90).
-        if lang is not None and lang != self.locked and confidence >= self.detect_threshold:
+        # it switches on its own (#90). Its own bar, deliberately separate
+        # from detect_threshold (see __init__): a deployment that pins
+        # detect_threshold low for the first lock must not thereby also make
+        # every moderate off-lock guess switch a confirmed lock outright.
+        if lang is not None and lang != self.locked and confidence >= self.instant_switch_threshold:
             self.locked = lang
             self._reset_challenger()
             return self.locked
