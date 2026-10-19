@@ -302,6 +302,21 @@ def _parse_tts_playback(raw: Optional[str]) -> str:
     )
     return _DEFAULT_TTS_PLAYBACK
 
+# Where the backend took STELLA_TTS_PLAYBACK from (#89): a mode pinned on the
+# deployment, the platform default a system admin set, or the built-in default.
+# Only for the log; unset (agent started without the backend) adds nothing.
+_TTS_PLAYBACK_SOURCES = {
+    "deployment": "the deployment",
+    "platform": "the platform default",
+    "default": "the built-in default",
+}
+
+
+def _tts_playback_source_note(raw: Optional[str]) -> str:
+    label = _TTS_PLAYBACK_SOURCES.get((raw or "").strip().lower())
+    return f" (from {label})" if label else ""
+
+
 # Wall-clock covered by one playout frame.
 _PLAYOUT_FRAME_MS = _PLAYOUT_FRAME_SAMPLES * 1000 // _TTS_SAMPLE_RATE
 
@@ -687,11 +702,14 @@ class AudioPipeline:
         )
         self._auto_slow_streak = 0
         logger.info(
-            f"[TTS] Playback mode: auto, starting in stream "
-            f"(switches to sentence after {_AUTO_SWITCH_AFTER_SLOW_SENTENCES} "
-            "consecutive sentences slower than real time)"
-            if self._tts_playback_configured == "auto"
-            else f"[TTS] Playback mode: {self._tts_playback_configured}"
+            (
+                f"[TTS] Playback mode: auto, starting in stream "
+                f"(switches to sentence after {_AUTO_SWITCH_AFTER_SLOW_SENTENCES} "
+                "consecutive sentences slower than real time)"
+                if self._tts_playback_configured == "auto"
+                else f"[TTS] Playback mode: {self._tts_playback_configured}"
+            )
+            + _tts_playback_source_note(os.getenv("STELLA_TTS_PLAYBACK_SOURCE"))
         )
         self._speech_worker_task: Optional[asyncio.Task] = None
 

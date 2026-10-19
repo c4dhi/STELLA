@@ -15,6 +15,8 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `stream_completion()` takes `first_token_timeout` and `retry_first_token_timeout`. A call with no first token within the budget is abandoned and started once more with the retry budget. If that one stalls too, it raises `FirstTokenTimeout`. Once a stream has started there is no limit. Both are logged as `[REPLY-TIMEOUT]` and `[REPLY-RETRY]`, with `log_context`.
 
+- The `[TTS] Playback mode` log line says where the mode came from (`from the deployment`, `from the platform default`, `from the built-in default`) when the backend sets `STELLA_TTS_PLAYBACK_SOURCE`. Unset, the line is unchanged (#89)
+
 ### Changed
 
 - `STELLA_TTS_PLAYBACK` defaults to `auto` (unset means `auto` too). A session starts in `stream` and switches once to `sentence` — never back — after 3 consecutive sentences synthesize slower than real time. `stream`/`sentence` still pin the mode outright with no switching (#669)
