@@ -13,6 +13,7 @@ import { CreateTokenDto } from './dto/create-token.dto.js';
 import { QuerySessionsDto } from './dto/query-sessions.dto.js';
 import { Prisma } from '@prisma/client';
 import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service.js';
+import { attachTurnLanguage } from './turn-language.util.js';
 
 /** Deliverable entry in the transcript summary section */
 interface TranscriptDeliverableSummaryEntry {
@@ -1281,6 +1282,16 @@ export class SessionsService {
     // Skip messages from the recorder itself
     if (participantIdentity === 'message-recorder') {
       return { success: true, stored: false, reason: 'recorder_message_skipped' };
+    }
+
+    // A user turn's language signal (#91): merged into that turn's stored
+    // transcript message, never a row of its own.
+    if (messageType === 'turn_language') {
+      const result = await attachTurnLanguage(this.prisma, sessionId, messageEnvelope.data || {});
+      if (!result.stored) {
+        this.logger.warn(`turn_language for session ${sessionId} not attached: ${result.reason}`);
+      }
+      return result;
     }
 
     // Determine message role based on participant identity
