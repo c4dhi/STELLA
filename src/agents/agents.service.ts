@@ -1260,6 +1260,11 @@ export class AgentsService {
       shadowEarlierMs?: number;
       partialIdentical?: boolean;
     }> = [];
+    // Endpointing (#92): the end-of-speech gap from STT on stt_end, pauses
+    // that nearly ended a turn, and speech right after a final (early cutoff).
+    const endOfSpeech = { turns: 0, silence: [] as number[], decode: [] as number[] };
+    const rescued: Array<{ turnId?: string; pauseMs?: number; intoWindowMs?: number }> = [];
+    const resumed: Array<{ sinceFinalMs?: number; agentSpeaking: boolean }> = [];
 
     for (const msg of messages) {
       const data = this.extractFullMetadata(msg.metadata);
@@ -1324,6 +1329,27 @@ export class AgentsService {
           if (typeof data.elapsed_ms === 'number') {
             ttfrTimings.push(data.elapsed_ms);
           }
+          break;
+        case 'stt_end':
+          endOfSpeech.turns += 1;
+          // Both or neither: the gap is only a sum when both parts are known.
+          if (typeof data.trailing_silence_ms === 'number' && typeof data.decode_ms === 'number') {
+            endOfSpeech.silence.push(data.trailing_silence_ms);
+            endOfSpeech.decode.push(data.decode_ms);
+          }
+          break;
+        case 'pause_rescued':
+          rescued.push({
+            turnId: typeof data.turn_id === 'string' ? data.turn_id : undefined,
+            pauseMs: typeof data.pause_ms === 'number' ? data.pause_ms : undefined,
+            intoWindowMs: typeof data.into_window_ms === 'number' ? data.into_window_ms : undefined,
+          });
+          break;
+        case 'user_resumed_after_final':
+          resumed.push({
+            sinceFinalMs: typeof data.since_final_ms === 'number' ? data.since_final_ms : undefined,
+            agentSpeaking: data.agent_speaking === true,
+          });
           break;
       }
     }
@@ -1408,6 +1434,29 @@ export class AgentsService {
             partial.length > 0 ? Math.round((partial.filter(Boolean).length / partial.length) * 10000) / 10000 : null,
         };
       })() : null,
+
+      endpointing: endOfSpeech.silence.length > 0 || rescued.length > 0 || resumed.length > 0 ? (() => {
+        const mean = (values: Array<number | undefined>) => {
+          const known = values.filter((v): v is number => v !== undefined);
+          return known.length > 0 ? Math.round(known.reduce((s, v) => s + v, 0) / known.length) : null;
+        };
+        const silence = mean(endOfSpeech.silence);
+        const decode = mean(endOfSpeech.decode);
+        return {
+          totalTurns: endOfSpeech.turns,
+          gapTurns: endOfSpeech.silence.length,
+          avgTrailingSilence_ms: silence,
+          avgDecode_ms: decode,
+          avgEndOfSpeechGap_ms: silence !== null && decode !== null ? silence + decode : null,
+          pausesRescued: rescued.length,
+          turnsWithRescuedPause: new Set(rescued.map((r) => r.turnId)).size,
+          avgRescuedPause_ms: mean(rescued.map((r) => r.pauseMs)),
+          avgRescuedIntoWindow_ms: mean(rescued.map((r) => r.intoWindowMs)),
+          resumedAfterFinal: resumed.length,
+          resumedWhileAgentSpeaking: resumed.filter((r) => r.agentSpeaking).length,
+          avgResumedSinceFinal_ms: mean(resumed.map((r) => r.sinceFinalMs)),
+        };
+      })() : null,
     };
   }
 
@@ -1463,6 +1512,7 @@ export class AgentsService {
           bridgeDuration: null,
           ttfr: null,
           sttDecode: null,
+          endpointing: null,
         },
       };
     }
