@@ -82,6 +82,7 @@ from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.pipeline import bridge_generator as bridge_generator_module
 from stella_v2_agent.pipeline.bridge_generator import BRIDGE_MODE_BRIEF, BridgeGenerator
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
+from stella_v2_agent.prompts.template import render_prompt
 
 HERE = Path(__file__).parent
 SCENARIOS = HERE / "bridge_repetition_scenarios.json"
@@ -189,6 +190,114 @@ async def _judge_meaning_overlap(
     return verdict.strip().upper().startswith("YES")
 
 
+# Test-side ONLY (#94, 20 Oct 20:08, @zenith/Felix): nothing below this prompt
+# is shipped. Felix wants a simplified bridge put through the SAME replay as a
+# comparison point for the mode-based design actually deployed: one prompt (no
+# BRIEF/FULL/THINKING split, no per-mode token cap), the model's own last
+# bridges as context instead of the full turn exchange, and only four rules —
+# no question, no echo, the word cap, and the timeout. If this comparison ever
+# turns into a real option, it gets its own code change reviewed on its own
+# card; this is a measurement, not a draft implementation.
+SIMPLIFIED_BRIDGE_PROMPT = (
+    "You just heard the user and you're about to answer. Say a short, natural "
+    "spoken reaction on its own — the opening beat of your reply, while the "
+    "rest of the answer is still being prepared.\n"
+    "{{#if ownBridges}}\n\n"
+    "Your own last openers this session, so you don't repeat yourself:\n"
+    "{{ownBridges}}\n"
+    "{{/if}}\n\n"
+    "Always:\n"
+    "- End with . or ! — never ask a question. The question belongs to the reply that follows.\n"
+    "- NEVER say the user's own words back to them.\n"
+    "- React to the specific thing they said, in YOUR words, not theirs.\n"
+    "- Speak the way THEY speak: their language, their register.\n"
+    "- Vary how you open from your own last openers above.\n"
+    "Output ONLY the bridge. No quotes, no labels."
+)
+
+
+def _own_bridges_block(own_bridges: List[str], limit: int = 6) -> str:
+    recent = [b for b in own_bridges[-limit:] if b]
+    return "\n".join(f'- "{b}"' for b in recent)
+
+
+async def _generate_simplified_bridge(
+    llm_service: LLMService, model: str, temperature: float, max_tokens: int,
+    timeout_s: float, user_input: str, own_bridges: List[str], language: Optional[str],
+) -> Dict[str, Any]:
+    """The simplified variant's whole generation + validation, test-side only
+    (see SIMPLIFIED_BRIDGE_PROMPT). Reuses the real validator's own helpers
+    (_clean_stream_text/_split_complete_sentences/_is_echo/_BRIDGE_MAX_WORDS)
+    so "the same four rules" are actually the same code, not a re-guess of it
+    — only _gate_stream's sentence-by-sentence TTS streaming is skipped, since
+    this measures text and latency, not what reaches a speaker mid-stream.
+
+    Returns bridge text, latency, and — when the bridge ends up empty — which
+    one of the four rules caused it (@zenith, 20 Oct 20:08: "say which rule
+    the early rejects were"), not just that something was rejected.
+    """
+    system_prompt = render_prompt(SIMPLIFIED_BRIDGE_PROMPT, {"ownBridges": _own_bridges_block(own_bridges)})
+    if language:
+        system_prompt += (
+            f"\n\nRESOLVED LANGUAGE (overrides every rule above): Produce the "
+            f"bridge in {bridge_generator_module._LANGUAGE_NAMES.get(language, language)} only."
+        )
+    messages = [
+        LLMMessage(role="system", content=system_prompt),
+        LLMMessage(role="user", content=user_input),
+    ]
+    config = LLMConfig(
+        model=model, temperature=temperature, max_tokens=max_tokens,
+        provider=LLMProvider.OPENAI_LANGCHAIN, streaming=True,
+    )
+    start = time.monotonic()
+    raw = ""
+    try:
+        async with asyncio.timeout(timeout_s):
+            async for text, is_final in stream_completion(
+                llm_service, messages, config, component_name="bridge_generator_simplified",
+            ):
+                raw = text
+                if is_final:
+                    break
+    except (asyncio.TimeoutError, TimeoutError):
+        return {"bridge": "", "reject_reason": "timeout", "latency_ms": round((time.monotonic() - start) * 1000)}
+    except Exception:
+        return {"bridge": "", "reject_reason": "empty_output", "latency_ms": round((time.monotonic() - start) * 1000)}
+    latency_ms = round((time.monotonic() - start) * 1000)
+
+    text = bridge_generator_module._clean_stream_text(raw)
+    if not text:
+        return {"bridge": "", "reject_reason": "empty_output", "latency_ms": latency_ms}
+    sentences, remainder = bridge_generator_module._split_complete_sentences(text)
+    candidates = list(sentences) + ([remainder] if remainder else [])
+    accepted: List[str] = []
+    words = 0
+    reason: Optional[str] = None
+    for idx, s in enumerate(candidates):
+        if "?" in s:
+            reason = "question" if not accepted else None
+            break
+        if idx == 0 and bridge_generator_module._is_echo(s, user_input):
+            reason = "echo" if not accepted else None
+            break
+        n = len(s.split())
+        if words + n > bridge_generator_module._BRIDGE_MAX_WORDS:
+            reason = "word_cap" if not accepted else None
+            break
+        accepted.append(s)
+        words += n
+
+    bridge = " ".join(accepted).strip()
+    if bridge and bridge[-1] not in ".!":
+        bridge += "."
+    return {
+        "bridge": bridge,
+        "reject_reason": None if bridge else (reason or "empty_output"),
+        "latency_ms": latency_ms,
+    }
+
+
 def load_scenarios(path: Path = SCENARIOS) -> List[Dict[str, Any]]:
     return json.loads(path.read_text())["sessions"]
 
@@ -246,9 +355,11 @@ async def _generate_reply(
 async def run_session(
     generator: BridgeGenerator, response_generator: ResponseGenerator, companion: Companion,
     session: Dict[str, Any], history_mode: str, judge_model: str, judge_every: int,
+    simplified: bool = False,
 ) -> List[Dict[str, Any]]:
     """One pass through a session's fixed script. Returns one record per turn."""
     history: List[Dict[str, str]] = []
+    own_bridges: List[str] = []  # only used when simplified=True
     records = []
     for index, turn in enumerate(session["turns"]):
         # Wall-clock around the whole call, not just a log line: generate()
@@ -259,17 +370,30 @@ async def run_session(
         # the two live-session drop causes @zenith/Felix asked to tell apart
         # (20 Oct, 19:58: "Bridge first-sentence latency against the 2 s
         # timeout matters too").
-        start = time.monotonic()
-        bridge = await generator.generate(
-            turn["user"],
-            history,
-            language=session.get("language"),
-            variables={
-                "activitiesOnOffer": turn.get("activities_on_offer", False),
-                "isBargeIn": turn.get("barge_in", False),
-            },
-        )
-        latency_ms = (time.monotonic() - start) * 1000
+        reject_reason = None
+        if simplified:
+            result = await _generate_simplified_bridge(
+                generator._llm_service, generator.bridge_model, generator.bridge_temperature,
+                generator.bridge_max_tokens, generator.bridge_timeout_s,
+                turn["user"], own_bridges, session.get("language"),
+            )
+            bridge = result["bridge"]
+            latency_ms = result["latency_ms"]
+            reject_reason = result["reject_reason"]
+        else:
+            start = time.monotonic()
+            bridge = await generator.generate(
+                turn["user"],
+                history,
+                language=session.get("language"),
+                variables={
+                    "activitiesOnOffer": turn.get("activities_on_offer", False),
+                    "isBargeIn": turn.get("barge_in", False),
+                },
+            )
+            latency_ms = round((time.monotonic() - start) * 1000)
+        if simplified and bridge:
+            own_bridges.append(bridge)
         session_id = f"bridge94-{session['id']}"
         try:
             reply = await _generate_reply(
@@ -290,10 +414,11 @@ async def run_session(
         records.append({
             "session": session["id"],
             "user": turn["user"],
-            "mode": generator.last_bridge_mode,
+            "mode": "simplified" if simplified else generator.last_bridge_mode,
             "bridge": bridge,
             "reply": reply,
             "latency_ms": round(latency_ms),
+            "reject_reason": reject_reason,
             "wording_overlap": overlap,
             "meaning_overlap_repeats": meaning_overlap,
         })
@@ -311,6 +436,7 @@ async def replay_all(
     generator: BridgeGenerator, sessions: List[Dict[str, Any]], trials: int, history_mode: str,
     judge_model: str, judge_every: int, concurrency: int = 6,
     free_instruction_override: Optional[str] = None, response_model_override: Optional[str] = None,
+    simplified: bool = False,
 ) -> List[Dict[str, Any]]:
     gate = asyncio.Semaphore(concurrency)
 
@@ -340,6 +466,7 @@ async def replay_all(
         async with gate:
             return await run_session(
                 _clone(generator), response_generator, companion, session, history_mode, judge_model, judge_every,
+                simplified=simplified,
             )
 
     tasks = [one(session) for session in sessions for _ in range(trials)]
@@ -415,6 +542,11 @@ def summarize(records: List[Dict[str, Any]], timeout_ms: float = 2000.0) -> Dict
             "timeout_ms": timeout_ms,
             "drops_near_timeout": near_timeout_drops,
             "drops_early_reject": empty - near_timeout_drops,
+            # Only populated by the simplified variant, which tracks which of
+            # its four rules fired (@zenith, 20 Oct 20:08) — the real
+            # BridgeGenerator's _gate_stream doesn't expose this, so it's
+            # always empty for a normal run.
+            "reject_reasons": dict(Counter(r["reject_reason"] for r in dropped if r.get("reject_reason"))),
         },
         "distinct_bridge_text": len(exact_counts),
         "exact_repeats": {
@@ -456,6 +588,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="override for the response generator's model (agent.yaml's response_generator.model moved "
         "to gpt-5.4-mini alongside the bridge's, per PR #707 — override both together to match a given "
         "deployed config, since this script's own agent.yaml hasn't got that change on this branch)",
+    )
+    parser.add_argument(
+        "--simplified-bridge", action="store_true",
+        help="test-side ONLY comparison variant (#94, 20 Oct 20:08): one prompt, no mode picker "
+        "or per-mode token cap, the model's own last bridges as context, and only the no-question "
+        "check, echo check, word cap and timeout. Ignores --prompt/--brief-directive/--history-mode, "
+        "since there is no mode-based prompt or turn history to apply them to. Nothing shipped.",
     )
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--max-tokens", type=int)
@@ -529,6 +668,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     records = asyncio.run(replay_all(
         generator, sessions, args.trials, args.history_mode, judge_model, args.judge_every, args.concurrency,
         free_instruction_override=free_instruction, response_model_override=args.response_model,
+        simplified=args.simplified_bridge,
     ))
     summary = summarize(records, timeout_ms=generator.bridge_timeout_s * 1000)
     response_defaults = slot_defaults("response_generator")
@@ -539,8 +679,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             "max_tokens": generator.bridge_max_tokens,
             "timeout_ms": generator.bridge_timeout_s * 1000,
             "history_limit": generator.history_limit or 6,
-            "prompt_source": "agent.yaml (CLI --prompt override)" if args.prompt else "agent.yaml bridge_generator.system_prompt",
-            "brief_directive_source": f"--brief-directive {args.brief_directive}" if args.brief_directive else "agent.yaml-equivalent code default (_MODE_DIRECTIVES[BRIEF], unchanged)",
+            "simplified_bridge": args.simplified_bridge,
+            "prompt_source": (
+                "test-side SIMPLIFIED_BRIDGE_PROMPT, no mode picker (#94, 20 Oct 20:08) — "
+                "ignores --prompt/--brief-directive/--history-mode"
+            ) if args.simplified_bridge else (
+                "agent.yaml (CLI --prompt override)" if args.prompt else "agent.yaml bridge_generator.system_prompt"
+            ),
+            "brief_directive_source": (
+                "n/a — simplified variant has no modes"
+            ) if args.simplified_bridge else (
+                f"--brief-directive {args.brief_directive}" if args.brief_directive
+                else "agent.yaml-equivalent code default (_MODE_DIRECTIVES[BRIEF], unchanged)"
+            ),
         },
         "response_generator": {
             "model": args.response_model or response_defaults["model"],
