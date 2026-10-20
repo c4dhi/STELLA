@@ -74,6 +74,17 @@ def test_confident_detection_overrides_seed_on_turn1():
     assert r.resolve("I want to discuss my weekly running plan") == "en"
 
 
+def test_low_confidence_first_turn_stays_provisional_for_a_later_confident_one():
+    # The 19 Oct dev-session bug, reproduced (#90): turn 1 is a long utterance
+    # Whisper only guesses at (en, .52, below the new .9 bar) — too weak to
+    # confirm anything, so it must not lock the session. Turn 2's clear,
+    # confident German then settles it immediately, same as any first lock.
+    r = LanguageResolver()
+    long_text = "a long first utterance that whisper only guessed at weakly"
+    assert r.resolve(long_text, signal=("en", 0.52)) != "de"
+    assert r.resolve("ein klarer deutscher Satz hier", signal=("de", 0.97)) == "de"
+
+
 # ─────────────────────── hold / reliability ───────────────────────
 
 def test_holds_lock_through_ambiguous_input():
@@ -211,11 +222,13 @@ def test_reset_preserves_config():
 # ─────────────────────── confidence-gated switch ───────────────────────
 
 def test_switches_on_sustained_confident_change():
+    # Confidence kept just below the #90 instant-switch bar (0.9) so this
+    # actually exercises the build-up rather than switching on turn one.
     r = LanguageResolver()
     r.resolve("Ich habe heute echt keine Motivation")  # lock de
     en_turn = "Actually I would prefer to continue in English now"
     for _ in range(3):
-        got = r.resolve(en_turn)
+        got = r.resolve(en_turn, signal=("en", 0.88))
     assert got == "en"
 
 
@@ -228,19 +241,41 @@ def test_switch_requires_more_than_a_single_short_word():
     assert r.resolve("der") == "en"
 
 
+def test_a_3word_off_lock_turn_does_not_instant_switch_even_at_high_confidence():
+    # The length floor outranks the #90 instant-switch bar too: a turn this
+    # short is where STT guesses hardest, so even .97 doesn't switch at once.
+    r = LanguageResolver()
+    r.resolve("I have been running a lot this week")  # lock en
+    assert r.resolve("ja klar doch", signal=("de", 0.97)) == "en"
+
+
+def test_a_low_detect_threshold_does_not_lower_the_instant_switch_bar():
+    # #90 review (@sable, ref 480490b4): detect_threshold and
+    # instant_switch_threshold are deliberately separate. A deployment (the
+    # study configs) pinning detect_threshold to 0.4 for the first-lock
+    # behavior it wants must NOT thereby also let a merely-moderate (.52)
+    # off-lock turn switch a confirmed lock outright — instant_switch_threshold
+    # stays at its own 0.9 default regardless.
+    r = LanguageResolver(detect_threshold=0.4)
+    r.resolve("Ich habe heute wirklich keine Motivation", signal=("de", 0.95))  # lock de
+    got = r.resolve("I really do not know that", signal=("en", 0.52))
+    assert got == "de", "0.52 must not switch a confirmed lock, however low detect_threshold is"
+
+
 def test_score_accumulates_across_a_mixed_run_not_just_consecutive_turns():
     # The point of a decaying score over the old debounce: a weaker turn in
     # between strong ones does not reset progress to zero, it just adds less
     # — so the run still reaches switch_score (1.5), just one turn later than
     # three strong votes in a row would (see test_switches_on_sustained_...).
     # A debounce=3 rule would have reset the streak dead at the weak turn and
-    # never gotten here at all.
+    # never gotten here at all. Confidence kept below the #90 instant-switch
+    # bar (0.9) throughout, so this still exercises the build-up itself.
     r = LanguageResolver()
     r.resolve("I have been running a lot this week")  # lock en
-    r.resolve("Ich bin heute echt total müde und erschöpft", signal=("de", 0.95))
+    r.resolve("Ich bin heute echt total müde und erschöpft", signal=("de", 0.85))
     r.resolve("also ich laufe ziemlich viel", signal=("de", 0.50))  # weak, still votes a little
-    r.resolve("Ich möchte wirklich auf Deutsch weitermachen bitte", signal=("de", 0.95))
-    got = r.resolve("Wir sprechen jetzt bitte weiter auf Deutsch", signal=("de", 0.95))
+    r.resolve("Ich möchte wirklich auf Deutsch weitermachen bitte", signal=("de", 0.85))
+    got = r.resolve("Wir sprechen jetzt bitte weiter auf Deutsch", signal=("de", 0.85))
     assert got == "de"
 
 
@@ -305,12 +340,14 @@ def test_apply_config_overrides_default_and_thresholds():
         "supported": ["en", "de"],
         "default": "en",
         "detect_threshold": 0.5,
+        "instant_switch_threshold": 0.95,
         "text_bar": 0.8,
         "decay": 0.4,
         "switch_score": 1.6,
     })
     assert r.default == "en"
     assert r.detect_threshold == 0.5
+    assert r.instant_switch_threshold == 0.95
     assert r.text_bar == 0.8
     assert r.decay == 0.4
     assert r.switch_score == 1.6
@@ -464,19 +501,24 @@ def test_first_confident_detection_locks_in():
     assert r.resolve("Hallo, wie geht es dir heute so?", signal=("de", 0.95)) == "de"
 
 
-def test_one_confident_turn_no_longer_flips_the_lock():
+def test_one_very_confident_turn_switches_the_lock_outright():
+    # #90, Felix's model, 20 Oct 2026: reverses the old "no single turn ever
+    # switches" rule for turns this sure of itself (>=0.9) — the build-up
+    # below stays for anything less confident (see the .82/.70 tests below).
     r = _resolver()
     r.resolve("Hallo, ich heisse Felix und komme aus Zuerich", signal=("de", 0.95))
     got = r.resolve("I think that is quite interesting actually", signal=("en", 0.95))
-    assert got == "de", "a single turn must not switch a confirmed lock"
+    assert got == "en", "a single turn at >=0.9 confidence switches at once"
 
 
 def test_a_sustained_switch_is_still_honoured():
+    # Confidence kept below the #90 instant-switch bar (0.9), so this is the
+    # build-up path, not the single-turn one above.
     r = _resolver()
     r.resolve("Hallo, ich heisse Felix und komme aus Zuerich", signal=("de", 0.95))
     for _ in range(3):
         got = r.resolve("I would much rather keep talking in English now",
-                        signal=("en", 0.95))
+                        signal=("en", 0.88))
     assert got == "en", "sustained, substantial evidence must still switch"
 
 
@@ -490,14 +532,16 @@ def test_short_acknowledgements_cannot_vote():
 
 def test_short_turns_do_not_cancel_a_real_switch_either():
     # They are not evidence in either direction, so an interleaved "okay"
-    # must not reset a genuine, sustained switch back to zero.
+    # must not reset a genuine, sustained switch back to zero. Confidence
+    # kept below the #90 instant-switch bar so this still exercises the
+    # build-up across the gap, not a turn-one switch.
     r = _resolver()
     r.resolve("Hallo, ich heisse Felix und komme aus Zuerich", signal=("de", 0.95))
     long_en = "I would honestly prefer to continue this conversation in English"
-    r.resolve(long_en, signal=("en", 0.95))
+    r.resolve(long_en, signal=("en", 0.88))
     r.resolve("Okay.", signal=("en", 0.99))
-    r.resolve(long_en, signal=("en", 0.95))
-    assert r.resolve(long_en, signal=("en", 0.95)) == "en"
+    r.resolve(long_en, signal=("en", 0.88))
+    assert r.resolve(long_en, signal=("en", 0.88)) == "en"
 
 
 def test_a_pinned_deployment_never_switches():
