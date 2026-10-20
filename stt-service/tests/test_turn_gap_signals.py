@@ -175,7 +175,7 @@ def test_the_whisper_final_carries_the_gap_and_its_rescued_pauses(monkeypatch):
 
     assert event is not None and event.is_final
     assert event.HasField("trailing_silence_ms")
-    assert event.trailing_silence_ms == pytest.approx(1100, abs=15)
+    assert event.trailing_silence_ms == pytest.approx(1100, abs=25)  # 10 ms windows, float steps
     assert event.decode_ms == pytest.approx(250, abs=1)
     assert event.speech_ms == pytest.approx(2200, abs=15)
     assert len(event.rescued_pauses) == 1
