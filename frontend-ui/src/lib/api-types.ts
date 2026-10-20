@@ -1814,4 +1814,6 @@ export interface PlatformSettings {
   updatedBy: string | null
   /** Deployments that set their own mode and so keep it. */
   pinnedDeployments: PinnedDeployment[]
+  /** How well the voice fits this server under concurrent load (#93). */
+  hardwareFit?: import('../components/settings/HardwareFitPanel').HardwareFit
 }
