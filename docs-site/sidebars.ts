@@ -140,6 +140,7 @@ const sidebars: SidebarsConfig = {
         'deployment/capacity',
         'deployment/agent-validation',
         'deployment/backup-restore',
+        'deployment/upgrading',
       ],
     },
     {

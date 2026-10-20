@@ -62,6 +62,7 @@ from stella_v2_agent.companion import (
     ExitStep,
     commands_from,
     decision as companion_decision,
+    started_label,
     woken_tag,
     exit_dialogue,
     start_dialogue,
@@ -275,6 +276,7 @@ class StellaV2Agent(BaseAgent):
             "isBargeIn": is_barge_in,
             "bargeInTranscript": input.text if is_barge_in else "",
             "userInput": input.text,
+            "activitiesOnOffer": self._activities_on_offer(),
         }
 
         # Handle on the concurrently-running Expert Pool (#455). Declared out
@@ -290,6 +292,11 @@ class StellaV2Agent(BaseAgent):
             # as a plan-mode session starts with nothing before it. Bridge,
             # experts and response all read the same scoped history.
             history_limit = self._custom_history_limit
+            # Two gRPC round-trips that run before anything else on every turn
+            # (#454): bracketed so the timeline shows what they cost.
+            yield AgentOutput.analytics_event(
+                input.session_id, "context_fetch_start", turn_id, self._elapsed_ms(),
+            )
             history = await self._fetch_conversation_history(limit=history_limit)
 
             # Fetch state from gRPC backend (parallel calls for performance)
@@ -301,39 +308,28 @@ class StellaV2Agent(BaseAgent):
                     if isinstance(collected_now, dict):
                         # Read now: clearing the plan takes its deliverables with it.
                         self.companion.collected = dict(collected_now)
+            yield AgentOutput.analytics_event(
+                input.session_id, "context_fetch_done", turn_id, self._elapsed_ms(),
+            )
 
             # Resolve the turn language BEFORE the bridge fires, so bridge,
             # response prompt ({{language}}), and TTS all read one value and
             # stay coherent (RFC §8 single source of truth).
-            # A plan that declares its language is PINNED to it: detection is
-            # off, and STT is told what to transcribe. Whisper auto-detects from
-            # a very short window and, guessing wrong, translates rather than
-            # mis-hears — which is how a fully-German plan ran its whole session
-            # in English. A declaration removes the guess entirely.
-            plan_language = self._resolved_pin_language(self._plan_config)
-            self.language_resolver.set_plan_language(plan_language)
-            if self.has_audio:
-                self.audio.set_stt_language(self.language_resolver.forced)
+            self._apply_session_language_pin()
             # Prefer STT's independent acoustic detection (voice); fall back to
             # the text classifier when absent (typed input / no signal, §8.3).
-            meta = input.metadata or {}
-            # Logged on every turn so a threshold for "too doubtful to act on"
-            # can be set from real sessions rather than guessed.
-            stt_confidence = float(meta.get("stt_confidence") or 0.0)
-            logger.info("Transcript confidence %.2f for %r", stt_confidence, input.text[:60])
-            detected_language = meta.get("detected_language") or None
-            language_signal = (
-                (detected_language, float(meta.get("language_confidence") or 0.0))
-                if detected_language
-                else None
-            )
-            resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
+            resolved_language = await self._resolve_language(input)
+            # How far the transcript itself can be trusted — read again here
+            # (not reused from inside _resolve_language) since companion mode
+            # below decides whether this turn was heard too poorly to act on.
+            stt_confidence = float((input.metadata or {}).get("stt_confidence") or 0.0)
             self._session_language = resolved_language
             sm_context["language"] = resolved_language
             # Tell the response prompt whether this is a fixed-language deployment
             # or a per-turn detection — the two need different wording to stop the
             # model opening in English on an ambiguous first turn.
             sm_context["language_pinned"] = bool(self.language_resolver.forced)
+            sm_context["content_language"] = self._activity_content_language(resolved_language)
             logger.info(f"Resolved language for turn: {resolved_language}")
 
             # Resolve the per-stream TTS voice. Unlike language there is no
@@ -380,8 +376,9 @@ class StellaV2Agent(BaseAgent):
             # Emitted next to bridge_start on purpose: the two elapsed_ms values
             # being equal IS the property this change buys, and drift between
             # them is how a regression would show up in the analytics timeline.
+            pool_start_ms = self._elapsed_ms()
             yield AgentOutput.analytics_event(
-                input.session_id, "expert_pool_start", turn_id, self._elapsed_ms(),
+                input.session_id, "expert_pool_start", turn_id, pool_start_ms,
             )
 
             logger.info(f"Stage 1: Bridge for: '{input.text}'")
@@ -436,6 +433,13 @@ class StellaV2Agent(BaseAgent):
                 bridge_output.metadata["speed"] = turn_speed
                 yield bridge_output
 
+            # Generation of the whole bridge, not its playback: bridge_ready is
+            # the first sentence, bridge_tts_done (audio pipeline) the end of
+            # playback. Also emitted on a silent turn, where nothing was said.
+            yield AgentOutput.analytics_event(
+                input.session_id, "bridge_done", turn_id, self._elapsed_ms(),
+            )
+
             # Covers the silent turn too, where the loop above never ran.
             turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_mode", None))
 
@@ -489,6 +493,17 @@ class StellaV2Agent(BaseAgent):
                     component=f"expert:{v.expert_name}",
                     **v.to_debug_dict(),
                 )
+                # The debug row above has no turn_id and can't be charted. One
+                # stage per expert, so each gets its own lane: experts start
+                # together with the pool, so each finished at pool start plus
+                # its own latency.
+                yield AgentOutput.analytics_event(
+                    input.session_id, f"expert_done:{v.expert_name}", turn_id,
+                    pool_start_ms + v.latency_ms,
+                    expert_name=v.expert_name, verdict=v.verdict,
+                    confidence=v.confidence, latency_ms=round(v.latency_ms, 1),
+                    success=v.success, priority=v.priority,
+                )
                 # A verdict says what an expert concluded, not what it DID. Tool
                 # calls are the actual side effects of the turn — setting a
                 # deliverable, advancing the plan, starting an activity — and
@@ -534,6 +549,14 @@ class StellaV2Agent(BaseAgent):
                 sm_context,
                 expert_configs=self.expert_registry.as_map(),
                 user_input=input.text,
+            )
+            # Stamped before the companion's exit/start judges are awaited
+            # below: those are their own LLM calls, not arbitration.
+            yield AgentOutput.analytics_event(
+                input.session_id, "arbitration_done", turn_id, self._elapsed_ms(),
+                latency_ms=round(arb_result.latency_ms, 1),
+                favored_expert=arb_result.favored_expert,
+                action=arb_result.directive.action,
             )
 
             # Companion mode (#36): the mode's judge has answered — the router
@@ -1042,24 +1065,31 @@ class StellaV2Agent(BaseAgent):
         # Explicit compiler version: config override, else the agent's pinned default.
         self._compiler_version = config.get("compiler_version") or PROMPT_COMPILER_VERSION
 
+        # Companion mode is declared by the deploy config. A companion starts with
+        # NO plan — it converses until the user picks an activity — so the state
+        # machine connection cannot be gated on having one up front. Decided
+        # here, before the language pin just below, because in companion mode
+        # an activity's plan may not pin the session at all (#58) —
+        # `_apply_session_language_pin` needs to already know which mode this is.
+        self._companion_mode = config.get("mode") == "companion"
+
         # Load plan and initialize gRPC state machine
         plan = self._load_plan_config(config)
+        self._plan_config = plan
 
-        # Declare the plan's language to STT BEFORE the first utterance. Doing it
-        # on the first turn is too late: the opening utterance is exactly the one
-        # that gets misdetected (it is short, and often starts with a name), and
-        # it is what confirms the lock for the rest of the session.
-        self.language_resolver.set_plan_language(self._resolved_pin_language(plan))
+        # Declare the session's language to STT BEFORE the first utterance.
+        # Doing it on the first turn is too late: the opening utterance is
+        # exactly the one that gets misdetected (it is short, and often starts
+        # with a name), and it is what confirms the lock for the rest of the
+        # session. Same precedence as every later turn (plan-following: the
+        # plan's declaration; companion mode: deployment pin, then persona —
+        # never the plan, since this companion starts with none anyway).
+        self._apply_session_language_pin()
         if self.has_audio:
-            self.audio.set_stt_language(self.language_resolver.forced)
             # Seed TTS too. The opening greeting is synthesised before any turn
             # resolves, so without this the agent's FIRST words come out in the
             # provider default while everything after them follows the plan.
             self.audio.set_tts_language(self.language_resolver.forced)
-        # Companion mode is declared by the deploy config. A companion starts with
-        # NO plan — it converses until the user picks an activity — so the state
-        # machine connection cannot be gated on having one up front.
-        self._companion_mode = config.get("mode") == "companion"
         self.companion = Companion(activities=config.get("available_plans") or [])
         if self._companion_mode:
             self.idle_timeout_seconds = self.companion.settings.idle_sleep_seconds or None
@@ -1399,10 +1429,14 @@ class StellaV2Agent(BaseAgent):
             return
         activity = self.companion.find(plan_id)
         if activity and activity.get("plan"):
-            self.companion.resume(activity)
+            started_at = await self._find_activity_start(activity)
+            self.companion.resume(activity, started_at=started_at)
             self._plan_config = activity["plan"]
             self._resolve_persona_in_plan_text(self._plan_config)
-            logger.info("Resumed mid-activity after restart: %s", self.companion.running_title)
+            logger.info(
+                "Resumed mid-activity after restart: %s (started_at=%s)",
+                self.companion.running_title, started_at,
+            )
             await self._set_sleep_allowed(False)
             return
         # The allow-list changed under a running activity (redeploy with a
@@ -1416,6 +1450,33 @@ class StellaV2Agent(BaseAgent):
         )
         if self.sm_client and not await self._cleared():
             logger.error("Could not clear the stale activity %s", plan_id)
+
+    async def _find_activity_start(self, activity: Dict[str, Any]) -> Optional[datetime]:
+        """When this activity actually began, for a companion rehydrating
+        mid-activity (#640): the state-machine row says only that a plan is
+        loaded, not since when, and the pod's own clock remembers nothing
+        from before the restart.
+
+        Its own "Started" decision tag does survive — debug messages are
+        persisted like any other turn — so the most recent one naming this
+        activity is read back. None when none is found (pruned history, or a
+        session old enough to predate the tag), in which case the caller
+        falls back to the unscoped history this always used to have.
+        """
+        title = activity.get("title")
+        if not title or not self.has_history:
+            return None
+        try:
+            messages = await self.get_chat_history(include_debug=True, limit=200)
+        except Exception as e:
+            logger.warning("Could not look up when %r started: %s", title, e)
+            return None
+        label = started_label(title)
+        for msg in reversed(messages):
+            decision = ((msg.envelope.get("data") or {}).get("metadata") or {}).get("decision") or {}
+            if decision.get("kind") == "activity_started" and decision.get("label") == label:
+                return parse_timestamp(msg.timestamp)
+        return None
 
     def _companion_progress_metadata(self) -> Optional[Dict[str, Any]]:
         """What the progress panel needs to know about companion state, on every
@@ -1660,6 +1721,121 @@ class StellaV2Agent(BaseAgent):
         elif isinstance(node, list):
             for item in node:
                 self._resolve_persona_in_plan_text(item)
+
+    def _apply_session_language_pin(self) -> None:
+        """Apply (or re-affirm) whatever currently pins this session's
+        language, before this turn's detection runs.
+
+        Plan-following deployments (no companion mode): unchanged — the
+        plan's own declaration, as always. A plan whose prompts and
+        acceptance criteria are written in German is PINNED to it: detection
+        is off, and STT is told what to transcribe. Whisper auto-detects
+        from a very short window and, guessing wrong, translates rather
+        than mis-hears — which is how a fully-German plan ran its whole
+        session in English. A declaration removes the guess entirely.
+
+        Companion mode (#58, Felix's call, 19 Oct 2026, ref 7f897946): an
+        activity's own plan never pins the session here — only the
+        deployment's own pin (`STELLA_LANGUAGE`, or a configured `force`) or
+        the persona's declared language can, deployment first. So there is
+        nothing to restore when an activity ends: its language was never
+        applied here in the first place. See `_activity_content_language`
+        for the turn-scoped hint an activity's own language becomes instead.
+        """
+        if self._companion_mode:
+            if not self.language_resolver.deployment_pin:
+                persona_language = (self._persona_config or {}).get("language")
+                if persona_language:
+                    self.language_resolver.set_plan_language(persona_language)
+        else:
+            plan_language = self._resolved_pin_language(self._plan_config)
+            self.language_resolver.set_plan_language(plan_language)
+        if self.has_audio:
+            self.audio.set_stt_language(self.language_resolver.forced)
+
+    def _activity_content_language(self, resolved_language: str) -> Optional[str]:
+        """The running activity's own declared language, as a translation
+        hint for the model (#58) — never a pin, so it does not touch STT,
+        TTS or the resolver, only the response prompt reads it
+        (``content_language``). Turn-scoped by construction: derived fresh
+        from ``_plan_config`` every turn, so it is simply absent again the
+        turn after ``_leave_activity`` clears it. ``None`` outside companion
+        mode, outside an activity, or when the activity's own language
+        already matches the session's.
+        """
+        if not (self._companion_mode and self._plan_config):
+            return None
+        activity_language = (self._plan_config or {}).get("language")
+        if activity_language and activity_language != resolved_language:
+            return activity_language
+        return None
+
+    def _activities_on_offer(self) -> bool:
+        """Whether this turn could be the user trying to pick an offered
+        activity (#87): companion mode, not already in one, with activities
+        actually on offer. The bridge reads this (``{{activitiesOnOffer}}``)
+        to never agree to or name a specific activity as settled, because
+        ``companion.decide()`` — which alone judges whether the title was
+        said precisely enough to start it outright, or only closely enough to
+        ask about — has not run yet when the bridge is generated, and a
+        bridge that already committed cannot be un-said once the answer
+        turns out to be "ask first".
+        """
+        return bool(self._companion_mode and not self.companion.active and self.companion.activities)
+
+    async def _resolve_language(self, input: AgentInput) -> str:
+        """Resolve this turn's language and, if the free decode was doubtful,
+        re-decode its audio forced into the lock for display only (#57).
+
+        Split out of ``process()`` so the hard rule — a forced re-decode must
+        never become its own evidence — is independently testable: this
+        method is the whole guarantee, since ``resolve()`` only ever sees the
+        turn's ORIGINAL free-decode signal, decided (``needs_redecode``)
+        before any re-decode happens and never revisited after.
+        """
+        meta = input.metadata or {}
+        # Logged on every turn so a threshold for "too doubtful to act on"
+        # can be set from real sessions rather than guessed.
+        stt_confidence = float(meta.get("stt_confidence") or 0.0)
+        logger.info("Transcript confidence %.2f for %r", stt_confidence, input.text[:60])
+        detected_language = meta.get("detected_language") or None
+        language_confidence = float(meta.get("language_confidence") or 0.0)
+        language_signal = (detected_language, language_confidence) if detected_language else None
+        # Decide BEFORE resolve(): the gate reads the ORIGINAL free decode's
+        # own signal and length, never a corrected one — #57's hard rule is
+        # that a forced re-decode must never become its own evidence, and
+        # that starts with never letting it influence this check either.
+        needs_redecode = bool(
+            self.has_audio and detected_language
+            and self.language_resolver.needs_redecode(
+                detected_language, language_confidence, input.text
+            )
+        )
+        resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
+        original_text = input.text
+        redecoded_text = None
+        if needs_redecode:
+            turn_id = meta.get("turn_id")
+            redecoded_text = (
+                await self.audio.redecode_utterance_audio(turn_id, resolved_language)
+                if turn_id else None
+            )
+            if redecoded_text:
+                logger.info(
+                    "[Language] Re-decoded doubtful turn forced into %r: %r -> %r",
+                    resolved_language, input.text, redecoded_text,
+                )
+                input.text = redecoded_text
+        # Kept with the turn's stored message so the switching rule can be
+        # checked against real sessions (#91). Sent in the background, so it
+        # neither delays nor fails the turn.
+        self.send_turn_language(
+            input,
+            original_text=original_text,
+            resolved_language=resolved_language,
+            redecoded=bool(redecoded_text),
+        )
+        return resolved_language
 
     def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
         """The declared language for the session, or None to detect per turn.

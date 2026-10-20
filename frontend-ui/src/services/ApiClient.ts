@@ -68,6 +68,8 @@ import type {
   UserNotificationEvent,
   AdminDashboardMetrics,
   CapacityMeasurement,
+  PlatformSettings,
+  TtsPlaybackMode,
   SessionActivityDay,
   HistoricalUsageData,
   ServerMetrics,
@@ -1727,6 +1729,24 @@ class SessionManagementClient {
     return this.request<AdminUserListItem>(`/admin/users/${userId}/admin`, {
       method: 'PATCH',
       body: JSON.stringify({ isAdmin }),
+    })
+  }
+
+  /**
+   * Platform defaults a system admin sets (today: the TTS playback mode).
+   */
+  async getPlatformSettings(): Promise<PlatformSettings> {
+    return this.get<PlatformSettings>('/admin/platform-settings')
+  }
+
+  /**
+   * Set the platform TTS playback default; null goes back to the built-in default.
+   * Applies from the next session; running sessions keep their mode.
+   */
+  async updatePlatformSettings(ttsPlayback: TtsPlaybackMode | null): Promise<PlatformSettings> {
+    return this.request<PlatformSettings>('/admin/platform-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ ttsPlayback }),
     })
   }
 

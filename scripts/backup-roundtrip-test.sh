@@ -124,11 +124,11 @@ total=$(psql_db dst "SELECT count(*) FROM \"AuditEvent\";")
 
 echo "==> [2] Host encrypt -> decrypt -> import dst2"
 printf 'ENV_VAR_ENCRYPTION_KEY=deadbeef\nJWT_SECRET=s3cr3t\n' > "$WORK/deploy.env"
-BACKUP_PASSPHRASE='pass phrase 123' npx ts-node scripts/backup-bundle.ts finalize "$WORK/b-keep.zip" "$WORK/deploy.env" "$WORK/final.enc" >/dev/null 2>&1
+BACKUP_PASSPHRASE='pass phrase 123' node --import ./scripts/register-ts-node-esm.mjs scripts/backup-bundle.ts finalize "$WORK/b-keep.zip" "$WORK/deploy.env" "$WORK/final.enc" >/dev/null 2>&1
 [[ "$(head -c 9 "$WORK/final.enc")" == "STELLABK2" ]] && enc=OK || enc=BAD
-BACKUP_PASSPHRASE='pass phrase 123' npx ts-node scripts/backup-bundle.ts prepare-restore "$WORK/final.enc" "$WORK/rec.zip" "$WORK/rec.env" >/dev/null 2>&1
+BACKUP_PASSPHRASE='pass phrase 123' node --import ./scripts/register-ts-node-esm.mjs scripts/backup-bundle.ts prepare-restore "$WORK/final.enc" "$WORK/rec.zip" "$WORK/rec.env" >/dev/null 2>&1
 diff -q "$WORK/deploy.env" "$WORK/rec.env" >/dev/null && cfg=IDENTICAL || cfg=DIFF
-if BACKUP_PASSPHRASE='WRONG' npx ts-node scripts/backup-bundle.ts prepare-restore "$WORK/final.enc" "$WORK/x.zip" "$WORK/x.env" >/dev/null 2>&1; then wrongpw=ACCEPTED; else wrongpw=REJECTED; fi
+if BACKUP_PASSPHRASE='WRONG' node --import ./scripts/register-ts-node-esm.mjs scripts/backup-bundle.ts prepare-restore "$WORK/final.enc" "$WORK/x.zip" "$WORK/x.env" >/dev/null 2>&1; then wrongpw=ACCEPTED; else wrongpw=REJECTED; fi
 DATABASE_URL="$(url dst2)" AGENT_STORAGE_PATH="$WORK/pkgdst2" node "$CLI" import --in "$WORK/rec.zip" --confirm >/dev/null 2>&1
 m2=$(compare_all src dst2)
 diff -r "$WORK/pkgsrc" "$WORK/pkgdst2" >/dev/null && p2=IDENTICAL || p2=DIFF
@@ -137,7 +137,7 @@ echo "==> [3] Plaintext-config guard (#380)"
 # The guard that makes encryption the default lives in finalize(). Steps 1-2
 # always supply a passphrase, so without these three checks the refusal could be
 # inverted and nothing would fail.
-if BACKUP_PASSPHRASE='' npx ts-node scripts/backup-bundle.ts finalize \
+if BACKUP_PASSPHRASE='' node --import ./scripts/register-ts-node-esm.mjs scripts/backup-bundle.ts finalize \
       "$WORK/b-keep.zip" "$WORK/deploy.env" "$WORK/refused.zip" >/dev/null 2>&1; then
   guard=ACCEPTED           # refusal did not fire — the control is broken
 else
@@ -148,7 +148,7 @@ fi
 [[ -e "$WORK/refused.zip" ]] && guard_file=WROTE_FILE || guard_file=NO_FILE
 # The documented escape hatch must still work, or operators will reach for
 # something worse.
-if BACKUP_PASSPHRASE='' STELLA_ALLOW_PLAINTEXT_CONFIG=1 npx ts-node scripts/backup-bundle.ts finalize \
+if BACKUP_PASSPHRASE='' STELLA_ALLOW_PLAINTEXT_CONFIG=1 node --import ./scripts/register-ts-node-esm.mjs scripts/backup-bundle.ts finalize \
       "$WORK/b-keep.zip" "$WORK/deploy.env" "$WORK/override.zip" >/dev/null 2>&1 \
       && [[ -s "$WORK/override.zip" ]]; then
   guard_override=OK

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A system admin can set how Stella plays her speech (`auto`, `stream` or `sentence`) for the whole platform, in Settings → Platform Defaults, with no redeploy. It applies from the next session; conversations already running keep their mode. A deployment that pins `stream` or `sentence` itself keeps it (the page lists those deployments); one left at `auto` follows the platform default. The agent log says where the mode came from. New table `PlatformSetting`, created by migration (#89)
+- Each user turn's message now keeps its language signal in `metadata.language`: the language heard and how sure it was, how long the turn was, its word count, the language the conversation was in after it, and whether it was re-decoded. No extra copy of the text, no migration. Typed turns carry no detected language or duration (#91)
+
+### Changed
+
+- Stella now picks her own speech playback mode instead of needing it set by hand. `STELLA_TTS_PLAYBACK` defaults to `auto` (unset means `auto` too): a session starts playing each sentence as it synthesizes (`stream`, lowest latency) and switches once to playing whole sentences (`sentence`) if the voice measures slower than real time for 3 sentences in a row — never back for the rest of the session. Setting `stream` or `sentence` by hand still pins that mode outright, with no switching, which is what a study that ran in a fixed mode on 1.3.0 or earlier should do if it needs to sound exactly as it did before. Note for researchers: a study running unset on a slow machine will sound different after upgrading — some sessions that used to stutter in `stream` will now settle into `sentence` playback on their own, at the cost of one longer silence on the sentence the switch lands on (since that sentence, already mid-reply, now waits for its own full synthesis the first time); pin `stream` to keep the old behaviour exactly, including the stutter (#669)
+
 ---
 
 ## [1.3.0] - 2026-10-07

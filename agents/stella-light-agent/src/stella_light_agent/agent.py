@@ -341,6 +341,56 @@ class StellaLightAgent(BaseAgent):
             for item in node:
                 self._resolve_persona_in_plan_text(item)
 
+    async def _resolve_language(self, input: AgentInput) -> str:
+        """Resolve this turn's language and, if the free decode was doubtful,
+        re-decode its audio forced into the lock for display only (#57).
+
+        Split out of ``process()`` so the hard rule — a forced re-decode must
+        never become its own evidence — is independently testable: this
+        method is the whole guarantee, since ``resolve()`` only ever sees the
+        turn's ORIGINAL free-decode signal, decided (``needs_redecode``)
+        before any re-decode happens and never revisited after.
+        """
+        meta = getattr(input, "metadata", None) or {}
+        detected_language = meta.get("detected_language") or None
+        language_confidence = float(meta.get("language_confidence") or 0.0)
+        language_signal = (detected_language, language_confidence) if detected_language else None
+        # Decide BEFORE resolve(): the gate reads the ORIGINAL free decode's
+        # own signal and length, never a corrected one — #57's hard rule is
+        # that a forced re-decode must never become its own evidence, and
+        # that starts with never letting it influence this check either.
+        needs_redecode = bool(
+            self.has_audio and detected_language
+            and self.language_resolver.needs_redecode(
+                detected_language, language_confidence, input.text
+            )
+        )
+        resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
+        original_text = input.text
+        redecoded_text = None
+        if needs_redecode:
+            turn_id = meta.get("turn_id")
+            redecoded_text = (
+                await self.audio.redecode_utterance_audio(turn_id, resolved_language)
+                if turn_id else None
+            )
+            if redecoded_text:
+                print(
+                    f"[StellaLightAgent] Re-decoded doubtful turn forced into "
+                    f"{resolved_language!r}: {input.text!r} -> {redecoded_text!r}"
+                )
+                input.text = redecoded_text
+        # Kept with the turn's stored message so the switching rule can be
+        # checked against real sessions (#91). Sent in the background, so it
+        # neither delays nor fails the turn.
+        self.send_turn_language(
+            input,
+            original_text=original_text,
+            resolved_language=resolved_language,
+            redecoded=bool(redecoded_text),
+        )
+        return resolved_language
+
     def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:
         """The declared language for the session, or None to detect per turn.
 
@@ -611,16 +661,7 @@ class StellaLightAgent(BaseAgent):
         )
         if self.has_audio:
             self.audio.set_stt_language(self.language_resolver.forced)
-        meta = getattr(input, "metadata", None) or {}
-        detected_language = meta.get("detected_language") or None
-        language_signal = (
-            (detected_language, float(meta.get("language_confidence") or 0.0))
-            if detected_language
-            else None
-        )
-        self._session_language = self.language_resolver.resolve(
-            input.text, signal=language_signal
-        )
+        self._session_language = await self._resolve_language(input)
         sm_context["language"] = self._session_language
         print(f"[StellaLightAgent] Resolved language for turn: {self._session_language}")
 

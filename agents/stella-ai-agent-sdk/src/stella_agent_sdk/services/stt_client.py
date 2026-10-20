@@ -261,6 +261,43 @@ class STTClient:
             logger.error(f"STT stream error: {e}")
             raise
 
+    async def redecode(
+        self,
+        audio_data: bytes,
+        language: str,
+        session_id: str = "",
+        sample_rate: int = 16000,
+        timeout: float = 5.0,
+    ) -> Optional[str]:
+        """One-shot re-decode of a doubtful utterance's own audio, forced to
+        ``language`` (#57). Call this only for a turn the caller's
+        ``LanguageResolver.needs_redecode`` found doubtful — never on a
+        confident turn — and never pass the result back into that same
+        resolver's ``resolve()`` as a signal; only the ORIGINAL free decode
+        from ``stream_transcribe`` is ever evidence (RFC §7/§8).
+
+        Returns ``None`` on any failure, or when the provider cannot force a
+        language (the lightweight dev default) — the caller keeps the
+        original free-decode text in that case rather than losing it.
+        """
+        if not self._connected:
+            return None
+        try:
+            request = self._pb2.RedecodeRequest(
+                audio_data=audio_data,
+                session_id=session_id,
+                language=language,
+                sample_rate=sample_rate,
+            )
+            response = await asyncio.wait_for(self._stub.Redecode(request), timeout=timeout)
+            return response.text or None
+        except asyncio.TimeoutError:
+            logger.warning(f"STT redecode timed out after {timeout}s")
+            return None
+        except Exception as e:
+            logger.error(f"STT redecode failed: {e}")
+            return None
+
     async def health_check(self) -> bool:
         """Check if the STT service is healthy."""
         if not self._connected:

@@ -211,3 +211,57 @@ async def test_committed_barge_in_turn_is_anchored():
 
     assert pipe.turn_anchor_ts > 0
     assert pipe._turn_id == "bargein_1"
+
+
+@pytest.mark.asyncio
+async def test_bridge_tts_done_fires_once_per_turn_with_its_playback_length():
+    """#454: it used to fire after every bridge sentence, so a two-sentence
+    bridge put two "done" points on the timeline and the playback window (how
+    much of the expert wait the bridge covers) had to be guessed."""
+    pipe, room = make_pipeline()
+    await next_turn(pipe, room, "hello")
+
+    pipe._emit_first_byte("bridge")
+    await asyncio.sleep(0.02)
+    first_byte = _analytics(room, "bridge_tts_first_byte")[0]["data"]["elapsed_ms"]
+    pipe._note_tts_done("bridge", first_byte + 800.0)   # first sentence played
+    pipe._note_tts_done("bridge", first_byte + 1500.0)  # second sentence played
+    pipe._note_tts_done("response", first_byte + 4000.0)
+    pipe._flush_tts_done()
+    await asyncio.sleep(0.02)
+
+    done = _analytics(room, "bridge_tts_done")
+    assert len(done) == 1, f"{len(done)} bridge_tts_done events for one bridge"
+    assert done[0]["data"]["elapsed_ms"] == pytest.approx(first_byte + 1500.0, abs=0.01)
+    assert done[0]["data"]["bridge_playback_ms"] == pytest.approx(1500.0, abs=0.01)
+    assert len(_analytics(room, "response_tts_done")) == 1
+
+    # Nothing left over for the next turn.
+    pipe._flush_tts_done()
+    await asyncio.sleep(0.02)
+    assert len(_analytics(room, "bridge_tts_done")) == 1
+
+
+@pytest.mark.asyncio
+async def test_tts_done_marks_when_the_audio_is_heard_not_when_it_was_handed_over():
+    """The last frame of a sentence is pushed into LiveKit's output buffer long
+    before it plays: on the local check (19 Oct) a spoken "Alright." measured
+    a 7 ms bridge_playback_ms. The audible end is the push plus what is still
+    queued for playout."""
+    pipe, room = make_pipeline()
+    await next_turn(pipe, room, "hello")
+    pipe._emit_first_byte("bridge")
+    await asyncio.sleep(0.02)
+    first_byte = _analytics(room, "bridge_tts_first_byte")[0]["data"]["elapsed_ms"]
+
+    type(room).queued_playout_ms = property(lambda self: 640.0)
+    try:
+        pipe._note_tts_done("bridge", first_byte + 8.0)
+        pipe._flush_tts_done()
+        await asyncio.sleep(0.02)
+    finally:
+        type(room).queued_playout_ms = property(lambda self: 0.0)
+
+    done = _analytics(room, "bridge_tts_done")[0]["data"]
+    assert done["elapsed_ms"] == pytest.approx(first_byte + 648.0, abs=0.01)
+    assert done["bridge_playback_ms"] == pytest.approx(648.0, abs=0.01)

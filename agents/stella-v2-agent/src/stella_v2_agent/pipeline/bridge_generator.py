@@ -67,6 +67,10 @@ Always:
 
 {{bridgeMode}}
 {{/if}}
+{{#if activitiesOnOffer}}
+
+OVERRIDING EVERY RULE ABOVE, INCLUDING "react to the specific thing they said": they may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on, and that decision is made after you speak — a confirmation question may follow what you say. So say nothing about what they just asked for: do not acknowledge it, do not confirm you understood it, do not repeat any part of it back in your own words either, do not offer to help with it, and do not say you will or can do it — that is also a promise, and it is not yours to make here. The shortest possible neutral beat is all that's wanted here — no example is given, for the same reason as above.
+{{/if}}
 Output ONLY the bridge. No quotes, no labels."""
 
 # ── Bridge modes ─────────────────────────────────────────────────────────────

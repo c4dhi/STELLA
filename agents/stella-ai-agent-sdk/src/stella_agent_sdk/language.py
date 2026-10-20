@@ -11,8 +11,15 @@ Design (see RFC §8):
   signal is STT's independent acoustic detection (passed into ``resolve`` by the
   agent); for typed text it is the bundled ``detect_language`` text classifier.
   Both shapes are interchangeable — same gating, same propagation (§8.3).
-- Hold a session lock; switch only on a sustained, high-confidence change
-  (§8 confidence-gated switch). Short/ambiguous utterances never flip it.
+- Hold a session lock; switch only once a decaying confidence score for some
+  other language crosses a bar (#57, Felix's model, 19 Oct 2026) — evidence
+  accumulates rather than needing a consecutive streak, but still fades if not
+  reinforced. A single off-lock detection confident enough (≥0.9 by default,
+  ``instant_switch_threshold``) skips the build-up and switches outright
+  (#90, Felix's model, 20 Oct 2026) — a separate bar from the one that
+  confirms the first lock (``detect_threshold``), so a deployment can tune
+  one without the other. Utterances too short to carry any signal never vote
+  either way.
 - Clamp to the supported set — never resolve to a language we cannot speak (§7).
 - Fallback chain: confident signal → session lock → plan seed → default.
 
@@ -24,7 +31,7 @@ confidence. Swapping in a broader detector only changes ``detect_language``.
 import logging
 import os
 import re
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -161,22 +168,49 @@ class LanguageResolver:
         supported: Tuple[str, ...] = ("de", "en"),
         default: str = "en",
         seed: Optional[str] = None,
-        detect_threshold: float = 0.4,
-        switch_threshold: float = 0.6,
-        debounce: int = 3,
+        detect_threshold: float = 0.9,
+        instant_switch_threshold: float = 0.9,
+        text_bar: float = 0.85,
+        decay: float = 0.5,
+        switch_score: float = 1.5,
         forced: Optional[str] = None,
     ) -> None:
         self.supported = set(supported)
         self.default = default if default in self.supported else next(iter(self.supported))
+        # Bar to confirm a PROVISIONAL first lock. 0.4 let a single 0.52 guess
+        # confirm it outright (the 19 Oct dev-session bug, #90); 0.9 means only
+        # a genuinely confident decode ever settles the first lock on one turn.
         self.detect_threshold = detect_threshold
-        self.switch_threshold = switch_threshold
-        # Consecutive confident detections required to move a CONFIRMED lock.
-        # Was 1, i.e. a single turn flipped the conversation's language
-        # mid-sentence. STT is least reliable on exactly the turns that carry
-        # the least language signal — short acknowledgements — so one vote was
-        # far too cheap. Observed in production: German sessions where "Nicht
-        # so." and "Y'all." came back from Whisper as English.
-        self.debounce = max(1, debounce)
+        # A SEPARATE bar (#90, Felix's model, 20 Oct 2026) for an instant
+        # switch of an already-CONFIRMED lock: a long-enough off-lock
+        # detection this sure of itself needs no build-up at all. Kept apart
+        # from detect_threshold on purpose — some deployments (the study
+        # configs) pin detect_threshold low for the first-lock behavior they
+        # want without that also making every merely-moderate off-lock guess
+        # switch a confirmed lock outright. A less confident off-lock turn
+        # still votes, just through the decay build-up below.
+        self.instant_switch_threshold = instant_switch_threshold
+        # The three numbers behind the confidence build-up (#57, Felix's model,
+        # replay-set 19 Oct 2026). A CONFIRMED lock only moves once a running
+        # ``challenger_score`` (below) for some other language crosses
+        # ``switch_score``; it is not a count of consecutive turns. ``decay``
+        # is how much of that score survives a turn that is not itself a vote
+        # for the same challenger — this is what lets a mixed run of evidence
+        # still add up instead of needing a consecutive streak, while a single
+        # misfire still fades rather than lingering forever.
+        #
+        # ``text_bar`` is unrelated to switching: it only decides whether a
+        # turn's own free decode is trusted as THIS turn's transcript, or
+        # re-decoded forced into the current lock for display (``needs_redecode``
+        # below). Voting has no confidence floor — a long, honest, merely
+        # unconfident off-lock turn still votes, just lightly — because a floor
+        # there was the trap: a genuine switch spoken at steady lower confidence
+        # (an accented speaker, say) could never clear it and would never be
+        # noticed at all. Only forced-redecoded text, and turns too short to
+        # carry any signal, never vote.
+        self.text_bar = text_bar
+        self.decay = decay
+        self.switch_score = switch_score
 
         self.seed = seed if seed in self.supported else None
         # Deployment pin. ``_forced_request`` keeps the raw operator choice so a
@@ -185,14 +219,23 @@ class LanguageResolver:
         # the pin from the shared SDK with no per-agent wiring.
         self._forced_request = (forced if forced is not None else forced_language())
         self.forced = self._validate_forced()
+        # Captured once, here, and never touched again by set_plan_language or
+        # apply_config — unlike `forced`, which later calls freely overwrite.
+        # A companion-mode caller needs to tell "the operator pinned this
+        # deployment" apart from "a plan or persona happened to set `forced`",
+        # since only the former outranks the persona (#58).
+        self.deployment_pin: Optional[str] = self.forced
         self.locked: Optional[str] = self.forced
         # True once the lock came from a real detection (not the default/seed).
         # A provisional lock yields to the first genuine detection at
-        # detect_threshold; a confirmed lock only changes via switch_threshold.
+        # detect_threshold; a confirmed lock only changes via the score below.
         # A pin counts as confirmed: it is a decision, not a placeholder.
         self._confirmed = bool(self.forced)
-        self._pending: Optional[str] = None
-        self._pending_count = 0
+        # The one challenger being tracked at a time, and its running score.
+        # Evidence for two different off-lock languages does not add together;
+        # whichever is seen most recently is the one accumulating.
+        self.challenger_lang: Optional[str] = None
+        self.challenger_score: float = 0.0
 
     def _validate_forced(self) -> Optional[str]:
         """Clamp the requested pin to the supported set (unsupported → no pin)."""
@@ -216,14 +259,15 @@ class LanguageResolver:
         """
         self.locked = self.forced
         self._confirmed = bool(self.forced)
-        self._reset_pending()
+        self._reset_challenger()
 
     def apply_config(self, config: dict) -> None:
         """Apply resolver configuration overrides from the pipeline config.
 
         Recognized keys (all optional): ``supported`` (list of ISO codes),
-        ``default`` (fallback language), ``detect_threshold``, ``switch_threshold``,
-        ``debounce``. Unknown keys are ignored.
+        ``default`` (fallback language), ``detect_threshold``,
+        ``instant_switch_threshold``, ``text_bar``, ``decay``,
+        ``switch_score``. Unknown keys are ignored.
         """
         if "supported" in config and config["supported"]:
             self.supported = set(config["supported"])
@@ -233,10 +277,14 @@ class LanguageResolver:
             self.default = next(iter(self.supported))
         if "detect_threshold" in config:
             self.detect_threshold = float(config["detect_threshold"])
-        if "switch_threshold" in config:
-            self.switch_threshold = float(config["switch_threshold"])
-        if "debounce" in config:
-            self.debounce = max(1, int(config["debounce"]))
+        if "instant_switch_threshold" in config:
+            self.instant_switch_threshold = float(config["instant_switch_threshold"])
+        if "text_bar" in config:
+            self.text_bar = float(config["text_bar"])
+        if "decay" in config:
+            self.decay = float(config["decay"])
+        if "switch_score" in config:
+            self.switch_score = float(config["switch_score"])
         if "force" in config:
             want = (str(config["force"] or "")).strip().lower()
             self._forced_request = want if want and want != "auto" else None
@@ -245,6 +293,12 @@ class LanguageResolver:
         self.forced = self._validate_forced()
         if self.forced:
             self.locked, self._confirmed = self.forced, True
+        if "force" in config:
+            # A configured force is the same tier as the deployment env var —
+            # both are the operator's own decision, applied here rather than
+            # at construction (#58). Re-validated against the current
+            # supported set, same as `forced` just above.
+            self.deployment_pin = self.forced
 
     def set_plan_language(self, lang: Optional[str]) -> None:
         """Declare the language this plan is written in — a PIN, not a hint.
@@ -279,7 +333,7 @@ class LanguageResolver:
         self.forced = self._validate_forced()
         if self.forced:
             self.locked, self._confirmed = self.forced, True
-            self._reset_pending()
+            self._reset_challenger()
 
     def set_seed(self, seed: Optional[str]) -> None:
         """Set the plan-declared language seed (``auto``/unsupported → no seed).
@@ -289,9 +343,29 @@ class LanguageResolver:
         """
         self.seed = seed if seed in self.supported else None
 
-    def _reset_pending(self) -> None:
-        self._pending = None
-        self._pending_count = 0
+    def _reset_challenger(self) -> None:
+        self.challenger_lang = None
+        self.challenger_score = 0.0
+
+    def needs_redecode(
+        self, lang: Optional[str], confidence: float, text: Optional[str]
+    ) -> bool:
+        """Whether THIS turn's own free decode is unreliable enough that the
+        STT pipeline should re-decode it forced into the current lock, for the
+        transcript shown/used this turn.
+
+        Purely cosmetic — which text is displayed — and has no bearing on
+        whether the lock itself moves: call this, then still pass the
+        ORIGINAL free decode's ``(lang, confidence)`` into ``resolve()`` as
+        ``signal``. The forced re-decode's own output must never be fed back
+        in; that is what keeps a self-confirming loop (§7/§8, the pin-report
+        bug) impossible even for an undeclared, merely-confirmed lock.
+        """
+        if self.forced or not self._confirmed:
+            return False  # nothing settled yet to correct toward
+        if lang == self.locked:
+            return False
+        return _too_short_to_switch(text) or confidence < self.text_bar
 
     def resolve(
         self,
@@ -319,7 +393,7 @@ class LanguageResolver:
         if self.forced:
             self.locked = self.forced
             self._confirmed = True
-            self._reset_pending()
+            self._reset_challenger()
             return self.locked
 
         if signal is not None:
@@ -339,33 +413,47 @@ class LanguageResolver:
                 self._confirmed = True
             elif self.locked is None:
                 self.locked = self.seed or self.default
-            self._reset_pending()
+            self._reset_challenger()
             return self.locked
 
         # Confirmed lock: hold it (the last detected language) unless a
-        # sustained, high-confidence change is seen — and only from turns long
-        # enough to actually carry the evidence. A one- or two-word
-        # acknowledgement is where STT guesses, so it must not get a vote; it
-        # neither advances a pending switch nor cancels one, it is simply not
-        # evidence either way.
+        # running confidence score for some OTHER language crosses
+        # switch_score (#57, Felix's model). Only turns long enough to carry
+        # evidence touch the score at all — a one- or two-word acknowledgement
+        # is where STT guesses, so it is simply not evidence either way: it
+        # neither builds a challenger nor decays one.
         if _too_short_to_switch(text):
             return self.locked
 
-        if lang and lang != self.locked and confidence >= self.switch_threshold:
-            if self._pending == lang:
-                self._pending_count += 1
-            else:
-                self._pending, self._pending_count = lang, 1
-            if self._pending_count >= self.debounce:
-                self.locked = lang
-                self._reset_pending()
-        else:
-            # Anything that is NOT a confident switch toward `lang` cancels an
-            # in-flight switch: same language, no signal, OR a weak/ambiguous
-            # opposite signal (different supported language below switch_threshold).
-            # This keeps "sustained" meaning CONSECUTIVE confident detections —
-            # a weak turn in between resets the debounce count (RFC §8 #3).
-            self._reset_pending()
+        # A long-enough, off-lock detection this confident needs no build-up —
+        # it switches on its own (#90). Its own bar, deliberately separate
+        # from detect_threshold (see __init__): a deployment that pins
+        # detect_threshold low for the first lock must not thereby also make
+        # every moderate off-lock guess switch a confirmed lock outright.
+        if lang is not None and lang != self.locked and confidence >= self.instant_switch_threshold:
+            self.locked = lang
+            self._reset_challenger()
+            return self.locked
+
+        if lang is None or lang == self.locked:
+            # No signal, or it reaffirms the lock: evidence AGAINST a
+            # challenger, so whatever has been building fades a step. No
+            # confidence floor needed here — agreeing is agreeing.
+            self.challenger_score *= self.decay
+            return self.locked
+
+        # A confident-or-not, long-enough, OFF-lock signal: it votes, weighted
+        # by its own confidence. Deliberately no floor — a genuine switch
+        # spoken at a steady, merely-moderate confidence (an accented speaker,
+        # say) must still be able to cross switch_score eventually, just more
+        # slowly than a crisper one. Only a forced re-decode's own output
+        # (never passed in here, see needs_redecode) is barred from voting.
+        if lang != self.challenger_lang:
+            self.challenger_lang, self.challenger_score = lang, 0.0
+        self.challenger_score = self.challenger_score * self.decay + confidence
+        if self.challenger_score >= self.switch_score:
+            self.locked = lang
+            self._reset_challenger()
 
         return self.locked
 
@@ -378,3 +466,44 @@ def language_name(code: Optional[str]) -> str:
     if not code or code == "auto":
         return "the user's language"
     return LANGUAGE_NAMES.get(code, code)
+
+
+def turn_language_record(
+    metadata: Dict[str, Any],
+    *,
+    original_text: str,
+    resolved_language: str,
+    redecoded: bool,
+    duration_s: Optional[float],
+    correlation_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """What one user turn said about its language, for the stored message (#91).
+
+    Published as a ``turn_language`` envelope once the agent has resolved the
+    turn, and merged by the backend into that turn's transcript message, so the
+    switching rule can be checked against real sessions afterwards. Carries no
+    transcript text. ``original_text`` is the free decode the signal belongs
+    to, so a re-decoded turn is still counted by what was first heard.
+
+    ``correlation_id`` is set for typed text: the frontend stores a typed
+    message under its own envelope, which the backend finds by that id.
+
+    Returns None when there is no turn id to attach it to.
+    """
+    transcript_id = (metadata or {}).get("turn_id")
+    if not transcript_id:
+        return None
+    detected = (metadata or {}).get("detected_language") or None
+    confidence = float((metadata or {}).get("language_confidence") or 0.0)
+    record = {
+        "transcript_id": transcript_id,
+        "detected_language": detected,
+        "language_confidence": round(confidence, 3) if detected else None,
+        "duration_s": round(duration_s, 2) if duration_s is not None else None,
+        "word_count": len((original_text or "").split()),
+        "resolved_language": resolved_language,
+        "redecoded": bool(redecoded),
+    }
+    if correlation_id:
+        record["correlation_id"] = correlation_id
+    return record

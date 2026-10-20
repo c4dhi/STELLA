@@ -566,17 +566,15 @@ EOF
 # =============================================================================
 
 stop_services() {
-    info "${EMOJI_STOP} Stopping STELLA services..."
+    info "${EMOJI_STOP} Stopping STELLA services in namespace '${KUBERNETES_NAMESPACE:-ai-agents}'..."
 
-    # Kill port-forward processes
-    if [[ -f "${PID_DIR}/port-forward.pid" ]]; then
-        local pid
-        pid=$(cat "${PID_DIR}/port-forward.pid")
-        if process_running "$pid"; then
-            kill_graceful "$pid"
-            verbose "Stopped port-forward daemon"
-        fi
-        rm -f "${PID_DIR}/port-forward.pid"
+    # End this namespace's port-forward loops. The daemon keeps their pids in
+    # ${PID_DIR}/daemon-pids.txt; nothing ever wrote the port-forward.pid this
+    # used to look for, so the loops outlived every --stop (#737).
+    if [[ -x "${SCRIPT_DIR}/port-forward-daemon.sh" ]]; then
+        KUBERNETES_NAMESPACE="${KUBERNETES_NAMESPACE:-ai-agents}" PID_DIR="${PID_DIR:-}" \
+            "${SCRIPT_DIR}/port-forward-daemon.sh" stop >/dev/null 2>&1 || true
+        verbose "Stopped port-forward daemon"
     fi
 
     # Scale down deployments
