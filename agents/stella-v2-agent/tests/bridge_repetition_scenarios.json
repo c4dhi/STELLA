@@ -1,0 +1,107 @@
+{
+  "_readme": [
+    "Synthetic companion sessions for tests/bridge_repetition_replay.py (#94).",
+    "Each session is a fixed script of user turns — no routing, no activities — run",
+    "straight through the real BridgeGenerator so the measured variety and repeats",
+    "come only from the bridge prompt/model, not from what the user happened to say.",
+    "Turn lengths and content are deliberately varied: greetings, brief acknowledgements,",
+    "short factual answers, longer disclosures (some positive, some not), one question",
+    "each, and a couple of brief turns back-to-back, to match the shape of a real",
+    "check-in conversation and exercise select_bridge_mode's anti-lockstep rule.",
+    "'reply' is a placeholder for the turn's actual response text (routing/content is",
+    "not under test here) — only used to build conversationHistory for the next turn.",
+    "'activities_on_offer' / 'barge_in' set the matching bridge template variables."
+  ],
+  "sessions": [
+    {
+      "id": "de-fitness-01",
+      "language": "de",
+      "turns": [
+        {"user": "Guten Morgen.", "reply": "Guten Morgen! Wie hast du geschlafen?"},
+        {"user": "Ganz gut, danke.", "reply": "Schön zu hören."},
+        {"user": "Ich war heute schon eine kleine Runde laufen.", "reply": "Das ist doch mal was. Wie lange warst du unterwegs?"},
+        {"user": "Ja.", "reply": "Magst du mir trotzdem sagen, wie lange ungefähr?"},
+        {"user": "Ehrlich gesagt war es anstrengender als sonst, meine Knie haben wieder etwas gezwickt.", "reply": "Verstehe. Willst du heute kürzer treten?"},
+        {"user": "Nein, nicht wirklich.", "reply": "Okay, dann machen wir weiter wie gewohnt."},
+        {"user": "Was sollten wir als nächstes machen?", "reply": "Wir könnten über deine Woche sprechen oder ein kleines Gedächtnisspiel machen."},
+        {"user": "Okay.", "reply": "Fangen wir mit deiner Woche an."},
+        {"user": "Ich habe in letzter Zeit auch schlechter geschlafen und bin oft müde.", "reply": "Das klingt anstrengend. Seit wann ist das so?"},
+        {"user": "Stimmt.", "reply": "Seit wann würdest du sagen?"},
+        {"user": "Genau.", "reply": "Kein Problem, wir können später darauf zurückkommen."},
+        {"user": "Danke, das hilft wirklich.", "reply": "Gerne, dafür bin ich da."}
+      ]
+    },
+    {
+      "id": "de-mood-02",
+      "language": "de",
+      "turns": [
+        {"user": "Hallo.", "reply": "Hallo! Schön, dich zu hören."},
+        {"user": "Mir geht's heute richtig gut.", "reply": "Das freut mich zu hören."},
+        {"user": "Ich hab heute Morgen mit meiner Tochter telefoniert.", "reply": "Wie schön. Worüber habt ihr gesprochen?"},
+        {"user": "Nicht viel.", "reply": "Ganz entspannt also."},
+        {"user": "Eigentlich schon, sie hat erzählt, dass ihr Enkelkind bald zur Welt kommt.", "reply": "Was für eine schöne Nachricht! Wie fühlst du dich dabei?"},
+        {"user": "Ja total.", "reply": "Das kann ich mir vorstellen."},
+        {"user": "Können wir heute das Gedächtnisspiel machen?", "reply": "Klar, fangen wir gleich damit an."},
+        {"user": "Super.", "reply": "Los geht's: drei Wörter, die ich dir gleich nenne."},
+        {"user": "Das letzte Mal hat mir das richtig Spaß gemacht, auch wenn ich nicht alles behalten habe.", "reply": "Das ist völlig normal, es geht ja nicht um perfekt."},
+        {"user": "Gut.", "reply": "Genau die richtige Einstellung."},
+        {"user": "Richtig.", "reply": "Dann los."},
+        {"user": "Vielen Dank.", "reply": "Sehr gerne."}
+      ]
+    },
+    {
+      "id": "en-fitness-01",
+      "language": "en",
+      "turns": [
+        {"user": "Morning.", "reply": "Morning! How did you sleep?"},
+        {"user": "Pretty good actually.", "reply": "Glad to hear that."},
+        {"user": "I went for a short walk earlier.", "reply": "Nice. How far did you get?"},
+        {"user": "Yeah.", "reply": "Any rough idea of the distance?"},
+        {"user": "Honestly it was harder than I expected, my knee's been acting up again.", "reply": "Sorry to hear that. Want to take it easier today?"},
+        {"user": "Not really.", "reply": "Okay, we'll keep going as planned then."},
+        {"user": "What should we talk about next?", "reply": "We could go over your week, or try a quick memory game."},
+        {"user": "Okay.", "reply": "Let's start with your week."},
+        {"user": "I've also been sleeping worse lately and feel tired a lot.", "reply": "That sounds draining. How long has that been going on?"},
+        {"user": "Right.", "reply": "Any rough sense of when it started?"},
+        {"user": "Sure.", "reply": "No rush, we can come back to it."},
+        {"user": "Thanks, that actually helps.", "reply": "Of course, happy to help."}
+      ]
+    },
+    {
+      "id": "en-mood-02",
+      "language": "en",
+      "turns": [
+        {"user": "Hey there.", "reply": "Hey! Good to hear your voice."},
+        {"user": "Great, actually!", "reply": "That's wonderful."},
+        {"user": "I finished a 5k this morning.", "reply": "That's fantastic! How did it feel?"},
+        {"user": "Yep.", "reply": "Any highlight from the run?"},
+        {"user": "It felt amazing, I've been training for weeks and it finally paid off.", "reply": "All that work showing up at once — that must feel great."},
+        {"user": "Not much else really.", "reply": "That's plenty for one morning."},
+        {"user": "Could we try the memory game today?", "reply": "Sure, let's jump right into it."},
+        {"user": "Sounds good.", "reply": "Here are three words to remember."},
+        {"user": "I also started a new recipe book and I'm really enjoying it.", "reply": "Nice, what have you cooked so far?"},
+        {"user": "Cool.", "reply": "Anything stand out so far?"},
+        {"user": "Totally.", "reply": "Glad to hear it."},
+        {"user": "Appreciate it.", "reply": "Anytime."}
+      ]
+    },
+    {
+      "id": "de-activity-offer-03",
+      "language": "de",
+      "turns": [
+        {"user": "Hallo zusammen.", "reply": "Hallo! Wie geht es dir heute?"},
+        {"user": "Ich wollte fragen, ob wir heute die Fokusgruppe machen könnten.", "reply": "Das klären wir gleich.", "activities_on_offer": true},
+        {"user": "Ja genau, die.", "reply": "Alles klar, dann starten wir damit."}
+      ]
+    },
+    {
+      "id": "en-barge-in-03",
+      "language": "en",
+      "turns": [
+        {"user": "Hi.", "reply": "Hi there! How are you doing today?"},
+        {"user": "wait actually sorry", "reply": "Of course — go ahead.", "barge_in": true},
+        {"user": "I just remembered I have an appointment later, can we keep this short?", "reply": "Absolutely, let's keep it brief."}
+      ]
+    }
+  ]
+}
