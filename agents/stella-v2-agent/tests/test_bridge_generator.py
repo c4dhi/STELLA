@@ -276,16 +276,14 @@ class TestApplyConfig:
         gen.apply_config({"fast_path": "on", "allow_silence": "on", "appraisal": "on"})
         assert gen.bridge_model  # still constructed and usable
 
-    def test_timeout_ms_overrides_env_default(self):
+    def test_the_bridge_has_no_timeout_knob_left(self):
+        # #766: the bridge's own wall-clock deadline is gone — a stored config
+        # that still carries timeout_ms from before must not blow up an agent
+        # on startup, and nothing it does should resurface the old behaviour.
         gen = BridgeGenerator(llm_service=None)
+        assert not hasattr(gen, "bridge_timeout_s")
         gen.apply_config({"timeout_ms": 1500})
-        assert gen.bridge_timeout_s == 1.5
-
-    def test_blank_timeout_is_ignored(self):
-        gen = BridgeGenerator(llm_service=None)
-        before = gen.bridge_timeout_s
-        gen.apply_config({"timeout_ms": ""})
-        assert gen.bridge_timeout_s == before
+        assert not hasattr(gen, "bridge_timeout_s")
 
     def test_other_knobs_still_apply(self):
         gen = BridgeGenerator(llm_service=None)
@@ -546,7 +544,6 @@ class TestGenerateStream:
     @pytest.mark.asyncio
     async def test_streams_multi_sentence_bridge_incrementally(self):
         gen = BridgeGenerator(llm_service=_FakeStreamingLLM("Okay, I hear you. That sounds really draining."))
-        gen.bridge_timeout_s = 5.0
         out = await _drain(gen.generate_stream("I force myself to work out", [], language="en"))
         # First emit is just the opening sentence; final is the whole bridge.
         assert out[0] == "Okay, I hear you."
@@ -561,7 +558,6 @@ class TestGenerateStream:
         carries the reaction instead. Better a missing opener than a stock one
         that would fit any answer."""
         gen = BridgeGenerator(llm_service=_FakeStreamingLLM("What do you enjoy doing?"))
-        gen.bridge_timeout_s = 5.0
         out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
         assert out == []
 
@@ -572,45 +568,32 @@ class TestGenerateStream:
                 raise RuntimeError("provider down")
 
         gen = BridgeGenerator(llm_service=_Boom())
-        gen.bridge_timeout_s = 5.0
         out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
         assert out == []
 
     @pytest.mark.asyncio
     async def test_generate_delegates_and_returns_final_accumulated(self):
         gen = BridgeGenerator(llm_service=_FakeStreamingLLM("Right, that makes sense. Thanks for sharing."))
-        gen.bridge_timeout_s = 5.0
         full = await gen.generate(_ORDINARY_TURN, [], language="en")
         assert full == "Right, that makes sense. Thanks for sharing."
 
-
-class TestTheTimeoutNeverReachesTheCaller:
-    """Session 3bde6b95: the bridge arrived right at its time limit, the limit
-    fired while the agent was publishing it, and the agent's whole turn loop
-    was cancelled. It left the room mid-reply without logging anything."""
-
     @pytest.mark.asyncio
-    async def test_a_caller_still_busy_when_the_limit_passes_is_not_cancelled(self):
-        gen = BridgeGenerator(llm_service=_FakeStreamingLLM("Okay, I hear you. That sounds really draining."))
-        gen.bridge_timeout_s = 0.05
-
-        heard = []
-        async for chunk in gen.generate_stream("I force myself to work out", [], language="en"):
-            heard.append(chunk)
-            # What the agent does with a chunk: publish it, which takes time.
-            await asyncio.sleep(0.2)
-
-        assert heard and heard[0] == "Okay, I hear you."
-
-    @pytest.mark.asyncio
-    async def test_a_model_that_never_answers_is_still_cut_off(self):
-        class _Silent:
+    async def test_a_slow_llm_is_no_longer_cut_off_here(self):
+        # #766, Felix: "not intended" — there is no wall-clock deadline left in
+        # this generator. A model that takes its time is simply waited for;
+        # the turn-level bound on how long the REST of the turn waits for this
+        # now lives in agent.py (the bridge races the expert pool there), not
+        # here. Guards against the old BRIDGE_TIMEOUT_MS behaviour quietly
+        # coming back.
+        class _Slow:
             async def generate(self, messages, config, callback, component_name="unknown"):
-                await asyncio.sleep(30)
+                await asyncio.sleep(0.3)
+                text = "Okay, that makes sense."
+                await callback.on_token(text, text)
+                resp = LLMResponse(content=text, model="t", provider="t")
+                await callback.on_complete(resp)
+                return resp
 
-        gen = BridgeGenerator(llm_service=_Silent())
-        gen.bridge_timeout_s = 0.05
-
-        started = asyncio.get_running_loop().time()
-        await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
-        assert asyncio.get_running_loop().time() - started < 2
+        gen = BridgeGenerator(llm_service=_Slow())
+        out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
+        assert out and out[-1] == "Okay, that makes sense."

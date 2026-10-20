@@ -24,8 +24,13 @@ from stella_v2_agent.companion import Companion
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
-BRIDGE_MS = 120
+BRIDGE_MS = 80
 EXPERTS_MS = 120
+# #766: a bridge no longer guaranteed to finish once the pool is ready (it is
+# abandoned instead, see TestBridgeGivesUpWhenThePoolIsReady below) — tied
+# against EXPERTS_MS, the two used to race, making bridge_end flaky. Kept
+# comfortably shorter here so these tests exercise overlap-and-natural-
+# completion, the thing they were written to pin, deterministically.
 
 
 class _Recorder:
@@ -37,6 +42,7 @@ class _Recorder:
         self.pool_start = None
         self.pool_end = None
         self.pool_cancelled = False
+        self.bridge_cancelled = False
         self.verdicts_at_arbitration = None
         self.response_collected_keys = None
 
@@ -116,6 +122,9 @@ def _make_agent(
             yield "Got it."
             await asyncio.sleep(bridge_ms / 2000)
             yield "Got it. Let me think."
+        except asyncio.CancelledError:
+            rec.bridge_cancelled = True
+            raise
         finally:
             rec.bridge_end = rec.now()
 
@@ -254,6 +263,8 @@ async def test_barge_in_mid_bridge_cancels_the_pool():
 
     assert rec.pool_cancelled, "expert pool kept running after the turn was abandoned"
     assert rec.pool_end is None
+    # #766: the bridge is now a task too, reaped the same way.
+    assert rec.bridge_cancelled, "bridge generation kept running after the turn was abandoned"
 
 
 @pytest.mark.asyncio
@@ -289,3 +300,72 @@ async def test_collected_keys_still_diffs_turn_start_against_post_pool():
     assert rec.response_collected_keys == ["goal"], (
         "collected_keys must contain only what THIS turn collected"
     )
+
+
+class TestBridgeGivesUpWhenThePoolIsReady:
+    """#766, Felix: the bridge's own 2s wall-clock deadline is gone — a bridge
+    that is simply a bit slow, not stuck, is no longer cut off. But the turn
+    still needs ONE bound, or a genuinely slow provider call would hold up the
+    reply for as long as the LLM client's own request timeout. The pool is
+    that bound: once it's ready, the turn moves on without waiting any
+    further for the bridge, and whatever the bridge produces after that is
+    never played — it must not land after or over the reply.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_slow_bridge_does_not_delay_the_reply(self):
+        rec = _Recorder()
+        agent = _make_agent(rec, bridge_ms=4000, experts_ms=80)
+
+        started = time.perf_counter()
+        await _drain(agent)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+
+        assert elapsed_ms < 1000, (
+            f"turn took {elapsed_ms:.0f}ms; it waited for the 4s bridge instead of "
+            f"the 80ms pool"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_bridge_too_slow_to_produce_anything_is_never_played(self):
+        rec = _Recorder()
+        agent = _make_agent(rec, bridge_ms=4000, experts_ms=80)
+        outputs = await _drain(agent)
+
+        bridge_chunks = [
+            o for o in outputs
+            if o.type.value == "text_chunk" and o.metadata.get("tts_source") == "bridge"
+        ]
+        assert bridge_chunks == [], "a bridge that never produced a sentence must not play one"
+        # The response must still have gone out — a bridge-less turn, not a
+        # stuck one.
+        assert any(o.type.value == "text_chunk" and o.is_final for o in outputs)
+
+    @pytest.mark.asyncio
+    async def test_the_abandoned_bridge_task_is_actually_cancelled(self):
+        """Not just given up on — reaped, so it can't keep running or leak a
+        'Task exception was never retrieved' warning."""
+        rec = _Recorder()
+        agent = _make_agent(rec, bridge_ms=4000, experts_ms=80)
+        await _drain(agent)
+        await asyncio.sleep(0)  # let the cancellation actually land
+
+        assert rec.bridge_cancelled, "the slow bridge kept running after the turn moved on"
+
+    @pytest.mark.asyncio
+    async def test_a_bridge_cut_off_mid_stream_keeps_what_already_played(self):
+        """The old timeout's behaviour, preserved: a sentence already validated
+        and sent to the caller stays spoken — only the REST is given up on. The
+        pool here finishes between the bridge's first and second sentence."""
+        rec = _Recorder()
+        agent = _make_agent(rec, bridge_ms=300, experts_ms=200)
+        outputs = await _drain(agent)
+
+        bridge_texts = [
+            o.content for o in outputs
+            if o.type.value == "text_chunk" and o.metadata.get("tts_source") == "bridge"
+        ]
+        assert bridge_texts == ["Got it."], (
+            "expected exactly the first sentence, not the second (never arrived in "
+            "time) and not nothing (the first DID arrive in time)"
+        )

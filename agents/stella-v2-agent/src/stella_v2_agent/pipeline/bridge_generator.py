@@ -8,15 +8,16 @@ fuller bridge speaks longer, covering more of the gap before the reply lands.
 Runs in parallel with the Expert Pool via asyncio.gather() (#363: there is no
 Input Gate to run beside).
 
-On failure: returns a short fallback bridge. Every turn always gets a bridge.
+On failure (nothing valid released, or the pool wins the race against a slow
+one — #766): the turn simply has no opener, and the reply carries the
+reaction instead.
 """
 
-import asyncio
 import re
 import time
 from typing import Dict, Any, List, Optional
 
-from stella_agent_sdk.env import env_bool as _env_bool, env_float as _env_float
+from stella_agent_sdk.env import env_bool as _env_bool
 from stella_agent_sdk.llm import (
     LLMService, LLMConfig, LLMMessage, LLMProvider, stream_completion,
 )
@@ -416,6 +417,17 @@ class BridgeGenerator:
     def __init__(self, llm_service: LLMService):
         self._llm_service = llm_service
 
+        # There used to be a wall-clock deadline here (BRIDGE_TIMEOUT_MS,
+        # 2s), cutting the LLM stream off even when it was still mid-sentence
+        # and simply a bit slow rather than stuck (#766, Felix: "not
+        # intended"). Removed — generate_stream() now runs to the stream's own
+        # natural end (or the LLM client's own request timeout, LLMConfig's
+        # default 30s, if the provider genuinely hangs). The turn-level
+        # guarantee this used to provide — the bridge never stalls the REST of
+        # the turn — now lives in agent.py: the bridge runs as its own task
+        # racing the expert pool, and a bridge still running once the pool is
+        # ready is abandoned there, not here.
+
         # LLM config (overridable via apply_config)
         self.bridge_model = "gpt-5.4-mini"
         # Headroom for a fuller reflective bridge (up to ~35 words / 2-3 short
@@ -430,10 +442,6 @@ class BridgeGenerator:
         # each individually fine and collectively a template, because the model
         # could not see its own pattern.
         self.history_limit: int = 0
-        # The bridge only buys ~1s while the main pipeline runs; it must never
-        # stall the turn. If the LLM is slow (API latency spike), fall back to a
-        # canned bridge instead of hanging. Tunable via BRIDGE_TIMEOUT_MS.
-        self.bridge_timeout_s: float = _env_float("BRIDGE_TIMEOUT_MS", 2000.0) / 1000
 
         # Anti-lockstep state (#1 naturalness). The mode chosen for the previous
         # turn of THIS session, so select_bridge_mode can refuse two full
@@ -449,8 +457,7 @@ class BridgeGenerator:
 
         The configurator is the primary control surface for the bridge: every
         knob below maps to a slot on the ``bridge_generator`` node in agent.yaml
-        (prompt, model, temperature, max_tokens, timeout_ms). The env var
-        BRIDGE_TIMEOUT_MS is only a deploy-time default — a value set here wins.
+        (prompt, model, temperature, max_tokens).
         """
         if "model" in config:
             self.bridge_model = config["model"]
@@ -462,8 +469,6 @@ class BridgeGenerator:
             self.custom_system_prompt = config["system_prompt"]
         if "history_limit" in config:
             self.history_limit = int(config["history_limit"])
-        if config.get("timeout_ms") not in (None, ""):
-            self.bridge_timeout_s = float(config["timeout_ms"]) / 1000
 
     def _build_messages(
         self,
@@ -524,8 +529,8 @@ class BridgeGenerator:
         each sentence reaches TTS as soon as it's ready.
 
         Returns:
-            A validated bridge phrase (a couple of words up to ~35, scaled to the
-            user's turn). Always returns a bridge (fallback on failure).
+            A validated bridge phrase (a couple of words up to ~35, scaled to
+            the user's turn), or "" on a silent turn.
         """
         bridge = ""
         async for accumulated in self.generate_stream(
@@ -555,11 +560,11 @@ class BridgeGenerator:
         cannot gate it — so each sentence is validated as it
         completes (``_gate_stream``: never release a question, an over-length run,
         or an evaluative opener). If the very first sentence is rejected or the
-        LLM times out/fails before anything is released, a canned templated bridge
-        is yielded instead (safe — nothing has been spoken yet).
+        LLM call fails before anything is released, the turn simply says
+        nothing (safe — nothing has been spoken yet).
 
         Args mirror :meth:`generate`. Yields ``str`` (accumulated bridge text);
-        always yields at least one non-empty value (fallback on failure).
+        yields nothing at all on a silent turn.
         """
         start_time = time.time()
 
@@ -591,30 +596,20 @@ class BridgeGenerator:
             )
 
             # Consume the LLM stream through the shared SDK adapter (single source
-            # of truth for callback→async-iterator), bounded on wall-clock so a
-            # slow LLM never stalls the turn. The timeout covers first-byte AND the
-            # tail; on timeout we keep whatever validated sentences already
-            # streamed (or fall back below if none did).
-            #
-            # The bound is applied to each wait ON THE LLM, never around the
-            # yield. `async with asyncio.timeout(...)` around a yield cancels
-            # whatever the task is doing when the deadline passes — and while
-            # this generator is suspended at a yield, that is the CALLER,
-            # publishing the bridge. A bridge that arrived right at the limit
-            # therefore cancelled the agent's whole turn loop, and the agent
-            # left the room without a word or a log line (session 3bde6b95).
-            loop = asyncio.get_running_loop()
-            deadline = loop.time() + self.bridge_timeout_s
+            # of truth for callback→async-iterator) to its natural end — no
+            # wall-clock deadline here any more (#766; see the note in
+            # __init__). The caller (agent.py) decides how long it's willing to
+            # keep this generator running and simply stops iterating it — via
+            # task cancellation, not a deadline inside this loop — when it
+            # needs to move on, so there is nothing here that can race a yield
+            # against a timer the way the old deadline did (session 3bde6b95).
             stream = stream_completion(
                 self._llm_service, messages, config, component_name="bridge_generator",
             ).__aiter__()
             try:
                 while True:
-                    remaining = deadline - loop.time()
-                    if remaining <= 0:
-                        raise asyncio.TimeoutError()
                     try:
-                        raw, final = await asyncio.wait_for(stream.__anext__(), remaining)
+                        raw, final = await stream.__anext__()
                     except StopAsyncIteration:
                         break
                     candidate, stop = _gate_stream(raw, final=final, user_input=user_input)
