@@ -223,6 +223,16 @@ class TestModeDirectives:
         for mode, text in _MODE_DIRECTIVES.items():
             assert "?" not in text, mode
 
+    def test_the_brief_beat_names_no_quoted_examples(self):
+        # #94/#766: BRIEF's directive used to quote four example phrases
+        # ("Okay.", "Right.", "Fair enough.", "Got it."), and in real-model
+        # replay (PR 767) the model converged on them — one phrase alone was
+        # half of all BRIEF beats. Measured before shipping: dropping the
+        # quotes for a principle instead more than tripled BRIEF's distinct-
+        # phrase share. Guards against a future edit re-adding a literal
+        # example here.
+        assert '"' not in _MODE_DIRECTIVES[BRIDGE_MODE_BRIEF]
+
 
 class TestNoAssessmentBeforeDispreferred:
     """A2 acceptance: the bridge can never appraise ahead of a dispreferred answer.
@@ -364,6 +374,16 @@ class TestConfigCarriesTheImprovements:
         # — each fine alone, together a template.
         assert "VARY HOW YOU OPEN" in prompt
         assert "different construction" in prompt
+
+    def test_yaml_bridge_names_no_quoted_examples_in_the_echo_rule(self):
+        # #94/#766: the "react to the specific thing" rule used to quote
+        # ("Fair enough.", "Ah, okay.") as examples, and real-model replay
+        # (PR 767) showed those get reused the same way BRIEF's own quoted
+        # examples did. Dropped for a principle, same as BRIEF. Guards
+        # against a future edit re-adding a literal example here.
+        prompt = _slot_default("bridge_generator", "system_prompt")
+        line = next(l for l in prompt.splitlines() if "React to the specific thing they said" in l)
+        assert '"' not in line
 
     def test_yaml_bridge_exposes_the_per_turn_mode(self):
         # How long/full this turn's beat should be is per-turn, not baked into
