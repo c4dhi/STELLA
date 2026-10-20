@@ -1,22 +1,30 @@
-"""Replay synthetic companion sessions through the real BridgeGenerator and
-measure repetition, variety, and bridges on turns that did not need one (#94).
+"""Replay synthetic companion sessions through the real BridgeGenerator AND
+ResponseGenerator, and measure repetition, variety, and bridge/reply overlap
+(#94).
 
 Felix, 20 Oct 2026, dev session: "we have a general problem with bridges, as it
-causes repetitions and is very monotonous." This runs fixed-script synthetic
-sessions (``bridge_repetition_scenarios.json``) turn by turn through
-``BridgeGenerator.generate()`` — the exact method a live turn calls — several
-times each, and reports:
+causes repetitions and is very monotonous." Felix (relayed by @zenith, 16:43)
+rules out skipping the bridge on trivial turns; his actual goal is narrower:
+the bridge must not preview what the reply says, and the reply must never
+repeat the bridge, in wording or in meaning. So this generates the REAL reply
+after each bridge too — bridge as its spoken prefix, exactly as agent.py does
+— and reports, turn by turn and in aggregate:
 
   - exact and near-duplicate repeats across all generated bridges;
   - variety: distinct openers and the share held by the most common one;
   - how many bridges were generated on a turn ``select_bridge_mode`` itself
     classifies as needing no more than a beat (BRIEF), and how much LESS varied
-    that subset is than the rest — the brief's "bridges that didn't need one".
+    that subset is than the rest — the brief's "bridges that didn't need one";
+  - bridge/reply WORDING overlap (shared words and shared bigrams, as a share
+    of the bridge's own words) for every turn;
+  - bridge/reply MEANING overlap on a sample (``--judge-sample``): a separate,
+    narrow, temperature-0 LLM call asked only "does the reply repeat, in
+    different words, something the bridge already conveyed?".
 
 No transcript text from a real session is used; every turn is scripted. Needs
-OPENAI_API_KEY (the bridge model is gpt-4o-mini via OPENAI_LANGCHAIN by
-default) — this script makes real model calls, so run it where that key is
-set, not inside a session that has none:
+OPENAI_API_KEY (both models are gpt-4o-mini via OPENAI_LANGCHAIN by default)
+— this script makes real model calls, so run it where that key is set, not
+inside a session that has none:
 
     OPENAI_API_KEY=... PYTHONPATH=src:../stella-ai-agent-sdk/src \\
         python tests/bridge_repetition_replay.py --out before.json
@@ -29,7 +37,8 @@ time"), override just that one knob and diff the reports:
     python tests/bridge_repetition_replay.py --temperature 0.4 --out temp_0.4.json
     python tests/bridge_repetition_replay.py --temperature 0.7 --out temp_0.7.json
 
-    # whether the model can see its own past bridges at all
+    # whether the model can see its own past bridges at all (settled by code
+    # per @sable's review — kept only as a control, not a candidate fix)
     python tests/bridge_repetition_replay.py --history-mode reply_only --out no_bridge_history.json
 """
 
@@ -42,8 +51,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from stella_agent_sdk.llm import LLMService
+from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider, LLMService, stream_completion
+from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.pipeline.bridge_generator import BRIDGE_MODE_BRIEF, BridgeGenerator
+from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 
 HERE = Path(__file__).parent
 SCENARIOS = HERE / "bridge_repetition_scenarios.json"
@@ -63,6 +74,10 @@ def _words(text: str) -> List[str]:
     return re.findall(r"\w+", text.lower(), flags=re.UNICODE)
 
 
+def _bigrams(words: List[str]) -> List[str]:
+    return [f"{a} {b}" for a, b in zip(words, words[1:])]
+
+
 def _opener(bridge: str) -> str:
     return " ".join(_words(bridge)[:_OPENER_WORDS])
 
@@ -73,6 +88,61 @@ def _near_duplicate(a: str, b: str) -> bool:
         return False
     shared = len(set(wa) & set(wb))
     return shared / max(len(wa), len(wb)) >= _NEAR_DUP_OVERLAP
+
+
+def _wording_overlap(bridge: str, reply: str) -> Optional[Dict[str, float]]:
+    """How much of the BRIDGE's own wording reappears in the reply that
+    follows it — the share is relative to the bridge (not the longer reply),
+    since what matters is whether the bridge gets echoed, not how much of the
+    reply happens to share common words."""
+    bw, rw = _words(bridge), _words(reply)
+    if not bw or not rw:
+        return None
+    shared_words = len(set(bw) & set(rw))
+    bb, rb = _bigrams(bw), _bigrams(rw)
+    shared_bigrams = len(set(bb) & set(rb)) if bb else 0
+    return {
+        "word_overlap": round(shared_words / len(bw), 2),
+        "bigram_overlap": round(shared_bigrams / len(bb), 2) if bb else 0.0,
+    }
+
+
+_JUDGE_PROMPT = (
+    "A spoken companion said BRIDGE as a quick first reaction, then immediately "
+    "continued with REPLY as the rest of the same turn. Does REPLY repeat, in "
+    "different words, something BRIDGE already conveyed (the same reaction, "
+    "the same observation, the same point) — not just related, but saying the "
+    "same thing again? Answer with exactly one word: YES or NO."
+)
+
+
+async def _judge_meaning_overlap(
+    llm_service: LLMService, bridge: str, reply: str, model: str,
+) -> Optional[bool]:
+    """A narrow, temperature-0, single-purpose judge call — not the bridge or
+    response model itself, so a verdict on either doesn't bias the other.
+    Returns None on any failure (timeout, parse) rather than guessing."""
+    if not bridge or not reply:
+        return None
+    messages = [
+        LLMMessage(role="system", content=_JUDGE_PROMPT),
+        LLMMessage(role="user", content=f"BRIDGE: {bridge}\nREPLY: {reply}"),
+    ]
+    config = LLMConfig(
+        model=model, temperature=0.0, max_tokens=5,
+        provider=LLMProvider.OPENAI_LANGCHAIN, streaming=True,
+    )
+    try:
+        verdict = ""
+        async for text, is_final in stream_completion(
+            llm_service, messages, config, component_name="bridge_reply_overlap_judge",
+        ):
+            verdict = text
+            if is_final:
+                break
+    except Exception:
+        return None
+    return verdict.strip().upper().startswith("YES")
 
 
 def load_scenarios(path: Path = SCENARIOS) -> List[Dict[str, Any]]:
@@ -93,13 +163,33 @@ def _clone(generator: BridgeGenerator) -> BridgeGenerator:
     return clone
 
 
+async def _generate_reply(
+    response_generator: ResponseGenerator, session_id: str, user_input: str,
+    history: List[Dict[str, str]], bridge: str, language: Optional[str],
+) -> str:
+    """The real reply, with ``bridge`` as its spoken prefix exactly as agent.py
+    passes it. Returns only the generated CONTINUATION (the prefix stripped
+    back off) — what should be compared against the bridge for overlap, since
+    the prefix is the bridge's own text by construction and comparing it to
+    itself would be a trivial 100% every time."""
+    prefix = f"{bridge} " if bridge else ""
+    final_text = ""
+    async for output in response_generator.generate(
+        session_id, user_input, ResponseDirective(), history, {"language": language},
+        bridge=bridge,
+    ):
+        final_text = output.content
+    return final_text[len(prefix):].strip() if final_text.startswith(prefix) else final_text.strip()
+
+
 async def run_session(
-    generator: BridgeGenerator, session: Dict[str, Any], history_mode: str,
+    generator: BridgeGenerator, response_generator: ResponseGenerator,
+    session: Dict[str, Any], history_mode: str, judge_model: str, judge_every: int,
 ) -> List[Dict[str, Any]]:
     """One pass through a session's fixed script. Returns one record per turn."""
     history: List[Dict[str, str]] = []
     records = []
-    for turn in session["turns"]:
+    for index, turn in enumerate(session["turns"]):
         bridge = await generator.generate(
             turn["user"],
             history,
@@ -109,6 +199,20 @@ async def run_session(
                 "isBargeIn": turn.get("barge_in", False),
             },
         )
+        session_id = f"bridge94-{session['id']}"
+        try:
+            reply = await _generate_reply(
+                response_generator, session_id, turn["user"], history, bridge, session.get("language"),
+            )
+        except Exception:
+            reply = ""
+        overlap = _wording_overlap(bridge, reply)
+        # A sample, not every turn (@zenith, 16:43: "an LLM judge on a
+        # sample") — one real call per sampled turn is enough signal without
+        # doubling the model-call cost of the whole run.
+        meaning_overlap = None
+        if reply and bridge and judge_every > 0 and index % judge_every == 0:
+            meaning_overlap = await _judge_meaning_overlap(generator._llm_service, bridge, reply, judge_model)
         # select_bridge_mode's own BRIEF rule *is* "this turn carries too
         # little to receive in full" — reused in summarize() as the
         # definition of "didn't need one" rather than inventing a second one.
@@ -117,15 +221,15 @@ async def run_session(
             "user": turn["user"],
             "mode": generator.last_bridge_mode,
             "bridge": bridge,
+            "reply": reply,
+            "wording_overlap": overlap,
+            "meaning_overlap_repeats": meaning_overlap,
         })
         history.append({"role": "user", "content": turn["user"]})
-        reply = turn.get("reply", "")
         # 'with_bridge': history carries bridge+reply as one utterance, matching
-        # the shared-transcript_id design intent in bridge_generator.py's own
-        # comments. 'reply_only': the model never sees its own past bridges —
-        # tests whether that visibility is actually what "vary how you open"
-        # needs, since it's unconfirmed from backend code alone whether a real
-        # session's persisted history includes the bridge text (see record).
+        # what response_generator.py itself persists as the turn's spoken
+        # content — confirmed in review (@sable), not a candidate cause.
+        # 'reply_only' is kept as a control for anyone who wants to re-check.
         content = f"{bridge} {reply}".strip() if (bridge and history_mode == "with_bridge") else reply
         history.append({"role": "assistant", "content": content})
     return records
@@ -133,7 +237,7 @@ async def run_session(
 
 async def replay_all(
     generator: BridgeGenerator, sessions: List[Dict[str, Any]], trials: int, history_mode: str,
-    concurrency: int = 6,
+    judge_model: str, judge_every: int, concurrency: int = 6,
 ) -> List[Dict[str, Any]]:
     gate = asyncio.Semaphore(concurrency)
 
@@ -141,9 +245,15 @@ async def replay_all(
     # turn), but different sessions/trials are independent — run those
     # concurrently, bounded by the gate. Each task gets its own generator
     # clone (see _clone) so the anti-lockstep state can't leak between them.
+    # ResponseGenerator carries no per-session state (unlike BridgeGenerator's
+    # _previous_mode), so one plain instance is shared across every task.
+    response_generator = ResponseGenerator(generator._llm_service)
+
     async def one(session):
         async with gate:
-            return await run_session(_clone(generator), session, history_mode)
+            return await run_session(
+                _clone(generator), response_generator, session, history_mode, judge_model, judge_every,
+            )
 
     tasks = [one(session) for session in sessions for _ in range(trials)]
     results = await asyncio.gather(*tasks)
@@ -187,6 +297,14 @@ def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     # it (see record). That subset's own repetition is reported in by_mode.
     brief_n = by_mode[BRIDGE_MODE_BRIEF]["turns"]
 
+    # Felix's actual goal (relayed by @zenith, 16:43): not that trivial turns
+    # skip the bridge, but that the bridge never previews the reply and the
+    # reply never repeats the bridge. Wording: computed for every turn that
+    # has both. Meaning: only for the turns a judge call actually ran on.
+    overlap_pairs = [r["wording_overlap"] for r in records if r.get("wording_overlap")]
+    judged = [r for r in records if r.get("meaning_overlap_repeats") is not None]
+    judged_yes = sum(1 for r in judged if r["meaning_overlap_repeats"])
+
     return {
         "total_turns": len(records),
         "bridges_generated": len(bridges),
@@ -203,6 +321,17 @@ def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "share_of_all_bridges": round(top_opener_n / len(bridges), 2) if bridges else None},
         "by_mode": by_mode,
         "brief_mode_share_of_all_turns": round(brief_n / len(records), 2) if records else None,
+        "bridge_reply_overlap": {
+            "turns_with_both": len(overlap_pairs),
+            "mean_word_overlap": round(sum(p["word_overlap"] for p in overlap_pairs) / len(overlap_pairs), 2) if overlap_pairs else None,
+            "mean_bigram_overlap": round(sum(p["bigram_overlap"] for p in overlap_pairs) / len(overlap_pairs), 2) if overlap_pairs else None,
+            "turns_above_0.5_word_overlap": sum(1 for p in overlap_pairs if p["word_overlap"] > 0.5),
+            "meaning_overlap_sample": {
+                "judged": len(judged),
+                "repeats_meaning_count": judged_yes,
+                "repeats_meaning_rate": round(judged_yes / len(judged), 2) if judged else None,
+            },
+        },
     }
 
 
@@ -213,7 +342,7 @@ def report(summary: Dict[str, Any], out=sys.stdout) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--scenarios", type=Path, default=SCENARIOS)
-    parser.add_argument("--trials", type=int, default=3, help="independent runs per session")
+    parser.add_argument("--trials", type=int, default=2, help="independent runs per session")
     parser.add_argument("--model")
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--max-tokens", type=int)
@@ -222,6 +351,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--history-mode", choices=["with_bridge", "reply_only"], default="with_bridge",
         help="whether conversationHistory carries the bridge text too (see docstring)",
+    )
+    parser.add_argument("--judge-model", default="gpt-4o-mini", help="model for the meaning-overlap judge call")
+    parser.add_argument(
+        "--judge-every", type=int, default=3,
+        help="run the meaning-overlap judge on every Nth turn (0 disables it)",
     )
     parser.add_argument("--out", type=Path, help="write per-turn records + summary as JSON")
     parser.add_argument("--concurrency", type=int, default=6)
@@ -243,7 +377,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         generator.apply_config(overrides)
 
     sessions = load_scenarios(args.scenarios)
-    records = asyncio.run(replay_all(generator, sessions, args.trials, args.history_mode, args.concurrency))
+    records = asyncio.run(replay_all(
+        generator, sessions, args.trials, args.history_mode, args.judge_model, args.judge_every, args.concurrency,
+    ))
     summary = summarize(records)
     summary["config"] = {
         "model": generator.bridge_model,
@@ -251,6 +387,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "max_tokens": generator.bridge_max_tokens,
         "history_limit": generator.history_limit or 6,
         "history_mode": args.history_mode,
+        "judge_model": args.judge_model,
+        "judge_every": args.judge_every,
         "trials": args.trials,
         "sessions": len(sessions),
     }
