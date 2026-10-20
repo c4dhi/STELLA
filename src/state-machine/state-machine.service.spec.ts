@@ -3198,6 +3198,13 @@ describe('goal state completion (#706)', () => {
       const keys = full!.states[0].tasks.flatMap(t => t.deliverables.map(d => d.key));
       expect(keys).toEqual(['likes_gardening']);
     });
+
+    it('do not make an open goal look done in the plan view', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      await svc.setDeliverable(sessionId, 'likes_walks', 'yes', 'said so');
+      const full = await svc.getFullState(sessionId);
+      expect(full!.states[0].tasks.map(t => [t.id, t.status])).toEqual([['__goal_deliverables__', 'pending']]);
+    });
   });
 
   describe('a goal state whose routes read a deliverable', () => {
@@ -3233,6 +3240,32 @@ describe('goal state completion (#706)', () => {
     it('takes the next state in plan order when the goal is skipped without the answer', async () => {
       const svc = await start(plan());
       expect((await svc.skipTask(sessionId, '__goal__', 'declined')).newStateId).toBe('fallback');
+    });
+
+    describe('routes on different keys', () => {
+      const twoKeys = () => planOf(
+        goalState('g1', {}, { transitions: [
+          { target_state_id: 'sleep', condition_type: 'deliverable_value', condition_config: { key: 'topic', value: 'sleep' } },
+          { target_state_id: 'low', condition_type: 'deliverable_value', condition_config: { key: 'mood', value: 'low' } },
+        ] }),
+        resting('fallback'), resting('sleep'), resting('low'),
+      );
+
+      it('one matching route is enough: the other key is not asked for', async () => {
+        const svc = await start(twoKeys());
+        await svc.setDeliverable(sessionId, 'topic', 'sleep', 'wants to talk about sleep');
+        const result = await svc.completeTask(sessionId, '__goal__', 'done');
+        expect(result).toMatchObject({ success: true, newStateId: 'sleep' });
+        const full = await svc.getFullState(sessionId);
+        expect(full!.states.find(s => s.id === 'g1')?.status).toBe('completed');
+      });
+
+      it('with no answer yet, asks for any one of the keys, not all', async () => {
+        const svc = await start(twoKeys());
+        const result = await svc.completeTask(sessionId, '__goal__', 'done');
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('one of: topic / mood');
+      });
     });
 
     it('an escape route beside a completion route does not block completion', async () => {

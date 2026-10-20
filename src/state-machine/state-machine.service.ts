@@ -774,26 +774,24 @@ export class StateMachineService {
 
   /**
    * What still has to be collected before the goal can be marked reached:
-   * required deliverables of the goal and of its tasks, and — when the state has
-   * no route that fires on completion alone — the deliverables its routes read.
-   * Without those the state would be finished with nowhere to go.
+   * required deliverables of the goal and of its tasks, said so the agent knows
+   * what to do about each. When the state has no route that fires on completion
+   * alone and none of its routes matches yet, one answer that would let a route
+   * fire is needed too — any one of them, not all.
    */
-  private goalStillNeeds(plan: PlanData, state: SessionState, currentState: PlanState): string[] {
-    return this.goalOpenAnswers(plan, state, currentState).map(a => a.key);
-  }
-
-  /** What the goal still needs, said so the agent knows what to do about each. */
   private describeGoalNeeds(plan: PlanData, state: SessionState, currentState: PlanState): string {
-    return this.goalOpenAnswers(plan, state, currentState)
-      .map(a => (a.unconfirmed ? `${a.key} (recorded but not confirmed by the participant)` : a.key))
-      .join(', ');
+    const { required, oneOf } = this.goalOpenAnswers(plan, state, currentState);
+    const parts = required.map(a => (a.unconfirmed ? `${a.key} (recorded but not confirmed by the participant)` : a.key));
+    if (oneOf.length === 1) parts.push(oneOf[0]);
+    else if (oneOf.length > 1) parts.push(`one of: ${oneOf.join(' / ')}`);
+    return parts.join(', ');
   }
 
   private goalOpenAnswers(
     plan: PlanData,
     state: SessionState,
     currentState: PlanState,
-  ): Array<{ key: string; unconfirmed: boolean }> {
+  ): { required: Array<{ key: string; unconfirmed: boolean }>; oneOf: string[] } {
     const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
     // An answer the agent only picked up in passing (`unconfirmed`) is recorded,
     // but it does not carry a goal: the agent has to check it back first.
@@ -810,16 +808,34 @@ export class StateMachineService {
         ...(task.deliverables ?? []).filter(d => d.required !== false && !settled(d.key)).map(d => d.key),
       );
     }
+    const required = [...new Set(needed)].map(key => ({ key, unconfirmed: Boolean(deliverables[key]?.unconfirmed) }));
 
+    // Without a route to take, the state would be finished with nowhere to go.
+    // One matching route is enough; only when none matches are the keys the
+    // routes read still open. A route may read an insight, so presence is enough.
     const transitions =
       this.ensureTransitions(plan).states.find(s => s.id === currentState.id)?.transitions ?? [];
-    if (!transitions.some(t => t.condition_type === 'goal_achieved')) {
-      for (const t of transitions) {
-        // A route may read an insight, so presence is enough here.
-        needed.push(...this.conditionKeys(t.condition_type, t.condition_config).filter(k => !(k in deliverables)));
+    let oneOf: string[] = [];
+    if (transitions.length > 0 && !transitions.some(t => t.condition_type === 'goal_achieved')) {
+      const routeMatches = transitions.some(
+        t =>
+          this.validateConditionConfig(t.condition_type, t.condition_config, currentState).valid &&
+          this.evaluateTransitionCondition(t.condition_type, t.condition_config, state, currentState, deliverables),
+      );
+      if (!routeMatches) {
+        const requiredKeys = new Set(required.map(a => a.key));
+        oneOf = [
+          ...new Set(
+            transitions.flatMap(t =>
+              this.conditionKeys(t.condition_type, t.condition_config).filter(
+                k => !(k in deliverables) && !requiredKeys.has(k),
+              ),
+            ),
+          ),
+        ];
       }
     }
-    return [...new Set(needed)].map(key => ({ key, unconfirmed: Boolean(deliverables[key]?.unconfirmed) }));
+    return { required, oneOf };
   }
 
   /**
@@ -2895,9 +2911,10 @@ export class StateMachineService {
           // synthetic goal task as completed even if some required deliverables
           // were skipped rather than collected (kept consistent with the
           // deliverable skip cascade above).
+          // A goal state is done only once its goal is closed (reached or
+          // given up), whatever its deliverables say.
           const goalTaskStatus: 'pending' | 'in_progress' | 'completed' =
-            stateStatus === 'completed' ? 'completed' :
-            allRequired.every(d => d.status === 'completed') ? 'completed' :
+            stateStatus === 'completed' || this.goalOutcome(state, planState) ? 'completed' :
             allRequired.some(d => d.status === 'completed') ? 'in_progress' : 'pending';
 
           tasks.unshift({
