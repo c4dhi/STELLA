@@ -17,9 +17,20 @@ after each bridge too — bridge as its spoken prefix, exactly as agent.py does
     that subset is than the rest — the brief's "bridges that didn't need one";
   - bridge/reply WORDING overlap (shared words and shared bigrams, as a share
     of the bridge's own words) for every turn;
-  - bridge/reply MEANING overlap on a sample (``--judge-sample``): a separate,
+  - bridge/reply MEANING overlap on a sample (``--judge-every``): a separate,
     narrow, temperature-0 LLM call asked only "does the reply repeat, in
     different words, something the bridge already conveyed?".
+
+Every generator this drives is configured from agent.yaml's ACTUAL deployed
+defaults (``slot_defaults()``, read fresh from the file, not copied by hand)
+— the bridge model/temperature/max_tokens/prompt, the response model/
+temperature/max_tokens, the companion free-conversation guidelines, the
+per-situation reply_instructions (the real ``routing_directive`` a live
+free-conversation turn gets, via ``Companion.instruction()``), and the judge
+model. So running this with NO flags at all reproduces the actual deployed
+baseline, not any hand-picked stand-in — the first version of this harness
+got exactly this wrong (used BridgeGenerator's code-fallback 0.7 instead of
+agent.yaml's deployed 0.4), caught by @zenith before it reached the card.
 
 No transcript text from a real session is used; every turn is scripted. Needs
 OPENAI_API_KEY (both models are gpt-4o-mini via OPENAI_LANGCHAIN by default)
@@ -30,11 +41,9 @@ inside a session that has none:
         python tests/bridge_repetition_replay.py --out before.json
 
 To isolate a single candidate cause (per the card: "change one factor at a
-time"), override just that one knob and diff the reports:
+time"), override just that one knob on top of the deployed baseline above,
+and diff the reports:
 
-    # the configured production temperature (agent.yaml default is 0.4,
-    # below the BridgeGenerator class's own 0.7 "for natural variety")
-    python tests/bridge_repetition_replay.py --temperature 0.4 --out temp_0.4.json
     python tests/bridge_repetition_replay.py --temperature 0.7 --out temp_0.7.json
 
     # whether the model can see its own past bridges at all (settled by code
@@ -51,13 +60,33 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
+
 from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider, LLMService, stream_completion
+from stella_v2_agent.companion import NO_CHANGE, Companion
 from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.pipeline.bridge_generator import BRIDGE_MODE_BRIEF, BridgeGenerator
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 
 HERE = Path(__file__).parent
 SCENARIOS = HERE / "bridge_repetition_scenarios.json"
+AGENT_YAML = HERE.parent / "agent.yaml"
+
+
+def slot_defaults(node_id: str, manifest_path: Path = AGENT_YAML) -> Dict[str, Any]:
+    """A pipelineSchema node's slot defaults, read straight from agent.yaml —
+    not hand-copied into this script, which is exactly how the first version
+    of this harness got the bridge temperature wrong (0.7, the BridgeGenerator
+    CLASS's fallback, instead of 0.4, what agent.yaml actually ships — caught
+    by @zenith before it reached the card). Every generator this script drives
+    is configured FROM this, so a future agent.yaml change can't silently
+    drift out of sync with what gets measured."""
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    nodes = (manifest.get("pipelineSchema") or {}).get("nodes") or []
+    node = next((n for n in nodes if n.get("id") == node_id), None)
+    if node is None:
+        raise ValueError(f"agent.yaml has no '{node_id}' node")
+    return {s["id"]: s.get("default") for s in node.get("slots") or []}
 
 # Two bridges count as a near-duplicate when they share this share of their
 # words (by exact token, not stemmed — good enough to show convergence on the
@@ -164,26 +193,43 @@ def _clone(generator: BridgeGenerator) -> BridgeGenerator:
 
 
 async def _generate_reply(
-    response_generator: ResponseGenerator, session_id: str, user_input: str,
-    history: List[Dict[str, str]], bridge: str, language: Optional[str],
+    response_generator: ResponseGenerator, companion: Companion, session_id: str,
+    user_input: str, history: List[Dict[str, str]], bridge: str, language: Optional[str],
 ) -> str:
-    """The real reply, with ``bridge`` as its spoken prefix exactly as agent.py
-    passes it. Returns only the generated CONTINUATION (the prefix stripped
-    back off) — what should be compared against the bridge for overlap, since
-    the prefix is the bridge's own text by construction and comparing it to
-    itself would be a trivial 100% every time."""
+    """The real reply, as agent.py's free-conversation path builds it:
+
+    - ``bridge`` as the spoken prefix the model must continue from, not repeat;
+    - the turn's ``routing_directive`` from ``Companion.instruction()`` — the
+      SAME per-situation instruction production uses (agent.py:594), which for
+      an ordinary free-conversation turn renders agent.yaml's
+      ``companion.reply_instructions['free']`` ("you already reacted aloud
+      with {{bridge}}... add at most ONE short sentence... no second
+      reaction"). This is the actual deployed mechanism meant to stop
+      exactly the overlap this ticket measures — the first version of this
+      harness omitted it entirely, which would have mismeasured the
+      mechanism under test rather than its absence;
+    - ``companion.settings.free_conversation_guidelines`` as the style guide,
+      not whatever ``ResponseGenerator`` falls back to (the PLAN-mode default,
+      a different prompt — see agent.py's ``_free_guidelines()``).
+
+    Returns only the generated CONTINUATION (the prefix stripped back off) —
+    what should be compared against the bridge for overlap, since the prefix
+    is the bridge's own text by construction and comparing it to itself would
+    be a trivial 100% every time."""
+    routing_directive = companion.instruction(NO_CHANGE, bridge=bridge)
     prefix = f"{bridge} " if bridge else ""
     final_text = ""
     async for output in response_generator.generate(
-        session_id, user_input, ResponseDirective(), history, {"language": language},
-        bridge=bridge,
+        session_id, user_input, ResponseDirective(routing_directive=routing_directive),
+        history, {"language": language}, bridge=bridge,
+        guidelines=companion.settings.free_conversation_guidelines,
     ):
         final_text = output.content
     return final_text[len(prefix):].strip() if final_text.startswith(prefix) else final_text.strip()
 
 
 async def run_session(
-    generator: BridgeGenerator, response_generator: ResponseGenerator,
+    generator: BridgeGenerator, response_generator: ResponseGenerator, companion: Companion,
     session: Dict[str, Any], history_mode: str, judge_model: str, judge_every: int,
 ) -> List[Dict[str, Any]]:
     """One pass through a session's fixed script. Returns one record per turn."""
@@ -202,7 +248,7 @@ async def run_session(
         session_id = f"bridge94-{session['id']}"
         try:
             reply = await _generate_reply(
-                response_generator, session_id, turn["user"], history, bridge, session.get("language"),
+                response_generator, companion, session_id, turn["user"], history, bridge, session.get("language"),
             )
         except Exception:
             reply = ""
@@ -245,14 +291,24 @@ async def replay_all(
     # turn), but different sessions/trials are independent — run those
     # concurrently, bounded by the gate. Each task gets its own generator
     # clone (see _clone) so the anti-lockstep state can't leak between them.
-    # ResponseGenerator carries no per-session state (unlike BridgeGenerator's
-    # _previous_mode), so one plain instance is shared across every task.
+    # ResponseGenerator and the Companion helper (used only to render the
+    # real reply_instructions text — see _generate_reply) carry no
+    # per-session state, so one instance of each is shared across every task.
     response_generator = ResponseGenerator(generator._llm_service)
+    response_defaults = slot_defaults("response_generator")
+    response_generator.apply_config({
+        "model": response_defaults["model"],
+        "temperature": response_defaults["temperature"],
+        "max_tokens": response_defaults["max_tokens"],
+    })
+    companion = Companion(activities=[])
+    companion.greeted = True  # skip the opening greeting/offer path (not under test)
+    companion.offered = True
 
     async def one(session):
         async with gate:
             return await run_session(
-                _clone(generator), response_generator, session, history_mode, judge_model, judge_every,
+                _clone(generator), response_generator, companion, session, history_mode, judge_model, judge_every,
             )
 
     tasks = [one(session) for session in sessions for _ in range(trials)]
@@ -352,7 +408,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--history-mode", choices=["with_bridge", "reply_only"], default="with_bridge",
         help="whether conversationHistory carries the bridge text too (see docstring)",
     )
-    parser.add_argument("--judge-model", default="gpt-4o-mini", help="model for the meaning-overlap judge call")
+    parser.add_argument(
+        "--judge-model", help="model for the meaning-overlap judge call "
+        "(default: companion.judge_model from agent.yaml — the same judge model "
+        "companion mode already uses for its exit/start confirmation checks; "
+        "this specific judge TASK is new to this script, not a deployed mechanism)",
+    )
     parser.add_argument(
         "--judge-every", type=int, default=3,
         help="run the meaning-overlap judge on every Nth turn (0 disables it)",
@@ -361,7 +422,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--concurrency", type=int, default=6)
     args = parser.parse_args(argv)
 
+    # Deployed defaults FIRST (agent.yaml, read fresh — not hand-copied), then
+    # CLI overrides on top of those, never instead of them. This is what makes
+    # "no flags at all" mean "the actual production baseline" rather than
+    # BridgeGenerator's own code-fallback values, which is exactly the bug
+    # @zenith caught in this harness's first real run.
+    bridge_defaults = slot_defaults("bridge_generator")
     generator = BridgeGenerator(LLMService())
+    generator.apply_config({
+        "model": bridge_defaults["model"],
+        "temperature": bridge_defaults["temperature"],
+        "max_tokens": bridge_defaults["max_tokens"],
+        "system_prompt": bridge_defaults["system_prompt"],
+    })
     overrides: Dict[str, Any] = {}
     if args.model:
         overrides["model"] = args.model
@@ -376,19 +449,33 @@ def main(argv: Optional[List[str]] = None) -> int:
     if overrides:
         generator.apply_config(overrides)
 
+    judge_model = args.judge_model or Companion(activities=[]).settings.judge_model
+
     sessions = load_scenarios(args.scenarios)
     records = asyncio.run(replay_all(
-        generator, sessions, args.trials, args.history_mode, args.judge_model, args.judge_every, args.concurrency,
+        generator, sessions, args.trials, args.history_mode, judge_model, args.judge_every, args.concurrency,
     ))
     summary = summarize(records)
+    response_defaults = slot_defaults("response_generator")
     summary["config"] = {
-        "model": generator.bridge_model,
-        "temperature": generator.bridge_temperature,
-        "max_tokens": generator.bridge_max_tokens,
-        "history_limit": generator.history_limit or 6,
-        "history_mode": args.history_mode,
-        "judge_model": args.judge_model,
+        "bridge_generator": {
+            "model": generator.bridge_model,
+            "temperature": generator.bridge_temperature,
+            "max_tokens": generator.bridge_max_tokens,
+            "history_limit": generator.history_limit or 6,
+            "prompt_source": "agent.yaml (CLI --prompt override)" if args.prompt else "agent.yaml bridge_generator.system_prompt",
+        },
+        "response_generator": {
+            "model": response_defaults["model"],
+            "temperature": response_defaults["temperature"],
+            "max_tokens": response_defaults["max_tokens"],
+            "guidelines_source": "agent.yaml companion.free_conversation_guidelines (via Companion, not the response_generator node's own guidelines — matches agent.py's _free_guidelines())",
+            "routing_directive_source": "Companion.instruction(NO_CHANGE, bridge) -> agent.yaml companion.reply_instructions['free']",
+        },
+        "judge_model": judge_model,
+        "judge_model_source": "agent.yaml companion.judge_model" if not args.judge_model else "--judge-model override",
         "judge_every": args.judge_every,
+        "history_mode": args.history_mode,
         "trials": args.trials,
         "sessions": len(sessions),
     }
