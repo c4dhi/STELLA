@@ -90,6 +90,7 @@ multilingual, uses goal-oriented steps, or relies on the default model, read
 - Dependency updates for the voice service stay held: `transformers` 5.20 breaks the Qwen3 voice on import, so it stays below 5.17, and `huggingface-hub` 2 can't be installed next to it ([#665](https://github.com/c4dhi/STELLA/issues/665))
 - The development server's Tesla T4 can't stream the Qwen3 voice in real time; with `auto` playback its sessions switch to sentence-by-sentence playback. Production's GPU has not been measured
 - The companion's bridge can still occasionally say it "can do" an imprecisely named activity before the system has decided (about 1 in 20 in an evaluation)
+- A plan step switched from flexible to goal-oriented keeps its old tasks, and the goal step still shows and counts them, so its completion can stay below 100%. Until it is fixed, remove the tasks before switching a step to goal-oriented ([#770](https://github.com/c4dhi/STELLA/issues/770))
 
 ---
 
