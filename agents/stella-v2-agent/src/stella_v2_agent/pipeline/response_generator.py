@@ -126,7 +126,7 @@ class ResponseGenerator:
         self._llm_service = llm_service
 
         # LLM config (overridable via apply_config)
-        self.response_model = "gpt-4o-mini"
+        self.response_model = "gpt-5.4-mini"
         self.response_max_tokens = 200
         self.response_temperature = 0.7
         self.custom_guidelines: Optional[str] = None

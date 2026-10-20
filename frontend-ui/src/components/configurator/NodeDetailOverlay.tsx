@@ -443,7 +443,7 @@ export default function NodeDetailOverlay({
         <PromptComposer blocks={blocks} isDark={isDark} />
 
         <SettingsGrid isDark={isDark}>
-          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
+          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
           {renderSlotField('temperature', 'Temperature', 'number', { min: 0, max: 1, step: 0.1 })}
           {renderSlotField('max_tokens', 'Max Tokens', 'number', { min: 20, max: 500, step: 10 })}
         </SettingsGrid>
@@ -554,7 +554,7 @@ export default function NodeDetailOverlay({
         <PromptComposer blocks={blocks} isDark={isDark} />
 
         <SettingsGrid isDark={isDark}>
-          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
+          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
           {renderSlotField('temperature', 'Temperature', 'number', { min: 0, max: 1.5, step: 0.1 })}
           {renderSlotField('max_tokens', 'Max Tokens', 'number', { min: 50, max: 1000, step: 10 })}
         </SettingsGrid>
@@ -584,7 +584,7 @@ export default function NodeDetailOverlay({
         <PromptComposer blocks={blocks} isDark={isDark} />
 
         <SettingsGrid isDark={isDark}>
-          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
+          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
           {renderSlotField('temperature', 'Temperature', 'number', { min: 0, max: 1, step: 0.1 })}
           {renderSlotField('max_tokens', 'Max Tokens', 'number', { min: 10, max: 100, step: 5 })}
           {renderSlotField('fast_path', 'Fast Bridge (skip LLM)', 'select', { selectOptions: ['off', 'on'] })}

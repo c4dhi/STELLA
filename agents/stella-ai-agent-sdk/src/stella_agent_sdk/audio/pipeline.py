@@ -44,7 +44,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List, Optional, Tuple
 
 from stella_agent_sdk.emotion.tags import EmotionCue
 from stella_agent_sdk.env import env_int as _env_int, env_float as _env_float
@@ -367,6 +367,12 @@ _PROGRESS_TICK_MS = float(os.getenv("TTS_PROGRESS_TICK_MS", "200"))
 _DEFAULT_MS_PER_CHAR = 70.0
 
 
+#: Speech starting this soon after a final is the early-cutoff signal (#92):
+#: the turn was ended while the user still had more to say. Logged as
+#: `user_resumed_after_final`; nothing acts on it.
+RESUMED_AFTER_FINAL_WINDOW_MS = 3000
+
+
 def _now() -> float:
     """Monotonic seconds — never the wall clock, which can step."""
     return time.monotonic()
@@ -643,6 +649,9 @@ class AudioPipeline:
         # speech_ended), keyed by transcript id, for the turn's language record
         # (#91). Bounded like the audio buffers above.
         self._speech_span_by_id: Dict[str, List[Optional[float]]] = {}
+        # The last spoken turn's id and when its final landed, until the user
+        # next starts speaking: the early-cutoff signal (#92).
+        self._last_turn_final: Optional[Tuple[Optional[str], float]] = None
         # A typed turn's frontend correlation_id, by the transcript id the SDK
         # gave it: the stored message is the frontend's envelope, which only
         # that id identifies (#91).
@@ -1110,9 +1119,15 @@ class AudioPipeline:
         if self._turn_stt_end_ts == 0:
             self._begin_turn_analytics(getattr(event, "transcript_id", None))
 
-    async def _emit_analytics_event(self, stage: str, elapsed_ms: float, **kwargs) -> None:
-        """Emit a raw timestamped analytics event relative to stt_end."""
-        turn_id = self._turn_id or ""
+    async def _emit_analytics_event(
+        self, stage: str, elapsed_ms: float, *, turn_id: Optional[str] = None, **kwargs
+    ) -> None:
+        """Emit a raw timestamped analytics event relative to stt_end.
+
+        ``turn_id`` names the turn explicitly, for an event that lands after
+        its turn's analytics were reset; otherwise it is the current turn.
+        """
+        turn_id = turn_id or self._turn_id or ""
         await self._room.publish_data({
             "type": "analytics",
             "data": {
@@ -1416,6 +1431,7 @@ class AudioPipeline:
             elif event.is_final:
                 self._end_utterance_capture()
             self._note_speech_span(event)
+            self._note_resumed_after_final(event)
 
             # A voice barge-in was committed for this utterance: its final IS
             # the interrupting turn. Handled before the gate check because
@@ -1658,7 +1674,20 @@ class AudioPipeline:
 
                 # Ground zero = stt_end (transcript locked in, pipeline processing starts)
                 # vad_trigger is emitted as a negative value showing how long the user spoke
-                asyncio.create_task(self._emit_analytics_event("stt_end", 0.0))
+                # With the end-of-speech gap from STT (#92), end of speech to
+                # first audio is trailing_silence_ms + decode_ms + the reply's
+                # first byte. Only what STT actually sent is included.
+                gap = {
+                    key: value
+                    for key in ("trailing_silence_ms", "decode_ms", "speech_ms")
+                    if (value := getattr(event, key, None)) is not None
+                }
+                asyncio.create_task(self._emit_analytics_event("stt_end", 0.0, **gap))
+                for pause in getattr(event, "rescued_pauses", None) or ():
+                    asyncio.create_task(
+                        self._emit_analytics_event("pause_rescued", 0.0, **pause)
+                    )
+                self._last_turn_final = (self._turn_id, _now())
                 if self._turn_stt_start_ts > 0:
                     vad_elapsed = (self._turn_stt_start_ts - self._turn_stt_end_ts) * 1000  # negative
                     asyncio.create_task(self._emit_analytics_event("vad_trigger", vad_elapsed))
@@ -3321,7 +3350,7 @@ class AudioPipeline:
         tid = event.transcript_id
         if not tid or not (event.speech_started or event.speech_ended):
             return
-        now = time.monotonic() if now is None else now
+        now = _now() if now is None else now
         span = self._speech_span_by_id.get(tid)
         if span is None:
             if not event.speech_started:
@@ -3331,6 +3360,35 @@ class AudioPipeline:
                 del self._speech_span_by_id[next(iter(self._speech_span_by_id))]
         if event.speech_ended:
             span[1] = now
+
+    def _note_resumed_after_final(self, event: TranscriptEvent) -> None:
+        """Log the user starting again soon after a final (#92).
+
+        The early-cutoff signal: the first ``speech_started`` of a NEW
+        utterance within RESUMED_AFTER_FINAL_WINDOW_MS of the last turn's
+        final. It goes on that turn, at ``since_final_ms`` past its stt_end,
+        with the whole silence before it (from the turn's last speech_ended)
+        and whether the agent was already audible. Fires once per final.
+        """
+        last = self._last_turn_final
+        if last is None or not event.speech_started or event.transcript_id == last[0]:
+            return
+        self._last_turn_final = None
+        turn_id, final_at = last
+        now = _now()
+        since_ms = (now - final_at) * 1000
+        if since_ms > RESUMED_AFTER_FINAL_WINDOW_MS:
+            return
+        span = self._speech_span_by_id.get(turn_id) if turn_id else None
+        pause_ms = round((now - span[1]) * 1000) if span and span[1] is not None else None
+        asyncio.create_task(self._emit_analytics_event(
+            "user_resumed_after_final",
+            since_ms,
+            turn_id=turn_id,
+            since_final_ms=round(since_ms),
+            pause_ms=pause_ms,
+            agent_speaking=self._audio_active,
+        ))
 
     def utterance_speech_seconds(self, transcript_id: Optional[str]) -> Optional[float]:
         """How long the user spoke in this utterance, from VAD; None if unknown."""

@@ -7,7 +7,8 @@ import type { StageLatency, StageDataPoint, SessionStagePoint } from '../../../l
 // These are handled by SummaryCards instead (safety_routing, state_transition have
 // timing_ms=0 and no meaningful position on the latency timeline).
 // Anchors and non-latency events excluded from the timeline visualization
-const EXCLUDED_STAGES = new Set(['plan_completion', 'safety_routing', 'vad_trigger', 'stt_end'])
+// pause_rescued is a count, not a latency: it is always at 0ms (#92).
+const EXCLUDED_STAGES = new Set(['plan_completion', 'safety_routing', 'vad_trigger', 'stt_end', 'pause_rescued'])
 
 const LANE_COLORS = [
   '#8B5CF6', // purple

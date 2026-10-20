@@ -22,7 +22,7 @@ from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, Future
 import numpy as np
 
-from .base import STTProvider, STTSession
+from .base import STTProvider, STTSession, end_of_speech_fields
 import stt_pb2
 from vad.speech_gate import GateConfig, GateSignal, SpeechGate, SpeechState, clamp_endpointing_ceiling
 
@@ -638,6 +638,11 @@ class WhisperSession(STTSession):
                     self.pre_buffer = array('h')
                     print("[WhisperSession] Speech started")
 
+                elif signal == GateSignal.PAUSE_RESCUED:
+                    pause = self.gate.rescued_pauses[-1]
+                    print(f"[WhisperSession] Pause rescued ({pause['pause_ms']}ms, "
+                          f"{pause['into_window_ms']}ms into the window)")
+
                 elif signal == GateSignal.SPEECH_STARTED:
                     events.append(self._speech_boundary_event(current_time, started=True))
 
@@ -872,6 +877,8 @@ class WhisperSession(STTSession):
 
     def _generate_final(self, current_time: float) -> Optional[stt_pb2.TranscriptEvent]:
         """Generate final transcript event."""
+        # The whole final step, drains included: it is all time the user waits.
+        final_started = time.time()
         if len(self.speech_buffer) < self.min_speech_samples:
             print(f"[WhisperSession] Audio too short: {len(self.speech_buffer)} < {self.min_speech_samples}")
             return None
@@ -1010,6 +1017,9 @@ class WhisperSession(STTSession):
                 detected_language=detected_language or "",
                 language_confidence=language_confidence,
                 decode_diagnostics=diagnostics_json,
+                **end_of_speech_fields(
+                    self.gate, current_time, (time.time() - final_started) * 1000
+                ),
             )
 
         except Exception as e:

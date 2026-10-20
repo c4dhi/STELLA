@@ -173,6 +173,60 @@ export default function SummaryCards({ summary }: SummaryCardsProps) {
           />
         </motion.div>
       )}
+
+      {summary.endpointing && (
+        <motion.div variants={itemVariants} className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <StatsCard
+            title="End-of-Speech Gap"
+            value={summary.endpointing.avgEndOfSpeechGap_ms ?? 0}
+            suffix="ms"
+            subtitle={
+              summary.endpointing.gapTurns > 0
+                ? `silence ${summary.endpointing.avgTrailingSilence_ms}ms + decode ${summary.endpointing.avgDecode_ms}ms · ${summary.endpointing.gapTurns} turns`
+                : 'Not reported by STT yet'
+            }
+            color="blue"
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <polyline points="8 8 4 12 8 16" />
+                <polyline points="16 8 20 12 16 16" />
+              </svg>
+            }
+          />
+          <StatsCard
+            title="Pauses Rescued"
+            value={summary.endpointing.pausesRescued}
+            subtitle={
+              summary.endpointing.pausesRescued > 0
+                ? `in ${summary.endpointing.turnsWithRescuedPause} turns · ~${summary.endpointing.avgRescuedIntoWindow_ms}ms into the window`
+                : 'No pause nearly ended a turn'
+            }
+            color="green"
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="6" y="4" width="4" height="16" />
+                <rect x="14" y="4" width="4" height="16" />
+              </svg>
+            }
+          />
+          <StatsCard
+            title="Spoke Again Right After"
+            value={summary.endpointing.resumedAfterFinal}
+            subtitle={
+              summary.endpointing.resumedAfterFinal > 0
+                ? `within 3s of a final · ${summary.endpointing.resumedWhileAgentSpeaking} while the agent spoke`
+                : 'No early cut-offs seen'
+            }
+            color="purple"
+            icon={
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+            }
+          />
+        </motion.div>
+      )}
     </>
   )
 }

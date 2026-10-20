@@ -1424,6 +1424,21 @@ export interface MetricsSummary {
     partialTurns: number
     partialAgreementRate: number | null
   } | null
+  /** End-of-speech gap and endpointing signals (#92); null when no turn reported them. */
+  endpointing: {
+    totalTurns: number
+    gapTurns: number
+    avgTrailingSilence_ms: number | null
+    avgDecode_ms: number | null
+    avgEndOfSpeechGap_ms: number | null
+    pausesRescued: number
+    turnsWithRescuedPause: number
+    avgRescuedPause_ms: number | null
+    avgRescuedIntoWindow_ms: number | null
+    resumedAfterFinal: number
+    resumedWhileAgentSpeaking: number
+    avgResumedSinceFinal_ms: number | null
+  } | null
 }
 
 export interface AgentMetricsResponse {

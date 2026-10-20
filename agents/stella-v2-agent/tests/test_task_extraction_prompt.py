@@ -54,3 +54,29 @@ def test_prompt_marks_corrections_with_the_correction_flag(system_prompt: str):
     # prompt every correction would silently fail.
     assert system_prompt.count("`correction: true`") >= 3
     assert "REJECTED without `correction: true`" in system_prompt
+
+
+# --- Goal states (#706) ------------------------------------------------------
+# A goal state is closed by completing or skipping its one task, `__goal__`.
+# The prompt used to say nothing about how a goal ends, and the model wrote the
+# user's answer into a "goal reached" deliverable instead.
+
+def test_prompt_closes_a_goal_through_its_task(system_prompt: str):
+    goal_section = system_prompt.split("GOAL-ORIENTED STATE HANDLING:")[1].split("DISCOVERED INSIGHTS")[0]
+    assert "put `__goal__` in the `tasks` list" in goal_section
+    assert "put `__goal__` in `skip_tasks`" in goal_section
+    # Giving a goal up is for a refusal of the whole subject, not for one open question.
+    assert "is NOT giving it up" in goal_section
+    assert "Never skip `__goal__` in a call that also records a deliverable" in goal_section
+
+
+def test_prompt_forbids_goal_reached_as_a_deliverable(system_prompt: str):
+    assert "Never set a deliverable named `__goal__` or `__goal_achieved__`" in system_prompt
+    # Nothing may still tell the model to close a goal by writing a value.
+    assert "setDeliverable(" not in system_prompt
+
+
+def test_prompt_does_not_take_a_maybe_for_a_reached_goal(system_prompt: str):
+    assert "is not a commitment" in system_prompt
+    assert "a remark made in passing" in system_prompt
+    assert "the goal is not reached — leave it open" in system_prompt

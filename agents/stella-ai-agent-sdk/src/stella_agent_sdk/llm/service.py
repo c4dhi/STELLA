@@ -41,7 +41,7 @@ class LLMToolCall:
 @dataclass
 class LLMConfig:
     """Configuration for LLM requests."""
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5.4-mini"
     temperature: float = 0.7
     max_tokens: int = 800
     provider: LLMProvider = LLMProvider.OPENAI_LANGCHAIN
