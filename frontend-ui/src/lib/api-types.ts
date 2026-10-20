@@ -1424,6 +1424,21 @@ export interface MetricsSummary {
     partialTurns: number
     partialAgreementRate: number | null
   } | null
+  /** End-of-speech gap and endpointing signals (#92); null when no turn reported them. */
+  endpointing: {
+    totalTurns: number
+    gapTurns: number
+    avgTrailingSilence_ms: number | null
+    avgDecode_ms: number | null
+    avgEndOfSpeechGap_ms: number | null
+    pausesRescued: number
+    turnsWithRescuedPause: number
+    avgRescuedPause_ms: number | null
+    avgRescuedIntoWindow_ms: number | null
+    resumedAfterFinal: number
+    resumedWhileAgentSpeaking: number
+    avgResumedSinceFinal_ms: number | null
+  } | null
 }
 
 export interface AgentMetricsResponse {
@@ -1778,4 +1793,25 @@ export interface MediaTestSession {
   livekitUrl: string
   expiresAt: string
   ttlSeconds: number
+}
+
+// ============================================================================
+// Platform defaults (Settings → Platform Defaults, system admins only)
+// ============================================================================
+
+export type TtsPlaybackMode = 'auto' | 'stream' | 'sentence'
+
+export interface PinnedDeployment {
+  name: string
+  project: string
+  mode: TtsPlaybackMode
+}
+
+export interface PlatformSettings {
+  /** null = never set: the built-in default (auto) applies. */
+  ttsPlayback: TtsPlaybackMode | null
+  updatedAt: string | null
+  updatedBy: string | null
+  /** Deployments that set their own mode and so keep it. */
+  pinnedDeployments: PinnedDeployment[]
 }

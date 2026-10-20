@@ -1,0 +1,148 @@
+import { jest } from '@jest/globals';
+import { BadRequestException, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { GUARDS_METADATA } from '@nestjs/common/constants.js';
+import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js';
+import { PlatformSettingsController } from './platform-settings.controller.js';
+import { PlatformSettingsService } from './platform-settings.service.js';
+
+function contextFor(user: unknown): ExecutionContext {
+  return { switchToHttp: () => ({ getRequest: () => ({ user }) }) } as unknown as ExecutionContext;
+}
+
+describe('PlatformSettingsController access', () => {
+  it('puts every endpoint behind SystemAdminGuard', () => {
+    const guards = Reflect.getMetadata(GUARDS_METADATA, PlatformSettingsController);
+    expect(guards).toContain(SystemAdminGuard);
+  });
+
+  it('lets a system admin through and turns away everyone else', () => {
+    const guard = new SystemAdminGuard();
+    expect(guard.canActivate(contextFor({ userId: 'a', isSystemAdmin: true }))).toBe(true);
+    expect(() => guard.canActivate(contextFor({ userId: 'u', isSystemAdmin: false }))).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(contextFor({ type: 'participant', isSystemAdmin: true }))).toThrow(ForbiddenException);
+    expect(() => guard.canActivate(contextFor(undefined))).toThrow(ForbiddenException);
+  });
+});
+
+function makeService(opts: {
+  stored?: { value: string; updatedAt?: Date; updatedBy?: { name: string | null; email: string } | null } | null;
+  publicProjects?: unknown[];
+  agents?: unknown[];
+  templates?: Record<string, string>;
+  findUniqueError?: Error;
+} = {}) {
+  const row = opts.stored
+    ? { key: 'ttsPlayback', updatedAt: new Date('2026-10-12T14:20:00Z'), updatedBy: null, ...opts.stored }
+    : null;
+  const prisma = {
+    platformSetting: {
+      findUnique: jest.fn(async () => {
+        if (opts.findUniqueError) throw opts.findUniqueError;
+        return row;
+      }),
+      upsert: jest.fn(async () => ({})),
+      deleteMany: jest.fn(async () => ({ count: 1 })),
+    },
+    project: { findMany: jest.fn(async () => opts.publicProjects ?? []) },
+    agentInstance: { findMany: jest.fn(async () => opts.agents ?? []) },
+    envVarTemplate: {
+      findUnique: jest.fn(async (args: any) =>
+        opts.templates?.[args.where.id] !== undefined ? { variables: opts.templates[args.where.id] } : null),
+    },
+  };
+  // "enc:<json>" stands in for real ciphertext.
+  const encryption = {
+    decrypt: jest.fn((s: string) => {
+      if (!s.startsWith('enc:')) throw new Error('bad ciphertext');
+      return JSON.parse(s.slice(4));
+    }),
+  };
+  const service = new PlatformSettingsService(prisma as any, encryption as any);
+  return { service, prisma };
+}
+
+const enc = (vars: Record<string, string>) => `enc:${JSON.stringify(vars)}`;
+
+describe('PlatformSettingsService', () => {
+  it('saves a mode with who changed it, and clears it with null', async () => {
+    const { service, prisma } = makeService();
+    await service.setTtsPlayback('sentence', 'admin-1');
+    expect(prisma.platformSetting.upsert).toHaveBeenCalledWith({
+      where: { key: 'ttsPlayback' },
+      create: { key: 'ttsPlayback', value: 'sentence', updatedById: 'admin-1' },
+      update: { value: 'sentence', updatedById: 'admin-1' },
+    });
+    await service.setTtsPlayback(null, 'admin-1');
+    expect(prisma.platformSetting.deleteMany).toHaveBeenCalledWith({ where: { key: 'ttsPlayback' } });
+  });
+
+  it('refuses an unknown mode without writing anything', async () => {
+    const { service, prisma } = makeService();
+    await expect(service.setTtsPlayback('loud', 'admin-1')).rejects.toThrow(BadRequestException);
+    await expect(service.setTtsPlayback(undefined, 'admin-1')).rejects.toThrow(BadRequestException);
+    expect(prisma.platformSetting.upsert).not.toHaveBeenCalled();
+    expect(prisma.platformSetting.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('shows the stored default and who last changed it', async () => {
+    const { service } = makeService({ stored: { value: 'stream', updatedBy: { name: 'Admin', email: 'a@x.test' } } });
+    await expect(service.getView()).resolves.toEqual({
+      ttsPlayback: 'stream',
+      updatedAt: '2026-10-12T14:20:00.000Z',
+      updatedBy: 'Admin',
+      pinnedDeployments: [],
+    });
+  });
+
+  it('applies the platform default to an unpinned pod and logs nothing else into env', async () => {
+    const { service } = makeService({ stored: { value: 'sentence' } });
+    await expect(service.applyToPodEnv({ STELLA_TTS_PLAYBACK: 'auto', X: '1' }, 'agent-1')).resolves.toEqual({
+      STELLA_TTS_PLAYBACK: 'sentence',
+      STELLA_TTS_PLAYBACK_SOURCE: 'platform',
+      X: '1',
+    });
+  });
+
+  it('keeps a pod pinned to stream on stream', async () => {
+    const { service } = makeService({ stored: { value: 'sentence' } });
+    const env = await service.applyToPodEnv({ STELLA_TTS_PLAYBACK: 'stream' }, 'agent-1');
+    expect(env.STELLA_TTS_PLAYBACK).toBe('stream');
+    expect(env.STELLA_TTS_PLAYBACK_SOURCE).toBe('deployment');
+  });
+
+  it('still starts the agent when the settings read fails', async () => {
+    const { service } = makeService({ findUniqueError: new Error('db down') });
+    const env = await service.applyToPodEnv({}, 'agent-1');
+    expect(env).toEqual({ STELLA_TTS_PLAYBACK: 'auto', STELLA_TTS_PLAYBACK_SOURCE: 'default' });
+  });
+
+  it('ignores a stored value that is no longer a mode', async () => {
+    const { service } = makeService({ stored: { value: 'loud' } });
+    await expect(service.getTtsPlayback()).resolves.toBeNull();
+  });
+
+  it('lists public projects and open-session agents that pin a mode, and only those', async () => {
+    const { service } = makeService({
+      templates: { t1: enc({ STELLA_TTS_PLAYBACK: 'sentence', OPENAI_API_KEY: 'secret' }) },
+      publicProjects: [
+        { name: 'Study A', publicAgentConfig: { name: 'Grace', envVars: { STELLA_TTS_PLAYBACK: 'stream' } }, publicAgentType: null },
+        { name: 'Study B', publicAgentConfig: { envVarTemplateId: 't1' }, publicAgentType: { name: 'Stella v2' } },
+        { name: 'Study C', publicAgentConfig: { envVars: { STELLA_TTS_PLAYBACK: 'auto' } }, publicAgentType: null },
+      ],
+      agents: [
+        // Manual vars override the template, as at pod creation.
+        { name: 'Agent 1', envVarTemplateId: 't1', manualEnvVarsEncrypted: enc({ STELLA_TTS_PLAYBACK: 'stream' }), session: { project: { name: 'P' } } },
+        { name: 'Agent 2', envVarTemplateId: null, manualEnvVarsEncrypted: null, session: { project: { name: 'P' } } },
+        { name: 'Agent 3', envVarTemplateId: null, manualEnvVarsEncrypted: 'garbage', session: { project: { name: 'P' } } },
+      ],
+    });
+    const pinned = await service.listPinnedDeployments();
+    expect(pinned).toEqual([
+      { name: 'Grace', project: 'Study A', mode: 'stream' },
+      { name: 'Stella v2', project: 'Study B', mode: 'sentence' },
+      { name: 'Agent 1', project: 'P', mode: 'stream' },
+    ]);
+    // Only the mode leaves the service.
+    expect(JSON.stringify(pinned)).not.toContain('secret');
+  });
+});

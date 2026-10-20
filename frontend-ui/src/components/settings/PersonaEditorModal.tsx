@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import type { Persona } from '../../lib/api-types'
+import LanguageSelect, { languageForSave } from './LanguageSelect'
 
 interface PersonaEditorModalProps {
   isOpen: boolean
@@ -97,7 +98,7 @@ export default function PersonaEditorModal({
       icon: icon.trim() || undefined,
       systemPrompt: systemPrompt.trim(),
       voice: voice.trim() || undefined,
-      language: language.trim().toLowerCase() || undefined,
+      language: languageForSave(language),
       variables: variableMap,
     }
 
@@ -211,12 +212,10 @@ export default function PersonaEditorModal({
                 </div>
                 <div>
                   <label className={labelClass}>Language</label>
-                  <input
-                    type="text"
+                  <LanguageSelect
                     value={language}
-                    onChange={(e) => setLanguage(e.target.value)}
-                    placeholder="e.g. de"
-                    maxLength={16}
+                    onChange={setLanguage}
+                    emptyLabel="None"
                     className={inputClass}
                   />
                   <p className={hintClass}>Only used when the plan declares none.</p>

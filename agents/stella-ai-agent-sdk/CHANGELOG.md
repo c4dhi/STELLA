@@ -11,6 +11,32 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-21
+
+Ships with STELLA 1.4.0. What changes for agent authors:
+
+### Added
+
+- `TranscriptEvent` carries `trailing_silence_ms`, `decode_ms`, `speech_ms` (None when STT does not send them) and `rescued_pauses` from the STT final. The pipeline puts the first three on `stt_end`, emits one `pause_rescued` per rescued pause, and emits `user_resumed_after_final` when a new utterance starts within `RESUMED_AFTER_FINAL_WINDOW_MS` (3000) of a turn's final, on that turn's id. `_emit_analytics_event` takes an explicit `turn_id` for events that land after their turn. Logging only (#763)
+- `BaseAgent.publish_turn_language()` publishes a `turn_language` envelope per user turn (built by `language.turn_language_record`): detected language and confidence, VAD speech length (`AudioPipeline.utterance_speech_seconds`), word count of the free decode, resolved language, and whether it was re-decoded, plus the frontend `correlation_id` for typed turns. No transcript text. `send_turn_language()` does the same in the background, which is what the v2 and light agents call from `_resolve_language`, so the publish never delays the reply; the recorder forwards it and the backend merges it into the turn's message (#759)
+- `stream_completion()` takes `first_token_timeout` and `retry_first_token_timeout`. A call with no first token within the budget is abandoned and started once more with the retry budget. If that one stalls too, it raises `FirstTokenTimeout`. Once a stream has started there is no limit. Both are logged as `[REPLY-TIMEOUT]` and `[REPLY-RETRY]`, with `log_context`. The v2 agent uses 4 s and 2 s (#684)
+- The `[TTS] Playback mode` log line says where the mode came from (`from the deployment`, `from the platform default`, `from the built-in default`) when the backend sets `STELLA_TTS_PLAYBACK_SOURCE`. Unset, the line is unchanged (#756)
+
+### Changed
+
+- The default model is `gpt-5.4-mini` (was `gpt-4o-mini`): `LLMConfig.model` and the barge-in evaluator. An agent that sets a model keeps it.
+- The state machine tool guidance tells the model how a goal-oriented phase ends: complete or skip its one task, `__goal__`, and never store an answer under a "goal reached" key.
+- `STELLA_TTS_PLAYBACK` defaults to `auto` (unset means `auto` too). A session starts in `stream` and switches once to `sentence` — never back — after 3 consecutive sentences synthesize slower than real time. `stream`/`sentence` still pin the mode outright with no switching (#669)
+- A short utterance dropped because the agent held the floor is now logged (`[GATE] Not taken as a turn`). In turn-based mode it is now also published to the transcript, marked as discarded, as it already was with barge-in.
+- `bridge_tts_done` is emitted once per turn, when the bridge's last sentence has played, instead of after every bridge sentence. It carries `bridge_playback_ms`, the time from the bridge's first audible byte to its end. `bridge_tts_done` and `response_tts_done` now mark when the last sentence is heard (push time plus the audio still queued for playout), not when its last frame was handed to LiveKit.
+- `LanguageResolver` switches the session language on a decaying confidence score (`text_bar` / `decay` / `switch_score`) instead of a fixed confidence threshold plus a count of consecutive turns (`switch_threshold` / `debounce`, removed). Evidence against the current lock now accumulates across a mixed run of turns rather than needing a streak, and a genuine switch spoken at merely moderate, sustained confidence can no longer be structurally unable to switch at all. A doubtful turn's own transcript can also be re-decoded forced into the current lock for display, via a new STT `Redecode` RPC — this never feeds back into the switching decision, which only ever sees the original free decode.
+
+  **For researchers running multilingual studies:** a session's transcription no longer re-guesses the language on every turn in free conversation (no declared plan language); it holds the detected language through short or ambiguous turns and follows a real language switch within a few turns, the same way spoken replies already did. `switch_threshold`/`debounce` in a pipeline configuration are now silently ignored — set `text_bar` (default 0.85), `decay` (0.5) and `switch_score` (1.5) instead (#685)
+- `LanguageResolver` locks the first language only on a detection of at least `detect_threshold`, now 0.9 by default (was 0.4), and a confirmed lock switches outright on one off-lock turn of 4+ words at `instant_switch_threshold` (new, default 0.9). Less confident turns still go through the decay build-up (#758)
+- `LanguageResolver.deployment_pin` (#699): the deployment's own language pin (`STELLA_LANGUAGE`, or a configured `force`), captured once and never overwritten by a later `set_plan_language` call — unlike `forced`, which still reflects whichever source called most recently. Lets a companion-mode caller tell "the operator pinned this deployment" apart from "a plan or persona happened to set `forced`", since only the former outranks the persona.
+
+  **For researchers running companion-mode studies with mixed-language activities:** a companion conversation no longer gets stuck in an activity's language after that activity ends. The session keeps the language it was pinned to (by the deployment, or the persona) or had detected, through an activity whose own content was written in a different language, inside it and after it — the activity's language is only ever mentioned to the model as a translation note, never applied to speech recognition or the voice.
+
 ## [0.7.0] - 2026-10-07
 
 Ships with STELLA 1.3.0. What changes for agent authors:

@@ -86,7 +86,7 @@ class BargeInEvaluator:
         self._llm_service = llm_service
 
         # LLM config (overridable via apply_config from the Agent Configurator).
-        self.model = "gpt-4o-mini"
+        self.model = "gpt-5.4-mini"
         self.provider = LLMProvider.OPENAI_LANGCHAIN
         self.max_tokens = 3
         self.temperature = 0.0

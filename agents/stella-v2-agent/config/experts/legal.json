@@ -3,7 +3,7 @@
   "description": "Flags legal concerns requiring careful handling and disclaimers",
   "priority": 90,
   "enabled": true,
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.4-mini",
   "temperature": 0.1,
   "max_tokens": 200,
   "can_call_functions": false,
@@ -29,11 +29,17 @@
     "high": {
       "action": "prepend",
       "template": "Just so you know, I can't give legal advice, so please confirm anything important with a qualified professional.",
+      "template_i18n": {
+        "de": "Nur damit du es weißt: Ich kann keine Rechtsberatung geben, also bestätige bitte alles Wichtige mit einer qualifizierten Fachperson."
+      },
       "description": "ENGAGE. A specific legal concern: a dispute, contract, privacy/employment matter, or a request for legal advice."
     },
     "critical": {
       "action": "override",
       "template": "This sounds like it could carry serious legal consequences. I'm not able to give legal advice — please reach out to a qualified legal professional or the appropriate authorities.",
+      "template_i18n": {
+        "de": "Das klingt, als könnte es ernste rechtliche Folgen haben. Ich kann keine Rechtsberatung geben — wende dich bitte an eine qualifizierte Rechtsperson oder die zuständigen Behörden."
+      },
       "description": "ENGAGE. Illegal activity or imminent danger."
     }
   }

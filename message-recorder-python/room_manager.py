@@ -341,6 +341,12 @@ class RoomManager:
                 should_store = True
                 print(f"   ✅ Storing task/plan message: {message_type}")
 
+            elif message_type == 'turn_language':
+                # STORE: a user turn's language signal (#91). The backend merges
+                # it into that turn's transcript message rather than adding a row.
+                should_store = True
+                print(f"   ✅ Forwarding turn_language")
+
             elif message_type == 'llm_config':
                 # STORE: LLM configuration for session context
                 should_store = True

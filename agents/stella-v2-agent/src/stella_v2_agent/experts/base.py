@@ -32,13 +32,26 @@ class VerdictDirective:
                           but post-response processing (deliverables, progress) still runs.
       - "short_circuit" → speak ONLY ``template``; bypass everything downstream.
     template: literature-informed text (supports {{placeholders}}). Empty for "inform".
+        Always a plain string — the Agent Configurator's TypeScript contract
+        (``api-types.ts``'s ``VerdictDirective.template: string``) and
+        ``useConfiguratorState.ts``'s reader both assume that, and would
+        silently blank an object value when loading it for editing.
     description: plain-language explanation of what this verdict means. The label +
         description are handed to the classifying LLM so it knows when to pick this
         verdict; the action/template are NOT shown to the LLM (arbitration-layer concern).
+    template_i18n: optional ``{language: text}`` overrides of ``template`` for
+        specific languages (e.g. ``{"de": "..."}``), resolved per turn by
+        ``Arbitration._resolve_template()`` from the session's language,
+        falling back to ``template`` — the current string — when the turn's
+        language has no entry (#705). A purely additive field, kept AFTER
+        ``description`` in field order so existing positional constructor
+        calls (``VerdictDirective(action, template, description)``) keep
+        meaning what they always meant.
     """
     action: str = "inform"
     template: str = ""
     description: str = ""
+    template_i18n: Dict[str, str] = field(default_factory=dict)
 
     @staticmethod
     def coerce(value: Any) -> "VerdictDirective":
@@ -59,9 +72,16 @@ class VerdictDirective:
                     action, ", ".join(VERDICT_ACTIONS),
                 )
                 action = "inform"
+            raw_i18n = value.get("template_i18n", {})
+            template_i18n = (
+                {str(k): str(v) for k, v in raw_i18n.items()}
+                if isinstance(raw_i18n, dict)
+                else {}
+            )
             return VerdictDirective(
                 action=action,
                 template=str(value.get("template", "")),
+                template_i18n=template_i18n,
                 description=str(value.get("description", "")),
             )
         return VerdictDirective()
@@ -74,7 +94,12 @@ class VerdictDirective:
         return {str(k): VerdictDirective.coerce(v) for k, v in value.items()}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"action": self.action, "template": self.template, "description": self.description}
+        return {
+            "action": self.action,
+            "template": self.template,
+            "template_i18n": self.template_i18n,
+            "description": self.description,
+        }
 
 
 @dataclass
@@ -110,7 +135,7 @@ class ExpertConfig:
     description: str = ""
     priority: int = 50
     enabled: bool = True
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5.4-mini"
     temperature: float = 0.1
     max_tokens: int = 150
     can_call_functions: bool = False
@@ -138,7 +163,7 @@ class ExpertConfig:
             description=data.get("description", ""),
             priority=data.get("priority", 50),
             enabled=data.get("enabled", True),
-            model=data.get("model", "gpt-4o-mini"),
+            model=data.get("model", "gpt-5.4-mini"),
             temperature=data.get("temperature", 0.1),
             max_tokens=data.get("max_tokens", 150),
             can_call_functions=data.get("can_call_functions", False),

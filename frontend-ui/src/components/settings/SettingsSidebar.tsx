@@ -3,7 +3,7 @@ import { useThemeStore } from '../../store/themeStore'
 import { useNotificationStore } from '../../store/notificationStore'
 import { useAuthStore } from '../../store/authStore'
 
-export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin'
+export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin' | 'platform'
 
 interface SettingsSidebarProps {
   activeSection: SettingsSection
@@ -119,6 +119,25 @@ const sections: SectionItem[] = [
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M18 20V10M12 20V4M6 20v-6" />
+      </svg>
+    ),
+  },
+  {
+    id: 'platform',
+    label: 'Platform Defaults',
+    description: 'Defaults for every deployment',
+    adminOnly: true,
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <line x1="4" y1="21" x2="4" y2="14" />
+        <line x1="4" y1="10" x2="4" y2="3" />
+        <line x1="12" y1="21" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12" y2="3" />
+        <line x1="20" y1="21" x2="20" y2="16" />
+        <line x1="20" y1="12" x2="20" y2="3" />
+        <line x1="1" y1="14" x2="7" y2="14" />
+        <line x1="9" y1="8" x2="15" y2="8" />
+        <line x1="17" y1="16" x2="23" y2="16" />
       </svg>
     ),
   },

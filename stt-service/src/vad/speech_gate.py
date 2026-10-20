@@ -37,7 +37,7 @@ pretending otherwise would push provider detail in here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 class SpeechState:
@@ -79,6 +79,12 @@ class GateSignal:
     #: The utterance is over — decode it and reset. The gate returns to IDLE.
     FINALIZE = "FINALIZE"
 
+    #: Speech resumed inside the continuation window (MAYBE_ENDING ->
+    #: SPEAKING): a pause that nearly ended the turn. Logging only (#92); the
+    #: pause is appended to `rescued_pauses`. Precedes the SPEECH_STARTED it
+    #: comes with.
+    PAUSE_RESCUED = "PAUSE_RESCUED"
+
 
 @dataclass
 class GateConfig:
@@ -98,11 +104,30 @@ class GateConfig:
     #: Sample rate the voiced-sample counter is measured in.
     sample_rate: int = 16000
 
-    #: Documented ceiling on MAYBE_ENDING that is NOT enforced here, exactly
-    #: as it was not enforced in the whisper machine this replaces. Carried so
-    #: the value has somewhere to live when #469 implements it; wiring it up
-    #: now would smuggle a behaviour change into an extraction.
+    #: Hard ceiling on time in MAYBE_ENDING, measured from entry into it
+    #: (#469). While the window is fixed the window always ends the hold
+    #: first; the ceiling is what still bounds it once something extends the
+    #: hold. Never shorter than the window: a shorter one would end every
+    #: utterance early, so it is clamped up to it. None means no ceiling.
     max_endpointing_delay_ms: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        self.max_endpointing_delay_ms = clamp_endpointing_ceiling(
+            self.max_endpointing_delay_ms, self.continuation_window_ms
+        )
+
+
+def clamp_endpointing_ceiling(
+    ceiling_ms: Optional[float], continuation_window_ms: float
+) -> Optional[float]:
+    """The ceiling, raised to the continuation window if it is shorter."""
+    if ceiling_ms is None or ceiling_ms >= continuation_window_ms:
+        return ceiling_ms
+    print(
+        f"[SpeechGate] max_endpointing_delay_ms={ceiling_ms:g} is shorter than "
+        f"continuation_window_ms={continuation_window_ms:g}; using {continuation_window_ms:g}"
+    )
+    return continuation_window_ms
 
 
 class SpeechGate:
@@ -128,6 +153,15 @@ class SpeechGate:
         self.pending_final_time: Optional[float] = None
         self.voiced_samples = 0
         self.barge_in_signalled = False
+        #: Why the last MAYBE_ENDING ended: "window" or "ceiling".
+        self.last_exit_reason: Optional[str] = None
+        #: The current utterance's rescued pauses (#92), oldest first. Cleared
+        #: when the NEXT utterance begins rather than on reset, so a provider
+        #: building the final after FINALIZE can still read them.
+        self.rescued_pauses: List[Dict[str, int]] = []
+        #: Silence waited and speech length at the last FINALIZE (#92), kept
+        #: for the same reason. See endpoint_timing().
+        self._last_endpoint: Optional[Dict[str, int]] = None
 
     # -- queries ---------------------------------------------------------
 
@@ -147,6 +181,45 @@ class SpeechGate:
             return 0.0
         return (now - self.silence_start_time) * 1000.0
 
+    def endpoint_timing(self, now: float) -> Optional[Dict[str, int]]:
+        """How the utterance being finalised ended (#92), or None if unknown.
+
+        `trailing_silence_ms` is the silence waited through before the turn
+        was ended; `speech_ms` runs from the first voiced window to the start
+        of that silence. Measured live while the utterance is still active (a
+        provider's own timeout ending it), else as recorded at FINALIZE.
+        """
+        if self.is_active:
+            return self._timing(now)
+        return dict(self._last_endpoint) if self._last_endpoint else None
+
+    def _timing(self, now: float) -> Optional[Dict[str, int]]:
+        if self.speech_start_time is None:
+            return None
+        speech_end = self.silence_start_time if self.silence_start_time is not None else now
+        return {
+            "trailing_silence_ms": int(round(self.silence_ms(now))),
+            "speech_ms": int(round(max(speech_end - self.speech_start_time, 0.0) * 1000.0)),
+        }
+
+    def hold_expired(self, now: float) -> Optional[str]:
+        """Whether MAYBE_ENDING is over: "ceiling", "window", or None.
+
+        The one place the hold's exit is decided; the provider's stream-end
+        check asks here too. Both bounds are measured from entry into
+        MAYBE_ENDING rather than from the start of the silence, so the full
+        grace period is always granted even if a blocking decode ate part of it.
+        """
+        if self.state != SpeechState.MAYBE_ENDING or self.pending_final_time is None:
+            return None
+        waited = (now - self.pending_final_time) * 1000.0
+        ceiling = self.config.max_endpointing_delay_ms
+        if ceiling is not None and waited >= ceiling:
+            return "ceiling"
+        if waited >= self.config.continuation_window_ms:
+            return "window"
+        return None
+
     # -- the machine -----------------------------------------------------
 
     def observe(self, *, voiced: bool, samples: int, now: float) -> List[str]:
@@ -163,6 +236,9 @@ class SpeechGate:
     def _on_voiced(self, samples: int, now: float) -> List[str]:
         signals: List[str] = []
 
+        # Read before it is cleared: a rescued pause is measured to here.
+        pause_ms = self.silence_ms(now)
+
         # Any voiced window cancels a pending stop. A single frame is enough:
         # the continuation window exists precisely so that a breath does not
         # end the turn, and undoing the stop is free while it is still pending.
@@ -173,14 +249,23 @@ class SpeechGate:
             self.speech_start_time = now
             self.voiced_samples = 0
             self.barge_in_signalled = False
+            self.rescued_pauses = []
+            self._last_endpoint = None
             signals.append(GateSignal.UTTERANCE_BEGAN)
             signals.append(GateSignal.SPEECH_STARTED)
 
         elif self.state == SpeechState.MAYBE_ENDING:
             # Same utterance, resumed. The transcript id is deliberately kept —
             # this is one turn with a pause in it, not two turns.
+            self.rescued_pauses.append({
+                "pause_ms": int(round(pause_ms)),
+                "into_window_ms": int(round((now - self.pending_final_time) * 1000.0)),
+                "silence_threshold_ms": int(round(self.config.silence_duration_ms)),
+                "continuation_window_ms": int(round(self.config.continuation_window_ms)),
+            })
             self.state = SpeechState.SPEAKING
             self.pending_final_time = None
+            signals.append(GateSignal.PAUSE_RESCUED)
             signals.append(GateSignal.SPEECH_STARTED)
 
         # Count VOICED audio only. Counting wall-clock instead would let a
@@ -211,13 +296,12 @@ class SpeechGate:
                 signals.append(GateSignal.SPEECH_ENDED)
 
         elif self.state == SpeechState.MAYBE_ENDING:
-            # Measured from entry into MAYBE_ENDING rather than from the start
-            # of the silence, so the full grace period is always granted even
-            # if a blocking decode ate part of it.
-            waited = (now - (self.pending_final_time or now)) * 1000.0
-            if waited >= self.config.continuation_window_ms:
+            reason = self.hold_expired(now)
+            if reason:
                 signals.append(GateSignal.FINALIZE)
+                self._last_endpoint = self._timing(now)
                 self.reset()
+                self.last_exit_reason = reason
 
         return signals
 

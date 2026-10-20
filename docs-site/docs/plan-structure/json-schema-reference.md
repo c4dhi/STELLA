@@ -36,6 +36,19 @@ A plan no longer carries a `system_prompt` or a `voice`. Who the agent is lives 
 | `transitions` | `StateTransition[]` | No | Outgoing routing rules |
 | `goal` | `StateGoal` | Only for `type: "goal"` | Goal-mode context |
 
+## StateGoal Object
+
+Used on a state with `type: "goal"`.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `objective` | `string` | Yes | What the conversation should achieve |
+| `context` | `string` | No | Background the agent should know |
+| `depth_guidance` | `string` | No | How deep to go before moving on |
+| `boundaries` | `string` | No | Topics or behaviour to stay away from |
+| `success_description` | `string` | No | When the goal counts as reached; the closing check judges against it |
+| `deliverables` | `PlanDeliverable[]` | No | Answers to collect on the way; required ones must be in before the goal can close |
+
 ## PlanTask Object
 
 | Field | Type | Required | Notes |

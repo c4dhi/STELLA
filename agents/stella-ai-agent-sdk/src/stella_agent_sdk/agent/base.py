@@ -9,6 +9,7 @@ import uuid
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional, TYPE_CHECKING
 
 from stella_agent_sdk.emotion.tags import strip_emotion_tags
+from stella_agent_sdk.language import turn_language_record
 from stella_agent_sdk.messages.input import AgentInput
 from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.messages.types import (
@@ -296,6 +297,58 @@ class BaseAgent(ABC):
     def has_audio(self) -> bool:
         """Whether the audio pipeline is available."""
         return self._audio_pipeline is not None
+
+    def send_turn_language(
+        self,
+        input: AgentInput,
+        *,
+        original_text: str,
+        resolved_language: str,
+        redecoded: bool,
+    ) -> None:
+        """Send this turn's language record in the background, so the publish
+        never sits on the turn's path to its reply (see ``publish_turn_language``)."""
+        if not self.has_audio:
+            return
+        task = asyncio.create_task(self.publish_turn_language(
+            input,
+            original_text=original_text,
+            resolved_language=resolved_language,
+            redecoded=redecoded,
+        ))
+        # Hold a reference until it finishes, or the task can be collected early.
+        pending = self.__dict__.setdefault("_turn_language_tasks", set())
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+    async def publish_turn_language(
+        self,
+        input: AgentInput,
+        *,
+        original_text: str,
+        resolved_language: str,
+        redecoded: bool,
+    ) -> None:
+        """Publish this turn's language record so it is kept with the turn's
+        stored message (#91, ``language.turn_language_record``). Call once per
+        user turn, after the language is resolved. Never raises: losing the
+        record must not cost the turn."""
+        if not self.has_audio:
+            return
+        try:
+            metadata = input.metadata or {}
+            record = turn_language_record(
+                metadata,
+                original_text=original_text,
+                resolved_language=resolved_language,
+                redecoded=redecoded,
+                duration_s=self._audio_pipeline.utterance_speech_seconds(metadata.get("turn_id")),
+                correlation_id=self._audio_pipeline.typed_correlation_id(metadata.get("turn_id")),
+            )
+            if record is not None:
+                await self._audio_pipeline.publish_turn_language(record)
+        except Exception as e:
+            logger.warning(f"[Language] Could not publish the turn language record: {e}")
 
     @property
     def has_history(self) -> bool:

@@ -7,7 +7,7 @@ import uuid
 from typing import List, Optional
 import numpy as np
 
-from .base import STTProvider, STTSession
+from .base import STTProvider, STTSession, end_of_speech_fields
 from vad.speech_gate import GateConfig, GateSignal, SpeechGate
 import stt_pb2
 
@@ -247,6 +247,10 @@ class SherpaSession(STTSession):
                     # A new turn gets a new id here rather than at reset(), so
                     # the speech_started below already carries the right one.
                     self.transcript_id = f"transcript_{uuid.uuid4().hex[:8]}"
+                elif signal == GateSignal.PAUSE_RESCUED:
+                    pause = self.gate.rescued_pauses[-1]
+                    print(f"[SherpaSession] Pause rescued ({pause['pause_ms']}ms, "
+                          f"{pause['into_window_ms']}ms into the window)")
                 elif signal == GateSignal.SPEECH_STARTED:
                     events.append(self._boundary_event(current_time, started=True))
                 elif signal == GateSignal.SPEECH_CONFIRMED:
@@ -293,6 +297,7 @@ class SherpaSession(STTSession):
             return None
 
         self.processing_endpoint = True
+        final_started = time.time()
 
         try:
             # Flush any remaining content
@@ -311,7 +316,11 @@ class SherpaSession(STTSession):
                 transcript_id=self.transcript_id,
                 participant_id=self.participant_id,
                 confidence=0.9,
-                timestamp_ms=int(current_time * 1000)
+                timestamp_ms=int(current_time * 1000),
+                # The gate runs on audio time here, so that is the clock.
+                **end_of_speech_fields(
+                    self.gate, self.audio_position, (time.time() - final_started) * 1000
+                ),
             )
 
             # Reset for next utterance

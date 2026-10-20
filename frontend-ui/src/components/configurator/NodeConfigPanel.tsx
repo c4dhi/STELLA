@@ -138,7 +138,7 @@ export default function NodeConfigPanel({ node, configuration, onChange, onClose
                 {
                   name: 'noise_detection',
                   description: 'Detects garbled or inaudible input',
-                  defaultModel: 'gpt-4o-mini',
+                  defaultModel: 'gpt-5.4-mini',
                   defaultTemperature: 0.1,
                   defaultMaxTokens: 200,
                   defaultSystemPrompt: 'Determine if the user\'s message is clear enough to act on.\n\nUnclear: gibberish, random characters, transcription artifacts, nonsense syllables.\nClear: any message with discernible meaning, even brief ("yes", "no", "ok").\nBe lenient — if ANY meaning is discernible, mark clear.\n\nVerdicts: "clear", "unclear", "partial"\nKeep recommendation under 10 words.',
@@ -146,7 +146,7 @@ export default function NodeConfigPanel({ node, configuration, onChange, onClose
                 {
                   name: 'medical',
                   description: 'Flags medical/health topics',
-                  defaultModel: 'gpt-4o-mini',
+                  defaultModel: 'gpt-5.4-mini',
                   defaultTemperature: 0.1,
                   defaultMaxTokens: 200,
                   defaultSystemPrompt: 'Detect health-related concerns that require cautious handling. You do NOT provide medical advice — only flag topics.\n\nFlag: symptoms, medications, mental health concerns, requests for diagnosis.\nDo NOT flag: general wellness (exercise, sleep), casual health mentions.\n\nVerdicts: "none", "low" (general health topic), "high" (specific concern), "critical" (emergency/suicidal ideation)\nKeep recommendation under 10 words.',
@@ -154,7 +154,7 @@ export default function NodeConfigPanel({ node, configuration, onChange, onClose
                 {
                   name: 'legal',
                   description: 'Flags legal topics',
-                  defaultModel: 'gpt-4o-mini',
+                  defaultModel: 'gpt-5.4-mini',
                   defaultTemperature: 0.1,
                   defaultMaxTokens: 200,
                   defaultSystemPrompt: 'Detect legal concerns that require careful handling. You do NOT provide legal advice — only flag topics.\n\nFlag: legal disputes, contracts, criminal activity, privacy concerns, employment law, requests for legal advice.\nDo NOT flag: general civic topics, news about legal matters.\n\nVerdicts: "none", "low" (general legal topic), "high" (specific concern), "critical" (illegal activity/imminent danger)\nKeep recommendation under 10 words.',
@@ -162,7 +162,7 @@ export default function NodeConfigPanel({ node, configuration, onChange, onClose
                 {
                   name: 'task_extraction',
                   description: 'Extracts deliverables from conversation',
-                  defaultModel: 'gpt-4o',
+                  defaultModel: 'gpt-5.4-mini',
                   defaultTemperature: 0.0,
                   defaultMaxTokens: 800,
                   defaultSystemPrompt: 'You are a thorough extraction analyst running as a background process. Your job is to ensure every deliverable the user provides gets captured.\n\nYou receive the FULL PLAN — all states, all tasks, all deliverables. You can extract and correct deliverables in ANY state.\n\nYOUR PROCESS:\n1. Read the current user message carefully. What information did the user share?\n2. Scan ALL pending deliverables across the entire plan. Did the user provide any of them?\n3. Check completed deliverables too. If the user deliberately corrected a previous answer, set the same key again with the new value and correction: true, quoting what they said in reasoning (a collected required answer is rejected without it).\n4. For each match, call `set_deliverable(key, value, reasoning)` where reasoning explains WHY this matches.\n5. Validate before calling tool: PROVENANCE (traces back to user\'s words?) and SEMANTIC FIT (actually answering this deliverable?).\n\nTOOL USAGE:\n- Match found: call `set_deliverable(key, value, reasoning)`\n- Task with no deliverables complete: call `complete_task(task_id, reasoning)`\n- Multiple tools allowed per response. No matches = no tool calls.\n\nOPTIONAL DELIVERABLE HANDLING:\n- Vague or negative answers ARE valid values for optional deliverables.\n- If asked 2+ times with dismissive responses, extract a reasonable summary.\n\nGUIDELINES:\n- Extract everything the user provided. Missing a deliverable = bad UX.\n- Be smart about matching. Users don\'t speak in schema language.\n- Do NOT fabricate values the user never mentioned.\n- Greetings are never names.',
@@ -170,7 +170,7 @@ export default function NodeConfigPanel({ node, configuration, onChange, onClose
                 {
                   name: 'probing',
                   description: 'Determines when clarification is needed',
-                  defaultModel: 'gpt-4o-mini',
+                  defaultModel: 'gpt-5.4-mini',
                   defaultTemperature: 0.2,
                   defaultMaxTokens: 300,
                   defaultSystemPrompt: 'You have two jobs:\n\n1. DELIVERABLE DETECTION: Check if the user\'s message provides any pending deliverables. Output their keys in "deliverable_signals". Only signal deliverables the user CLEARLY provided.\n\n2. FOLLOW-UP DECISION: Decide if the assistant should ask a follow-up question.\n   - "no_probe": user\'s message is clear, no question needed\n   - "needs_clarification": a specific follow-up would help\n   - "gentle_redirect": user went off-topic, steer back\n   Do NOT probe when the user just provided requested information.\n\nREQUIRED vs OPTIONAL rules:\n- REQUIRED: probe persistently until collected.\n- OPTIONAL: probe gently at most once. If vague/dismissive answer, return "no_probe".\n- If TURNS WITHOUT PROGRESS >= 2 and only OPTIONAL remain, always return "no_probe".\n\nKeep recommendation under 15 words.',
@@ -178,7 +178,7 @@ export default function NodeConfigPanel({ node, configuration, onChange, onClose
                 {
                   name: 'timekeeper',
                   description: 'Tracks conversation progress',
-                  defaultModel: 'gpt-4o-mini',
+                  defaultModel: 'gpt-5.4-mini',
                   defaultTemperature: 0.1,
                   defaultMaxTokens: 300,
                   defaultSystemPrompt: 'Assess if the conversation is making progress toward its goals.\n\nConsider: turns without deliverables collected, repeated questions, user engagement.\n\nVerdicts:\n- "on_track": progressing normally\n- "slowing": some stagnation\n- "stuck": recommend specific action\n- "force_advance": skip current state\n\nFor stuck/force_advance, include suggested_deliverables if values can be inferred from context.\nKeep recommendation under 15 words.',

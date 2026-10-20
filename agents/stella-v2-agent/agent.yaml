@@ -53,7 +53,7 @@ configSchema:
       properties:
         model:
           type: string
-          default: "gpt-4o-mini"
+          default: "gpt-5.4-mini"
         temperature:
           type: number
           default: 0.7
@@ -87,8 +87,8 @@ configSchema:
     - name: STELLA_TTS_PREROLL_MS
       description: "Fix the jitter buffer (ms) of audio held before each sentence plays. Leave unset (recommended): the agent measures how fast the voice is generated on this hardware and picks the head start itself, starting at 200 ms and raising it (up to 3 s) when the voice runs slower than real time or 'Playout starved' / 'bridged Xms' shows up in the agent log, then lowering it slowly when there is slack. Setting a value turns that off. 0 also disables the underrun guard."
     - name: STELLA_TTS_PLAYBACK
-      description: "How synthesized speech is played: 'stream' (default) starts each sentence as it is generated, lowest latency; 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did. Use 'sentence' when the TTS runs slower than real time (e.g. Qwen3 on a T4), where 'stream' can run dry mid-word. Set per deployment, so two deployments can be compared side by side. Unknown values fall back to 'stream'. Leave unset for 'stream'."
-      default: "stream"
+      description: "How synthesized speech is played: 'auto' (default, and what leaving this unset means) starts the session in 'stream' and switches once to 'sentence' if the measured synthesis speed says the provider cannot keep up — never back. 'stream' starts each sentence as it is generated, lowest latency, but can run dry mid-word on a TTS slower than real time (e.g. Qwen3 on a T4). 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did — pin it to skip the auto-switch. Set per deployment, so two deployments can be compared side by side. Only 'stream' or 'sentence' pins a deployment: left at 'auto', it follows the platform default a system admin sets in Settings → Platform Defaults (from the next session). Unknown values fall back to 'auto'."
+      default: "auto"
     - name: STELLA_TTS_RATE_VARIATION
       description: "Vary the speaking rate slightly by turn character (a heavier turn is taken a little slower, an opening beat a little brisker). ON BY DEFAULT — set 'false' to synthesize every utterance at exactly one rate. Only providers that implement rate honor it (Qwen3 does, by resampling)."
     - name: TTS_SPEED
@@ -149,7 +149,7 @@ pipelineSchema:
         - id: conversation_guidelines
           label: "Conversation Guidelines"
           type: text
-          description: "Custom conversation style guidelines (overrides defaults). In companion mode these apply inside an activity only; outside one the Companion node's Free Conversation Guidelines are used instead. Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
+          description: "Custom conversation style guidelines (overrides defaults). In companion mode these apply inside an activity only; outside one the Companion node's Free Conversation Guidelines are used instead. Supports runtime variables: {{conversationHistory}}, {{stateContext}}, {{directive}}, {{language}}, {{contentLanguage}} (companion mode only: present when this activity's own plan was declared in a different language than the conversation — a translation note, never an instruction to switch; the conversation's own language in {{language}} always wins, and this disappears again the turn after the activity ends, #58), {{bridge}} (opener already spoken this turn — {{#if bridge}}…{{/if}} so the reply continues seamlessly), {{emotionTags}} (the emotion-tag vocabulary that drives the animated face — omit it and the model is never told the tags exist, so the face will not react), and the per-turn flags {{taskJustCollected}} / {{stateCompleting}} / {{stateJustChanged}} with {{nextTopicHint}} (use {{#if …}}…{{/if}} to own the 'acknowledge, don't re-ask, ease into the new phase' guidance instead of leaving it to code)."
           default: |
             CONVERSATIONAL STYLE (spoken aloud via TTS — follow strictly):
 
@@ -219,6 +219,10 @@ pipelineSchema:
 
             {{language}}
             {{/if}}
+            {{#if contentLanguage}}
+
+            {{contentLanguage}}
+            {{/if}}
             {{#if emotionTags}}
 
             {{emotionTags}}
@@ -238,8 +242,8 @@ pipelineSchema:
         - id: model
           label: "Model"
           type: select
-          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
-          default: "gpt-4o-mini"
+          options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-5.4-mini"
         - id: temperature
           label: "Temperature"
           type: number
@@ -264,7 +268,7 @@ pipelineSchema:
         - id: system_prompt
           label: "System Prompt"
           type: text
-          description: "System prompt for the bridge. Supports {{conversationHistory}}, {{isBargeIn}}, {{allowAppraisal}}, {{userInput}} and {{bridgeMode}} — the per-turn instruction saying whether this turn wants a bare beat, a full reception, or a visible pause. If your prompt omits {{bridgeMode}} it is appended automatically, so the per-turn behaviour still applies."
+          description: "System prompt for the bridge. Supports {{conversationHistory}}, {{isBargeIn}}, {{activitiesOnOffer}} (companion mode, free conversation, activities on offer — true before the system has decided whether a named activity matches precisely enough to start outright, #87), {{allowAppraisal}}, {{userInput}} and {{bridgeMode}} — the per-turn instruction saying whether this turn wants a bare beat, a full reception, or a visible pause. If your prompt omits {{bridgeMode}} it is appended automatically, so the per-turn behaviour still applies."
           default: |
             You just heard the user and you're about to answer. First you say the opening beat of your reply the way a real person would — spoken aloud on its own, while the rest of the answer is still being prepared.
             {{#if conversationHistory}}
@@ -277,7 +281,7 @@ pipelineSchema:
             - End with . or ! — never ask a question. The question belongs to the reply that follows.
             - Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
             - NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
-            - React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction ("Fair enough.", "Ah, okay.") beats an echo every time.
+            - React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction beats an echo every time — no example is given here on purpose, since a quoted one gets reused turn after turn until it becomes exactly the robotic pattern this rule exists to prevent.
             - Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
             - VARY HOW YOU OPEN. Check what you already said in the recent context above and start this one differently — different words AND a different construction. Opening several turns in a row with the same frame ("That sounds like...", "Das klingt nach...") is the single most robotic thing you can do, even when each sentence is individually fine.
             - No "hmm", "uh" or "erm" — they render badly in our synth.
@@ -290,12 +294,16 @@ pipelineSchema:
 
             {{bridgeMode}}
             {{/if}}
+            {{#if activitiesOnOffer}}
+
+            OVERRIDING EVERY RULE ABOVE, INCLUDING "react to the specific thing they said": they may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on, and that decision is made after you speak — a confirmation question may follow what you say. So say nothing about what they just asked for: do not acknowledge it, do not confirm you understood it, do not repeat any part of it back in your own words either, do not offer to help with it, and do not say you will or can do it — that is also a promise, and it is not yours to make here. The shortest possible neutral beat is all that's wanted here — no example is given, for the same reason as above.
+            {{/if}}
             Output ONLY the bridge. No quotes, no labels.
         - id: model
           label: "Model"
           type: select
-          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
-          default: "gpt-4o-mini"
+          options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-5.4-mini"
         - id: temperature
           label: "Temperature"
           type: number
@@ -366,8 +374,8 @@ pipelineSchema:
         - id: model
           label: "Model"
           type: select
-          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
-          default: "gpt-4o-mini"
+          options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-5.4-mini"
         - id: temperature
           label: "Temperature"
           type: number
@@ -441,7 +449,7 @@ pipelineSchema:
             offered_unasked: "They have just told you how they are. {{#if bridge}}You have already reacted to that aloud with \"{{bridge}}\", so do not react to it again: go straight to the offer.{{else}}React to that in a few words, then make the offer.{{/if}} Tell them what you could do together: {{activities}}. Offer exactly these and ask whether they would like to do one. Say each one's title as it is written here, so they can ask for it by name; what is in brackets only tells you what it is, so do not read it out. Do not invent any others, and ask nothing else."
             offered: "The user asked what you can do together. Offer exactly these and invite them to pick one: {{activities}}. Say each one's title as it is written here, so they can ask for it by name; what is in brackets only tells you what it is, so do not read it out unless they ask. Do not invent any others."
             offered_none: "The user asked what you can do together, but no activities are available. Say so plainly in one sentence, with no question."
-            free: "You are keeping the user company in open conversation; there is nothing to collect and no goal to reach. {{#if bridge}}You have already reacted aloud with \"{{bridge}}\". Add at most ONE short sentence that says something new; no second reaction, and nothing at all if there is nothing to add.{{else}}React to what they just said in one or two short sentences.{{/if}} Nothing more: no question of any kind, no invitation to say more, no suggestion of things to do. They will speak if they want to, and silence is fine. Only if their message itself asks about one of these activities — {{activities}} — do you answer in a sentence and ask whether they would like to do it."
+            free: "You are keeping the user company in open conversation; there is nothing to collect and no goal to reach. {{#if bridge}}You have already reacted aloud with \"{{bridge}}\". Add at most ONE short sentence that says something NEW — not the same reaction or observation said again in different words, a genuinely different thought; say nothing at all if there is nothing to add. Paraphrasing your own opener is the same mistake as repeating it word for word.{{else}}React to what they just said in one or two short sentences.{{/if}} Nothing more: no question of any kind, no invitation to say more, no suggestion of things to do. They will speak if they want to, and silence is fine. Only if their message itself asks about one of these activities — {{activities}} — do you answer in a sentence and ask whether they would like to do it."
             started: "The user just chose \"{{title}}\" and it starts now. Acknowledge the choice in a few words, then open it exactly as the current step below says, as if this conversation had only just begun — do not re-ask which activity they want, and do not invent an opening of your own."
             start_asked: "The user seems to want \"{{title}}\"{{#if description}} ({{description}}){{/if}} but did not name it outright. Ask in ONE short question, naming it, whether that is the one they mean. Do nothing else this turn: do not start it and do not list the other activities."
             start_declined: "The user did not confirm \"{{title}}\", so it does not start. Say so in a few words and nothing more: no question, no other suggestion."
@@ -558,26 +566,43 @@ pipelineSchema:
       default: "en"
     detect_threshold:
       label: "Detect threshold"
-      description: "Min confidence to adopt a detected language (and to override a provisional default/seed lock)."
+      description: "Min confidence to confirm a provisional first lock."
       type: number
       min: 0
       max: 1
       step: 0.05
-      default: 0.4
-    switch_threshold:
-      label: "Switch threshold"
-      description: "Min confidence to switch an already-confirmed language (higher than detect, so a stray word can't flip it)."
+      default: 0.9
+    instant_switch_threshold:
+      label: "Instant switch threshold"
+      description: "Min confidence for a single long-enough (4+ word) off-lock turn to switch a CONFIRMED lock outright, with no build-up. Kept separate from detect_threshold so a deployment can pin the first-lock bar low without also making every moderate off-lock guess switch the lock on one turn. A less confident off-lock turn still votes, just through the decay build-up below (text_bar/decay/switch_score)."
       type: number
       min: 0
       max: 1
       step: 0.05
-      default: 0.6
-    debounce:
-      label: "Switch debounce"
-      description: "Consecutive confident detections required before switching language."
-      type: integer
-      min: 1
-      default: 1
+      default: 0.9
+    text_bar:
+      label: "Keep-text bar"
+      description: "Below this confidence (or too short), a turn's own transcript is re-decoded forced into the current lock for display; at or above it, the turn's own free decode is shown as-is. Cosmetic only — does not gate whether the lock itself moves (see switch_score)."
+      type: number
+      min: 0
+      max: 1
+      step: 0.05
+      default: 0.85
+    decay:
+      label: "Challenger decay"
+      description: "How much of a building challenger-language score survives a turn that isn't itself a vote for it. Lower = evidence fades faster between confident off-language turns."
+      type: number
+      min: 0
+      max: 1
+      step: 0.05
+      default: 0.5
+    switch_score:
+      label: "Switch score"
+      description: "An already-confirmed language switches once a challenger language's running score (decaying each turn, rising by each vote's own confidence) crosses this. Replaces a fixed consecutive-turn count: evidence accumulates across a mixed run rather than needing a streak."
+      type: number
+      min: 0
+      step: 0.05
+      default: 1.5
 
 # SDK prompt-compiler version this agent resolves {{placeholder}} tokens with.
 # 1.1.0 adds the {{persona.*}} namespace. 1.0.0 stays registered in the SDK, so

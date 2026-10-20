@@ -14,9 +14,10 @@ import InboxSection from '../components/settings/InboxSection'
 import AdminDashboardSection from '../components/settings/AdminDashboardSection'
 import AgentConfigSection from '../components/settings/AgentConfigSection'
 import AnalyticsSection from '../components/settings/AnalyticsSection'
+import PlatformSettingsSection from '../components/settings/PlatformSettingsSection'
 import { useAuthStore } from '../store/authStore'
 
-const validSections: SettingsSection[] = ['profile', 'preferences', 'personas', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin']
+const validSections: SettingsSection[] = ['profile', 'preferences', 'personas', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin', 'platform']
 
 // Animation variants for page transitions
 const pageVariants = {
@@ -58,7 +59,7 @@ export default function SettingsPage() {
     if (!validSections.includes(section as SettingsSection)) {
       return 'profile'
     }
-    if ((section === 'admin' || section === 'analytics') && !isSystemAdmin) {
+    if ((section === 'admin' || section === 'analytics' || section === 'platform') && !isSystemAdmin) {
       return 'profile'
     }
     return section as SettingsSection
@@ -94,6 +95,8 @@ export default function SettingsPage() {
         return isSystemAdmin ? <AnalyticsSection /> : <ProfileSection />
       case 'admin':
         return isSystemAdmin ? <AdminDashboardSection /> : <ProfileSection />
+      case 'platform':
+        return isSystemAdmin ? <PlatformSettingsSection /> : <ProfileSection />
       default:
         return <ProfileSection />
     }

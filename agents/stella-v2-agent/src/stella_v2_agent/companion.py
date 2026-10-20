@@ -353,13 +353,18 @@ class Companion:
         self.started_at = now
         self.collected = {}
 
-    def resume(self, activity: Dict[str, Any]) -> None:
-        """A restarted agent finds this activity already running. When it began
-        is not known here, so its history is not scoped."""
+    def resume(self, activity: Dict[str, Any], started_at: Optional[datetime] = None) -> None:
+        """A restarted agent finds this activity already running.
+
+        ``started_at`` is the real moment it began, recovered by the caller
+        from whatever survives the pod (#640) — the state-machine row says
+        only that a plan is loaded, not since when. None only when that could
+        not be found, in which case its history is not scoped, exactly as
+        before this was recoverable at all."""
         self.active = activity
         self.pending_exit = False
         self.exit_asks = 0
-        self.started_at = None
+        self.started_at = started_at
         self.collected = {}
 
     def note(self, transition: Transition) -> None:
@@ -501,6 +506,13 @@ _DECISIONS = {
     Change.START_ASKED: ("activity_start_proposed", "Asked to confirm starting “{title}”", None),
     Change.START_DECLINED: ("activity_start_declined", "Not starting “{title}”", None),
 }
+
+
+def started_label(title: str) -> str:
+    """The exact label the "Started" decision tag carries for `title` (#640):
+    the curly quotes here must match `_DECISIONS[Change.STARTED]` exactly, so
+    a rehydrating agent can find its own tag back by this same string."""
+    return _DECISIONS[Change.STARTED][1].format(title=title)
 
 
 def woken_tag(session_id: str) -> AgentOutput:

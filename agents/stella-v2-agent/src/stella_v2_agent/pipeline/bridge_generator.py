@@ -54,7 +54,7 @@ Always:
 - End with . or ! — never ask a question. The question belongs to the reply that follows.
 - Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
 - NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
-- React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction ("Fair enough.", "Ah, okay.") beats an echo every time.
+- React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction beats an echo every time — no example is given here on purpose, since a quoted one gets reused turn after turn until it becomes exactly the robotic pattern this rule exists to prevent.
 - Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
 - VARY HOW YOU OPEN. Check what you already said in the recent context above and start this one differently — different words AND a different construction. Opening several turns in a row with the same frame ("That sounds like...", "Das klingt nach...") is the single most robotic thing you can do, even when each sentence is individually fine.
 - No "hmm", "uh" or "erm" — they render badly in our synth.
@@ -66,6 +66,10 @@ Always:
 {{#if bridgeMode}}
 
 {{bridgeMode}}
+{{/if}}
+{{#if activitiesOnOffer}}
+
+OVERRIDING EVERY RULE ABOVE, INCLUDING "react to the specific thing they said": they may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on, and that decision is made after you speak — a confirmation question may follow what you say. So say nothing about what they just asked for: do not acknowledge it, do not confirm you understood it, do not repeat any part of it back in your own words either, do not offer to help with it, and do not say you will or can do it — that is also a promise, and it is not yours to make here. The shortest possible neutral beat is all that's wanted here — no example is given, for the same reason as above.
 {{/if}}
 Output ONLY the bridge. No quotes, no labels."""
 
@@ -109,10 +113,14 @@ _MODE_DIRECTIVES = {
         "THIS TURN — keep it to a beat. One or two words, then stop. Either they "
         "gave you very little, or you already received them in full a moment ago; "
         "either way a fuller reception here would sound like a routine rather than "
-        "a person. Just show you heard them and hand the floor back: \"Okay.\", "
-        "\"Right.\", \"Fair enough.\", \"Got it.\" — in their language. Do not name "
-        "a feeling, do not add warmth you have not been given a reason for, and "
-        "above all do not hand their own words back to them."
+        "a person. Just show you heard them and hand the floor back, in their "
+        "language and in YOUR OWN words — no example is given here on purpose, "
+        "since a quoted one gets reused verbatim turn after turn, which is exactly "
+        "how this beat came to sound monotonous. Say something different "
+        "from how you closed your last beat like this one; do not fall back on "
+        "the same short phrase every time. Do not name a feeling, do not add "
+        "warmth you have not been given a reason for, and above all do not hand "
+        "their own words back to them."
     ),
     BRIDGE_MODE_FULL: (
         "THIS TURN — they gave you something real. React the way a person would: "
@@ -409,7 +417,7 @@ class BridgeGenerator:
         self._llm_service = llm_service
 
         # LLM config (overridable via apply_config)
-        self.bridge_model = "gpt-4o-mini"
+        self.bridge_model = "gpt-5.4-mini"
         # Headroom for a fuller reflective bridge (up to ~35 words / 2-3 short
         # sentences). agent.yaml's bridge_generator.max_tokens overrides this when
         # a config is loaded; this is the no-config default.

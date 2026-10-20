@@ -179,3 +179,4 @@ curl http://localhost:5173
 - [First Agent](./first-agent.md) - Deploy your first agent
 - [Database Schema](../architecture/database.md) - Understand the data model
 - [Kubernetes Deployment](../deployment/kubernetes.md) - Production Kubernetes setup
+- [Upgrading Stella](../deployment/upgrading.md) - Go from one release to the next, and back

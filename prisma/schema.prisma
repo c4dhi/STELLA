@@ -30,6 +30,7 @@ model User {
   messages                   UserMessage[] // Inbox messages for this user
   sentProjectInvitations     ProjectInvitation[]  @relation("SentInvitations")
   receivedProjectInvitations ProjectInvitation[]  @relation("ReceivedInvitations")
+  platformSettingsUpdated    PlatformSetting[] // Platform defaults this admin last changed
 }
 
 enum MemberRole {
@@ -742,4 +743,15 @@ model Persona {
 
   @@index([userId])
   @@index([isSystemDefault])
+}
+
+// Platform-wide defaults a system admin sets in Settings → Platform Defaults
+// (#89). One row per key; a missing row means the built-in default applies.
+// Read at agent pod creation, so a change reaches the next session only.
+model PlatformSetting {
+  key         String   @id // e.g. "ttsPlayback"
+  value       String
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+  updatedBy   User?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
 }

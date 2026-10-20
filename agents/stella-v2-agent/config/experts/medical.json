@@ -3,7 +3,7 @@
   "description": "Flags health and medical safety concerns requiring cautious handling",
   "priority": 95,
   "enabled": true,
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.4-mini",
   "temperature": 0.1,
   "max_tokens": 200,
   "can_call_functions": false,
@@ -29,11 +29,17 @@
     "high": {
       "action": "prepend",
       "template": "I want to be careful here — I can't give medical advice, so please check anything important with a qualified professional.",
+      "template_i18n": {
+        "de": "Ich möchte hier vorsichtig sein — ich kann keine medizinischen Ratschläge geben, also sprich bitte alles Wichtige mit einer qualifizierten Fachperson ab."
+      },
       "description": "ENGAGE. A specific health concern: symptoms, medication, injury, mental health, or a request for diagnosis."
     },
     "critical": {
       "action": "override",
       "template": "It sounds like this could be serious. If you're in danger or this is an emergency, please contact emergency services or a medical professional right now. I'm not able to give medical advice, but I want to make sure you get the right help.",
+      "template_i18n": {
+        "de": "Das klingt, als könnte es ernst sein. Wenn du in Gefahr bist oder das ein Notfall ist, wende dich bitte sofort an den Rettungsdienst oder eine medizinische Fachperson. Ich kann keine medizinischen Ratschläge geben, aber ich möchte sicherstellen, dass du die richtige Hilfe bekommst."
+      },
       "description": "ENGAGE. A medical emergency or suicidal ideation."
     }
   }

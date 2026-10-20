@@ -35,6 +35,23 @@ _LEADING_TAGS_RE = re.compile(r"^(?:\s*\[[a-zA-Z_]+\]\s*)+")
 _LEADING_PUNCT_RE = re.compile(r"^[\s.,!?;:]+")
 
 
+# Spoken when the reply cannot be produced, including when the call stalls on
+# its retry as well (#684): the turn ends and Stella listens again. Chosen by
+# the turn's resolved language, the same way as the arbitration's
+# "didn't catch that" line; anything else falls back to English.
+FALLBACK_LINE = "I'm sorry, I encountered an issue. Could you try again?"
+_FALLBACK_LINES_BY_LANG: Dict[str, str] = {
+    "en": FALLBACK_LINE,
+    "de": "Entschuldige, da ist bei mir gerade etwas schiefgelaufen. Kannst du es nochmal versuchen?",
+}
+
+
+def fallback_line_for(language: Optional[str]) -> str:
+    """The fallback line in ``language`` ("de", "de-CH", ...), else English."""
+    key = (language or "").split("-")[0].lower()
+    return _FALLBACK_LINES_BY_LANG.get(key, FALLBACK_LINE)
+
+
 # A "[tag" the stream has not closed yet.
 _OPEN_TAG_RE = re.compile(r"^\s*\[[a-zA-Z_]*$")
 
@@ -109,7 +126,7 @@ class ResponseGenerator:
         self._llm_service = llm_service
 
         # LLM config (overridable via apply_config)
-        self.response_model = "gpt-4o-mini"
+        self.response_model = "gpt-5.4-mini"
         self.response_max_tokens = 200
         self.response_temperature = 0.7
         self.custom_guidelines: Optional[str] = None
@@ -129,6 +146,12 @@ class ResponseGenerator:
         # oldest 10 dropped on the floor — long-range callbacks ('you said
         # earlier you hate mornings') were structurally impossible past turn 10.
         self.history_limit: int = 0
+        # Seconds to the first streamed token, then once more for the retry
+        # (#684, decided by Felix on 19 Oct). The client's own 30s timeout and
+        # retry turned one stalled connection into 32s of silence after the
+        # bridge. A reply that has started is never cut for being long.
+        self.first_token_timeout: float = 4.0
+        self.retry_first_token_timeout: float = 2.0
 
     def apply_config(self, config: dict) -> None:
         """Apply configuration overrides from Agent Configurator."""
@@ -284,24 +307,31 @@ class ResponseGenerator:
 
         # Consume the stream through the shared SDK adapter (single source of
         # truth for callback→async-iterator) instead of hand-rolling a queue.
+        sent = prefix.strip()
         try:
             async for llm_text, is_final in stream_completion(
                 self._llm_service, messages, config, component_name="response_generator",
+                first_token_timeout=self.first_token_timeout,
+                retry_first_token_timeout=self.retry_first_token_timeout,
+                log_context=f"turn {transcript_id}",
             ):
                 cleaned = _strip_repeated_opener(spoken_prefix, llm_text, is_final)
                 if cleaned is None:
                     continue  # could still be a repeat of the opener: hold it
+                sent = (prefix + cleaned).strip()
                 yield AgentOutput.text_chunk(
                     session_id,
-                    (prefix + cleaned).strip(),
+                    sent,
                     transcript_id=transcript_id,
                     is_final=is_final,
                 )
         except Exception as error:
-            logger.error(f"Streaming error: {error}")
+            logger.error(f"Streaming error: {error!r}")
+            # After whatever was already sent: text under one transcript id
+            # may only grow, or the SDK speaks the whole utterance again.
             yield AgentOutput.text_chunk(
                 session_id,
-                "I'm sorry, I encountered an issue. Could you try again?",
+                f"{sent} {fallback_line_for((sm_context or {}).get('language'))}".strip(),
                 transcript_id=transcript_id,
                 is_final=True,
             )
