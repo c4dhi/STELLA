@@ -42,6 +42,17 @@ def test_instructions_are_filled_in_with_the_activity():
     assert "Memory Game (three words)" in offered
 
 
+def test_the_free_instruction_forbids_restating_the_bridge_in_other_words():
+    # #94/#766: the reply sometimes repeated the bridge's point in different
+    # words — a literal-repeat check alone ("no second reaction") didn't catch
+    # a paraphrase. Measured against the real models before shipping (PR 767):
+    # naming paraphrase explicitly as the same mistake as a literal repeat
+    # reduced the bridge/reply meaning-overlap rate. Guards against a future
+    # edit quietly dropping that line.
+    free = load_settings().instruction("free")
+    assert "paraphrasing" in free.lower()
+
+
 def test_a_saved_configuration_changes_single_values_and_keeps_the_rest():
     settings = load_settings()
     shipped = dict(settings.reply_instructions)
