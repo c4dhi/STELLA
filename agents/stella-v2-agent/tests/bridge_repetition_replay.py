@@ -310,7 +310,7 @@ async def run_session(
 async def replay_all(
     generator: BridgeGenerator, sessions: List[Dict[str, Any]], trials: int, history_mode: str,
     judge_model: str, judge_every: int, concurrency: int = 6,
-    free_instruction_override: Optional[str] = None,
+    free_instruction_override: Optional[str] = None, response_model_override: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     gate = asyncio.Semaphore(concurrency)
 
@@ -324,7 +324,7 @@ async def replay_all(
     response_generator = ResponseGenerator(generator._llm_service)
     response_defaults = slot_defaults("response_generator")
     response_generator.apply_config({
-        "model": response_defaults["model"],
+        "model": response_model_override or response_defaults["model"],
         "temperature": response_defaults["temperature"],
         "max_tokens": response_defaults["max_tokens"],
     })
@@ -450,7 +450,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--scenarios", type=Path, default=SCENARIOS)
     parser.add_argument("--trials", type=int, default=2, help="independent runs per session")
-    parser.add_argument("--model")
+    parser.add_argument("--model", help="override for the bridge generator's model")
+    parser.add_argument(
+        "--response-model",
+        help="override for the response generator's model (agent.yaml's response_generator.model moved "
+        "to gpt-5.4-mini alongside the bridge's, per PR #707 — override both together to match a given "
+        "deployed config, since this script's own agent.yaml hasn't got that change on this branch)",
+    )
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--max-tokens", type=int)
     parser.add_argument("--history-limit", type=int)
@@ -522,7 +528,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     sessions = load_scenarios(args.scenarios)
     records = asyncio.run(replay_all(
         generator, sessions, args.trials, args.history_mode, judge_model, args.judge_every, args.concurrency,
-        free_instruction_override=free_instruction,
+        free_instruction_override=free_instruction, response_model_override=args.response_model,
     ))
     summary = summarize(records, timeout_ms=generator.bridge_timeout_s * 1000)
     response_defaults = slot_defaults("response_generator")
@@ -537,7 +543,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             "brief_directive_source": f"--brief-directive {args.brief_directive}" if args.brief_directive else "agent.yaml-equivalent code default (_MODE_DIRECTIVES[BRIEF], unchanged)",
         },
         "response_generator": {
-            "model": response_defaults["model"],
+            "model": args.response_model or response_defaults["model"],
+            "model_source": "--response-model override" if args.response_model else "agent.yaml response_generator.model (unchanged)",
             "temperature": response_defaults["temperature"],
             "max_tokens": response_defaults["max_tokens"],
             "guidelines_source": "agent.yaml companion.free_conversation_guidelines (via Companion, not the response_generator node's own guidelines — matches agent.py's _free_guidelines())",
