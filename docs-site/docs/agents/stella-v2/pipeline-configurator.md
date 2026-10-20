@@ -64,7 +64,7 @@ This is the clinical-determinism knob: each expert maps each verdict to an actio
 | Slot | Type | Default | Rationale |
 |------|------|---------|-----------|
 | `conversation_guidelines` | text | Professional interviewer style | Detailed rules for tone, register, response length, and formatting. How the agent speaks — not who it is. |
-| `model` | select | `gpt-4o-mini` | Balances quality and speed. Upgrade to `gpt-4o` for complex domains requiring stronger reasoning. |
+| `model` | select | `gpt-5.4-mini` | The default since 1.4.0 (was `gpt-4o-mini`). `gpt-4o-mini`, `gpt-4o`, `gpt-4.1-mini` and `gpt-4.1-nano` stay selectable. |
 | `temperature` | number | `0.7` | Moderate temperature for natural conversational variation. Lower for more consistent responses, higher for more creative ones. |
 | `max_tokens` | number | `150` | Targets 30-50 spoken words. Voice conversations need short responses — long monologues feel unnatural in speech. |
 
@@ -85,7 +85,7 @@ That is the point of the separation: the same configuration can front any number
 | Slot | Type | Default | Rationale |
 |------|------|---------|-----------|
 | `system_prompt` | text | Bridge phrase rules | Strict rules: complete sentence, max 6 words, never answer the question, match user's language. |
-| `model` | select | `gpt-4o-mini` | Must be fast — the bridge needs to be spoken before the main response starts generating. |
+| `model` | select | `gpt-5.4-mini` | Must be fast — the bridge needs to be spoken before the main response starts generating. |
 | `temperature` | number | `0.4` | Low-moderate for slight variation without unpredictability. Bridges should feel natural but not surprising. |
 | `max_tokens` | number | `30` | Very low cap because output is a single short sentence (e.g., "Good question.", "Absolutely.", "I appreciate that."). |
 
