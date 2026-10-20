@@ -87,7 +87,7 @@ That is the point of the separation: the same configuration can front any number
 | `system_prompt` | text | Bridge phrase rules | Strict rules: complete sentence, max 6 words, never answer the question, match user's language. |
 | `model` | select | `gpt-5.4-mini` | Must be fast — the bridge needs to be spoken before the main response starts generating. |
 | `temperature` | number | `0.4` | Low-moderate for slight variation without unpredictability. Bridges should feel natural but not surprising. |
-| `max_tokens` | number | `30` | Very low cap because output is a single short sentence (e.g., "Good question.", "Absolutely.", "I appreciate that."). |
+| `max_tokens` | number | `30` | Very low cap because output is a single short sentence. |
 
 **Why the Bridge Generator exists**: In voice conversations, silence after the user stops speaking feels like the agent is unresponsive. The bridge fills this gap with a natural acknowledgment while the full pipeline (Expert Pool → Arbitration → Response Generator) runs in parallel. This reduces **perceived** latency from ~800ms to ~100ms without affecting actual processing time. The bridge phrase is spoken as a standalone TTS segment, and the full response follows immediately after.
 

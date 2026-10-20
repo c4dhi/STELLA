@@ -146,7 +146,7 @@ The state machine supports the following `condition_type` values:
 | Condition Type | Purpose | Added In |
 |----------------|---------|----------|
 | `all_tasks_complete` | Transition once every task in the current state has been addressed (completed or skipped) | Existing |
-| `goal_achieved` | Transition once a goal state's goal has been closed or given up (the default for `type: "goal"`) | 1.4.0 |
+| `goal_achieved` | Transition once a goal state's goal has been closed or given up (the default for `type: "goal"`; ends through the state's own task since 1.4.0) | Existing |
 | `deliverable_exists` | Transition when a deliverable key has been collected | Existing |
 | `deliverable_value` | Transition when a deliverable equals a specific value | Existing |
 | `turn_count_exceeded` | Guardrail transition based on turn count | Ticket 5 |
