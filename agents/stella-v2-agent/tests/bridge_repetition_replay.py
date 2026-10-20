@@ -69,6 +69,7 @@ import asyncio
 import json
 import re
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -250,6 +251,15 @@ async def run_session(
     history: List[Dict[str, str]] = []
     records = []
     for index, turn in enumerate(session["turns"]):
+        # Wall-clock around the whole call, not just a log line: generate()
+        # drains generate_stream(), which is bounded by bridge_timeout_s, so
+        # an EMPTY bridge that took ~the full timeout is a drop from running
+        # out of time, while an empty one that returned fast is a drop from
+        # the validator rejecting the first sentence (echo/question/length) —
+        # the two live-session drop causes @zenith/Felix asked to tell apart
+        # (20 Oct, 19:58: "Bridge first-sentence latency against the 2 s
+        # timeout matters too").
+        start = time.monotonic()
         bridge = await generator.generate(
             turn["user"],
             history,
@@ -259,6 +269,7 @@ async def run_session(
                 "isBargeIn": turn.get("barge_in", False),
             },
         )
+        latency_ms = (time.monotonic() - start) * 1000
         session_id = f"bridge94-{session['id']}"
         try:
             reply = await _generate_reply(
@@ -282,6 +293,7 @@ async def run_session(
             "mode": generator.last_bridge_mode,
             "bridge": bridge,
             "reply": reply,
+            "latency_ms": round(latency_ms),
             "wording_overlap": overlap,
             "meaning_overlap_repeats": meaning_overlap,
         })
@@ -335,9 +347,20 @@ async def replay_all(
     return [record for run in results for record in run]
 
 
-def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+def summarize(records: List[Dict[str, Any]], timeout_ms: float = 2000.0) -> Dict[str, Any]:
     bridges = [r["bridge"] for r in records if r["bridge"]]
     empty = len(records) - len(bridges)
+
+    # A drop's own latency says which of the two live causes it was: ran out
+    # of the bridge_timeout_s budget (latency close to it), or the validator
+    # rejected the first sentence and the call returned early (#94, 20 Oct
+    # 19:58). 90% of the timeout is a deliberately loose cutoff — the budget
+    # covers first-byte AND the tail, so a genuine timeout rarely lands
+    # exactly at the millisecond.
+    dropped = [r for r in records if not r["bridge"]]
+    drop_latencies = [r["latency_ms"] for r in dropped]
+    near_timeout_drops = sum(1 for ms in drop_latencies if ms >= 0.9 * timeout_ms)
+    all_latencies = [r["latency_ms"] for r in records]
 
     exact_counts = Counter(bridges)
     exact_repeats = {text: n for text, n in exact_counts.items() if n > 1}
@@ -384,6 +407,15 @@ def summarize(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_turns": len(records),
         "bridges_generated": len(bridges),
         "bridges_empty": empty,
+        "bridge_latency_ms": {
+            "mean_all": round(sum(all_latencies) / len(all_latencies)) if all_latencies else None,
+            "max_all": round(max(all_latencies)) if all_latencies else None,
+            "mean_dropped": round(sum(drop_latencies) / len(drop_latencies)) if drop_latencies else None,
+            "max_dropped": round(max(drop_latencies)) if drop_latencies else None,
+            "timeout_ms": timeout_ms,
+            "drops_near_timeout": near_timeout_drops,
+            "drops_early_reject": empty - near_timeout_drops,
+        },
         "distinct_bridge_text": len(exact_counts),
         "exact_repeats": {
             "count_of_repeated_texts": len(exact_repeats),
@@ -463,6 +495,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "temperature": bridge_defaults["temperature"],
         "max_tokens": bridge_defaults["max_tokens"],
         "system_prompt": bridge_defaults["system_prompt"],
+        "timeout_ms": bridge_defaults["timeout_ms"],
     })
     overrides: Dict[str, Any] = {}
     if args.model:
@@ -491,13 +524,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         generator, sessions, args.trials, args.history_mode, judge_model, args.judge_every, args.concurrency,
         free_instruction_override=free_instruction,
     ))
-    summary = summarize(records)
+    summary = summarize(records, timeout_ms=generator.bridge_timeout_s * 1000)
     response_defaults = slot_defaults("response_generator")
     summary["config"] = {
         "bridge_generator": {
             "model": generator.bridge_model,
             "temperature": generator.bridge_temperature,
             "max_tokens": generator.bridge_max_tokens,
+            "timeout_ms": generator.bridge_timeout_s * 1000,
             "history_limit": generator.history_limit or 6,
             "prompt_source": "agent.yaml (CLI --prompt override)" if args.prompt else "agent.yaml bridge_generator.system_prompt",
             "brief_directive_source": f"--brief-directive {args.brief_directive}" if args.brief_directive else "agent.yaml-equivalent code default (_MODE_DIRECTIVES[BRIEF], unchanged)",
