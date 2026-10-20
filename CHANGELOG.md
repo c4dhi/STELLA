@@ -7,15 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.4.0] - 2026-10-21
+
+A companion that keeps up. Stella recovers from a stalled reply within seconds,
+holds the conversation's language instead of guessing it every turn, picks a
+playback mode that suits the machine, and the goal step of a plan ends when it
+should. **If you upgrade, read "Upgrade notes" first. If your study is
+multilingual, uses goal-oriented steps, or relies on the default model, read
+"For studies" under Changed.**
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy (the new `PlatformSetting` table for admin-set platform defaults), and nothing backs up for you first
+- **Default model:** the v2 agent's default model is now `gpt-5.4-mini` (was `gpt-4o-mini`, and `gpt-4o` for task extraction). A deployment or saved configuration that names its own model keeps it; the study configurations under `config/study` keep theirs. It uses the same OpenAI key
+- **Playback default:** `STELLA_TTS_PLAYBACK` now defaults to `auto`. A study that must sound exactly as it did on 1.3.0 pins `stream` on its deployment (see Changed)
+- **Language settings:** `switch_threshold` and `debounce` in a pipeline configuration are no longer read. Their replacements are `text_bar` (default 0.85), `decay` (0.5) and `switch_score` (1.5), plus `instant_switch_threshold` (0.9); `detect_threshold` now defaults to 0.9. A configuration that never set these needs nothing
+- No manual step and no new required setting. Agent SDK 0.8.0 ships with this release
+
 ### Added
 
-- A system admin can set how Stella plays her speech (`auto`, `stream` or `sentence`) for the whole platform, in Settings → Platform Defaults, with no redeploy. It applies from the next session; conversations already running keep their mode. A deployment that pins `stream` or `sentence` itself keeps it (the page lists those deployments); one left at `auto` follows the platform default. The agent log says where the mode came from. New table `PlatformSetting`, created by migration (#89)
-- Each user turn's message now keeps its language signal in `metadata.language`: the language heard and how sure it was, how long the turn was, its word count, the language the conversation was in after it, and whether it was re-decoded. No extra copy of the text, no migration. Typed turns carry no detected language or duration (#91)
-- The turn analytics now cover the time before the transcript is ready, and how endpointing goes wrong. Logging only: when a turn ends is unchanged. `stt_end` carries the silence the speech recognition waited through before ending the turn (`trailing_silence_ms`), how long the final transcription took (`decode_ms`) and how long the user spoke (`speech_ms`), so end of speech to first audio is `trailing_silence_ms + decode_ms + response_tts_first_byte`. `pause_rescued` records each pause that nearly ended a turn (the user spoke again inside the continuation window), with its length and how far into the window it got. `user_resumed_after_final` records the user speaking again within 3 s of a final (the early cut-off signal), with the silence before it and whether the agent was already speaking. The analytics page sums them up in three new cards. Both speech-recognition providers report them (#92)
+**Admin settings**
+- A system admin can set how Stella plays her speech (`auto`, `stream` or `sentence`) for the whole platform, in Settings → Platform Defaults, with no redeploy. It applies from the next session; conversations already running keep their mode. A deployment that pins `stream` or `sentence` itself keeps it (the page lists those deployments); one left at `auto` follows the platform default. The agent log says where the mode came from. New table `PlatformSetting`, created by migration (#756)
+
+**Analytics**
+- Every turn records where its seconds went: fetching context, each expert, arbitration and the bridge each appear on the turn timeline, with one lane per expert. `bridge_tts_done` fires once per turn with `bridge_playback_ms`, how long the participant listened to the bridge while the experts worked, and the `*_tts_done` events mark when the last sentence is heard rather than when it was handed to the audio connection (#454)
+- Each user turn's message now keeps its language signal in `metadata.language`: the language heard and how sure it was, how long the turn was, its word count, the language the conversation was in after it, and whether it was re-decoded. No extra copy of the text, no migration. Typed turns carry no detected language or duration (#759)
+- The turn analytics now cover the time before the transcript is ready, and how endpointing goes wrong. Logging only: when a turn ends is unchanged. `stt_end` carries the silence the speech recognition waited through before ending the turn (`trailing_silence_ms`), how long the final transcription took (`decode_ms`) and how long the user spoke (`speech_ms`), so end of speech to first audio is `trailing_silence_ms + decode_ms + response_tts_first_byte`. `pause_rescued` records each pause that nearly ended a turn (the user spoke again inside the continuation window), with its length and how far into the window it got. `user_resumed_after_final` records the user speaking again within 3 s of a final (the early cut-off signal), with the silence before it and whether the agent was already speaking. The analytics page sums them up in three new cards. Both speech-recognition providers report them (#763)
+
+**Agent SDK**
+- Agent SDK 0.8.0 (`pip install stella-ai-agent-sdk==0.8.0`). For agent authors: `stream_completion()` gives up on a call with no first token within a budget and retries once; the pipeline puts the end-of-speech timing on `stt_end` and emits `pause_rescued` and `user_resumed_after_final`; `publish_turn_language()` records each turn's language; `LanguageResolver` switches on a decaying confidence score; the default model is `gpt-5.4-mini`. Details in the [SDK changelog](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md)
+
+**Documentation**
+- An "Upgrading Stella" page: backing up, upgrading, the manual steps per version, and rolling back (#641)
+- The landing page presents `stella-v2` with plan and companion mode, and `stella-light` as deprecated (#714)
 
 ### Changed
 
+**Speech playback picks its own mode**
 - Stella now picks her own speech playback mode instead of needing it set by hand. `STELLA_TTS_PLAYBACK` defaults to `auto` (unset means `auto` too): a session starts playing each sentence as it synthesizes (`stream`, lowest latency) and switches once to playing whole sentences (`sentence`) if the voice measures slower than real time for 3 sentences in a row — never back for the rest of the session. Setting `stream` or `sentence` by hand still pins that mode outright, with no switching, which is what a study that ran in a fixed mode on 1.3.0 or earlier should do if it needs to sound exactly as it did before. Note for researchers: a study running unset on a slow machine will sound different after upgrading — some sessions that used to stutter in `stream` will now settle into `sentence` playback on their own, at the cost of one longer silence on the sentence the switch lands on (since that sentence, already mid-reply, now waits for its own full synthesis the first time); pin `stream` to keep the old behaviour exactly, including the stutter (#669)
+
+**For studies: the conversation's language**
+- Speech recognition keeps the session language in free conversation instead of guessing it anew on every turn. Evidence for another language builds up over turns and decays, and the session switches once there is enough of it (#685)
+- Only a confident turn decides the language. The first language is locked only by a turn heard with at least 0.9 confidence, and once locked, a single turn of 4 or more words heard in another language at 0.9 or more switches at once. Anything less confident goes through the build-up above. Before, a single guess at 0.4 could lock the wrong language for the session (#758)
+- A doubtful turn's transcript is re-decoded in the session's language for display. That second decode never counts as evidence for a switch
+- In companion mode, an activity written in another language no longer changes the session's language, during the activity or after it. The language set on the deployment wins, then the persona's, then what was detected; the activity's language is passed to the reply only as a translation note. A plan-following deployment still takes its plan's language for the whole session (#699)
+- What a multilingual study notices: transcripts no longer flip language on a short or unclear turn, and a participant who really switches is followed within a few turns, or at once when the turn is long and clear. A study that declares its language is unchanged
+
+**For studies: the default model**
+- The v2 agent's experts, reply and bridge generators and barge-in evaluator default to `gpt-5.4-mini`, with their default prompts adjusted for it (for example, a bare "yes" to several offered activities picks none of them, and "not now" after an offer steps away). The other models stay selectable. A study that relies on the old default should set its model explicitly
+
+**For studies: goal-oriented steps**
+- A goal step now ends through its own task: the agent completes the goal, or gives it up, and the outcome is kept for that step only. Before, the agent's attempts to close the goal were rejected, an answer could be stored in place of "goal reached", and reaching one goal ended every later goal step (#706)
+- Before a goal is closed or given up, a second check asks whether the success criteria are really met (or the participant really declined), and needs the participant's own words to say yes. Closing late is preferred to closing early: a goal is not closed on small talk, a vague "maybe", or an answer that still needs confirming
+- A goal step is no longer complete the moment it is entered (#400), one matching route is enough to close it, and the plan view no longer shows an open goal as done
+- Insights the agent notices on its own are capped at 25 per session and no longer count as progress
+
+**Companion mode and replies**
+- The bridge in companion mode never agrees to, promises or names an activity before the system has decided which one was meant; it stays generic until then (#752)
+- Bridges repeat themselves less. The bridge prompt no longer quotes example phrases, which the model kept reusing (one phrase was half of all short bridges), and the reply is told not to restate the bridge's point in other words (#766)
+- While a medical or legal caution is active, a plan step's own suggestion, tip or praise is held back, and the caution line is spoken in the session's language (German or English) (#705)
+
+### Fixed
+
+- A stalled reply recovers within seconds. A reply call with no first word within 4 s is started once more with a 2 s budget; if that one stalls too, Stella says a short fallback line in the session's language, after about 6 s instead of 32 s of silence after the bridge. A reply that has started is never cut off. A short reply spoken during the wait is logged, and in turn-based mode it appears in the transcript marked as not taken (#684)
+- The end-of-turn wait has the ceiling it claims: `VAD_MAX_ENDPOINTING_DELAY_MS` now ends a long hold, and the reason a hold ended is logged (#469)
+- Companion mode: an agent restarted mid-activity finds when the activity started, so it sees only that activity's turns, not the whole conversation (#640)
+- Plan Builder and persona editor: the language is chosen from a list (auto-detect, five languages, Other… for any ISO 639-1 code). The old field hid languages once a code was typed (#700)
+- Deploy script (`start-k8s.sh`):
+  - The image import into K3s is checked, retried once, and the deploy stops if an image is still missing; imported images are pinned so the cluster doesn't delete them, and the build cache is bounded to 50 GB (#725)
+  - `--namespace` and `--port-offset` win over the env file, and backup, restore and stop say which namespace they act on (#729)
+  - `--stop` and `--restart` act on the env file's namespace, not always `ai-agents` (#736), and `--stop` ends the port-forward loops (#737)
+  - A failed migration prints why, retries a database that isn't ready yet, and closes its port-forward (#735)
+  - `--reset-db` scales the deployments down before deleting the volumes, and no longer hangs (#734)
+- Backup and restore work on a fresh install again (#730)
+- The README's documentation links point at the current pages (#712)
+- Security updates for npm dependencies across the backend, frontend and docs site (#703)
+
+### Known limitations
+
+- Dependency updates for the voice service stay held: `transformers` 5.20 breaks the Qwen3 voice on import, so it stays below 5.17, and `huggingface-hub` 2 can't be installed next to it ([#665](https://github.com/c4dhi/STELLA/issues/665))
+- The development server's Tesla T4 can't stream the Qwen3 voice in real time; with `auto` playback its sessions switch to sentence-by-sentence playback. Production's GPU has not been measured
+- The companion's bridge can still occasionally say it "can do" an imprecisely named activity before the system has decided (about 1 in 20 in an evaluation)
+- A plan step switched from flexible to goal-oriented keeps its old tasks, and the goal step still shows and counts them, so its completion can stay below 100%. Until it is fixed, remove the tasks before switching a step to goal-oriented ([#770](https://github.com/c4dhi/STELLA/issues/770))
 
 ---
 
