@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A system admin can set how Stella plays her speech (`auto`, `stream` or `sentence`) for the whole platform, in Settings → Platform Defaults, with no redeploy. It applies from the next session; conversations already running keep their mode. A deployment that pins `stream` or `sentence` itself keeps it (the page lists those deployments); one left at `auto` follows the platform default. The agent log says where the mode came from. New table `PlatformSetting`, created by migration (#89)
+- Each user turn's message now keeps its language signal in `metadata.language`: the language heard and how sure it was, how long the turn was, its word count, the language the conversation was in after it, and whether it was re-decoded. No extra copy of the text, no migration. Typed turns carry no detected language or duration (#91)
 
 ### Changed
 

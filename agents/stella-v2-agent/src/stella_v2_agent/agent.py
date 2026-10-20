@@ -1801,18 +1801,29 @@ class StellaV2Agent(BaseAgent):
             )
         )
         resolved_language = self.language_resolver.resolve(input.text, signal=language_signal)
+        original_text = input.text
+        redecoded_text = None
         if needs_redecode:
             turn_id = meta.get("turn_id")
-            redecoded = (
+            redecoded_text = (
                 await self.audio.redecode_utterance_audio(turn_id, resolved_language)
                 if turn_id else None
             )
-            if redecoded:
+            if redecoded_text:
                 logger.info(
                     "[Language] Re-decoded doubtful turn forced into %r: %r -> %r",
-                    resolved_language, input.text, redecoded,
+                    resolved_language, input.text, redecoded_text,
                 )
-                input.text = redecoded
+                input.text = redecoded_text
+        # Kept with the turn's stored message so the switching rule can be
+        # checked against real sessions (#91). Sent in the background, so it
+        # neither delays nor fails the turn.
+        self.send_turn_language(
+            input,
+            original_text=original_text,
+            resolved_language=resolved_language,
+            redecoded=bool(redecoded_text),
+        )
         return resolved_language
 
     def _resolved_pin_language(self, plan: Optional[Dict[str, Any]]) -> Optional[str]:

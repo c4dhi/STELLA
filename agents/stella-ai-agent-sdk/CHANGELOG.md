@@ -13,6 +13,7 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `BaseAgent.publish_turn_language()` publishes a `turn_language` envelope per user turn (built by `language.turn_language_record`): detected language and confidence, VAD speech length (`AudioPipeline.utterance_speech_seconds`), word count of the free decode, resolved language, and whether it was re-decoded, plus the frontend `correlation_id` for typed turns. No transcript text. `send_turn_language()` does the same in the background, which is what the v2 and light agents call from `_resolve_language`, so the publish never delays the reply; the recorder forwards it and the backend merges it into the turn's message (#91)
 - `stream_completion()` takes `first_token_timeout` and `retry_first_token_timeout`. A call with no first token within the budget is abandoned and started once more with the retry budget. If that one stalls too, it raises `FirstTokenTimeout`. Once a stream has started there is no limit. Both are logged as `[REPLY-TIMEOUT]` and `[REPLY-RETRY]`, with `log_context`.
 
 - The `[TTS] Playback mode` log line says where the mode came from (`from the deployment`, `from the platform default`, `from the built-in default`) when the backend sets `STELLA_TTS_PLAYBACK_SOURCE`. Unset, the line is unchanged (#89)
