@@ -49,6 +49,19 @@ and diff the reports:
     # whether the model can see its own past bridges at all (settled by code
     # per @sable's review — kept only as a control, not a candidate fix)
     python tests/bridge_repetition_replay.py --history-mode reply_only --out no_bridge_history.json
+
+    # option 1's "after": BRIEF's literal canned examples diversified/removed.
+    # NOT the same as --prompt: the BRIEF directive text lives in a separate
+    # code constant (_MODE_DIRECTIVES), appended to whatever base prompt is in
+    # play, so --prompt alone can't change it — hence this dedicated flag.
+    python tests/bridge_repetition_replay.py \\
+        --brief-directive tests/bridge_brief_directive_diversified.txt --out option1_after.json
+
+    # option 2's "after": a sharpened "free" reply_instruction that explicitly
+    # forbids restating the bridge's point in different words, not just a
+    # literal repeat.
+    python tests/bridge_repetition_replay.py \\
+        --free-instruction tests/companion_free_instruction_sharpened.txt --out option2_after.json
 """
 
 import argparse
@@ -65,6 +78,7 @@ import yaml
 from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider, LLMService, stream_completion
 from stella_v2_agent.companion import NO_CHANGE, Companion
 from stella_v2_agent.models.arbitration_result import ResponseDirective
+from stella_v2_agent.pipeline import bridge_generator as bridge_generator_module
 from stella_v2_agent.pipeline.bridge_generator import BRIDGE_MODE_BRIEF, BridgeGenerator
 from stella_v2_agent.pipeline.response_generator import ResponseGenerator
 
@@ -284,6 +298,7 @@ async def run_session(
 async def replay_all(
     generator: BridgeGenerator, sessions: List[Dict[str, Any]], trials: int, history_mode: str,
     judge_model: str, judge_every: int, concurrency: int = 6,
+    free_instruction_override: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     gate = asyncio.Semaphore(concurrency)
 
@@ -304,6 +319,10 @@ async def replay_all(
     companion = Companion(activities=[])
     companion.greeted = True  # skip the opening greeting/offer path (not under test)
     companion.offered = True
+    if free_instruction_override is not None:
+        # Option 2's "after": a sharpened version of agent.yaml's own
+        # companion.reply_instructions['free'] (see --free-instruction).
+        companion.settings.reply_instructions["free"] = free_instruction_override
 
     async def one(session):
         async with gate:
@@ -403,7 +422,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--temperature", type=float)
     parser.add_argument("--max-tokens", type=int)
     parser.add_argument("--history-limit", type=int)
-    parser.add_argument("--prompt", type=Path, help="file with a replacement bridge system prompt")
+    parser.add_argument("--prompt", type=Path, help="file with a replacement bridge BASE system prompt")
+    parser.add_argument(
+        "--brief-directive", type=Path,
+        help="file replacing _MODE_DIRECTIVES[BRIEF] for this run (option 1's 'after': BRIEF's "
+        "canned examples diversified/removed — NOT part of the base --prompt text, see docstring)",
+    )
+    parser.add_argument(
+        "--free-instruction", type=Path,
+        help="file replacing agent.yaml's companion.reply_instructions['free'] for this run "
+        "(option 2's 'after': a sharpened anti-restate instruction)",
+    )
     parser.add_argument(
         "--history-mode", choices=["with_bridge", "reply_only"], default="with_bridge",
         help="whether conversationHistory carries the bridge text too (see docstring)",
@@ -451,9 +480,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     judge_model = args.judge_model or Companion(activities=[]).settings.judge_model
 
+    if args.brief_directive:
+        # Mutates the module-level dict in place: scoped to this one process/
+        # run, same convention as the rest of this script's config overrides.
+        bridge_generator_module._MODE_DIRECTIVES[BRIDGE_MODE_BRIEF] = args.brief_directive.read_text().strip()
+    free_instruction = args.free_instruction.read_text().strip() if args.free_instruction else None
+
     sessions = load_scenarios(args.scenarios)
     records = asyncio.run(replay_all(
         generator, sessions, args.trials, args.history_mode, judge_model, args.judge_every, args.concurrency,
+        free_instruction_override=free_instruction,
     ))
     summary = summarize(records)
     response_defaults = slot_defaults("response_generator")
@@ -464,6 +500,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "max_tokens": generator.bridge_max_tokens,
             "history_limit": generator.history_limit or 6,
             "prompt_source": "agent.yaml (CLI --prompt override)" if args.prompt else "agent.yaml bridge_generator.system_prompt",
+            "brief_directive_source": f"--brief-directive {args.brief_directive}" if args.brief_directive else "agent.yaml-equivalent code default (_MODE_DIRECTIVES[BRIEF], unchanged)",
         },
         "response_generator": {
             "model": response_defaults["model"],
@@ -471,6 +508,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "max_tokens": response_defaults["max_tokens"],
             "guidelines_source": "agent.yaml companion.free_conversation_guidelines (via Companion, not the response_generator node's own guidelines — matches agent.py's _free_guidelines())",
             "routing_directive_source": "Companion.instruction(NO_CHANGE, bridge) -> agent.yaml companion.reply_instructions['free']",
+            "free_instruction_source": f"--free-instruction {args.free_instruction}" if args.free_instruction else "agent.yaml companion.reply_instructions['free'] (unchanged)",
         },
         "judge_model": judge_model,
         "judge_model_source": "agent.yaml companion.judge_model" if not args.judge_model else "--judge-model override",
