@@ -82,7 +82,12 @@ Run the steps of every version you pass, oldest first. A version not listed here
 
 ### 1.4.0
 
-Filled in with the release.
+None. The deploy applies the one new database migration (the `PlatformSetting` table) on its own, so back up first as described above.
+
+Check two things in your configuration, without running anything:
+
+- **Default model.** A deployment or configuration that names no model now runs `gpt-5.4-mini`. Set the model explicitly if your study must keep the old one.
+- **Language settings.** `switch_threshold` and `debounce` are no longer read. If a configuration set them, set `text_bar`, `decay` and `switch_score` instead (defaults 0.85, 0.5 and 1.5).
 
 ### 1.3.0
 
