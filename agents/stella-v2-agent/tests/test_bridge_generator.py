@@ -40,9 +40,13 @@ class _FakeStreamingLLM:
     def __init__(self, text: str):
         self.text = text
         self.called = False
+        self.last_messages = None
+        self.last_config = None
 
     async def generate(self, messages, config, callback, component_name="unknown"):
         self.called = True
+        self.last_messages = messages
+        self.last_config = config
         acc = ""
         for tok in self.text.split(" "):
             piece = (" " if acc else "") + tok
@@ -291,6 +295,17 @@ class TestApplyConfig:
         assert gen.bridge_model == "gpt-4o"
         assert gen.bridge_temperature == 0.2
         assert gen.bridge_max_tokens == 40
+
+    def test_simplified_is_off_by_default_and_accepts_the_selects_on_off_strings(self):
+        # #766: a select slot, not a real boolean (the configurator has no
+        # boolean type) — "on"/"off" strings, same convention as the removed
+        # toggles _coerce_bool was written for.
+        gen = BridgeGenerator(llm_service=None)
+        assert gen.simplified is False
+        gen.apply_config({"simplified": "on"})
+        assert gen.simplified is True
+        gen.apply_config({"simplified": "off"})
+        assert gen.simplified is False
 
 
 def _validate_whole(raw):
@@ -580,11 +595,10 @@ class TestGenerateStream:
     @pytest.mark.asyncio
     async def test_a_slow_llm_is_no_longer_cut_off_here(self):
         # #766, Felix: "not intended" — there is no wall-clock deadline left in
-        # this generator. A model that takes its time is simply waited for;
-        # the turn-level bound on how long the REST of the turn waits for this
-        # now lives in agent.py (the bridge races the expert pool there), not
-        # here. Guards against the old BRIDGE_TIMEOUT_MS behaviour quietly
-        # coming back.
+        # this generator, by explicit decision (keep the bridge inline, no
+        # other change to the turn). A model that takes its time is simply
+        # waited for, up to the LLM client's own 30s request timeout. Guards
+        # against the old BRIDGE_TIMEOUT_MS behaviour quietly coming back.
         class _Slow:
             async def generate(self, messages, config, callback, component_name="unknown"):
                 await asyncio.sleep(0.3)
@@ -597,3 +611,68 @@ class TestGenerateStream:
         gen = BridgeGenerator(llm_service=_Slow())
         out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
         assert out and out[-1] == "Okay, that makes sense."
+
+
+class TestSimplifiedBridge:
+    """#766: a deployment-selectable comparison variant. Off by default — see
+    TestApplyConfig for the on/off switch itself."""
+
+    @pytest.mark.asyncio
+    async def test_skips_the_mode_picker(self):
+        # "yeah" alone selects BRIEF in the default path (TestSelectBridgeMode);
+        # simplified has no modes at all, so last_bridge_mode must say so, not
+        # "brief".
+        gen = BridgeGenerator(llm_service=_FakeStreamingLLM("Got it."))
+        gen.simplified = True
+        await _drain(gen.generate_stream("yeah", [], language="en"))
+        assert gen.last_bridge_mode == "simplified"
+
+    @pytest.mark.asyncio
+    async def test_has_no_per_mode_token_cap(self):
+        # BRIEF would cap this at 12 tokens in the default path; simplified
+        # uses bridge_max_tokens for every turn, uncapped by mode.
+        llm = _FakeStreamingLLM("Got it.")
+        gen = BridgeGenerator(llm_service=llm)
+        gen.simplified = True
+        gen.apply_config({"max_tokens": 77})
+        await _drain(gen.generate_stream("yeah", [], language="en"))
+        assert llm.last_config.max_tokens == 77
+
+    @pytest.mark.asyncio
+    async def test_sees_its_own_last_bridges_not_the_turn_exchange(self):
+        llm = _FakeStreamingLLM("Right, noted.")
+        gen = BridgeGenerator(llm_service=llm)
+        gen.simplified = True
+        await _drain(gen.generate_stream("I run three times a week", [], language="en"))
+        first_bridge = gen._own_bridges[-1]
+        assert first_bridge  # something was tracked
+
+        await _drain(gen.generate_stream("and I lift too", [], language="en"))
+        second_system_prompt = llm.last_messages[0].content
+        assert first_bridge in second_system_prompt, (
+            "the bridge's own prior opener must reach the next turn's prompt"
+        )
+
+    @pytest.mark.asyncio
+    async def test_still_applies_the_four_checks(self):
+        # Same _gate_stream as the default path — a question is still rejected.
+        gen = BridgeGenerator(llm_service=_FakeStreamingLLM("What do you enjoy doing?"))
+        gen.simplified = True
+        out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
+        assert out == []
+
+    @pytest.mark.asyncio
+    async def test_a_slow_llm_is_not_cut_off_either(self):
+        class _Slow:
+            async def generate(self, messages, config, callback, component_name="unknown"):
+                await asyncio.sleep(0.3)
+                text = "Okay, noted."
+                await callback.on_token(text, text)
+                resp = LLMResponse(content=text, model="t", provider="t")
+                await callback.on_complete(resp)
+                return resp
+
+        gen = BridgeGenerator(llm_service=_Slow())
+        gen.simplified = True
+        out = await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
+        assert out and out[-1] == "Okay, noted."

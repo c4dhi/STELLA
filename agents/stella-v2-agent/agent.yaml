@@ -318,6 +318,23 @@ pipelineSchema:
           max: 120
           step: 5
           default: 90
+        - id: simplified
+          label: "Simplified Bridge (comparison)"
+          type: select
+          options: ["off", "on"]
+          default: "off"
+          description: >
+            #766 comparison variant, for trying both designs on the same
+            deployment. "off" (default) is the mode-based bridge above: a
+            BRIEF/FULL/THINKING pick per turn, a tighter token cap for a brief
+            beat, and the recent turn exchange as context. "on" switches to
+            one prompt for every turn with no mode pick and no per-mode cap
+            (just Max Tokens above for all of it), and the bridge's own last
+            few openers this session as context instead of the turn exchange
+            — so "vary how you open" has something concrete to check against.
+            Both ends share the same no-question/no-echo/word-cap checks and
+            neither has a timeout. The System Prompt above only applies to
+            "off"; "on" uses its own built-in prompt, not editable here yet.
     - id: barge_in
       label: "Barge-in Evaluator"
       description: "Decides whether an interruption — spoken or typed — should stop the agent (COMMIT) or be ignored so it keeps talking (RESUME). A spoken one reaches this prompt only after two cheaper filters have run: the agent ducks its own voice the moment it hears sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms). This prompt then judges the FINAL transcript — the one question duration cannot answer, since 'mhm' and 'no, wait' are both short. RESUME resumes playback from exactly where it paused, so a wrong guess here is recoverable. Noise that transcribes to nothing never gets this far. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s) and speech is queued as the next turn instead. Operators can force barge-in off entirely with BARGE_IN_ENABLED=false."

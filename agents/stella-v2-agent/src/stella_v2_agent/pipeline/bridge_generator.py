@@ -8,9 +8,8 @@ fuller bridge speaks longer, covering more of the gap before the reply lands.
 Runs in parallel with the Expert Pool via asyncio.gather() (#363: there is no
 Input Gate to run beside).
 
-On failure (nothing valid released, or the pool wins the race against a slow
-one — #766): the turn simply has no opener, and the reply carries the
-reaction instead.
+On failure (nothing valid released): the turn simply has no opener, and the
+reply carries the reaction instead.
 """
 
 import re
@@ -40,6 +39,19 @@ def _coerce_bool(value: Any) -> bool:
         return value.strip().lower() in ("true", "1", "yes", "on")
     return bool(value)
 
+
+def _append_resolved_language(system_prompt: str, language: Optional[str]) -> str:
+    """Shared by both bridge prompt builders (mode-based and simplified) so the
+    one language-pinning rule can't drift between them."""
+    if not language:
+        return system_prompt
+    return system_prompt + (
+        f"\n\nRESOLVED LANGUAGE (overrides every rule above): "
+        f"Produce the bridge in {_LANGUAGE_NAMES.get(language, language)} only. "
+        f"This includes any wording quoted as an example earlier in this "
+        f"prompt — examples show the MOVE, never the words to say."
+    )
+
 # Minimal fallback only. The full, editable bridge prompt lives in agent.yaml
 # (bridge_generator → system_prompt) and is what runs in production; this default
 # is used solely when no configured prompt is provided. It stays reflection-only
@@ -68,6 +80,40 @@ Always:
 
 {{bridgeMode}}
 {{/if}}
+{{#if activitiesOnOffer}}
+
+OVERRIDING EVERY RULE ABOVE, INCLUDING "react to the specific thing they said": they may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on, and that decision is made after you speak — a confirmation question may follow what you say. So say nothing about what they just asked for: do not acknowledge it, do not confirm you understood it, do not repeat any part of it back in your own words either, do not offer to help with it, and do not say you will or can do it — that is also a promise, and it is not yours to make here. The shortest possible neutral beat is all that's wanted here — no example is given, for the same reason as above.
+{{/if}}
+Output ONLY the bridge. No quotes, no labels."""
+
+# A deployment-selectable comparison variant (#766, Felix: compare against the
+# mode-based design above in one sitting). Off by default (see "simplified" in
+# apply_config). No BRIEF/FULL/THINKING split and no per-mode token cap — one
+# prompt, one budget (self.bridge_max_tokens) for every turn — and the model
+# sees its own last bridges rather than the full turn exchange, so "vary how
+# you open" has something concrete and unambiguous to check against. The
+# isBargeIn and activitiesOnOffer overrides are unrelated safety behaviour
+# (#87), not part of what's being compared, so they carry over unchanged.
+SIMPLIFIED_BRIDGE_PROMPT = """You just heard the user and you're about to answer. First you say the opening beat of your reply the way a real person would — spoken aloud on its own, while the rest of the answer is still being prepared.
+{{#if ownBridges}}
+
+Your own last openers this session, so you don't repeat yourself:
+{{ownBridges}}
+{{/if}}
+
+Always:
+- End with . or ! — never ask a question. The question belongs to the reply that follows.
+- Never answer, advise, or move to the next topic — that is the reply's job. You only receive what they just said.
+- NEVER say the user's own words back to them. If they said "I don't know", you do not say "I don't know"; if they said "not really", you do not say "not really". Repeating someone verbatim is not acknowledgement — it lands as mockery, or as a machine with nothing of its own to add. React to what they MEANT.
+- React to the specific thing they said rather than to the act of answering, but do it in YOUR words, not theirs. A short real reaction beats an echo every time — no example is given here on purpose, since a quoted one gets reused turn after turn until it becomes exactly the robotic pattern this rule exists to prevent.
+- Speak the way THEY speak: their language, their register, contractions and all. Never translate an English phrase word for word into their language — say what someone actually says in that language.
+- VARY HOW YOU OPEN. Check your own last openers above and start this one differently — different words AND a different construction. Opening several turns in a row with the same frame ("That sounds like...", "Das klingt nach...") is the single most robotic thing you can do, even when each sentence is individually fine.
+- No "hmm", "uh" or "erm" — they render badly in our synth.
+{{#if isBargeIn}}
+- The user just interrupted you. Yield the floor: two or three words that hand it to them, then stop. No example is given here on purpose — a quoted one gets repeated verbatim, in the language it was written in. Do not continue your previous point.
+{{/if}}
+- Do NOT evaluate or praise what they said — no "that's interesting", "good point", "that's great", "perfect". You do not yet know whether they just told you something difficult. Naming what you hear in it ("that sounds draining") is welcome; judging it is not.
+- Say only what follows from what they actually told you. Do not invent a mood, a motive or a situation they have not mentioned.
 {{#if activitiesOnOffer}}
 
 OVERRIDING EVERY RULE ABOVE, INCLUDING "react to the specific thing they said": they may be trying to start one of the activities on offer, but you don't yet know if they named it precisely enough for the system to act on, and that decision is made after you speak — a confirmation question may follow what you say. So say nothing about what they just asked for: do not acknowledge it, do not confirm you understood it, do not repeat any part of it back in your own words either, do not offer to help with it, and do not say you will or can do it — that is also a promise, and it is not yours to make here. The shortest possible neutral beat is all that's wanted here — no example is given, for the same reason as above.
@@ -420,13 +466,12 @@ class BridgeGenerator:
         # There used to be a wall-clock deadline here (BRIDGE_TIMEOUT_MS,
         # 2s), cutting the LLM stream off even when it was still mid-sentence
         # and simply a bit slow rather than stuck (#766, Felix: "not
-        # intended"). Removed — generate_stream() now runs to the stream's own
-        # natural end (or the LLM client's own request timeout, LLMConfig's
-        # default 30s, if the provider genuinely hangs). The turn-level
-        # guarantee this used to provide — the bridge never stalls the REST of
-        # the turn — now lives in agent.py: the bridge runs as its own task
-        # racing the expert pool, and a bridge still running once the pool is
-        # ready is abandoned there, not here.
+        # intended"). Removed, by Felix's explicit decision to keep the
+        # bridge running inline, same as before, with no other change to how
+        # the turn is structured. generate_stream() now runs to the stream's
+        # own natural end — the only remaining bound is the LLM client's own
+        # request timeout (LLMConfig's default 30s), if the provider
+        # genuinely hangs rather than just being a bit slow.
 
         # LLM config (overridable via apply_config)
         self.bridge_model = "gpt-5.4-mini"
@@ -452,12 +497,21 @@ class BridgeGenerator:
         # speaking rate for the whole turn (see agent.py / set_tts_speed).
         self.last_bridge_mode: Optional[str] = None
 
+        # #766: a deployment-selectable comparison variant, off by default —
+        # one prompt, no mode picker, the model's own last bridges as context.
+        # See SIMPLIFIED_BRIDGE_PROMPT.
+        self.simplified: bool = False
+        # This session's own past bridges, in order — what "own last bridges"
+        # context means in simplified mode. Unused (and never written to) in
+        # the default mode-based path.
+        self._own_bridges: List[str] = []
+
     def apply_config(self, config: dict) -> None:
         """Apply configuration overrides from the Agent Configurator.
 
         The configurator is the primary control surface for the bridge: every
         knob below maps to a slot on the ``bridge_generator`` node in agent.yaml
-        (prompt, model, temperature, max_tokens).
+        (prompt, model, temperature, max_tokens, simplified).
         """
         if "model" in config:
             self.bridge_model = config["model"]
@@ -469,6 +523,8 @@ class BridgeGenerator:
             self.custom_system_prompt = config["system_prompt"]
         if "history_limit" in config:
             self.history_limit = int(config["history_limit"])
+        if "simplified" in config:
+            self.simplified = _coerce_bool(config["simplified"])
 
     def _build_messages(
         self,
@@ -500,17 +556,31 @@ class BridgeGenerator:
         # reason RESOLVED LANGUAGE is below.
         if directive and "{{bridgeMode}}" not in raw_prompt:
             system_prompt += "\n\n" + directive
-        if language:
-            system_prompt += (
-                f"\n\nRESOLVED LANGUAGE (overrides every rule above): "
-                f"Produce the bridge in {_LANGUAGE_NAMES.get(language, language)} only. "
-                f"This includes any wording quoted as an example earlier in this "
-                f"prompt — examples show the MOVE, never the words to say."
-            )
+        system_prompt = _append_resolved_language(system_prompt, language)
         return [
             LLMMessage(role="system", content=system_prompt),
             # The interruption/answer being reacted to is the bare user message;
             # all context is placed by the prompt via template variables.
+            LLMMessage(role="user", content=user_input),
+        ]
+
+    def _build_simplified_messages(
+        self,
+        user_input: str,
+        language: Optional[str],
+        variables: Optional[Dict[str, Any]],
+    ) -> List[LLMMessage]:
+        """The comparison variant's messages (#766): one prompt, no mode, the
+        model's own last bridges instead of the turn exchange as context."""
+        raw_prompt = self.custom_system_prompt or SIMPLIFIED_BRIDGE_PROMPT
+        ctx = {
+            **(variables or {}),
+            "userInput": user_input,
+            "ownBridges": "\n".join(f'- "{b}"' for b in self._own_bridges[-6:] if b),
+        }
+        system_prompt = _append_resolved_language(render_prompt(raw_prompt, ctx), language)
+        return [
+            LLMMessage(role="system", content=system_prompt),
             LLMMessage(role="user", content=user_input),
         ]
 
@@ -568,28 +638,33 @@ class BridgeGenerator:
         """
         start_time = time.time()
 
-        # Decide what this turn's beat should DO before producing it. This is
-        # what makes the bridge conditional: it used to prompt the LLM the same
-        # way every turn, so every turn opened with a full reception.
-        mode = select_bridge_mode(user_input, previous_mode=self._previous_mode)
-        self._previous_mode = mode
-        self.last_bridge_mode = mode
-
-        released = ""  # accumulated, validated bridge text yielded so far
-        try:
+        if self.simplified:
+            # #766: no mode picker, no per-mode cap — one prompt, one budget.
+            self.last_bridge_mode = "simplified"
+            messages = self._build_simplified_messages(user_input, language, variables)
+            max_tokens = self.bridge_max_tokens
+        else:
+            # Decide what this turn's beat should DO before producing it. This
+            # is what makes the bridge conditional: it used to prompt the LLM
+            # the same way every turn, so every turn opened with a full
+            # reception.
+            mode = select_bridge_mode(user_input, previous_mode=self._previous_mode)
+            self._previous_mode = mode
+            self.last_bridge_mode = mode
             messages = self._build_messages(
                 user_input, conversation_history, language, variables, mode,
             )
+            # A beat is one or two words; capping it hard is what keeps the
+            # round trip inside the turn-taking gap now that there is no
+            # instant template to fall back on.
+            max_tokens = min(self.bridge_max_tokens, _MODE_MAX_TOKENS.get(mode, self.bridge_max_tokens))
+
+        released = ""  # accumulated, validated bridge text yielded so far
+        try:
             config = LLMConfig(
                 model=self.bridge_model,
                 temperature=self.bridge_temperature,
-                # A beat is one or two words; capping it hard is what keeps the
-                # round trip inside the turn-taking gap now that there is no
-                # instant template to fall back on.
-                max_tokens=min(
-                    self.bridge_max_tokens,
-                    _MODE_MAX_TOKENS.get(mode, self.bridge_max_tokens),
-                ),
+                max_tokens=max_tokens,
                 provider=LLMProvider.OPENAI_LANGCHAIN,
                 streaming=True,
                 json_mode=False,
@@ -598,11 +673,10 @@ class BridgeGenerator:
             # Consume the LLM stream through the shared SDK adapter (single source
             # of truth for callback→async-iterator) to its natural end — no
             # wall-clock deadline here any more (#766; see the note in
-            # __init__). The caller (agent.py) decides how long it's willing to
-            # keep this generator running and simply stops iterating it — via
-            # task cancellation, not a deadline inside this loop — when it
-            # needs to move on, so there is nothing here that can race a yield
-            # against a timer the way the old deadline did (session 3bde6b95).
+            # __init__). Nothing races a yield against a timer here any more
+            # either, so the old failure mode (session 3bde6b95: a bridge that
+            # arrived right at the limit cancelled the agent's whole turn
+            # loop while publishing it) cannot recur.
             stream = stream_completion(
                 self._llm_service, messages, config, component_name="bridge_generator",
             ).__aiter__()
@@ -644,5 +718,11 @@ class BridgeGenerator:
         # "no opener, normal reply" rather than to a stock phrase that fits any
         # answer. The cost is that the pipeline's latency is heard as silence on
         # this turn, which is the honest signal that something went wrong.
+        if self.simplified and released.strip():
+            # "Own last bridges" context for the NEXT turn (see
+            # _build_simplified_messages) — per session, same lifetime as
+            # _previous_mode above.
+            self._own_bridges.append(released.strip())
+
         if not released.strip():
-            logger.warning(f"Bridge produced nothing usable (mode={mode}) — staying silent")
+            logger.warning(f"Bridge produced nothing usable (mode={self.last_bridge_mode}) — staying silent")
