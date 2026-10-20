@@ -104,4 +104,32 @@ message TranscriptEvent {
                                    // utterance — speech may resume inside the
                                    // continuation window, and speech_started
                                    // is re-emitted if it does.
+
+  // End-of-speech timing, on a final only (#92). Logging: nothing acts on
+  // these. Unset (not 0) on every other event and from a service that does
+  // not measure them, so "absent" and "zero" stay distinguishable.
+  optional int32 trailing_silence_ms = 13;  // Silence the turn machine waited
+                                            // through before ending the turn
+                                            // (silence threshold + window).
+  optional int32 decode_ms = 14;            // From ending the turn to this
+                                            // final being ready (decode,
+                                            // including any wait for a
+                                            // partial still running).
+  optional int32 speech_ms = 15;            // First speech to the start of
+                                            // the closing silence.
+  repeated RescuedPause rescued_pauses = 16;  // Pauses inside this utterance
+                                              // that entered MAYBE_ENDING but
+                                              // were broken by speech inside
+                                              // the continuation window.
+}
+
+// A pause that nearly ended the turn (#92). Its silence passed the threshold,
+// so the turn machine started waiting for the window to run out, and the
+// user spoke again before it did.
+message RescuedPause {
+  int32 pause_ms = 1;                // Length of the silence
+  int32 into_window_ms = 2;          // How far into the continuation window
+                                     // the user came back
+  int32 silence_threshold_ms = 3;    // The thresholds it was measured against
+  int32 continuation_window_ms = 4;
 }

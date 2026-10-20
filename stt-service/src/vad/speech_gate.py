@@ -37,7 +37,7 @@ pretending otherwise would push provider detail in here.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 class SpeechState:
@@ -78,6 +78,12 @@ class GateSignal:
 
     #: The utterance is over — decode it and reset. The gate returns to IDLE.
     FINALIZE = "FINALIZE"
+
+    #: Speech resumed inside the continuation window (MAYBE_ENDING ->
+    #: SPEAKING): a pause that nearly ended the turn. Logging only (#92); the
+    #: pause is appended to `rescued_pauses`. Precedes the SPEECH_STARTED it
+    #: comes with.
+    PAUSE_RESCUED = "PAUSE_RESCUED"
 
 
 @dataclass
@@ -149,6 +155,13 @@ class SpeechGate:
         self.barge_in_signalled = False
         #: Why the last MAYBE_ENDING ended: "window" or "ceiling".
         self.last_exit_reason: Optional[str] = None
+        #: The current utterance's rescued pauses (#92), oldest first. Cleared
+        #: when the NEXT utterance begins rather than on reset, so a provider
+        #: building the final after FINALIZE can still read them.
+        self.rescued_pauses: List[Dict[str, int]] = []
+        #: Silence waited and speech length at the last FINALIZE (#92), kept
+        #: for the same reason. See endpoint_timing().
+        self._last_endpoint: Optional[Dict[str, int]] = None
 
     # -- queries ---------------------------------------------------------
 
@@ -167,6 +180,27 @@ class SpeechGate:
         if self.silence_start_time is None:
             return 0.0
         return (now - self.silence_start_time) * 1000.0
+
+    def endpoint_timing(self, now: float) -> Optional[Dict[str, int]]:
+        """How the utterance being finalised ended (#92), or None if unknown.
+
+        `trailing_silence_ms` is the silence waited through before the turn
+        was ended; `speech_ms` runs from the first voiced window to the start
+        of that silence. Measured live while the utterance is still active (a
+        provider's own timeout ending it), else as recorded at FINALIZE.
+        """
+        if self.is_active:
+            return self._timing(now)
+        return dict(self._last_endpoint) if self._last_endpoint else None
+
+    def _timing(self, now: float) -> Optional[Dict[str, int]]:
+        if self.speech_start_time is None:
+            return None
+        speech_end = self.silence_start_time if self.silence_start_time is not None else now
+        return {
+            "trailing_silence_ms": int(round(self.silence_ms(now))),
+            "speech_ms": int(round(max(speech_end - self.speech_start_time, 0.0) * 1000.0)),
+        }
 
     def hold_expired(self, now: float) -> Optional[str]:
         """Whether MAYBE_ENDING is over: "ceiling", "window", or None.
@@ -202,6 +236,9 @@ class SpeechGate:
     def _on_voiced(self, samples: int, now: float) -> List[str]:
         signals: List[str] = []
 
+        # Read before it is cleared: a rescued pause is measured to here.
+        pause_ms = self.silence_ms(now)
+
         # Any voiced window cancels a pending stop. A single frame is enough:
         # the continuation window exists precisely so that a breath does not
         # end the turn, and undoing the stop is free while it is still pending.
@@ -212,14 +249,23 @@ class SpeechGate:
             self.speech_start_time = now
             self.voiced_samples = 0
             self.barge_in_signalled = False
+            self.rescued_pauses = []
+            self._last_endpoint = None
             signals.append(GateSignal.UTTERANCE_BEGAN)
             signals.append(GateSignal.SPEECH_STARTED)
 
         elif self.state == SpeechState.MAYBE_ENDING:
             # Same utterance, resumed. The transcript id is deliberately kept —
             # this is one turn with a pause in it, not two turns.
+            self.rescued_pauses.append({
+                "pause_ms": int(round(pause_ms)),
+                "into_window_ms": int(round((now - self.pending_final_time) * 1000.0)),
+                "silence_threshold_ms": int(round(self.config.silence_duration_ms)),
+                "continuation_window_ms": int(round(self.config.continuation_window_ms)),
+            })
             self.state = SpeechState.SPEAKING
             self.pending_final_time = None
+            signals.append(GateSignal.PAUSE_RESCUED)
             signals.append(GateSignal.SPEECH_STARTED)
 
         # Count VOICED audio only. Counting wall-clock instead would let a
@@ -253,6 +299,7 @@ class SpeechGate:
             reason = self.hold_expired(now)
             if reason:
                 signals.append(GateSignal.FINALIZE)
+                self._last_endpoint = self._timing(now)
                 self.reset()
                 self.last_exit_reason = reason
 

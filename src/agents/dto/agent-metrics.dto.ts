@@ -70,6 +70,26 @@ export class MetricsSummaryDto {
     partialTurns: number;
     partialAgreementRate: number | null;
   } | null;
+  /**
+   * Endpointing (#92): the end-of-speech gap STT reports on each final, and
+   * how often a pause was rescued inside the continuation window or the user
+   * spoke again right after a final (the early-cutoff signal). Null when no
+   * turn carried any of it.
+   */
+  endpointing: {
+    totalTurns: number;
+    gapTurns: number;
+    avgTrailingSilence_ms: number | null;
+    avgDecode_ms: number | null;
+    avgEndOfSpeechGap_ms: number | null;
+    pausesRescued: number;
+    turnsWithRescuedPause: number;
+    avgRescuedPause_ms: number | null;
+    avgRescuedIntoWindow_ms: number | null;
+    resumedAfterFinal: number;
+    resumedWhileAgentSpeaking: number;
+    avgResumedSinceFinal_ms: number | null;
+  } | null;
 }
 
 export class AgentMetricsResponseDto {
