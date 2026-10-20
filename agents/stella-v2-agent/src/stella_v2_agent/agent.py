@@ -285,7 +285,6 @@ class StellaV2Agent(BaseAgent):
         expert_task: Optional[asyncio.Task] = None
         exit_task: Optional[asyncio.Task] = None
         start_task: Optional[asyncio.Task] = None
-        bridge_task: Optional[asyncio.Task] = None
 
         try:
             # Fetch context. The history is scoped to the current mode (#36):
@@ -404,48 +403,9 @@ class StellaV2Agent(BaseAgent):
             # nothing at all), then reused for the reply so bridge and reply are
             # spoken at ONE rate — a rate change mid-utterance reads as a glitch.
             turn_speed = 1.0
-
-            # The bridge used to carry its own wall-clock timeout (#766, Felix:
-            # "not intended" — a bridge still mid-sentence at 2s was cut off even
-            # when the provider was simply a bit slow, not stuck). There is no
-            # bridge-side deadline now, but the turn still needs ONE: without it,
-            # a genuinely slow provider call would hold up the reply for as long
-            # as the LLM client's own request timeout (30s), since nothing else
-            # bounds this stream. The expert pool is already running and already
-            # has to be waited for — so it IS that bound, not a new arbitrary
-            # number: a slow bridge gets exactly as long as the turn is waiting
-            # on experts anyway, no more. Once the pool is ready, we stop
-            # listening for more bridge text and move on with whatever validated
-            # text already streamed (possibly none) — the same "keep what
-            # already arrived, drop the rest" behaviour the old timeout had, just
-            # bounded dynamically instead of at a fixed 2s. The bridge task is
-            # cancelled below and never read again, so anything it produces
-            # after this point is simply never yielded — it cannot play after or
-            # over the reply.
-            bridge_queue: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
-
-            async def _stream_bridge_into_queue() -> None:
-                try:
-                    async for accum in self.bridge_generator.generate_stream(
-                        input.text, history, language=resolved_language, variables=prompt_variables
-                    ):
-                        await bridge_queue.put(accum)
-                finally:
-                    await bridge_queue.put(None)  # sentinel: generation has ended
-
-            bridge_task = asyncio.create_task(_stream_bridge_into_queue())
-
-            while not expert_task.done():
-                get_next = asyncio.create_task(bridge_queue.get())
-                done, _pending = await asyncio.wait(
-                    {get_next, expert_task}, return_when=asyncio.FIRST_COMPLETED,
-                )
-                if get_next not in done:
-                    get_next.cancel()
-                    break  # the pool finished first; stop waiting on the bridge
-                bridge_accum = get_next.result()
-                if bridge_accum is None:
-                    break  # the bridge is done, naturally, before the pool
+            async for bridge_accum in self.bridge_generator.generate_stream(
+                input.text, history, language=resolved_language, variables=prompt_variables
+            ):
                 if not bridge_accum:
                     continue
                 bridge = bridge_accum
@@ -472,14 +432,6 @@ class StellaV2Agent(BaseAgent):
                 turn_speed = _turn_speed(getattr(self.bridge_generator, "last_bridge_mode", None))
                 bridge_output.metadata["speed"] = turn_speed
                 yield bridge_output
-
-            if not bridge_task.done():
-                # The pool won the race; this turn goes on without the rest of
-                # the bridge (or without any of it). Reaped the same way
-                # expert_task is reaped below if the turn ends before this —
-                # cancel and retrieve, never await, never let it play.
-                bridge_task.cancel()
-                bridge_task.add_done_callback(lambda t: t.cancelled() or t.exception())
 
             # Generation of the whole bridge, not its playback: bridge_ready is
             # the first sentence, bridge_tts_done (audio pipeline) the end of
@@ -854,14 +806,6 @@ class StellaV2Agent(BaseAgent):
 
         finally:
             self._is_processing = False
-            if bridge_task is not None:
-                # Barge-in, an early exception, or the pool simply winning the
-                # race (#766) can all leave the bridge in flight.
-                if not bridge_task.done():
-                    bridge_task.cancel()
-                bridge_task.add_done_callback(
-                    lambda t: t.cancelled() or t.exception()
-                )
             if expert_task is not None:
                 # Barge-in or a bridge error can leave the pool in flight.
                 if not expert_task.done():
