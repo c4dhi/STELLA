@@ -11,6 +11,11 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The default model is `gpt-5.4-mini` (was `gpt-4o-mini`): `LLMConfig.model` and the barge-in evaluator. An agent that sets a model keeps it.
+- The state machine tool guidance tells the model how a goal-oriented phase ends: complete or skip its one task, `__goal__`, and never store an answer under a "goal reached" key.
+
 ### Added
 
 - `BaseAgent.publish_turn_language()` publishes a `turn_language` envelope per user turn (built by `language.turn_language_record`): detected language and confidence, VAD speech length (`AudioPipeline.utterance_speech_seconds`), word count of the free decode, resolved language, and whether it was re-decoded, plus the frontend `correlation_id` for typed turns. No transcript text. `send_turn_language()` does the same in the background, which is what the v2 and light agents call from `_resolve_language`, so the publish never delays the reply; the recorder forwards it and the backend merges it into the turn's message (#91)
