@@ -413,7 +413,7 @@ class BridgeGenerator:
         self._llm_service = llm_service
 
         # LLM config (overridable via apply_config)
-        self.bridge_model = "gpt-4o-mini"
+        self.bridge_model = "gpt-5.4-mini"
         # Headroom for a fuller reflective bridge (up to ~35 words / 2-3 short
         # sentences). agent.yaml's bridge_generator.max_tokens overrides this when
         # a config is loaded; this is the no-config default.

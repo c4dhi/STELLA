@@ -292,7 +292,7 @@ export default function ExpertSidebar({
                             onChange={(e) => onUpdateExpert('task_extraction', { model: e.target.value })}
                             className={inputClass}
                           >
-                            {['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'].map((m) => (
+                            {['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'].map((m) => (
                               <option key={m} value={m}>{m}</option>
                             ))}
                           </select>
@@ -418,7 +418,7 @@ export default function ExpertSidebar({
                           onChange={(e) => onUpdateExpert('companion_router', { model: e.target.value })}
                           className={inputClass}
                         >
-                          {['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'].map((m) => (
+                          {['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'].map((m) => (
                             <option key={m} value={m}>{m}</option>
                           ))}
                         </select>
@@ -646,7 +646,7 @@ function AddCustomExpertForm({
   const [form, setForm] = useState({
     name: '',
     description: '',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.4-mini',
     temperature: 0.3,
     maxTokens: 200,
     systemPrompt: '',
@@ -744,7 +744,7 @@ function AddCustomExpertForm({
             onChange={(e) => setForm({ ...form, model: e.target.value })}
             className={inputClass}
           >
-            {['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'].map((m) => (
+            {['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'].map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
           </select>
