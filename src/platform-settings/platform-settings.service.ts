@@ -9,6 +9,7 @@ import {
   isPinnedTtsPlayback,
   parseTtsPlaybackSetting,
 } from './tts-playback.util.js';
+import { HARDWARE_FIT, HardwareFit, scoreHardwareFit } from './hardware-fit.util.js';
 
 export interface PinnedDeployment {
   name: string;
@@ -23,7 +24,13 @@ export interface PlatformSettingsView {
   updatedBy: string | null;
   // Deployments that set their own mode and so ignore the default.
   pinnedDeployments: PinnedDeployment[];
+  // How well the voice fits this server under its concurrent load (#93);
+  // null only when it could not be read.
+  hardwareFit: HardwareFit | null;
 }
+
+const SPEED_STAGE = 'tts_sentence_speed';
+const SWITCH_STAGE = 'tts_playback_switch';
 
 /**
  * Platform-wide defaults a system admin sets in Settings → Platform Defaults.
@@ -61,7 +68,59 @@ export class PlatformSettingsService {
       updatedAt: row ? row.updatedAt.toISOString() : null,
       updatedBy: row?.updatedBy ? row.updatedBy.name || row.updatedBy.email : null,
       pinnedDeployments: await this.listPinnedDeployments(),
+      hardwareFit: await this.getHardwareFit().catch(error => {
+        this.logger.warn(`Could not score the hardware fit: ${error.message}`);
+        return null;
+      }),
     };
+  }
+
+  /**
+   * Score the voice against this server from the last two weeks of sessions:
+   * every sentence's speed and every `auto` switch the agents published, plus
+   * all other analytics as the sign a session was in conversation. The newest
+   * load test fills in session counts the live data has not reached.
+   */
+  async getHardwareFit(now: Date = new Date()): Promise<HardwareFit> {
+    const since = new Date(now.getTime() - HARDWARE_FIT.windowDays * 24 * 3600 * 1000);
+    const analytics = { messageType: 'analytics', timestamp: { gte: since } };
+    const stage = (name: string) => ({ metadata: { path: ['envelope', 'data', 'stage'], equals: name } });
+
+    const [measured, activity, loadTest] = await Promise.all([
+      this.prisma.message.findMany({
+        where: { ...analytics, OR: [stage(SPEED_STAGE), stage(SWITCH_STAGE)] },
+        select: { sessionId: true, timestamp: true, metadata: true },
+      }),
+      // Only "was this session in conversation around then" is needed, so one
+      // row per session per 10 s instead of every analytics row: well inside
+      // the minute-wide window, at a fraction of the rows.
+      this.prisma.$queryRaw<{ sessionId: string; at: Date }[]>`
+        SELECT DISTINCT "sessionId", date_bin('10 seconds', "timestamp", TIMESTAMP '2000-01-01') AS at
+        FROM "Message"
+        WHERE "messageType" = 'analytics' AND "timestamp" >= ${since}`,
+      this.prisma.capacityMeasurement.findFirst({
+        orderBy: { measuredAt: 'desc' },
+        select: { maxSessions: true, reachedTopLevel: true, gpuName: true, ttsProvider: true },
+      }),
+    ]);
+
+    const speeds: { sessionId: string; at: number; rtf: number }[] = [];
+    const switches: { sessionId: string; at: number }[] = [];
+    for (const row of measured) {
+      const data = (row.metadata as any)?.envelope?.data;
+      const at = row.timestamp.getTime();
+      if (data?.stage === SPEED_STAGE && typeof data.rtf === 'number' && Number.isFinite(data.rtf)) {
+        speeds.push({ sessionId: row.sessionId, at, rtf: data.rtf });
+      } else if (data?.stage === SWITCH_STAGE) {
+        switches.push({ sessionId: row.sessionId, at });
+      }
+    }
+    return scoreHardwareFit({
+      speeds,
+      switches,
+      activity: activity.map(row => ({ sessionId: row.sessionId, at: new Date(row.at).getTime() })),
+      loadTest,
+    });
   }
 
   /** Set the default (null clears it, back to the built-in default). */

@@ -4,6 +4,7 @@ import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
 import { apiClient } from '../../services/ApiClient'
 import type { PlatformSettings, TtsPlaybackMode } from '../../lib/api-types'
+import HardwareFitPanel from './HardwareFitPanel'
 
 const containerVariants = {
   hidden: {},
@@ -119,6 +120,10 @@ export default function PlatformSettingsSection() {
         <p className={`text-body-sm mb-6 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
           How Stella plays her speech. Takes effect from the next session; conversations already running keep their mode.
         </p>
+
+        {settings?.hardwareFit && (
+          <HardwareFitPanel fit={settings.hardwareFit} mode={mode} isDark={isDark} />
+        )}
 
         <div role="radiogroup" aria-label="Voice playback" className="space-y-3">
           {playbackOptions.map(option => {
