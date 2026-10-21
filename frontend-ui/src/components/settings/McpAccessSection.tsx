@@ -39,7 +39,7 @@ const accessOptions: { value: AccessTokenAccess; label: string; description: str
   {
     value: 'read_write',
     label: 'Read and write',
-    description: 'Can list and read everything below, and create or change your personas, plans and agent configs.',
+    description: 'Everything read only allows, and also create or change your personas, plans and agent configs.',
   },
   {
     value: 'read',
