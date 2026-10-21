@@ -27,7 +27,14 @@ import { PersonasTools } from '../src/mcp/tools/personas.tools';
  */
 const GOOD = 'stella_pat_' + 'a'.repeat(43);
 const READ_ONLY = 'stella_pat_' + 'r'.repeat(43);
-const USER = { userId: 'u1', email: 'u@x.test', name: 'U', isSystemAdmin: false, projectIds: [], projectRoles: {} };
+const USER = {
+  userId: 'u1',
+  email: 'u@x.test',
+  name: 'U',
+  isSystemAdmin: false,
+  projectIds: [],
+  projectRoles: {},
+};
 
 describe('/mcp (e2e)', () => {
   let app: INestApplication;
@@ -47,24 +54,54 @@ describe('/mcp (e2e)', () => {
         McpEnabledGuard,
         McpOriginGuard,
         McpBearerGuard,
-        { provide: McpOAuthUrls, useValue: { resourceMetadataUrl: 'http://localhost/.well-known/oauth-protected-resource/mcp' } },
-        { provide: OAuthTokensService, useValue: { authenticateAccessToken: async () => null } },
+        {
+          provide: McpOAuthUrls,
+          useValue: {
+            resourceMetadataUrl:
+              'http://localhost/.well-known/oauth-protected-resource/mcp',
+          },
+        },
+        {
+          provide: OAuthTokensService,
+          useValue: { authenticateAccessToken: async () => null },
+        },
         McpServerFactory,
         { provide: McpAuditService, useValue: audit },
-        { provide: MCP_TOOL_PROVIDERS, useValue: [new PersonasTools(personas as any)] },
-        { provide: PlatformSettingsService, useValue: { isMcpEnabled: async () => mcpEnabled } },
+        {
+          provide: MCP_TOOL_PROVIDERS,
+          useValue: [new PersonasTools(personas as any)],
+        },
+        {
+          provide: PlatformSettingsService,
+          useValue: { isMcpEnabled: async () => mcpEnabled },
+        },
         {
           provide: AccessTokensService,
           useValue: {
             authenticate: async (secret: string) =>
               secret === GOOD
-                ? { user: USER, tokenId: 't1', scopes: ['mcp:read', 'mcp:write'] }
+                ? {
+                    user: USER,
+                    tokenId: 't1',
+                    scopes: ['mcp:read', 'mcp:write'],
+                  }
                 : secret === READ_ONLY
                   ? { user: USER, tokenId: 't2', scopes: ['mcp:read'] }
                   : null,
           },
         },
-        { provide: ConfigService, useValue: { get: (k: string) => ({ NODE_ENV: 'production', PUBLIC_FRONTEND_URL: 'https://stella.example.org' } as any)[k] } },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: (k: string) =>
+              (
+                ({
+                  NODE_ENV: 'production',
+                  PUBLIC_FRONTEND_URL: 'https://stella.example.org',
+                }) as any
+              )[k],
+          },
+        },
       ],
     }).compile();
     app = moduleRef.createNestApplication({ bodyParser: false });
@@ -84,7 +121,9 @@ describe('/mcp (e2e)', () => {
   async function connect(secret: string) {
     const client = new Client({ name: 'e2e', version: '1' });
     await client.connect(
-      new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${secret}` } } }),
+      new StreamableHTTPClientTransport(new URL(url), {
+        requestInit: { headers: { Authorization: `Bearer ${secret}` } },
+      }),
     );
     return client;
   }
@@ -92,12 +131,20 @@ describe('/mcp (e2e)', () => {
   const initialize = (headers: Record<string, string> = {}, target = url) =>
     fetch(target, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...headers },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...headers,
+      },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
         method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'raw', version: '1' } },
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'raw', version: '1' },
+        },
       }),
     });
 
@@ -105,15 +152,30 @@ describe('/mcp (e2e)', () => {
     const client = await connect(GOOD);
     expect(client.getServerVersion()?.name).toBe('stella');
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(['personas_list', 'personas_create']));
+    expect(names).toEqual(
+      expect.arrayContaining(['personas_list', 'personas_create']),
+    );
 
-    const list: any = await client.callTool({ name: 'personas_list', arguments: {} });
-    expect(list.structuredContent).toEqual({ items: [{ id: 'pe1', name: 'Grace' }] });
+    const list: any = await client.callTool({
+      name: 'personas_list',
+      arguments: {},
+    });
+    expect(list.structuredContent).toEqual({
+      items: [{ id: 'pe1', name: 'Grace' }],
+    });
 
-    const created: any = await client.callTool({ name: 'personas_create', arguments: { name: 'Ada', systemPrompt: 'You are Ada.' } });
+    const created: any = await client.callTool({
+      name: 'personas_create',
+      arguments: { name: 'Ada', systemPrompt: 'You are Ada.' },
+    });
     expect(created.isError).toBeFalsy();
-    expect(personas.create).toHaveBeenCalledWith('u1', expect.objectContaining({ name: 'Ada' }));
-    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ tool: 'personas_create', success: true }));
+    expect(personas.create).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ name: 'Ada' }),
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'personas_create', success: true }),
+    );
     await client.close();
   });
 
@@ -135,7 +197,9 @@ describe('/mcp (e2e)', () => {
     const missing = await initialize();
     expect(missing.status).toBe(401);
     expect(missing.headers.get('www-authenticate')).toContain('Bearer');
-    const unknown = await initialize({ Authorization: 'Bearer stella_pat_unknown' });
+    const unknown = await initialize({
+      Authorization: 'Bearer stella_pat_unknown',
+    });
     expect(unknown.status).toBe(401);
   });
 
@@ -145,15 +209,27 @@ describe('/mcp (e2e)', () => {
   });
 
   it('refuses browser requests from other origins', async () => {
-    const res = await initialize({ Authorization: `Bearer ${GOOD}`, Origin: 'https://evil.example.com' });
+    const res = await initialize({
+      Authorization: `Bearer ${GOOD}`,
+      Origin: 'https://evil.example.com',
+    });
     expect(res.status).toBe(403);
-    const ours = await initialize({ Authorization: `Bearer ${GOOD}`, Origin: 'https://stella.example.org' });
+    const ours = await initialize({
+      Authorization: `Bearer ${GOOD}`,
+      Origin: 'https://stella.example.org',
+    });
     expect(ours.status).toBe(200);
   });
 
   it('answers GET and DELETE with 405: the server is stateless', async () => {
     for (const method of ['GET', 'DELETE']) {
-      const res = await fetch(url, { method, headers: { Authorization: `Bearer ${GOOD}`, Accept: 'text/event-stream' } });
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${GOOD}`,
+          Accept: 'text/event-stream',
+        },
+      });
       expect(res.status).toBe(405);
       expect(res.headers.get('allow')).toBe('POST');
     }

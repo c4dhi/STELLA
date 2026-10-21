@@ -8,25 +8,44 @@ function makeService(stored: string | null, findError?: Error) {
     platformSetting: {
       findUnique: jest.fn(async () => {
         if (findError) throw findError;
-        return stored === null ? null : { key: 'mcp.enabled', value: stored, updatedAt: new Date(), updatedBy: null };
+        return stored === null
+          ? null
+          : {
+              key: 'mcp.enabled',
+              value: stored,
+              updatedAt: new Date(),
+              updatedBy: null,
+            };
       }),
       upsert: jest.fn(async () => ({})),
     },
     project: { findMany: jest.fn(async () => []) },
     agentInstance: { findMany: jest.fn(async () => []) },
   };
-  return { service: new PlatformSettingsService(prisma as any, { decrypt: jest.fn() } as any), prisma };
+  return {
+    service: new PlatformSettingsService(
+      prisma as any,
+      { decrypt: jest.fn() } as any,
+    ),
+    prisma,
+  };
 }
 
 describe('MCP switch', () => {
   it('is off when never set, and off when the read fails', async () => {
     await expect(makeService(null).service.isMcpEnabled()).resolves.toBe(false);
-    await expect(makeService(null, new Error('db down')).service.isMcpEnabled()).resolves.toBe(false);
+    await expect(
+      makeService(null, new Error('db down')).service.isMcpEnabled(),
+    ).resolves.toBe(false);
   });
 
   it('is on only for a stored "true"', async () => {
-    await expect(makeService('true').service.isMcpEnabled()).resolves.toBe(true);
-    await expect(makeService('yes').service.isMcpEnabled()).resolves.toBe(false);
+    await expect(makeService('true').service.isMcpEnabled()).resolves.toBe(
+      true,
+    );
+    await expect(makeService('yes').service.isMcpEnabled()).resolves.toBe(
+      false,
+    );
   });
 
   it('caches reads, and a write clears the cache', async () => {
@@ -36,7 +55,9 @@ describe('MCP switch', () => {
     expect(prisma.platformSetting.findUnique).toHaveBeenCalledTimes(1);
     await service.setMcpEnabled(false, 'admin-1');
     await service.isMcpEnabled();
-    expect(prisma.platformSetting.findUnique.mock.calls.length).toBeGreaterThan(1);
+    expect(prisma.platformSetting.findUnique.mock.calls.length).toBeGreaterThan(
+      1,
+    );
   });
 
   it('stores the switch as text with who changed it, and accepts only booleans', async () => {
@@ -47,7 +68,9 @@ describe('MCP switch', () => {
       create: { key: 'mcp.enabled', value: 'true', updatedById: 'admin-1' },
       update: { value: 'true', updatedById: 'admin-1' },
     });
-    await expect(service.setMcpEnabled('true', 'admin-1')).rejects.toThrow(BadRequestException);
+    await expect(service.setMcpEnabled('true', 'admin-1')).rejects.toThrow(
+      BadRequestException,
+    );
   });
 });
 
@@ -58,7 +81,10 @@ describe('PUT /admin/platform-settings', () => {
       setTtsPlayback: jest.fn(async () => view),
       setMcpEnabled: jest.fn(async () => view),
     };
-    return { controller: new PlatformSettingsController(service as any), service };
+    return {
+      controller: new PlatformSettingsController(service as any),
+      service,
+    };
   };
 
   it('changes only the keys it is sent', async () => {
@@ -77,6 +103,8 @@ describe('PUT /admin/platform-settings', () => {
 
   it('refuses an empty body', async () => {
     const { controller } = make();
-    await expect(controller.update({ userId: 'a' }, {})).rejects.toThrow(BadRequestException);
+    await expect(controller.update({ userId: 'a' }, {})).rejects.toThrow(
+      BadRequestException,
+    );
   });
 });

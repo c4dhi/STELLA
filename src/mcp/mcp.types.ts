@@ -27,7 +27,9 @@ export interface McpToolContext {
  * the handler validates writes with the REST DTO and calls the domain service,
  * which keeps ownership and business rules where they already live.
  */
-export interface McpToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> {
+export interface McpToolDefinition<
+  Shape extends z.ZodRawShape = z.ZodRawShape,
+> {
   name: string;
   title: string;
   description: string;
@@ -35,11 +37,16 @@ export interface McpToolDefinition<Shape extends z.ZodRawShape = z.ZodRawShape> 
   input: Shape;
   annotations: ToolAnnotations;
   // A JSON object: MCP structuredContent must be an object, so lists are wrapped.
-  handler(args: z.infer<z.ZodObject<Shape>>, ctx: McpToolContext): Promise<Record<string, unknown>>;
+  handler(
+    args: z.infer<z.ZodObject<Shape>>,
+    ctx: McpToolContext,
+  ): Promise<Record<string, unknown>>;
 }
 
 /** Typed helper so each tool's handler sees its own argument types. */
-export function defineTool<Shape extends z.ZodRawShape>(def: McpToolDefinition<Shape>): McpToolDefinition {
+export function defineTool<Shape extends z.ZodRawShape>(
+  def: McpToolDefinition<Shape>,
+): McpToolDefinition {
   return def as unknown as McpToolDefinition;
 }
 
@@ -50,6 +57,19 @@ export interface McpToolProvider {
 
 export const MCP_TOOL_PROVIDERS = Symbol('MCP_TOOL_PROVIDERS');
 
-export const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
-export const CREATES: ToolAnnotations = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
-export const UPDATES: ToolAnnotations = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false };
+export const READ_ONLY: ToolAnnotations = {
+  readOnlyHint: true,
+  openWorldHint: false,
+};
+export const CREATES: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+export const UPDATES: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};

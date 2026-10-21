@@ -1,4 +1,15 @@
-import { Controller, Delete, Get, HttpException, HttpStatus, Logger, Post, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  HttpException,
+  HttpStatus,
+  Logger,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Public } from '../common/decorators/public.decorator.js';
@@ -23,9 +34,15 @@ export class McpController {
   constructor(private readonly serverFactory: McpServerFactory) {}
 
   @Post()
-  async handle(@Req() req: Request & { mcpAuth: McpAuthContext }, @Res() res: Response): Promise<void> {
+  async handle(
+    @Req() req: Request & { mcpAuth: McpAuthContext },
+    @Res() res: Response,
+  ): Promise<void> {
     const server = this.serverFactory.create(req.mcpAuth);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+      enableJsonResponse: true,
+    });
     res.on('close', () => {
       void transport.close();
       void server.close();
@@ -37,7 +54,13 @@ export class McpController {
     } catch (error) {
       this.logger.error(`MCP request failed: ${error?.message}`, error?.stack);
       if (!res.headersSent) {
-        res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
+        res
+          .status(500)
+          .json({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error' },
+            id: null,
+          });
       }
     }
   }
@@ -57,5 +80,8 @@ export class McpController {
 
 function methodNotAllowed(res: Response): never {
   res.setHeader('Allow', 'POST');
-  throw new HttpException('Method not allowed: this MCP server is stateless, use POST', HttpStatus.METHOD_NOT_ALLOWED);
+  throw new HttpException(
+    'Method not allowed: this MCP server is stateless, use POST',
+    HttpStatus.METHOD_NOT_ALLOWED,
+  );
 }

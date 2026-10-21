@@ -1,4 +1,10 @@
-import { HttpException, Inject, Injectable, Logger, ValidationPipe } from '@nestjs/common';
+import {
+  HttpException,
+  Inject,
+  Injectable,
+  Logger,
+  ValidationPipe,
+} from '@nestjs/common';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { McpAuditService } from './mcp-audit.service.js';
@@ -22,12 +28,18 @@ const INSTRUCTIONS = [
 ].join(' ');
 
 // The same settings as the global pipe in main.ts.
-const validationPipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true });
+const validationPipe = new ValidationPipe({
+  transform: true,
+  whitelist: true,
+  forbidNonWhitelisted: true,
+});
 
 function errorResult(status: number, message: string): CallToolResult {
   return {
     isError: true,
-    content: [{ type: 'text', text: JSON.stringify({ error: { status, message } }) }],
+    content: [
+      { type: 'text', text: JSON.stringify({ error: { status, message } }) },
+    ],
   };
 }
 
@@ -56,14 +68,17 @@ export class McpServerFactory {
     this.tools = providers.flatMap((p) => p.tools());
     const names = new Set<string>();
     for (const tool of this.tools) {
-      if (names.has(tool.name)) throw new Error(`Duplicate MCP tool name: ${tool.name}`);
+      if (names.has(tool.name))
+        throw new Error(`Duplicate MCP tool name: ${tool.name}`);
       names.add(tool.name);
     }
   }
 
   /** Tool names a token with these scopes can see, for tests and logs. */
   toolNamesFor(auth: Pick<McpAuthContext, 'scopes'>): string[] {
-    return this.tools.filter((t) => auth.scopes.includes(t.scope)).map((t) => t.name);
+    return this.tools
+      .filter((t) => auth.scopes.includes(t.scope))
+      .map((t) => t.name);
   }
 
   create(auth: McpAuthContext): McpServer {
@@ -72,39 +87,61 @@ export class McpServerFactory {
       if (!auth.scopes.includes(tool.scope)) continue;
       server.registerTool(
         tool.name,
-        { title: tool.title, description: tool.description, inputSchema: tool.input, annotations: tool.annotations },
+        {
+          title: tool.title,
+          description: tool.description,
+          inputSchema: tool.input,
+          annotations: tool.annotations,
+        },
         (args: unknown) => this.run(tool, args, auth),
       );
     }
     return server;
   }
 
-  async run(tool: McpToolDefinition, args: unknown, auth: McpAuthContext): Promise<CallToolResult> {
+  async run(
+    tool: McpToolDefinition,
+    args: unknown,
+    auth: McpAuthContext,
+  ): Promise<CallToolResult> {
     const started = Date.now();
     let success = false;
     let errorCode: string | undefined;
     const ctx: McpToolContext = {
       auth,
-      validate: (dto, value) => validationPipe.transform(value ?? {}, { type: 'body', metatype: dto }),
+      validate: (dto, value) =>
+        validationPipe.transform(value ?? {}, { type: 'body', metatype: dto }),
     };
     try {
       // Tools a token cannot use are not listed, but a client may still call one by name.
       if (!auth.scopes.includes(tool.scope)) {
         errorCode = 'insufficient_scope';
-        return errorResult(403, `This access token does not have the ${tool.scope} scope`);
+        return errorResult(
+          403,
+          `This access token does not have the ${tool.scope} scope`,
+        );
       }
       const result = await tool.handler((args ?? {}) as never, ctx);
       // Round-trip to plain JSON (Dates become strings) so structuredContent matches the text.
-      const json = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+      const json = JSON.parse(JSON.stringify(result)) as Record<
+        string,
+        unknown
+      >;
       success = true;
-      return { content: [{ type: 'text', text: JSON.stringify(json, null, 2) }], structuredContent: json };
+      return {
+        content: [{ type: 'text', text: JSON.stringify(json, null, 2) }],
+        structuredContent: json,
+      };
     } catch (error) {
       if (error instanceof HttpException) {
         errorCode = String(error.getStatus());
         return errorResult(error.getStatus(), messageOf(error));
       }
       errorCode = 'internal';
-      this.logger.error(`MCP tool ${tool.name} failed: ${error?.message}`, error?.stack);
+      this.logger.error(
+        `MCP tool ${tool.name} failed: ${error?.message}`,
+        error?.stack,
+      );
       return errorResult(500, 'The tool failed with an internal error');
     } finally {
       await this.audit.record({

@@ -22,7 +22,13 @@ export function isPublicAddress(address: string): boolean {
   const v6 = address.toLowerCase();
   if (v6 === '::1' || v6 === '::') return false;
   if (v6.startsWith('fc') || v6.startsWith('fd')) return false; // unique local
-  if (v6.startsWith('fe8') || v6.startsWith('fe9') || v6.startsWith('fea') || v6.startsWith('feb')) return false;
+  if (
+    v6.startsWith('fe8') ||
+    v6.startsWith('fe9') ||
+    v6.startsWith('fea') ||
+    v6.startsWith('feb')
+  )
+    return false;
   const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isPublicAddress(mapped[1]);
   return true;
@@ -44,20 +50,31 @@ const defaultDeps: CimdDeps = {
  * so the fetch is fenced: https only, public addresses only, no redirects,
  * a short timeout and a size cap. The document must name itself as client_id.
  */
-export async function fetchClientMetadataDocument(clientId: string, deps: CimdDeps = defaultDeps) {
+export async function fetchClientMetadataDocument(
+  clientId: string,
+  deps: CimdDeps = defaultDeps,
+) {
   let url: URL;
   try {
     url = new URL(clientId);
   } catch {
     throw new CimdError('client_id is not a URL');
   }
-  if (url.protocol !== 'https:') throw new CimdError('client metadata URL must use https');
-  if (url.username || url.password || url.hash) throw new CimdError('client metadata URL must not carry credentials or a fragment');
+  if (url.protocol !== 'https:')
+    throw new CimdError('client metadata URL must use https');
+  if (url.username || url.password || url.hash)
+    throw new CimdError(
+      'client metadata URL must not carry credentials or a fragment',
+    );
 
   const host = url.hostname.replace(/^\[|\]$/g, '');
-  const addresses = isIP(host) ? [{ address: host }] : await deps.lookup(host).catch(() => []);
-  if (addresses.length === 0) throw new CimdError('client metadata host does not resolve');
-  if (!addresses.every((a) => isPublicAddress(a.address))) throw new CimdError('client metadata host is not public');
+  const addresses = isIP(host)
+    ? [{ address: host }]
+    : await deps.lookup(host).catch(() => []);
+  if (addresses.length === 0)
+    throw new CimdError('client metadata host does not resolve');
+  if (!addresses.every((a) => isPublicAddress(a.address)))
+    throw new CimdError('client metadata host is not public');
 
   let response: Response;
   try {
@@ -69,12 +86,15 @@ export async function fetchClientMetadataDocument(clientId: string, deps: CimdDe
   } catch {
     throw new CimdError('client metadata document could not be fetched');
   }
-  if (!response.ok) throw new CimdError(`client metadata document returned ${response.status}`);
+  if (!response.ok)
+    throw new CimdError(`client metadata document returned ${response.status}`);
 
   const declared = Number(response.headers.get('content-length') || 0);
-  if (declared > MAX_BYTES) throw new CimdError('client metadata document is too large');
+  if (declared > MAX_BYTES)
+    throw new CimdError('client metadata document is too large');
   const text = await response.text();
-  if (Buffer.byteLength(text) > MAX_BYTES) throw new CimdError('client metadata document is too large');
+  if (Buffer.byteLength(text) > MAX_BYTES)
+    throw new CimdError('client metadata document is too large');
 
   let json: unknown;
   try {
@@ -83,9 +103,14 @@ export async function fetchClientMetadataDocument(clientId: string, deps: CimdDe
     throw new CimdError('client metadata document is not JSON');
   }
   if ((json as { client_id?: unknown })?.client_id !== clientId) {
-    throw new CimdError('client metadata document does not name itself as client_id');
+    throw new CimdError(
+      'client metadata document does not name itself as client_id',
+    );
   }
   const parsed = OAuthClientMetadataSchema.safeParse(json);
-  if (!parsed.success) throw new CimdError('client metadata document is not valid client metadata');
+  if (!parsed.success)
+    throw new CimdError(
+      'client metadata document is not valid client metadata',
+    );
   return parsed.data;
 }

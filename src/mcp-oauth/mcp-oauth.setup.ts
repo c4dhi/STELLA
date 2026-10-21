@@ -1,17 +1,29 @@
 import { INestApplication, Logger } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
-import { createOAuthMetadata, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import {
+  createOAuthMetadata,
+  mcpAuthRouter,
+} from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
 import { OAUTH_SCOPES } from './mcp-oauth.constants.js';
 import { McpOAuthUrls } from './mcp-oauth.urls.js';
 import { StellaOAuthProvider } from './stella-oauth.provider.js';
 
-const OAUTH_PATHS = ['/authorize', '/token', '/register', '/revoke', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource'];
-const isOAuthPath = (path: string) => OAUTH_PATHS.some((p) => path === p || path.startsWith(`${p}/`));
+const OAUTH_PATHS = [
+  '/authorize',
+  '/token',
+  '/register',
+  '/revoke',
+  '/.well-known/oauth-authorization-server',
+  '/.well-known/oauth-protected-resource',
+];
+const isOAuthPath = (path: string) =>
+  OAUTH_PATHS.some((p) => path === p || path.startsWith(`${p}/`));
 
 // Production sits behind a layer-4 proxy, so every request has the same IP.
 // Limits are keyed by client instead, with one global ceiling on registration.
-const clientKey = (req: Request) => String(req.body?.client_id ?? req.query?.client_id ?? 'anonymous');
+const clientKey = (req: Request) =>
+  String(req.body?.client_id ?? req.query?.client_id ?? 'anonymous');
 
 /**
  * Mount MCP sign-in (OAuth 2.1 authorization server, RFC 8414/9728/7591,
@@ -29,7 +41,12 @@ export function setupMcpOAuth(app: INestApplication): void {
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     if (!isOAuthPath(req.path)) return next();
     if (await platformSettings.isMcpEnabled()) return next();
-    res.status(404).json({ error: 'not_found', error_description: 'MCP access is switched off' });
+    res
+      .status(404)
+      .json({
+        error: 'not_found',
+        error_description: 'MCP access is switched off',
+      });
   });
 
   const options = {
@@ -47,24 +64,39 @@ export function setupMcpOAuth(app: INestApplication): void {
     client_id_metadata_document_supported: true,
     authorization_response_iss_parameter_supported: true,
   };
-  app.use('/.well-known/oauth-authorization-server', (req: Request, res: Response, next: NextFunction) => {
-    if (req.method !== 'GET') return next();
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.json(metadata);
-  });
+  app.use(
+    '/.well-known/oauth-authorization-server',
+    (req: Request, res: Response, next: NextFunction) => {
+      if (req.method !== 'GET') return next();
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.json(metadata);
+    },
+  );
 
   app.use(
     mcpAuthRouter({
       ...options,
-      authorizationOptions: { rateLimit: { windowMs: 15 * 60_000, max: 60, keyGenerator: clientKey } },
-      tokenOptions: { rateLimit: { windowMs: 15 * 60_000, max: 300, keyGenerator: clientKey } },
-      revocationOptions: { rateLimit: { windowMs: 15 * 60_000, max: 100, keyGenerator: clientKey } },
+      authorizationOptions: {
+        rateLimit: { windowMs: 15 * 60_000, max: 60, keyGenerator: clientKey },
+      },
+      tokenOptions: {
+        rateLimit: { windowMs: 15 * 60_000, max: 300, keyGenerator: clientKey },
+      },
+      revocationOptions: {
+        rateLimit: { windowMs: 15 * 60_000, max: 100, keyGenerator: clientKey },
+      },
       clientRegistrationOptions: {
         // Public clients (none) get no secret; confidential ones keep theirs until the app re-registers.
         clientSecretExpirySeconds: 0,
-        rateLimit: { windowMs: 60 * 60_000, max: 100, keyGenerator: () => 'global' },
+        rateLimit: {
+          windowMs: 60 * 60_000,
+          max: 100,
+          keyGenerator: () => 'global',
+        },
       },
     }),
   );
-  logger.log(`MCP sign-in ready: issuer ${urls.issuer.href}, resource ${urls.mcpResource.href}`);
+  logger.log(
+    `MCP sign-in ready: issuer ${urls.issuer.href}, resource ${urls.mcpResource.href}`,
+  );
 }

@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { PlanTemplatesService } from '../../plan-templates/plan-templates.service.js';
 import { CreatePlanTemplateDto } from '../../plan-templates/dto/create-plan-template.dto.js';
 import { UpdatePlanTemplateDto } from '../../plan-templates/dto/update-plan-template.dto.js';
-import { CREATES, McpToolProvider, READ_ONLY, UPDATES, defineTool } from '../mcp.types.js';
+import {
+  CREATES,
+  McpToolProvider,
+  READ_ONLY,
+  UPDATES,
+  defineTool,
+} from '../mcp.types.js';
 
 // Mirrors CreatePlanTemplateDto; IsPlanContent checks the content itself.
 const planFields = {
@@ -32,7 +38,9 @@ export class PlanTemplatesTools implements McpToolProvider {
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
-        handler: async (_args, { auth }) => ({ items: await this.plans.findAllByUser(auth.user.userId) }),
+        handler: async (_args, { auth }) => ({
+          items: await this.plans.findAllByUser(auth.user.userId),
+        }),
       }),
       defineTool({
         name: 'plan_templates_get',
@@ -41,7 +49,8 @@ export class PlanTemplatesTools implements McpToolProvider {
         scope: 'mcp:read',
         input: { id: z.string() },
         annotations: READ_ONLY,
-        handler: async ({ id }, { auth }) => this.plans.findOne(id, auth.user.userId),
+        handler: async ({ id }, { auth }) =>
+          this.plans.findOne(id, auth.user.userId),
       }),
       defineTool({
         name: 'plan_templates_create',
@@ -51,17 +60,25 @@ export class PlanTemplatesTools implements McpToolProvider {
         input: planFields,
         annotations: CREATES,
         handler: async (args, ctx) =>
-          this.plans.create(ctx.auth.user.userId, await ctx.validate(CreatePlanTemplateDto, args)),
+          this.plans.create(
+            ctx.auth.user.userId,
+            await ctx.validate(CreatePlanTemplateDto, args),
+          ),
       }),
       defineTool({
         name: 'plan_templates_update',
         title: 'Update a plan template',
-        description: 'Change fields of a plan template the user owns. content replaces the whole plan content.',
+        description:
+          'Change fields of a plan template the user owns. content replaces the whole plan content.',
         scope: 'mcp:write',
         input: { id: z.string(), changes: z.object(planFields).partial() },
         annotations: UPDATES,
         handler: async ({ id, changes }, ctx) =>
-          this.plans.update(id, ctx.auth.user.userId, await ctx.validate(UpdatePlanTemplateDto, changes)),
+          this.plans.update(
+            id,
+            ctx.auth.user.userId,
+            await ctx.validate(UpdatePlanTemplateDto, changes),
+          ),
       }),
     ];
   }

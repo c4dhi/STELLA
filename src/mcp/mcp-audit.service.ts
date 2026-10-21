@@ -42,14 +42,21 @@ export class McpAuditService {
         },
       });
     } catch (error) {
-      this.logger.warn(`Could not store audit row for ${entry.tool}: ${error.message}`);
+      this.logger.warn(
+        `Could not store audit row for ${entry.tool}: ${error.message}`,
+      );
     }
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
   async purgeOld(): Promise<void> {
     const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
-    const { count } = await this.prisma.mcpAuditLog.deleteMany({ where: { createdAt: { lt: cutoff } } });
-    if (count > 0) this.logger.log(`Deleted ${count} MCP audit rows older than ${RETENTION_DAYS} days`);
+    const { count } = await this.prisma.mcpAuditLog.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    });
+    if (count > 0)
+      this.logger.log(
+        `Deleted ${count} MCP audit rows older than ${RETENTION_DAYS} days`,
+      );
   }
 }

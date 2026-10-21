@@ -10,8 +10,14 @@ type Row = Record<string, any>;
 function matches(row: Row, where: Row = {}): boolean {
   return Object.entries(where).every(([key, cond]) => {
     const value = row[key];
-    if (cond && typeof cond === 'object' && !(cond instanceof Date) && !Array.isArray(cond)) {
-      if ('lt' in cond) return value instanceof Date && value.getTime() < cond.lt.getTime();
+    if (
+      cond &&
+      typeof cond === 'object' &&
+      !(cond instanceof Date) &&
+      !Array.isArray(cond)
+    ) {
+      if ('lt' in cond)
+        return value instanceof Date && value.getTime() < cond.lt.getTime();
       if ('none' in cond) return true; // relation filters are applied by the caller
     }
     return value === cond;
@@ -23,12 +29,23 @@ function table(defaults: (data: Row) => Row = () => ({})) {
   return {
     rows,
     async create({ data }: { data: Row }) {
-      const row = { id: randomUUID(), createdAt: new Date(), ...defaults(data), ...data };
+      const row = {
+        id: randomUUID(),
+        createdAt: new Date(),
+        ...defaults(data),
+        ...data,
+      };
       rows.push(row);
       return { ...row };
     },
     async createMany({ data }: { data: Row[] }) {
-      for (const d of data) rows.push({ id: randomUUID(), createdAt: new Date(), ...defaults(d), ...d });
+      for (const d of data)
+        rows.push({
+          id: randomUUID(),
+          createdAt: new Date(),
+          ...defaults(d),
+          ...d,
+        });
       return { count: data.length };
     },
     async findFirst({ where }: { where: Row }) {
@@ -61,13 +78,23 @@ function table(defaults: (data: Row) => Row = () => ({})) {
 export function createInMemoryOAuthPrisma() {
   const oAuthClient = table();
   const oAuthAuthorizationRequest = table(() => ({
-    status: 'PENDING', userId: null, approvedScopes: [], codeHash: null, codeExpiresAt: null, consumedAt: null, grantId: null,
+    status: 'PENDING',
+    userId: null,
+    approvedScopes: [],
+    codeHash: null,
+    codeExpiresAt: null,
+    consumedAt: null,
+    grantId: null,
   }));
   const oAuthGrant = table(() => ({ lastUsedAt: null, revokedAt: null }));
   const oAuthToken = table(() => ({ rotatedAt: null }));
 
-  const findBy = (t: { rows: Row[] }, where: Row) => t.rows.find((r) => matches(r, where));
-  const withClient = (grant: Row) => ({ ...grant, client: { ...findBy(oAuthClient, { id: grant.clientId }) } });
+  const findBy = (t: { rows: Row[] }, where: Row) =>
+    t.rows.find((r) => matches(r, where));
+  const withClient = (grant: Row) => ({
+    ...grant,
+    client: { ...findBy(oAuthClient, { id: grant.clientId }) },
+  });
 
   return {
     oAuthClient: {
@@ -76,7 +103,15 @@ export function createInMemoryOAuthPrisma() {
         const row = findBy(oAuthClient, where);
         return row ? { ...row } : null;
       },
-      async upsert({ where, create, update }: { where: Row; create: Row; update: Row }) {
+      async upsert({
+        where,
+        create,
+        update,
+      }: {
+        where: Row;
+        create: Row;
+        update: Row;
+      }) {
         const row = findBy(oAuthClient, where);
         if (row) return Object.assign(row, update);
         return oAuthClient.create({ data: create });
@@ -87,7 +122,9 @@ export function createInMemoryOAuthPrisma() {
       async findUnique({ where, include }: { where: Row; include?: Row }) {
         const row = findBy(oAuthAuthorizationRequest, where);
         if (!row) return null;
-        return include?.client ? { ...row, client: { ...findBy(oAuthClient, { id: row.clientId }) } } : { ...row };
+        return include?.client
+          ? { ...row, client: { ...findBy(oAuthClient, { id: row.clientId }) } }
+          : { ...row };
       },
     },
     oAuthGrant: {
@@ -107,7 +144,12 @@ export function createInMemoryOAuthPrisma() {
         if (!row) return null;
         if (!include?.grant) return { ...row };
         const grant = findBy(oAuthGrant, { id: row.grantId })!;
-        return { ...row, grant: include.grant.include?.client ? withClient(grant) : { ...grant } };
+        return {
+          ...row,
+          grant: include.grant.include?.client
+            ? withClient(grant)
+            : { ...grant },
+        };
       },
     },
   };

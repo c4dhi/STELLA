@@ -17,7 +17,13 @@ import { StellaOAuthProvider } from './stella-oauth.provider.js';
 @Module({
   imports: [AuthModule, EnvVarTemplatesModule, PlatformSettingsModule],
   controllers: [OAuthConsentController],
-  providers: [McpOAuthUrls, OAuthClientsStore, OAuthTokensService, OAuthAuthorizationService, StellaOAuthProvider],
+  providers: [
+    McpOAuthUrls,
+    OAuthClientsStore,
+    OAuthTokensService,
+    OAuthAuthorizationService,
+    StellaOAuthProvider,
+  ],
   exports: [McpOAuthUrls, OAuthTokensService, StellaOAuthProvider],
 })
 export class McpOAuthModule {}

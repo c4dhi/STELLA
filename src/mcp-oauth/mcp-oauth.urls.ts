@@ -19,11 +19,17 @@ export class McpOAuthUrls {
 
   constructor(config: ConfigService) {
     const port = config.get<string>('PORT') || '3000';
-    const api = (config.get<string>('PUBLIC_API_URL') || `http://localhost:${port}`).replace(/\/+$/, '');
-    const frontend = (config.get<string>('PUBLIC_FRONTEND_URL') || 'http://localhost:8080').replace(/\/+$/, '');
+    const api = (
+      config.get<string>('PUBLIC_API_URL') || `http://localhost:${port}`
+    ).replace(/\/+$/, '');
+    const frontend = (
+      config.get<string>('PUBLIC_FRONTEND_URL') || 'http://localhost:8080'
+    ).replace(/\/+$/, '');
     this.issuer = new URL(`${api}/`);
     this.mcpResource = new URL(`${api}/mcp`);
-    this.resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(this.mcpResource);
+    this.resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(
+      this.mcpResource,
+    );
     this.frontend = new URL(`${frontend}/`);
   }
 
@@ -41,7 +47,10 @@ export class McpOAuthUrls {
   signInAvailable(): boolean {
     const local = ['localhost', '127.0.0.1'].includes(this.issuer.hostname);
     const ok = this.issuer.protocol === 'https:' || local;
-    if (!ok) this.logger.warn(`MCP sign-in disabled: PUBLIC_API_URL ${this.issuer.origin} is not HTTPS`);
+    if (!ok)
+      this.logger.warn(
+        `MCP sign-in disabled: PUBLIC_API_URL ${this.issuer.origin} is not HTTPS`,
+      );
     return ok;
   }
 
@@ -50,7 +59,10 @@ export class McpOAuthUrls {
     if (!resource) return true;
     try {
       const url = new URL(resource.toString());
-      return url.origin === this.mcpResource.origin && url.pathname.replace(/\/+$/, '') === this.mcpResource.pathname;
+      return (
+        url.origin === this.mcpResource.origin &&
+        url.pathname.replace(/\/+$/, '') === this.mcpResource.pathname
+      );
     } catch {
       return false;
     }

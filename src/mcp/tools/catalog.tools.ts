@@ -25,7 +25,9 @@ export class CatalogTools implements McpToolProvider {
           isSystemAdmin: auth.user.isSystemAdmin,
           projectRoles: auth.user.projectRoles,
           scopes: auth.scopes,
-          connectedVia: auth.oauthGrantId ? { app: auth.clientName } : { personalAccessToken: auth.tokenId },
+          connectedVia: auth.oauthGrantId
+            ? { app: auth.clientName }
+            : { personalAccessToken: auth.tokenId },
         }),
       }),
       defineTool({
@@ -37,7 +39,9 @@ export class CatalogTools implements McpToolProvider {
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
-        handler: async () => ({ items: await this.agentImages.getAgentTypesWithInfo() }),
+        handler: async () => ({
+          items: await this.agentImages.getAgentTypesWithInfo(),
+        }),
       }),
     ];
   }

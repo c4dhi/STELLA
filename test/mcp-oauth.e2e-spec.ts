@@ -1,5 +1,10 @@
 import { jest } from '@jest/globals';
-import { CanActivate, ExecutionContext, INestApplication, Injectable } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  INestApplication,
+  Injectable,
+} from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
@@ -37,7 +42,14 @@ import { createInMemoryOAuthPrisma } from '../src/mcp-oauth/in-memory-prisma.fix
  * API the STELLA page calls, the code exchange, then MCP calls. The real
  * OAuth services and SDK handlers run against an in-memory database.
  */
-const USER = { userId: 'u1', email: 'u@x.test', name: 'U', isSystemAdmin: false, projectIds: [], projectRoles: {} };
+const USER = {
+  userId: 'u1',
+  email: 'u@x.test',
+  name: 'U',
+  isSystemAdmin: false,
+  projectIds: [],
+  projectRoles: {},
+};
 const REDIRECT = 'http://localhost:53123/callback';
 
 // Stands in for the global JWT guard: the consent page's requests carry x-test-user.
@@ -66,24 +78,53 @@ describe('MCP sign-in (e2e)', () => {
   let app: INestApplication;
   let base: string;
   let mcpEnabled = true;
-  const personas = { findAllForUser: jest.fn(async () => [{ id: 'pe1', name: 'Grace' }]) };
+  const personas = {
+    findAllForUser: jest.fn(async () => [{ id: 'pe1', name: 'Grace' }]),
+  };
 
   beforeAll(async () => {
     const port = await freePort();
     base = `http://localhost:${port}`;
-    const config = { get: (k: string) => ({ PUBLIC_API_URL: base, PUBLIC_FRONTEND_URL: 'http://localhost:8180', NODE_ENV: 'test' } as any)[k] };
+    const config = {
+      get: (k: string) =>
+        (
+          ({
+            PUBLIC_API_URL: base,
+            PUBLIC_FRONTEND_URL: 'http://localhost:8180',
+            NODE_ENV: 'test',
+          }) as any
+        )[k],
+    };
     const moduleRef = await Test.createTestingModule({
       controllers: [McpController, OAuthConsentController],
       providers: [
         { provide: APP_GUARD, useClass: TestUserGuard },
         { provide: ConfigService, useValue: config },
         { provide: PrismaService, useValue: createInMemoryOAuthPrisma() },
-        { provide: EncryptionService, useValue: { encrypt: (d: object) => JSON.stringify(d), decrypt: (s: string) => JSON.parse(s) } },
+        {
+          provide: EncryptionService,
+          useValue: {
+            encrypt: (d: object) => JSON.stringify(d),
+            decrypt: (s: string) => JSON.parse(s),
+          },
+        },
         { provide: AuthUserLoader, useValue: { load: async () => USER } },
-        { provide: AccessTokensService, useValue: { authenticate: async () => null } },
-        { provide: PlatformSettingsService, useValue: { isMcpEnabled: async () => mcpEnabled } },
-        { provide: McpAuditService, useValue: { record: async () => undefined } },
-        { provide: MCP_TOOL_PROVIDERS, useValue: [new PersonasTools(personas as any)] },
+        {
+          provide: AccessTokensService,
+          useValue: { authenticate: async () => null },
+        },
+        {
+          provide: PlatformSettingsService,
+          useValue: { isMcpEnabled: async () => mcpEnabled },
+        },
+        {
+          provide: McpAuditService,
+          useValue: { record: async () => undefined },
+        },
+        {
+          provide: MCP_TOOL_PROVIDERS,
+          useValue: [new PersonasTools(personas as any)],
+        },
         McpOAuthUrls,
         OAuthClientsStore,
         OAuthTokensService,
@@ -113,26 +154,41 @@ describe('MCP sign-in (e2e)', () => {
   /** The STELLA consent page: the signed-in user clicks Allow. */
   async function allow(consentUrl: string, access = 'read_write') {
     const requestId = new URL(consentUrl).searchParams.get('request')!;
-    const view = await fetch(`${base}/oauth/requests/${requestId}`, { headers: { 'x-test-user': '1' } }).then((r) => r.json());
+    const view = await fetch(`${base}/oauth/requests/${requestId}`, {
+      headers: { 'x-test-user': '1' },
+    }).then((r) => r.json());
     const res = await fetch(`${base}/oauth/requests/${requestId}/approve`, {
       method: 'POST',
       headers: { 'x-test-user': '1', 'Content-Type': 'application/json' },
       body: JSON.stringify({ access }),
     });
-    return { view, redirect: new URL(((await res.json()) as { redirectUrl: string }).redirectUrl) };
+    return {
+      view,
+      redirect: new URL(
+        ((await res.json()) as { redirectUrl: string }).redirectUrl,
+      ),
+    };
   }
 
   it('walks the whole flow by hand: discovery, registration, consent, PKCE, MCP, refresh', async () => {
     // 1. An unauthenticated MCP call says where to sign in.
-    const unauth = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const unauth = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
     expect(unauth.status).toBe(401);
-    const prmUrl = unauth.headers.get('www-authenticate')!.match(/resource_metadata="([^"]+)"/)![1];
+    const prmUrl = unauth.headers
+      .get('www-authenticate')!
+      .match(/resource_metadata="([^"]+)"/)![1];
     expect(prmUrl).toBe(`${base}/.well-known/oauth-protected-resource/mcp`);
 
     // 2. Metadata.
     const prm = await fetch(prmUrl).then((r) => r.json());
     expect(prm.resource).toBe(`${base}/mcp`);
-    const asMeta = await fetch(`${base}/.well-known/oauth-authorization-server`).then((r) => r.json());
+    const asMeta = await fetch(
+      `${base}/.well-known/oauth-authorization-server`,
+    ).then((r) => r.json());
     expect(asMeta).toMatchObject({
       issuer: prm.authorization_servers[0],
       code_challenge_methods_supported: ['S256'],
@@ -143,7 +199,11 @@ describe('MCP sign-in (e2e)', () => {
     const reg = await fetch(asMeta.registration_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_name: 'E2E App', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none' }),
+      body: JSON.stringify({
+        client_name: 'E2E App',
+        redirect_uris: [REDIRECT],
+        token_endpoint_auth_method: 'none',
+      }),
     });
     expect(reg.status).toBe(201);
     const { client_id } = await reg.json();
@@ -153,17 +213,29 @@ describe('MCP sign-in (e2e)', () => {
     const challenge = b64url(createHash('sha256').update(verifier).digest());
     const authorize = new URL(asMeta.authorization_endpoint);
     Object.entries({
-      response_type: 'code', client_id, redirect_uri: REDIRECT, code_challenge: challenge,
-      code_challenge_method: 'S256', state: 'st8', scope: 'mcp:read mcp:write', resource: prm.resource,
+      response_type: 'code',
+      client_id,
+      redirect_uri: REDIRECT,
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: 'st8',
+      scope: 'mcp:read mcp:write',
+      resource: prm.resource,
     }).forEach(([k, v]) => authorize.searchParams.set(k, v));
     const toConsent = await fetch(authorize, { redirect: 'manual' });
     expect(toConsent.status).toBe(302);
     const consentUrl = toConsent.headers.get('location')!;
-    expect(consentUrl).toMatch(/^http:\/\/localhost:8180\/oauth\/consent\?request=/);
+    expect(consentUrl).toMatch(
+      /^http:\/\/localhost:8180\/oauth\/consent\?request=/,
+    );
 
     // 5. Consent page: what the user sees, then Allow (read only).
     const { view, redirect } = await allow(consentUrl, 'read');
-    expect(view).toMatchObject({ clientName: 'E2E App', redirectHost: 'localhost:53123', verifiedBy: 'registration' });
+    expect(view).toMatchObject({
+      clientName: 'E2E App',
+      redirectHost: 'localhost:53123',
+      verifiedBy: 'registration',
+    });
     expect(redirect.searchParams.get('state')).toBe('st8');
     const code = redirect.searchParams.get('code')!;
 
@@ -172,7 +244,14 @@ describe('MCP sign-in (e2e)', () => {
       fetch(asMeta.token_endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ grant_type: 'authorization_code', code, code_verifier: codeVerifier, client_id, redirect_uri: REDIRECT, resource: prm.resource }),
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          code_verifier: codeVerifier,
+          client_id,
+          redirect_uri: REDIRECT,
+          resource: prm.resource,
+        }),
       });
     expect((await exchange(b64url(randomBytes(32)))).status).toBe(400);
     const tokenRes = await exchange(verifier);
@@ -182,13 +261,19 @@ describe('MCP sign-in (e2e)', () => {
 
     // 7. The access token works on /mcp; read-only shows no write tools.
     const client = new Client({ name: 'e2e', version: '1' });
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
-      requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
-    }));
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+        requestInit: {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        },
+      }),
+    );
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).toContain('personas_list');
     expect(names).not.toContain('personas_create');
-    expect((await client.callTool({ name: 'personas_list', arguments: {} })).isError).toBeFalsy();
+    expect(
+      (await client.callTool({ name: 'personas_list', arguments: {} })).isError,
+    ).toBeFalsy();
     await client.close();
 
     // 8. Refresh rotates; replaying the old refresh token disconnects the app.
@@ -196,14 +281,22 @@ describe('MCP sign-in (e2e)', () => {
       fetch(asMeta.token_endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: rt, client_id }),
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: rt,
+          client_id,
+        }),
       });
     const rotated = await (await refresh(tokens.refresh_token)).json();
     expect(rotated.access_token).toBeDefined();
     expect((await refresh(tokens.refresh_token)).status).toBe(400);
     const after = await fetch(`${base}/mcp`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${rotated.access_token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      headers: {
+        Authorization: `Bearer ${rotated.access_token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     });
     expect(after.status).toBe(401);
@@ -216,16 +309,33 @@ describe('MCP sign-in (e2e)', () => {
     let verifier = '';
     const provider: OAuthClientProvider = {
       redirectUrl: REDIRECT,
-      clientMetadata: { client_name: 'SDK client', redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] },
+      clientMetadata: {
+        client_name: 'SDK client',
+        redirect_uris: [REDIRECT],
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+      },
       clientInformation: () => clientInfo,
-      saveClientInformation: (info) => { clientInfo = info; },
+      saveClientInformation: (info) => {
+        clientInfo = info;
+      },
       tokens: () => saved,
-      saveTokens: (t) => { saved = t; },
-      redirectToAuthorization: (url) => { authorizationUrl = url; },
-      saveCodeVerifier: (v) => { verifier = v; },
+      saveTokens: (t) => {
+        saved = t;
+      },
+      redirectToAuthorization: (url) => {
+        authorizationUrl = url;
+      },
+      saveCodeVerifier: (v) => {
+        verifier = v;
+      },
       codeVerifier: () => verifier,
     };
-    const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: provider });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`${base}/mcp`),
+      { authProvider: provider },
+    );
     const client = new Client({ name: 'sdk', version: '1' });
     await expect(client.connect(transport)).rejects.toThrow();
     expect(authorizationUrl).toBeDefined();
@@ -236,18 +346,37 @@ describe('MCP sign-in (e2e)', () => {
     await transport.finishAuth(redirect.searchParams.get('code')!);
 
     const connected = new Client({ name: 'sdk', version: '1' });
-    await connected.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: provider }));
-    expect((await connected.listTools()).tools.map((t) => t.name)).toContain('personas_list');
+    await connected.connect(
+      new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+        authProvider: provider,
+      }),
+    );
+    expect((await connected.listTools()).tools.map((t) => t.name)).toContain(
+      'personas_list',
+    );
     await connected.close();
 
     // It shows up in Settings → MCP Access, and disconnecting it locks it out.
-    const apps = await fetch(`${base}/me/connected-apps`, { headers: { 'x-test-user': '1' } }).then((r) => r.json());
+    const apps = await fetch(`${base}/me/connected-apps`, {
+      headers: { 'x-test-user': '1' },
+    }).then((r) => r.json());
     const app = apps.find((a: any) => a.clientName === 'SDK client');
     expect(app).toBeDefined();
-    expect((await fetch(`${base}/me/connected-apps/${app.id}`, { method: 'DELETE', headers: { 'x-test-user': '1' } })).status).toBe(204);
+    expect(
+      (
+        await fetch(`${base}/me/connected-apps/${app.id}`, {
+          method: 'DELETE',
+          headers: { 'x-test-user': '1' },
+        })
+      ).status,
+    ).toBe(204);
     const locked = await fetch(`${base}/mcp`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${saved.access_token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      headers: {
+        Authorization: `Bearer ${saved.access_token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     });
     expect(locked.status).toBe(401);
@@ -255,15 +384,29 @@ describe('MCP sign-in (e2e)', () => {
 
   it('hides every sign-in endpoint while MCP is switched off', async () => {
     mcpEnabled = false;
-    for (const path of ['/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource/mcp', '/authorize?client_id=x']) {
+    for (const path of [
+      '/.well-known/oauth-authorization-server',
+      '/.well-known/oauth-protected-resource/mcp',
+      '/authorize?client_id=x',
+    ]) {
       expect((await fetch(`${base}${path}`)).status).toBe(404);
     }
-    expect((await fetch(`${base}/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status).toBe(404);
+    expect(
+      (
+        await fetch(`${base}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        })
+      ).status,
+    ).toBe(404);
   });
 
   it('refuses consent without a signed-in STELLA user', async () => {
     const res = await fetch(`${base}/oauth/requests/whatever/approve`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ access: 'read' }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ access: 'read' }),
     });
     expect(res.status).toBe(403);
   });

@@ -23,28 +23,45 @@ export class SessionsTools implements McpToolProvider {
       defineTool({
         name: 'projects_list',
         title: 'List projects',
-        description: 'Projects the user is a member of. Sessions live in projects.',
+        description:
+          'Projects the user is a member of. Sessions live in projects.',
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
-        handler: async (_args, { auth }) => ({ items: await this.projects.findAll(auth.user.userId) }),
+        handler: async (_args, { auth }) => ({
+          items: await this.projects.findAll(auth.user.userId),
+        }),
       }),
       defineTool({
         name: 'sessions_list',
         title: 'List sessions',
-        description: 'Sessions in a project, newest first. Page with skip and take (at most 100).',
+        description:
+          'Sessions in a project, newest first. Page with skip and take (at most 100).',
         scope: 'mcp:read',
         input: {
           projectId: z.string(),
-          status: z.enum(Object.values(SessionStatus) as [SessionStatus, ...SessionStatus[]]).optional(),
-          search: z.string().optional().describe('Matches the session or room name'),
+          status: z
+            .enum(
+              Object.values(SessionStatus) as [
+                SessionStatus,
+                ...SessionStatus[],
+              ],
+            )
+            .optional(),
+          search: z
+            .string()
+            .optional()
+            .describe('Matches the session or room name'),
           skip: z.number().int().min(0).optional(),
           take: z.number().int().min(1).max(100).optional(),
         },
         annotations: READ_ONLY,
         handler: async ({ projectId, ...query }, ctx) => {
           this.access.assertProjectMember(ctx.auth.user, projectId);
-          return this.sessions.findAll(projectId, await ctx.validate(QuerySessionsDto, query));
+          return this.sessions.findAll(
+            projectId,
+            await ctx.validate(QuerySessionsDto, query),
+          );
         },
       }),
       defineTool({
@@ -61,9 +78,16 @@ export class SessionsTools implements McpToolProvider {
           includeDebug: z.boolean().optional(),
         },
         annotations: READ_ONLY,
-        handler: async ({ sessionId, cursor, limit, includeDebug }, { auth }) => {
+        handler: async (
+          { sessionId, cursor, limit, includeDebug },
+          { auth },
+        ) => {
           await this.access.assertSessionAccess(auth.user, sessionId);
-          const page = await this.sessions.getMessages(sessionId, { cursor, limit: limit ?? 50, includeDebug });
+          const page = await this.sessions.getMessages(sessionId, {
+            cursor,
+            limit: limit ?? 50,
+            includeDebug,
+          });
           return {
             messages: page.messages.map((m) => ({
               id: m.id,

@@ -18,7 +18,10 @@ export class ResourceAccessService {
   }
 
   async assertSessionAccess(user: AuthUser, sessionId: string): Promise<void> {
-    const session = await this.prisma.session.findUnique({ where: { id: sessionId }, select: { projectId: true } });
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { projectId: true },
+    });
     if (!session || !user.projectIds.includes(session.projectId)) {
       throw new NotFoundException(`Session ${sessionId} not found`);
     }

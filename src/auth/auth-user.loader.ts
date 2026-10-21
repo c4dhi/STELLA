@@ -44,7 +44,9 @@ export class AuthUserLoader {
     }
 
     if (!user.verified) {
-      throw new UnauthorizedException('Your account is pending administrator approval. Please contact your administrator.');
+      throw new UnauthorizedException(
+        'Your account is pending administrator approval. Please contact your administrator.',
+      );
     }
 
     return {

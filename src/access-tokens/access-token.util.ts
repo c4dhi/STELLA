@@ -3,7 +3,8 @@ import { createHash, randomInt } from 'crypto';
 /** Every secret starts with this, so secret scanners and the guard can spot one. */
 export const PAT_PREFIX = 'stella_pat_';
 
-const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+const ALPHABET =
+  '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 // 43 base62 characters carry just over 256 bits.
 const SECRET_LENGTH = 43;
 // Characters of the secret kept in clear (after the prefix) to tell tokens apart.
@@ -15,7 +16,8 @@ export type PatScope = (typeof PAT_SCOPES)[number];
 /** A prefixed random secret; also used for the OAuth tokens and codes behind MCP sign-in. */
 export function generateSecret(prefix: string): string {
   let body = '';
-  for (let i = 0; i < SECRET_LENGTH; i++) body += ALPHABET[randomInt(ALPHABET.length)];
+  for (let i = 0; i < SECRET_LENGTH; i++)
+    body += ALPHABET[randomInt(ALPHABET.length)];
   return prefix + body;
 }
 
@@ -35,5 +37,8 @@ export function displayPrefixOf(secret: string): string {
 }
 
 export function looksLikePat(secret: string): boolean {
-  return secret.startsWith(PAT_PREFIX) && secret.length === PAT_PREFIX.length + SECRET_LENGTH;
+  return (
+    secret.startsWith(PAT_PREFIX) &&
+    secret.length === PAT_PREFIX.length + SECRET_LENGTH
+  );
 }

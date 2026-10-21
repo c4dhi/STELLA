@@ -24,7 +24,13 @@ import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 
 // Adding a domain: write a *.tools.ts provider and list it here.
-const TOOL_PROVIDERS = [CatalogTools, PersonasTools, PlanTemplatesTools, AgentConfigurationsTools, SessionsTools];
+const TOOL_PROVIDERS = [
+  CatalogTools,
+  PersonasTools,
+  PlanTemplatesTools,
+  AgentConfigurationsTools,
+  SessionsTools,
+];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
 @Module({
@@ -49,7 +55,11 @@ const TOOL_PROVIDERS = [CatalogTools, PersonasTools, PlanTemplatesTools, AgentCo
     McpAuditService,
     McpServerFactory,
     ...TOOL_PROVIDERS,
-    { provide: MCP_TOOL_PROVIDERS, useFactory: (...providers) => providers, inject: TOOL_PROVIDERS },
+    {
+      provide: MCP_TOOL_PROVIDERS,
+      useFactory: (...providers) => providers,
+      inject: TOOL_PROVIDERS,
+    },
   ],
 })
 export class McpModule {}

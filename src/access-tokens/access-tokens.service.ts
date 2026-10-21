@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuthUser, AuthUserLoader } from '../auth/auth-user.loader.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
@@ -82,12 +87,18 @@ export class AccessTokensService {
     private readonly platformSettings: PlatformSettingsService,
   ) {}
 
-  async create(userId: string, dto: CreateAccessTokenDto): Promise<{ token: string; accessToken: AccessTokenView }> {
+  async create(
+    userId: string,
+    dto: CreateAccessTokenDto,
+  ): Promise<{ token: string; accessToken: AccessTokenView }> {
     if (!(await this.platformSettings.isMcpEnabled())) {
-      throw new ForbiddenException('MCP access is switched off for this platform');
+      throw new ForbiddenException(
+        'MCP access is switched off for this platform',
+      );
     }
     const secret = generatePatSecret();
-    const scopes: PatScope[] = dto.access === 'read' ? ['mcp:read'] : ['mcp:read', 'mcp:write'];
+    const scopes: PatScope[] =
+      dto.access === 'read' ? ['mcp:read'] : ['mcp:read', 'mcp:write'];
     const days = dto.expiresInDays ?? DEFAULT_EXPIRY_DAYS;
     const row = await this.prisma.personalAccessToken.create({
       data: {
@@ -100,7 +111,9 @@ export class AccessTokensService {
       },
       select: VIEW_SELECT,
     });
-    this.logger.log(`User ${userId} created access token ${row.id} (${scopes.join(', ')}, ${days} days)`);
+    this.logger.log(
+      `User ${userId} created access token ${row.id} (${scopes.join(', ')}, ${days} days)`,
+    );
     return { token: secret, accessToken: toView(row) };
   }
 
@@ -115,7 +128,10 @@ export class AccessTokensService {
 
   /** Revoking keeps the row, so the audit log still names the token. */
   async revoke(id: string, userId: string): Promise<AccessTokenView> {
-    const existing = await this.prisma.personalAccessToken.findUnique({ where: { id }, select: { userId: true, revokedAt: true } });
+    const existing = await this.prisma.personalAccessToken.findUnique({
+      where: { id },
+      select: { userId: true, revokedAt: true },
+    });
     if (!existing || existing.userId !== userId) {
       throw new NotFoundException('Access token not found');
     }
@@ -137,20 +153,40 @@ export class AccessTokensService {
     if (!looksLikePat(secret)) return null;
     const row = await this.prisma.personalAccessToken.findUnique({
       where: { tokenHash: hashPatSecret(secret) },
-      select: { id: true, userId: true, scopes: true, expiresAt: true, revokedAt: true, lastUsedAt: true },
+      select: {
+        id: true,
+        userId: true,
+        scopes: true,
+        expiresAt: true,
+        revokedAt: true,
+        lastUsedAt: true,
+      },
     });
     if (!row || row.revokedAt) return null;
     if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) return null;
 
     const user = await this.authUserLoader.load(row.userId);
 
-    if (!row.lastUsedAt || Date.now() - row.lastUsedAt.getTime() > LAST_USED_WRITE_INTERVAL_MS) {
+    if (
+      !row.lastUsedAt ||
+      Date.now() - row.lastUsedAt.getTime() > LAST_USED_WRITE_INTERVAL_MS
+    ) {
       // Not awaited into the request's outcome: a failed bookkeeping write must not refuse the call.
       this.prisma.personalAccessToken
         .update({ where: { id: row.id }, data: { lastUsedAt: new Date() } })
-        .catch((error) => this.logger.warn(`Could not record use of token ${row.id}: ${error.message}`));
+        .catch((error) =>
+          this.logger.warn(
+            `Could not record use of token ${row.id}: ${error.message}`,
+          ),
+        );
     }
 
-    return { user, tokenId: row.id, scopes: row.scopes.filter((s): s is PatScope => s === 'mcp:read' || s === 'mcp:write') };
+    return {
+      user,
+      tokenId: row.id,
+      scopes: row.scopes.filter(
+        (s): s is PatScope => s === 'mcp:read' || s === 'mcp:write',
+      ),
+    };
   }
 }

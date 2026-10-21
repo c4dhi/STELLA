@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, ForbiddenException, Get, HttpCode, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { OAuthAuthorizationService } from './oauth-authorization.service.js';
 import { OAuthTokensService } from './oauth-tokens.service.js';
@@ -6,7 +15,8 @@ import { ApproveRequestDto } from './dto/approve-request.dto.js';
 
 function userIdOf(user: any): string {
   // Participant tokens pass the global guard too; only signed-in users can connect apps.
-  if (!user?.userId) throw new ForbiddenException('Sign in to STELLA to connect an app');
+  if (!user?.userId)
+    throw new ForbiddenException('Sign in to STELLA to connect an app');
   return user.userId;
 }
 
@@ -29,7 +39,11 @@ export class OAuthConsentController {
 
   @Post('oauth/requests/:id/approve')
   @HttpCode(200)
-  approve(@Param('id') id: string, @CurrentUser() user: any, @Body() dto: ApproveRequestDto) {
+  approve(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+    @Body() dto: ApproveRequestDto,
+  ) {
     return this.authorization.approve(id, userIdOf(user), dto.access);
   }
 

@@ -1,4 +1,12 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  ForbiddenException,
+  Get,
+  Param,
+  Post,
+} from '@nestjs/common';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { AccessTokensService } from './access-tokens.service.js';
 import { CreateAccessTokenDto } from './dto/create-access-token.dto.js';
@@ -26,7 +34,8 @@ export class AccessTokensController {
 
   // Participant tokens pass the global guard too; they own no tokens.
   private userIdOf(user: any): string {
-    if (!user?.userId) throw new ForbiddenException('Only signed-in users have access tokens');
+    if (!user?.userId)
+      throw new ForbiddenException('Only signed-in users have access tokens');
     return user.userId;
   }
 }

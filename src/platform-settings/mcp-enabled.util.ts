@@ -7,7 +7,9 @@ import { BadRequestException } from '@nestjs/common';
 export const MCP_ENABLED_SETTING_KEY = 'mcp.enabled';
 
 /** PlatformSetting.value is text, so the switch is stored as "true" / "false". */
-export function parseStoredMcpEnabled(stored: string | null | undefined): boolean {
+export function parseStoredMcpEnabled(
+  stored: string | null | undefined,
+): boolean {
   return stored === 'true';
 }
 

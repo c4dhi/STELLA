@@ -1,4 +1,10 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export const ACCESS_TOKEN_EXPIRY_DAYS = [7, 30, 90, 365] as const;
 export const ACCESS_TOKEN_ACCESS = ['read', 'read_write'] as const;
