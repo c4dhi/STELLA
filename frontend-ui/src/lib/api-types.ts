@@ -1852,6 +1852,33 @@ export interface CreateAccessTokenRequest {
   access?: AccessTokenAccess
 }
 
+/** A pending MCP sign-in, as the consent page shows it. */
+export interface OAuthAuthorizationRequestView {
+  id: string
+  clientName: string
+  clientUri: string | null
+  logoUri: string | null
+  /** Where the browser goes after Allow / Deny. */
+  redirectHost: string
+  verifiedBy: 'registration' | 'metadata_document'
+  requestedScopes: AccessTokenScope[]
+  expiresAt: string
+}
+
+export interface OAuthRedirect {
+  redirectUrl: string
+}
+
+/** An app connected to the account through MCP sign-in. */
+export interface ConnectedApp {
+  id: string
+  clientName: string
+  clientUri: string | null
+  scopes: AccessTokenScope[]
+  connectedAt: string
+  lastUsedAt: string | null
+}
+
 export interface CreateAccessTokenResponse {
   /** The secret. Shown once; the server keeps only its hash. */
   token: string

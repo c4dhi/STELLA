@@ -14,7 +14,9 @@ import { McpServerFactory } from '../src/mcp/mcp-server.factory';
 import { McpAuditService } from '../src/mcp/mcp-audit.service';
 import { McpEnabledGuard } from '../src/mcp/guards/mcp-enabled.guard';
 import { McpOriginGuard } from '../src/mcp/guards/mcp-origin.guard';
-import { PatAuthGuard } from '../src/mcp/guards/pat-auth.guard';
+import { McpBearerGuard } from '../src/mcp/guards/mcp-bearer.guard';
+import { McpOAuthUrls } from '../src/mcp-oauth/mcp-oauth.urls';
+import { OAuthTokensService } from '../src/mcp-oauth/oauth-tokens.service';
 import { MCP_TOOL_PROVIDERS } from '../src/mcp/mcp.types';
 import { PersonasTools } from '../src/mcp/tools/personas.tools';
 
@@ -44,7 +46,9 @@ describe('/mcp (e2e)', () => {
         { provide: APP_GUARD, useClass: JwtAuthGuard },
         McpEnabledGuard,
         McpOriginGuard,
-        PatAuthGuard,
+        McpBearerGuard,
+        { provide: McpOAuthUrls, useValue: { resourceMetadataUrl: 'http://localhost/.well-known/oauth-protected-resource/mcp' } },
+        { provide: OAuthTokensService, useValue: { authenticateAccessToken: async () => null } },
         McpServerFactory,
         { provide: McpAuditService, useValue: audit },
         { provide: MCP_TOOL_PROVIDERS, useValue: [new PersonasTools(personas as any)] },

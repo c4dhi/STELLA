@@ -12,7 +12,9 @@ export class CatalogTools implements McpToolProvider {
       defineTool({
         name: 'whoami',
         title: 'Who am I',
-        description: 'The STELLA user this access token belongs to, the projects they are a member of, and what the token may do.',
+        description:
+          'The STELLA user this connection acts as, the projects they are a member of, what it may do, and how it ' +
+          'was connected (an app the user signed in to, or a personal access token).',
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
@@ -23,6 +25,7 @@ export class CatalogTools implements McpToolProvider {
           isSystemAdmin: auth.user.isSystemAdmin,
           projectRoles: auth.user.projectRoles,
           scopes: auth.scopes,
+          connectedVia: auth.oauthGrantId ? { app: auth.clientName } : { personalAccessToken: auth.tokenId },
         }),
       }),
       defineTool({

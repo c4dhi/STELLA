@@ -110,6 +110,7 @@ export class McpServerFactory {
       await this.audit.record({
         userId: auth.user.userId,
         tokenId: auth.tokenId,
+        oauthGrantId: auth.oauthGrantId,
         tool: tool.name,
         args,
         success,

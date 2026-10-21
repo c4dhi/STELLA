@@ -7,7 +7,8 @@ const RETENTION_DAYS = 90;
 
 export interface McpAuditEntry {
   userId: string;
-  tokenId: string;
+  tokenId?: string;
+  oauthGrantId?: string;
   tool: string;
   args: unknown;
   success: boolean;
@@ -31,7 +32,8 @@ export class McpAuditService {
       await this.prisma.mcpAuditLog.create({
         data: {
           userId: entry.userId,
-          tokenId: entry.tokenId,
+          tokenId: entry.tokenId ?? null,
+          oauthGrantId: entry.oauthGrantId ?? null,
           tool: entry.tool,
           argsSummary: summarizeToolArgs(entry.args) as object,
           success: entry.success,

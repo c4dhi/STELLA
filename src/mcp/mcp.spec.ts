@@ -6,7 +6,7 @@ import { ResourceAccessService } from '../auth/resource-access.service.js';
 import { McpServerFactory } from './mcp-server.factory.js';
 import { McpAuthContext } from './mcp.types.js';
 import { summarizeToolArgs } from './mcp-audit.util.js';
-import { PatAuthGuard } from './guards/pat-auth.guard.js';
+import { McpBearerGuard } from './guards/mcp-bearer.guard.js';
 import { McpOriginGuard } from './guards/mcp-origin.guard.js';
 import { CatalogTools } from './tools/catalog.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
@@ -180,34 +180,48 @@ describe('summarizeToolArgs', () => {
   });
 });
 
-describe('PatAuthGuard', () => {
+describe('McpBearerGuard', () => {
+  const urls = { resourceMetadataUrl: 'https://backend.example.org/.well-known/oauth-protected-resource/mcp' } as any;
   function ctx(req: any) {
     const headers: Record<string, string> = {};
     const res = { setHeader: (k: string, v: string) => (headers[k] = v) };
     return { context: { switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }) } as any, headers };
   }
-  const guard = (auth: unknown) => new PatAuthGuard({ authenticate: jest.fn(async () => auth) } as any);
+  const guard = (pat: unknown, grant: unknown = null) =>
+    new McpBearerGuard(
+      { authenticate: jest.fn(async () => pat) } as any,
+      { authenticateAccessToken: jest.fn(async () => grant) } as any,
+      urls,
+    );
 
   it('never accepts a token in the URL', async () => {
     const { context } = ctx({ query: { token: 'stella_pat_x' }, headers: {} });
     await expect(guard(READ).canActivate(context)).rejects.toThrow(BadRequestException);
   });
 
-  it('answers 401 with WWW-Authenticate when the header is missing or the token is bad', async () => {
+  it('answers 401 pointing at the sign-in metadata, so Claude and ChatGPT can start sign-in', async () => {
     const missing = ctx({ query: {}, headers: {} });
     await expect(guard(READ).canActivate(missing.context)).rejects.toThrow(UnauthorizedException);
-    expect(missing.headers['WWW-Authenticate']).toContain('Bearer');
+    expect(missing.headers['WWW-Authenticate']).toBe(`Bearer resource_metadata="${urls.resourceMetadataUrl}"`);
 
     const bad = ctx({ query: {}, headers: { authorization: 'Bearer stella_pat_nope' } });
     await expect(guard(null).canActivate(bad.context)).rejects.toThrow(UnauthorizedException);
-    expect(bad.headers['WWW-Authenticate']).toContain('invalid_token');
+    expect(bad.headers['WWW-Authenticate']).toContain('error="invalid_token"');
+    expect(bad.headers['WWW-Authenticate']).toContain('resource_metadata=');
   });
 
-  it('puts the token owner on the request', async () => {
+  it('puts a personal token owner on the request', async () => {
     const req: any = { query: {}, headers: { authorization: 'Bearer stella_pat_ok' } };
     await expect(guard({ user: USER, tokenId: 't1', scopes: ['mcp:read'] }).canActivate(ctx(req).context)).resolves.toBe(true);
     expect(req.user).toBe(USER);
     expect(req.mcpAuth).toEqual({ user: USER, tokenId: 't1', scopes: ['mcp:read'] });
+  });
+
+  it('puts the user behind a signed-in app on the request, with the app', async () => {
+    const req: any = { query: {}, headers: { authorization: 'Bearer stella_oat_ok' } };
+    const grant = { user: USER, grantId: 'g1', clientName: 'Claude', scopes: ['mcp:read', 'mcp:write'] };
+    await expect(guard(null, grant).canActivate(ctx(req).context)).resolves.toBe(true);
+    expect(req.mcpAuth).toEqual({ user: USER, oauthGrantId: 'g1', clientName: 'Claude', scopes: ['mcp:read', 'mcp:write'] });
   });
 });
 

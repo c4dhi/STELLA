@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { AppModule } from './app.module.js';
 import { AllExceptionsFilter } from './common/filters/http-exception.filter.js';
 import * as express from 'express';
+import { setupMcpOAuth } from './mcp-oauth/mcp-oauth.setup.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -29,6 +30,10 @@ async function bootstrap() {
     }
   });
   app.use(express.urlencoded({ extended: true }));
+
+  // MCP sign-in endpoints (/authorize, /token, /.well-known/…) for Claude,
+  // ChatGPT and other MCP clients. Express routers, so before Nest's routes.
+  setupMcpOAuth(app);
 
   // Determine proto path
   // In Docker: __dirname is /app/dist/src, proto files are at /app/dist/proto (../proto)

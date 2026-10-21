@@ -3,11 +3,14 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { AuthUser } from '../auth/auth-user.loader.js';
 import type { PatScope } from '../access-tokens/access-token.util.js';
 
-/** Who is calling /mcp: set on the request by PatAuthGuard. */
+/** Who is calling /mcp: set on the request by McpBearerGuard. */
 export interface McpAuthContext {
   user: AuthUser;
-  tokenId: string;
   scopes: PatScope[];
+  // Exactly one of these: a personal access token, or an app connected by sign-in.
+  tokenId?: string;
+  oauthGrantId?: string;
+  clientName?: string;
 }
 
 export interface McpToolContext {

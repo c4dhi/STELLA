@@ -5,7 +5,7 @@ import { useToastStore } from '../../store/toastStore'
 import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
 import { apiClient } from '../../services/ApiClient'
 import ConfirmDialog from '../modals/ConfirmDialog'
-import type { AccessToken, AccessTokenAccess, AccessTokenExpiryDays } from '../../lib/api-types'
+import type { AccessToken, AccessTokenAccess, AccessTokenExpiryDays, ConnectedApp } from '../../lib/api-types'
 
 const containerVariants = {
   hidden: {},
@@ -51,6 +51,24 @@ const accessOptions: { value: AccessTokenAccess; label: string; description: str
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' })
 
+type ClientTab = 'claude' | 'chatgpt' | 'claude-code'
+
+const clientTabs: { id: ClientTab; label: string }[] = [
+  { id: 'claude', label: 'Claude' },
+  { id: 'chatgpt', label: 'ChatGPT' },
+  { id: 'claude-code', label: 'Claude Code' },
+]
+
+/** Claude and ChatGPT connect from their own servers, so they need a public HTTPS address. */
+function isPublicHttps(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url)
+    return protocol === 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(hostname) && !hostname.endsWith('.local')
+  } catch {
+    return false
+  }
+}
+
 function statusOf(token: AccessToken): 'active' | 'revoked' | 'expired' {
   if (token.revokedAt) return 'revoked'
   if (token.expiresAt && new Date(token.expiresAt).getTime() <= Date.now()) return 'expired'
@@ -71,8 +89,12 @@ export default function McpAccessSection() {
   const [creating, setCreating] = useState(false)
   const [newSecret, setNewSecret] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<AccessToken | null>(null)
+  const [tab, setTab] = useState<ClientTab>('claude')
+  const [apps, setApps] = useState<ConnectedApp[] | null>(null)
+  const [disconnecting, setDisconnecting] = useState<ConnectedApp | null>(null)
 
   const mcpUrl = apiClient.getMcpUrl()
+  const reachableFromCloud = isPublicHttps(mcpUrl)
 
   const load = () => {
     apiClient.listAccessTokens()
@@ -80,7 +102,27 @@ export default function McpAccessSection() {
       .catch(err => setLoadError(err instanceof Error ? err.message : 'Could not load your tokens'))
   }
 
-  useEffect(load, [])
+  const loadApps = () => {
+    apiClient.listConnectedApps()
+      .then(setApps)
+      .catch(err => setLoadError(err instanceof Error ? err.message : 'Could not load your connected apps'))
+  }
+
+  useEffect(() => {
+    load()
+    loadApps()
+  }, [])
+
+  const disconnect = async (app: ConnectedApp) => {
+    setDisconnecting(null)
+    try {
+      await apiClient.disconnectApp(app.id)
+      addToast({ message: `Disconnected ${app.clientName}. It has to sign in again to reach STELLA.`, type: 'success' })
+      loadApps()
+    } catch (err) {
+      addToast({ message: err instanceof Error ? err.message : 'Could not disconnect the app', type: 'error' })
+    }
+  }
 
   const create = async () => {
     setCreating(true)
@@ -150,8 +192,134 @@ export default function McpAccessSection() {
           MCP Access
         </h2>
         <p className={`text-body-sm ${muted}`}>
-          Connect an AI client such as Claude Code to your STELLA account. It can then read and edit your personas,
-          plans and agent configs, and read the sessions in your projects. It acts as you, with the access you give the token.
+          Connect Claude, ChatGPT or another AI assistant to your STELLA account. It can then read and edit your
+          personas, plans and agent configs, and read the sessions in your projects, acting as you.
+        </p>
+      </motion.div>
+
+      {/* The address to give the app */}
+      <motion.div variants={itemVariants} className={card}>
+        <h3 className={heading}>Your STELLA connector address</h3>
+        <p className={`text-body-sm mb-3 ${muted}`}>Paste this into the app when it asks for the server or connector URL.</p>
+        <div className="flex gap-2">
+          <code className={codeBox}>{mcpUrl}</code>
+          <button
+            onClick={() => void copy(mcpUrl, 'Address')}
+            className={`flex-shrink-0 px-4 py-2 rounded-xl text-body-sm font-medium ${
+              isDark ? 'bg-surface-dark-tertiary text-content-inverse' : 'bg-surface-secondary text-content'
+            }`}
+          >
+            Copy
+          </button>
+        </div>
+        {!reachableFromCloud && (
+          <p className="mt-3 text-caption text-amber-500">
+            This address is not a public HTTPS address, so Claude and ChatGPT can’t reach it: they connect from
+            their own servers. Claude Code on this computer can. Ask your admin to run STELLA under its public domain.
+          </p>
+        )}
+      </motion.div>
+
+      {/* How to connect, per app */}
+      <motion.div variants={itemVariants} className={card}>
+        <h3 className={heading}>Connect an app</h3>
+        <div role="tablist" aria-label="App" className={`flex gap-1 p-1 mb-5 rounded-xl ${isDark ? 'bg-surface-dark-tertiary' : 'bg-surface-secondary'}`}>
+          {clientTabs.map(t => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
+              onClick={() => setTab(t.id)}
+              className={`flex-1 px-3 py-1.5 rounded-lg text-body-sm font-medium transition-colors ${
+                tab === t.id
+                  ? isDark ? 'bg-surface-dark-secondary text-content-inverse' : 'bg-white text-content shadow-sm'
+                  : faint
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'claude' && (
+          <ol className={`list-decimal pl-5 space-y-2 text-body-sm ${muted}`}>
+            <li>In Claude (claude.ai, the desktop app or the mobile app), open <b>Settings → Connectors</b>.</li>
+            <li>Choose <b>Add custom connector</b>. Name it <b>STELLA</b> and paste the address above as the URL.</li>
+            <li>Click <b>Connect</b>. A STELLA page opens: sign in if asked, choose the access and click <b>Allow</b>.</li>
+            <li>In a chat, turn STELLA on in the tools menu and ask, for example, “List my STELLA personas”.</li>
+            <li className={faint}>On Claude Team or Enterprise, an owner adds the connector for the organisation first; you then connect it yourself.</li>
+          </ol>
+        )}
+
+        {tab === 'chatgpt' && (
+          <ol className={`list-decimal pl-5 space-y-2 text-body-sm ${muted}`}>
+            <li>You need a paid ChatGPT plan. On Business, Enterprise or Edu, an admin may have to allow custom connectors.</li>
+            <li>In ChatGPT, open <b>Settings → Apps &amp; Connectors → Advanced settings</b> and turn on <b>Developer mode</b>.</li>
+            <li>Back in Apps &amp; Connectors, choose <b>Create</b>. Name it <b>STELLA</b>, paste the address above, and pick <b>OAuth</b> as authentication.</li>
+            <li>A STELLA page opens: sign in if asked, choose the access and click <b>Allow</b>.</li>
+            <li>In a chat, pick STELLA from the tools (+) menu.</li>
+            <li className={faint}>ChatGPT renames these menus from time to time; look for “connectors”, “apps” or “developer mode”.</li>
+          </ol>
+        )}
+
+        {tab === 'claude-code' && (
+          <div className={`space-y-3 text-body-sm ${muted}`}>
+            <p>Add STELLA once, then sign in from Claude Code:</p>
+            <code className={codeBox}>{`claude mcp add --transport http stella ${mcpUrl}`}</code>
+            <p>
+              Start Claude Code, type <span className="font-mono">/mcp</span>, pick <b>stella</b> and choose <b>Authenticate</b>.
+              Your browser opens STELLA: sign in if asked and click <b>Allow</b>.
+            </p>
+            <p className={faint}>For scripts or clients that can’t sign in, use a personal access token instead (below).</p>
+          </div>
+        )}
+      </motion.div>
+
+      {/* Apps connected by sign-in */}
+      <motion.div variants={itemVariants} className={card}>
+        <h3 className={heading}>Connected apps</h3>
+        {apps && apps.length === 0 && <p className={`text-body-sm ${muted}`}>No apps connected yet.</p>}
+        {apps && apps.length > 0 && (
+          <ul className="space-y-2">
+            {apps.map(app => (
+              <li
+                key={app.id}
+                className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl ${
+                  isDark ? 'bg-surface-dark-tertiary' : 'bg-surface-secondary'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className={`flex items-center gap-2 text-body-sm font-semibold ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+                    <span className="truncate">{app.clientName}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
+                      isDark ? 'bg-surface-dark text-content-inverse-tertiary' : 'bg-white text-content-tertiary border border-neutral-200'
+                    }`}>
+                      {app.scopes.includes('mcp:write') ? 'Read and write' : 'Read only'}
+                    </span>
+                  </div>
+                  <div className={`text-caption mt-0.5 ${faint}`}>
+                    connected {formatDate(app.connectedAt)}
+                    {' · '}{app.lastUsedAt ? `last used ${formatDate(app.lastUsedAt)}` : 'not used yet'}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setDisconnecting(app)}
+                  className="flex-shrink-0 px-3 py-1.5 rounded-lg text-caption font-medium text-red-500 hover:bg-red-500/10"
+                >
+                  Disconnect
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </motion.div>
+
+      <motion.div variants={itemVariants}>
+        <h3 className={`text-heading-sm font-semibold mt-4 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+          Personal access tokens
+        </h3>
+        <p className={`text-body-sm ${muted}`}>
+          For scripts and clients that can’t sign in. A token works like a password for MCP: keep it secret.
         </p>
       </motion.div>
 
@@ -172,7 +340,7 @@ export default function McpAccessSection() {
           </div>
 
           <p className={`text-body-sm mt-6 mb-2 font-semibold ${isDark ? 'text-content-inverse' : 'text-content'}`}>
-            Add it to Claude Code
+            Use it with Claude Code
           </p>
           <code className={codeBox}>{claudeCommand(newSecret)}</code>
           <div className="mt-3 flex gap-2">
@@ -268,7 +436,6 @@ export default function McpAccessSection() {
       {/* Existing tokens */}
       <motion.div variants={itemVariants} className={card}>
         <h3 className={heading}>Your tokens</h3>
-        <p className={`text-caption mb-4 ${faint}`}>Endpoint: <span className="font-mono">{mcpUrl}</span></p>
         {loadError && <p className="text-body-sm text-red-500">{loadError}</p>}
         {tokens && tokens.length === 0 && (
           <p className={`text-body-sm ${muted}`}>No tokens yet.</p>
@@ -328,6 +495,16 @@ export default function McpAccessSection() {
         confirmVariant="danger"
         onConfirm={() => revoking && void revoke(revoking)}
         onCancel={() => setRevoking(null)}
+      />
+
+      <ConfirmDialog
+        isOpen={disconnecting !== null}
+        title={`Disconnect ${disconnecting?.clientName ?? 'this app'}?`}
+        message="It loses access to STELLA immediately. You can connect it again by signing in from the app."
+        confirmText="Disconnect"
+        confirmVariant="danger"
+        onConfirm={() => disconnecting && void disconnect(disconnecting)}
+        onCancel={() => setDisconnecting(null)}
       />
     </motion.div>
   )

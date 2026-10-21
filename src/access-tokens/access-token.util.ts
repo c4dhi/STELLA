@@ -12,16 +12,23 @@ const DISPLAY_CHARS = 6;
 export const PAT_SCOPES = ['mcp:read', 'mcp:write'] as const;
 export type PatScope = (typeof PAT_SCOPES)[number];
 
-export function generatePatSecret(): string {
+/** A prefixed random secret; also used for the OAuth tokens and codes behind MCP sign-in. */
+export function generateSecret(prefix: string): string {
   let body = '';
   for (let i = 0; i < SECRET_LENGTH; i++) body += ALPHABET[randomInt(ALPHABET.length)];
-  return PAT_PREFIX + body;
+  return prefix + body;
+}
+
+export function generatePatSecret(): string {
+  return generateSecret(PAT_PREFIX);
 }
 
 /** sha256 is enough here: the secret is random and long, so it needs no salt or slow hash. */
-export function hashPatSecret(secret: string): string {
+export function hashSecret(secret: string): string {
   return createHash('sha256').update(secret).digest('hex');
 }
+
+export const hashPatSecret = hashSecret;
 
 export function displayPrefixOf(secret: string): string {
   return secret.slice(0, PAT_PREFIX.length + DISPLAY_CHARS);

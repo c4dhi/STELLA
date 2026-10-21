@@ -4,18 +4,19 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { Public } from '../common/decorators/public.decorator.js';
 import { McpEnabledGuard } from './guards/mcp-enabled.guard.js';
 import { McpOriginGuard } from './guards/mcp-origin.guard.js';
-import { PatAuthGuard } from './guards/pat-auth.guard.js';
+import { McpBearerGuard } from './guards/mcp-bearer.guard.js';
 import { McpServerFactory } from './mcp-server.factory.js';
 import { McpAuthContext } from './mcp.types.js';
 
 /**
  * The remote MCP endpoint (#772): Streamable HTTP, stateless, so any backend
  * replica can answer any request. Public to the global JWT guard; the guards
- * below run in order: switched on, allowed origin, valid access token.
+ * below run in order: switched on, allowed origin, valid access token
+ * (personal, or from MCP sign-in).
  */
 @Public()
 @Controller('mcp')
-@UseGuards(McpEnabledGuard, McpOriginGuard, PatAuthGuard)
+@UseGuards(McpEnabledGuard, McpOriginGuard, McpBearerGuard)
 export class McpController {
   private readonly logger = new Logger(McpController.name);
 

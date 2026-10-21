@@ -72,7 +72,11 @@ import type {
   PlatformFeatures,
   AccessToken,
   CreateAccessTokenRequest,
+  AccessTokenAccess,
   CreateAccessTokenResponse,
+  OAuthAuthorizationRequestView,
+  OAuthRedirect,
+  ConnectedApp,
   TtsPlaybackMode,
   SessionActivityDay,
   HistoricalUsageData,
@@ -1789,6 +1793,31 @@ class SessionManagementClient {
 
   async revokeAccessToken(id: string): Promise<AccessToken> {
     return this.delete<AccessToken>(`/me/access-tokens/${id}`)
+  }
+
+  // ============================================================================
+  // MCP sign-in (consent page, connected apps)
+  // ============================================================================
+
+  async getOAuthRequest(id: string): Promise<OAuthAuthorizationRequestView> {
+    return this.get<OAuthAuthorizationRequestView>(`/oauth/requests/${encodeURIComponent(id)}`)
+  }
+
+  /** Returns where to send the browser: back to the app, with a one-time code. */
+  async approveOAuthRequest(id: string, access: AccessTokenAccess): Promise<OAuthRedirect> {
+    return this.post<OAuthRedirect>(`/oauth/requests/${encodeURIComponent(id)}/approve`, { access })
+  }
+
+  async denyOAuthRequest(id: string): Promise<OAuthRedirect> {
+    return this.post<OAuthRedirect>(`/oauth/requests/${encodeURIComponent(id)}/deny`)
+  }
+
+  async listConnectedApps(): Promise<ConnectedApp[]> {
+    return this.get<ConnectedApp[]>('/me/connected-apps')
+  }
+
+  async disconnectApp(id: string): Promise<void> {
+    await this.request<void>(`/me/connected-apps/${encodeURIComponent(id)}`, { method: 'DELETE' })
   }
 
   /** Absolute URL of the MCP endpoint, for client setup instructions. */

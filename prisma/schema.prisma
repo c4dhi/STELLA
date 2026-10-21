@@ -32,6 +32,7 @@ model User {
   receivedProjectInvitations ProjectInvitation[]   @relation("ReceivedInvitations")
   platformSettingsUpdated    PlatformSetting[] // Platform defaults this admin last changed
   personalAccessTokens       PersonalAccessToken[] // Tokens AI clients use to reach /mcp as this user
+  oauthGrants                OAuthGrant[] // Apps (Claude, ChatGPT…) connected to this account over MCP sign-in
 }
 
 enum MemberRole {
@@ -780,17 +781,117 @@ model PersonalAccessToken {
 // One row per MCP tool call (#772). Arguments are summarised and redacted
 // before they are stored. Rows older than 90 days are deleted daily.
 model McpAuditLog {
-  id          String               @id @default(uuid())
-  userId      String
-  tokenId     String?
-  token       PersonalAccessToken? @relation(fields: [tokenId], references: [id], onDelete: SetNull)
-  tool        String
-  argsSummary Json
-  success     Boolean
-  errorCode   String?
-  durationMs  Int
-  createdAt   DateTime             @default(now())
+  id           String               @id @default(uuid())
+  userId       String
+  tokenId      String?
+  token        PersonalAccessToken? @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+  // Set when the call came from an app connected by sign-in rather than a personal token.
+  oauthGrantId String?
+  oauthGrant   OAuthGrant?          @relation(fields: [oauthGrantId], references: [id], onDelete: SetNull)
+  tool         String
+  argsSummary  Json
+  success      Boolean
+  errorCode    String?
+  durationMs   Int
+  createdAt    DateTime             @default(now())
 
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// MCP sign-in (OAuth 2.1): STELLA is the authorization server for its own /mcp
+// endpoint, so Claude, ChatGPT and other MCP clients can connect with the
+// user's STELLA login instead of a pasted token.
+// ---------------------------------------------------------------------------
+
+enum OAuthClientSource {
+  DCR // registered itself at /register (RFC 7591)
+  CIMD // client_id is the URL of its metadata document, fetched and cached
+}
+
+// An app that may ask users for access. Holds the client's registered
+// metadata as sent; its secret (if it has one) is encrypted, because the
+// SDK's token endpoint compares it in plain text.
+model OAuthClient {
+  id                    String                      @id // the client_id
+  name                  String
+  source                OAuthClientSource
+  metadata              Json // RFC 7591 client metadata, without the secret
+  clientSecretEncrypted String?
+  clientSecretExpiresAt DateTime?
+  metadataFetchedAt     DateTime? // CIMD: when the document was last fetched
+  createdAt             DateTime                    @default(now())
+  authorizationRequests OAuthAuthorizationRequest[]
+  grants                OAuthGrant[]
+}
+
+enum OAuthRequestStatus {
+  PENDING
+  APPROVED
+  DENIED
+}
+
+// One run of /authorize: waits for the user on the consent page, then holds
+// the one-time code until the client exchanges it.
+model OAuthAuthorizationRequest {
+  id             String             @id @default(uuid())
+  clientId       String
+  client         OAuthClient        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  redirectUri    String
+  codeChallenge  String
+  state          String?
+  scopes         String[]
+  resource       String?
+  status         OAuthRequestStatus @default(PENDING)
+  expiresAt      DateTime
+  userId         String?
+  approvedScopes String[]
+  codeHash       String?            @unique
+  codeExpiresAt  DateTime?
+  consumedAt     DateTime?
+  grantId        String? // the grant the code was exchanged into, to revoke it if the code is replayed
+  createdAt      DateTime           @default(now())
+
+  @@index([expiresAt])
+}
+
+// A user's consent for one app. Disconnecting the app revokes the grant and
+// with it every token issued under it.
+model OAuthGrant {
+  id         String        @id @default(uuid())
+  userId     String
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId   String
+  client     OAuthClient   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  scopes     String[]
+  createdAt  DateTime      @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  tokens     OAuthToken[]
+  auditLogs  McpAuditLog[]
+
+  @@index([userId])
+}
+
+enum OAuthTokenKind {
+  ACCESS
+  REFRESH
+}
+
+// Access (1 h) and refresh (30 d, rotated on use) tokens. Only sha256 hashes
+// are stored, like personal access tokens.
+model OAuthToken {
+  id        String         @id @default(uuid())
+  grantId   String
+  grant     OAuthGrant     @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  kind      OAuthTokenKind
+  tokenHash String         @unique
+  resource  String?
+  expiresAt DateTime
+  rotatedAt DateTime? // refresh tokens: set once used; a second use means it leaked
+  createdAt DateTime       @default(now())
+
+  @@index([grantId])
+  @@index([expiresAt])
 }
