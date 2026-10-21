@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Each sentence long enough to measure (`_MIN_MEASURABLE_AUDIO_MS`) publishes a `tts_sentence_speed` analytics event: `audio_ms`, `synth_ms`, `rtf` and the `playback` mode it played in. The `auto` switch to `sentence` publishes `tts_playback_switch` once, with `rtf` and `slow_sentences`. Neither carries `elapsed_ms`, so the latency stats and stage timeline skip them. Platform Defaults scores the hardware from these (#765)
+
 ## [0.8.0] - 2026-10-21
 
 Ships with STELLA 1.4.0. What changes for agent authors:

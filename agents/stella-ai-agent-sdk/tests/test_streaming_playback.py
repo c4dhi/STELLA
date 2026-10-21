@@ -1180,3 +1180,74 @@ def test_preroll_setting_is_logged_once_at_session_start(monkeypatch, caplog, en
         AudioPipeline(PacedRoom(), stt_client=None, tts_client=SlowTTS(frames=1, gap=0), session_id="s")
     lines = [r.getMessage() for r in caplog.records if "Pre-roll" in r.getMessage()]
     assert len(lines) == 1 and expected in lines[0]
+
+
+# ── Speed and the switch reach turn analytics (#93) ──────────────────────────
+# Platform Defaults scores how well the voice fits the hardware from these, so
+# they have to outlive the pod: the log line alone dies with it.
+
+def _speed_events(room):
+    return [d["data"] for d in room.data
+            if d.get("type") == "analytics" and d["data"]["stage"] == "tts_sentence_speed"]
+
+
+def _switch_events(room):
+    return [d["data"] for d in room.data
+            if d.get("type") == "analytics" and d["data"]["stage"] == "tts_playback_switch"]
+
+
+@pytest.mark.asyncio
+async def test_each_measurable_sentence_publishes_its_speed():
+    pipe, room = make_pipeline(SlowTTS())
+    pipe._turn_id = "t1"
+    pipe._learn_preroll(_fake_utt(1000, rtf=0.9), bridged_ms=0.0)
+    await asyncio.sleep(0.01)
+    [event] = _speed_events(room)
+    assert event["turn_id"] == "t1"
+    assert event["audio_ms"] == pytest.approx(1000, abs=1)
+    assert event["synth_ms"] == pytest.approx(900, abs=1)
+    assert event["rtf"] == pytest.approx(0.9, abs=0.01)
+    assert event["playback"] == "stream"
+    # Not a latency: no elapsed_ms, so the stage timeline and latency stats skip it.
+    assert "elapsed_ms" not in event
+
+
+@pytest.mark.asyncio
+async def test_sentences_too_short_to_measure_publish_no_speed():
+    pipe, room = make_pipeline(SlowTTS())
+    pipe._learn_preroll(_fake_utt(200, rtf=3.0), bridged_ms=0.0)
+    await asyncio.sleep(0.01)
+    assert _speed_events(room) == []
+
+
+@pytest.mark.asyncio
+async def test_the_auto_switch_is_published_once_with_the_mode_each_sentence_played_in():
+    pipe, room = make_pipeline(SlowTTS())
+    for _ in range(5):
+        pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    await asyncio.sleep(0.01)
+    [switch] = _switch_events(room)
+    assert switch["rtf"] == pytest.approx(2.0, abs=0.01)
+    assert switch["slow_sentences"] == 3
+    assert "elapsed_ms" not in switch
+    # The third slow sentence played in stream; it is what tipped the switch.
+    assert [e["playback"] for e in _speed_events(room)] == ["stream"] * 3 + ["sentence"] * 2
+
+
+@pytest.mark.asyncio
+async def test_a_pinned_sentence_mode_still_publishes_speed_but_never_a_switch(monkeypatch):
+    monkeypatch.setenv("STELLA_TTS_PLAYBACK", "sentence")
+    pipe, room = make_pipeline(SlowTTS())
+    for _ in range(4):
+        pipe._learn_preroll(_fake_utt(1000, rtf=2.0), bridged_ms=0.0)
+    await asyncio.sleep(0.01)
+    assert len(_speed_events(room)) == 4
+    assert _switch_events(room) == []
+
+
+def test_speed_without_a_running_loop_is_dropped_not_raised():
+    # _learn_preroll is called synchronously in places (and in the tests above);
+    # a measurement must never break playback.
+    pipe, room = make_pipeline(SlowTTS())
+    pipe._learn_preroll(_fake_utt(1000, rtf=0.9), bridged_ms=0.0)
+    assert _speed_events(room) == []
