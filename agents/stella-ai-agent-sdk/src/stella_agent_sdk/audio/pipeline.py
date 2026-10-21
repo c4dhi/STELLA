@@ -1138,6 +1138,22 @@ class AudioPipeline:
             }
         })
 
+    def _publish_measurement(self, stage: str, **fields) -> None:
+        """Publish an analytics event that is a measurement, not a latency.
+
+        It carries no ``elapsed_ms``, so the stage timeline and latency stats
+        skip it. Fire-and-forget from synchronous code: with no running loop
+        (some tests) it is dropped, never raised, so it cannot break playback.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._room.publish_data({
+            "type": "analytics",
+            "data": {"stage": stage, "turn_id": self._turn_id or "", **fields},
+        }))
+
     def close_transcript_gate(self) -> None:
         """Close the transcript gate — suppresses transcripts until reopened.
 
@@ -3983,6 +3999,16 @@ class AudioPipeline:
         if utt.error is not None or not utt.synth_ms:
             return
         audio_ms = len(utt.data) / (_TTS_SAMPLE_RATE * _BYTES_PER_SAMPLE) * 1000.0
+        if audio_ms >= _MIN_MEASURABLE_AUDIO_MS:
+            # Platform Defaults scores the hardware from these (#93); the mode
+            # is the one this sentence played in, before any switch it tips.
+            self._publish_measurement(
+                "tts_sentence_speed",
+                audio_ms=round(audio_ms, 1),
+                synth_ms=round(utt.synth_ms, 1),
+                rtf=round(utt.synth_ms / audio_ms, 3),
+                playback=self._tts_playback,
+            )
         self._maybe_switch_to_sentence_mode(audio_ms, utt.synth_ms)
 
         if self._preroll.fixed:
@@ -4018,6 +4044,11 @@ class AudioPipeline:
                 f"{self._auto_slow_streak} consecutive sentences slower than real time)"
             )
             self._tts_playback = "sentence"
+            self._publish_measurement(
+                "tts_playback_switch",
+                rtf=round(rtf, 3),
+                slow_sentences=self._auto_slow_streak,
+            )
 
     async def _bridge_underrun(self, fade_from: int = 0) -> float:
         """Push silence when the output source is about to run dry.
