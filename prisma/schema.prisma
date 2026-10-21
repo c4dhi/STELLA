@@ -13,14 +13,14 @@ datasource db {
 }
 
 model User {
-  id                         String               @id @default(uuid())
-  email                      String               @unique
+  id                         String                @id @default(uuid())
+  email                      String                @unique
   password                   String // bcrypt hashed
   name                       String?
-  verified                   Boolean              @default(false)
-  isSystemAdmin              Boolean              @default(false) // System-level admin access
-  createdAt                  DateTime             @default(now())
-  updatedAt                  DateTime             @updatedAt
+  verified                   Boolean               @default(false)
+  isSystemAdmin              Boolean               @default(false) // System-level admin access
+  createdAt                  DateTime              @default(now())
+  updatedAt                  DateTime              @updatedAt
   projectMemberships         ProjectMembership[]
   customAgentTypes           AgentType[] // Custom agents uploaded by this user
   planTemplates              PlanTemplate[] // Plan templates created by this user
@@ -28,9 +28,10 @@ model User {
   agentConfigurations        AgentConfiguration[] // Agent pipeline configurations created by this user
   personas                   Persona[] // Personas (agent identity) created by this user
   messages                   UserMessage[] // Inbox messages for this user
-  sentProjectInvitations     ProjectInvitation[]  @relation("SentInvitations")
-  receivedProjectInvitations ProjectInvitation[]  @relation("ReceivedInvitations")
+  sentProjectInvitations     ProjectInvitation[]   @relation("SentInvitations")
+  receivedProjectInvitations ProjectInvitation[]   @relation("ReceivedInvitations")
   platformSettingsUpdated    PlatformSetting[] // Platform defaults this admin last changed
+  personalAccessTokens       PersonalAccessToken[] // Tokens AI clients use to reach /mcp as this user
 }
 
 enum MemberRole {
@@ -599,16 +600,16 @@ model ServerMetricsSnapshot {
 // One run of the voice load test (scripts/load-test): how many simultaneous
 // sessions a server's GPU carried before the voice slowed or stuttered.
 model CapacityMeasurement {
-  id              String   @id @default(uuid())
-  measuredAt      DateTime
-  createdAt       DateTime @default(now())
+  id         String   @id @default(uuid())
+  measuredAt DateTime
+  createdAt  DateTime @default(now())
 
-  gpuName         String
-  gpuMemoryMb     Int?
-  environment     String // which deployment was measured, e.g. "development"
-  sttProvider     String?
-  ttsProvider     String?
-  gitRevision     String?
+  gpuName     String
+  gpuMemoryMb Int?
+  environment String // which deployment was measured, e.g. "development"
+  sttProvider String?
+  ttsProvider String?
+  gitRevision String?
 
   maxSessions     Int
   limitedBy       String[]
@@ -754,4 +755,42 @@ model PlatformSetting {
   updatedAt   DateTime @updatedAt
   updatedById String?
   updatedBy   User?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+}
+
+// A token an AI client sends as `Authorization: Bearer stella_pat_…` to reach
+// /mcp as its owner (#772). Only the sha256 of the secret is stored; the
+// secret itself is shown once, at creation.
+model PersonalAccessToken {
+  id            String        @id @default(uuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  displayPrefix String // first characters of the secret, so the owner can tell tokens apart
+  tokenHash     String        @unique // sha256 hex of the full secret
+  scopes        String[] // "mcp:read", "mcp:write"
+  expiresAt     DateTime?
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime      @default(now())
+  auditLogs     McpAuditLog[]
+
+  @@index([userId])
+}
+
+// One row per MCP tool call (#772). Arguments are summarised and redacted
+// before they are stored. Rows older than 90 days are deleted daily.
+model McpAuditLog {
+  id          String               @id @default(uuid())
+  userId      String
+  tokenId     String?
+  token       PersonalAccessToken? @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+  tool        String
+  argsSummary Json
+  success     Boolean
+  errorCode   String?
+  durationMs  Int
+  createdAt   DateTime             @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }

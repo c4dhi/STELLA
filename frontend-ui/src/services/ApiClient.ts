@@ -69,6 +69,10 @@ import type {
   AdminDashboardMetrics,
   CapacityMeasurement,
   PlatformSettings,
+  PlatformFeatures,
+  AccessToken,
+  CreateAccessTokenRequest,
+  CreateAccessTokenResponse,
   TtsPlaybackMode,
   SessionActivityDay,
   HistoricalUsageData,
@@ -1748,6 +1752,48 @@ class SessionManagementClient {
       method: 'PUT',
       body: JSON.stringify({ ttsPlayback }),
     })
+  }
+
+  /**
+   * Switch MCP access on or off for every user. Off keeps existing tokens but
+   * makes them unusable.
+   */
+  async setMcpEnabled(mcpEnabled: boolean): Promise<PlatformSettings> {
+    return this.request<PlatformSettings>('/admin/platform-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ mcpEnabled }),
+    })
+  }
+
+  // ============================================================================
+  // Platform features API
+  // ============================================================================
+
+  /** Which optional features are on, for any signed-in user. */
+  async getPlatformFeatures(): Promise<PlatformFeatures> {
+    return this.get<PlatformFeatures>('/platform/features')
+  }
+
+  // ============================================================================
+  // MCP access tokens API
+  // ============================================================================
+
+  async listAccessTokens(): Promise<AccessToken[]> {
+    return this.get<AccessToken[]>('/me/access-tokens')
+  }
+
+  /** The response carries the secret; it cannot be fetched again. */
+  async createAccessToken(data: CreateAccessTokenRequest): Promise<CreateAccessTokenResponse> {
+    return this.post<CreateAccessTokenResponse>('/me/access-tokens', data)
+  }
+
+  async revokeAccessToken(id: string): Promise<AccessToken> {
+    return this.delete<AccessToken>(`/me/access-tokens/${id}`)
+  }
+
+  /** Absolute URL of the MCP endpoint, for client setup instructions. */
+  getMcpUrl(): string {
+    return new URL(`${this.getBaseUrl().replace(/\/$/, '')}/mcp`, window.location.origin).toString()
   }
 
   // ============================================================================

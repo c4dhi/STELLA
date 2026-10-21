@@ -91,6 +91,7 @@ describe('PlatformSettingsService', () => {
       updatedAt: '2026-10-12T14:20:00.000Z',
       updatedBy: 'Admin',
       pinnedDeployments: [],
+      mcpEnabled: false,
     });
   });
 

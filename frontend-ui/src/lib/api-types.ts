@@ -1814,4 +1814,46 @@ export interface PlatformSettings {
   updatedBy: string | null
   /** Deployments that set their own mode and so keep it. */
   pinnedDeployments: PinnedDeployment[]
+  /** Whether AI clients may connect over MCP. Off unless an admin turns it on. */
+  mcpEnabled: boolean
+}
+
+// ============================================================================
+// Platform features (any signed-in user)
+// ============================================================================
+
+export interface PlatformFeatures {
+  mcpEnabled: boolean
+}
+
+// ============================================================================
+// MCP access tokens (Settings → MCP Access)
+// ============================================================================
+
+export type AccessTokenScope = 'mcp:read' | 'mcp:write'
+export type AccessTokenAccess = 'read' | 'read_write'
+export type AccessTokenExpiryDays = 7 | 30 | 90 | 365
+
+export interface AccessToken {
+  id: string
+  name: string
+  /** The first characters of the secret, to tell tokens apart. */
+  displayPrefix: string
+  scopes: AccessTokenScope[]
+  expiresAt: string | null
+  lastUsedAt: string | null
+  revokedAt: string | null
+  createdAt: string
+}
+
+export interface CreateAccessTokenRequest {
+  name: string
+  expiresInDays?: AccessTokenExpiryDays
+  access?: AccessTokenAccess
+}
+
+export interface CreateAccessTokenResponse {
+  /** The secret. Shown once; the server keeps only its hash. */
+  token: string
+  accessToken: AccessToken
 }

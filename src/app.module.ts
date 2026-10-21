@@ -35,6 +35,8 @@ import { AgentConfigurationsModule } from './agent-configurations/agent-configur
 import { HealthModule } from './health/health.module.js';
 import { TtsModule } from './tts/tts.module.js';
 import { BackupModule } from './backup/backup.module.js';
+import { AccessTokensModule } from './access-tokens/access-tokens.module.js';
+import { McpModule } from './mcp/mcp.module.js';
 
 const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.local';
 
@@ -75,6 +77,8 @@ const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : 
     HealthModule,
     TtsModule,
     BackupModule,
+    AccessTokensModule,
+    McpModule,
   ],
   controllers: [AppController],
   providers: [
