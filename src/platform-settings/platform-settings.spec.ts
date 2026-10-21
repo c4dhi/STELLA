@@ -56,6 +56,16 @@ function makeService(opts: {
           !stages || stages.includes((m.metadata as any)?.envelope?.data?.stage));
       }),
     },
+    // The activity query: one row per session per 10 s, as date_bin returns it.
+    $queryRaw: jest.fn(async () => {
+      if (opts.messageError) throw opts.messageError;
+      const seen = new Map<string, { sessionId: string; at: Date }>();
+      for (const m of opts.messages ?? []) {
+        const at = new Date(Math.floor(m.timestamp.getTime() / 10_000) * 10_000);
+        seen.set(`${m.sessionId}@${at.getTime()}`, { sessionId: m.sessionId, at });
+      }
+      return [...seen.values()];
+    }),
     capacityMeasurement: { findFirst: jest.fn(async () => opts.loadTest ?? null) },
     agentInstance: { findMany: jest.fn(async () => opts.agents ?? []) },
     envVarTemplate: {
@@ -184,7 +194,7 @@ describe('PlatformSettingsService', () => {
       // Session d was in conversation for the first minute only: 13 sentences each saw it.
       expect(fit.buckets.find(b => b.sessions === 4)).toMatchObject({ sentences: 39, source: 'load test' });
       // Fourteen days back, analytics only.
-      const where = (prisma.message.findMany.mock.calls[1] as any)[0].where;
+      const where = (prisma.message.findMany.mock.calls[0] as any)[0].where;
       expect(where.messageType).toBe('analytics');
       expect(where.timestamp.gte.toISOString()).toBe('2026-10-06T11:00:00.000Z');
     });

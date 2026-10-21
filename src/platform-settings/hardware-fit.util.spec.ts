@@ -130,6 +130,37 @@ describe('scoreHardwareFit', () => {
     expect(fit.colour).toBe('green');
   });
 
+  it('never reads better at the usual load than the ranges below it say', () => {
+    // Alone, sessions were slow; in pairs, fast. The pairs must not make the
+    // headline green while the ranges already call 1 session yellow.
+    const speeds = [
+      ...overlapping(1, 30, 1.0, T0),
+      ...overlapping(1, 30, 1.0, T0 + 60 * MIN),
+      ...overlapping(2, 60, 0.5, T0 + 120 * MIN),
+      ...overlapping(2, 60, 0.5, T0 + 180 * MIN),
+    ];
+    const fit = scoreHardwareFit(input({ speeds }));
+    expect(fit.buckets.map(b => b.colour)).toEqual(['yellow', 'green']);
+    expect(fit.usualSessions).toBe(2);
+    expect(fit.greenUpTo).toBeNull();
+    expect(fit.yellowUpTo).toBe(2);
+    expect(fit.colour).toBe('yellow');
+  });
+
+  it('walks up the session counts without ever getting better', () => {
+    const speeds = [
+      ...overlapping(1, 40, 0.5, T0),
+      ...overlapping(1, 40, 0.5, T0 + 60 * MIN),
+      ...overlapping(2, 30, 1.8, T0 + 120 * MIN),
+      ...overlapping(3, 20, 0.5, T0 + 180 * MIN),
+    ];
+    const fit = scoreHardwareFit(input({ speeds }));
+    expect(fit.buckets.map(b => b.colour)).toEqual(['green', 'red', 'green']);
+    expect(fit.greenUpTo).toBe(1);
+    expect(fit.yellowUpTo).toBe(1);
+    expect(fit.redFrom).toBe(2);
+  });
+
   it('gives a group its own colour only from 50 sentences across 2 sessions', () => {
     const speeds = [
       ...overlapping(1, 100, 0.5, T0),

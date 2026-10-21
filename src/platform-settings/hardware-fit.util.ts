@@ -173,33 +173,39 @@ export function scoreHardwareFit(input: HardwareFitInput): HardwareFit {
   }
 
   let usualSessions: number | null = null;
-  let colour: FitColour | null = null;
   if (enough) {
     const sortedLevels = levels.slice().sort((a, b) => a - b);
     usualSessions = sortedLevels[Math.floor((sortedLevels.length - 1) / 2)];
-    const usual = buckets[usualSessions - 1];
-    if (usual?.colour) {
-      colour = usual.colour;
-    } else {
-      // The usual group alone is too thin: read all sentences together.
-      const all = input.speeds.map(s => s.rtf).sort((a, b) => a - b);
-      const switched = new Set(input.switches.map(s => s.sessionId).filter(id => speakingSessions.has(id)));
-      colour = colourFor(percentile(all, HARDWARE_FIT.percentile), switched.size / speakingSessions.size);
-    }
     if (input.loadTest) fillFromLoadTest(buckets, input.loadTest);
   }
 
   // How far each colour holds: walk up the session counts, never improving.
+  // The headline is read off the same walk, so it can never say better at
+  // the usual load than the ranges already say below it.
   let worst: FitColour | null = null;
+  let atUsual: FitColour | null = null;
   let greenUpTo: number | null = null;
   let yellowUpTo: number | null = null;
   let redFrom: number | null = null;
   for (const b of buckets) {
     if (!b.colour) continue;
     if (!worst || RANK[b.colour] > RANK[worst]) worst = b.colour;
+    if (usualSessions !== null && b.sessions <= usualSessions) atUsual = worst;
     if (worst === 'green') greenUpTo = b.sessions;
     if (worst !== 'red') yellowUpTo = b.sessions;
     else if (redFrom === null) redFrom = b.sessions;
+  }
+
+  let colour: FitColour | null = null;
+  if (enough) {
+    if (atUsual) {
+      colour = atUsual;
+    } else {
+      // No group at or below the usual load has a colour: read all sentences together.
+      const all = input.speeds.map(s => s.rtf).sort((a, b) => a - b);
+      const switched = new Set(input.switches.map(s => s.sessionId).filter(id => speakingSessions.has(id)));
+      colour = colourFor(percentile(all, HARDWARE_FIT.percentile), switched.size / speakingSessions.size);
+    }
   }
 
   return {

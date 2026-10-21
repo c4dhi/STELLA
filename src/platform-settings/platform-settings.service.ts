@@ -91,10 +91,13 @@ export class PlatformSettingsService {
         where: { ...analytics, OR: [stage(SPEED_STAGE), stage(SWITCH_STAGE)] },
         select: { sessionId: true, timestamp: true, metadata: true },
       }),
-      this.prisma.message.findMany({
-        where: analytics,
-        select: { sessionId: true, timestamp: true },
-      }),
+      // Only "was this session in conversation around then" is needed, so one
+      // row per session per 10 s instead of every analytics row: well inside
+      // the minute-wide window, at a fraction of the rows.
+      this.prisma.$queryRaw<{ sessionId: string; at: Date }[]>`
+        SELECT DISTINCT "sessionId", date_bin('10 seconds', "timestamp", TIMESTAMP '2000-01-01') AS at
+        FROM "Message"
+        WHERE "messageType" = 'analytics' AND "timestamp" >= ${since}`,
       this.prisma.capacityMeasurement.findFirst({
         orderBy: { measuredAt: 'desc' },
         select: { maxSessions: true, reachedTopLevel: true, gpuName: true, ttsProvider: true },
@@ -115,7 +118,7 @@ export class PlatformSettingsService {
     return scoreHardwareFit({
       speeds,
       switches,
-      activity: activity.map(row => ({ sessionId: row.sessionId, at: row.timestamp.getTime() })),
+      activity: activity.map(row => ({ sessionId: row.sessionId, at: new Date(row.at).getTime() })),
       loadTest,
     });
   }
