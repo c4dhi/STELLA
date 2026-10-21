@@ -218,9 +218,10 @@ export function scoreHardwareFit(input: HardwareFitInput): HardwareFit {
 }
 
 /**
- * Levels the load test passed take the colour of the highest live group at or
- * below them (the lowest live group, below all of them); one past its limit is
- * red, unless live data already reaches that far. Live colours always win.
+ * Levels the load test passed take a live group's colour: the nearest one above
+ * them (more load is never faster, so a gap takes the worse side), or the
+ * highest one, above all of them. One past its limit is red, unless live data
+ * already reaches that far. Live colours always win.
  */
 function fillFromLoadTest(buckets: HardwareFitBucket[], test: LoadTestSummary): void {
   const live = buckets.filter(b => b.colour);
@@ -232,7 +233,7 @@ function fillFromLoadTest(buckets: HardwareFitBucket[], test: LoadTestSummary): 
     if (existing?.colour) continue;
     let colour: FitColour | null = null;
     if (n <= test.maxSessions) {
-      colour = (live.filter(b => b.sessions <= n).at(-1) ?? live[0]).colour;
+      colour = (live.find(b => b.sessions > n) ?? live[live.length - 1]).colour;
     } else if (n === test.maxSessions + 1 && !test.reachedTopLevel && n > maxLive) {
       colour = 'red';
     }

@@ -174,6 +174,26 @@ describe('scoreHardwareFit', () => {
       expect(fit.ttsModel).toBe('qwen3');
     });
 
+    it('fills a gap between two measured groups with the worse one above it', () => {
+      const speeds = [
+        ...overlapping(1, 100, 0.5, T0),
+        ...overlapping(1, 100, 0.5, T0 + 60 * MIN),
+        ...overlapping(3, 30, 1.2, T0 + 120 * MIN),
+      ];
+      const fit = scoreHardwareFit(input({
+        speeds,
+        loadTest: { maxSessions: 4, reachedTopLevel: false, gpuName: 'T4', ttsProvider: null },
+      }));
+      expect(fit.buckets.map(b => [b.sessions, b.colour, b.source])).toEqual([
+        [1, 'green', 'live'],
+        [2, 'yellow', 'load test'],
+        [3, 'yellow', 'live'],
+        [4, 'yellow', 'load test'],
+        [5, 'red', 'load test'],
+      ]);
+      expect(fit.greenUpTo).toBe(1);
+    });
+
     it('marks nothing red when the test passed its top level', () => {
       const fit = scoreHardwareFit(input({
         speeds: live(),
