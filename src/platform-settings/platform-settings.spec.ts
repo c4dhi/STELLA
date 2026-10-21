@@ -30,6 +30,9 @@ function makeService(opts: {
   agents?: unknown[];
   templates?: Record<string, string>;
   findUniqueError?: Error;
+  messages?: { sessionId: string; timestamp: Date; metadata?: unknown }[];
+  loadTest?: unknown;
+  messageError?: Error;
 } = {}) {
   const row = opts.stored
     ? { key: 'ttsPlayback', updatedAt: new Date('2026-10-12T14:20:00Z'), updatedBy: null, ...opts.stored }
@@ -44,6 +47,16 @@ function makeService(opts: {
       deleteMany: jest.fn(async () => ({ count: 1 })),
     },
     project: { findMany: jest.fn(async () => opts.publicProjects ?? []) },
+    message: {
+      // Honours the stage filter the way the JSON path query does in Postgres.
+      findMany: jest.fn(async (args: any) => {
+        if (opts.messageError) throw opts.messageError;
+        const stages: string[] | undefined = args.where.OR?.map((c: any) => c.metadata.equals);
+        return (opts.messages ?? []).filter(m =>
+          !stages || stages.includes((m.metadata as any)?.envelope?.data?.stage));
+      }),
+    },
+    capacityMeasurement: { findFirst: jest.fn(async () => opts.loadTest ?? null) },
     agentInstance: { findMany: jest.fn(async () => opts.agents ?? []) },
     envVarTemplate: {
       findUnique: jest.fn(async (args: any) =>
@@ -91,6 +104,7 @@ describe('PlatformSettingsService', () => {
       updatedAt: '2026-10-12T14:20:00.000Z',
       updatedBy: 'Admin',
       pinnedDeployments: [],
+      hardwareFit: expect.objectContaining({ colour: null, sentencesSeen: 0 }),
     });
   });
 
@@ -144,5 +158,56 @@ describe('PlatformSettingsService', () => {
     ]);
     // Only the mode leaves the service.
     expect(JSON.stringify(pinned)).not.toContain('secret');
+  });
+
+  describe('hardware fit (#93)', () => {
+    const T0 = Date.parse('2026-10-20T10:00:00Z');
+    const analytics = (sessionId: string, at: number, data: Record<string, unknown>) => ({
+      sessionId,
+      timestamp: new Date(at),
+      metadata: { envelope: { type: 'analytics', data } },
+    });
+    // Three sessions talking at once, 80 sentences each at the given speed.
+    const talk = (rtf: number) =>
+      ['a', 'b', 'c'].flatMap(id =>
+        Array.from({ length: 80 }, (_, i) =>
+          analytics(id, T0 + i * 5000, { stage: 'tts_sentence_speed', turn_id: 't', rtf, playback: 'stream' })));
+
+    it('scores the speeds agents published, at the sessions running alongside', async () => {
+      const { service, prisma } = makeService({
+        messages: [...talk(1.1), analytics('d', T0, { stage: 'stt_end', elapsed_ms: 0 })],
+        loadTest: { maxSessions: 4, reachedTopLevel: false, gpuName: 'Tesla T4', ttsProvider: 'qwen3' },
+      });
+      const fit = await service.getHardwareFit(new Date(T0 + 3600_000));
+      expect(fit).toMatchObject({ colour: 'yellow', usualSessions: 3, gpu: 'Tesla T4', ttsModel: 'qwen3' });
+      expect(fit.sentencesSeen).toBe(240);
+      // Session d was in conversation for the first minute only: 13 sentences each saw it.
+      expect(fit.buckets.find(b => b.sessions === 4)).toMatchObject({ sentences: 39, source: 'load test' });
+      // Fourteen days back, analytics only.
+      const where = (prisma.message.findMany.mock.calls[1] as any)[0].where;
+      expect(where.messageType).toBe('analytics');
+      expect(where.timestamp.gte.toISOString()).toBe('2026-10-06T11:00:00.000Z');
+    });
+
+    it('counts a switch, and ignores a speed with no usable number', async () => {
+      const { service } = makeService({
+        messages: [
+          ...talk(0.5),
+          analytics('a', T0, { stage: 'tts_playback_switch', rtf: 1.2, slow_sentences: 3 }),
+          analytics('a', T0, { stage: 'tts_sentence_speed', rtf: 'fast' }),
+        ],
+      });
+      const fit = await service.getHardwareFit(new Date(T0 + 3600_000));
+      expect(fit.sentencesSeen).toBe(240);
+      expect(fit.buckets.find(b => b.sessions === 3)!.switchedShare).toBeCloseTo(1 / 3);
+      expect(fit.colour).toBe('yellow');
+    });
+
+    it('leaves the rest of the page working when the fit cannot be read', async () => {
+      const { service } = makeService({ messageError: new Error('db down') });
+      const view = await service.getView();
+      expect(view.hardwareFit).toBeNull();
+      expect(view.ttsPlayback).toBeNull();
+    });
   });
 });
