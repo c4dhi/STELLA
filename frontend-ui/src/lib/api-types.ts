@@ -1814,6 +1814,41 @@ export interface PlatformSettings {
   updatedBy: string | null
   /** Deployments that set their own mode and so keep it. */
   pinnedDeployments: PinnedDeployment[]
-  /** How well the voice fits this server under concurrent load (#93). */
-  hardwareFit?: import('../components/settings/HardwareFitPanel').HardwareFit
+  /** How well the voice fits this server under concurrent load (#93); null when it could not be read. */
+  hardwareFit: HardwareFit | null
+}
+
+/** How well the voice fits this server, at a given number of sessions at once (#93). */
+export type FitColour = 'green' | 'yellow' | 'red'
+
+export interface HardwareFitBucket {
+  /** Sessions in conversation at once when these sentences were spoken. */
+  sessions: number
+  sentences: number
+  /** Synthesis time / audio length, 90th percentile. Below 1 is faster than real time. */
+  rtfP90: number | null
+  /** Share of sessions in this group that switched from streaming to sentence by sentence. */
+  switchedShare: number | null
+  /** null: too little data for a colour. */
+  colour: FitColour | null
+  /** 'live' from sessions, or 'load test' where the last capacity measurement fills in. */
+  source: 'live' | 'load test'
+}
+
+export interface HardwareFit {
+  /** The reading at the usual load; null when there is too little data. */
+  colour: FitColour | null
+  usualSessions: number | null
+  /** From the last load test; null when none was recorded. */
+  ttsModel: string | null
+  gpu: string | null
+  windowDays: number
+  /** Highest session count each colour holds for; null = never reached. */
+  greenUpTo: number | null
+  yellowUpTo: number | null
+  /** Lowest session count read as red; null = none seen or estimated. */
+  redFrom: number | null
+  buckets: HardwareFitBucket[]
+  sentencesSeen: number
+  sentencesNeeded: number
 }

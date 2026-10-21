@@ -1,37 +1,5 @@
 import { useState } from 'react'
-import type { TtsPlaybackMode } from '../../lib/api-types'
-
-/** How well the voice fits this server, at a given number of sessions at once (#93). */
-export type FitColour = 'green' | 'yellow' | 'red'
-
-export interface HardwareFitBucket {
-  /** Sessions running at once when these sentences were spoken. */
-  sessions: number
-  sentences: number
-  /** Synthesis time / audio length, 90th percentile. Below 1 is faster than real time. */
-  rtfP90: number | null
-  /** Share of sessions in this bucket that switched from streaming to sentence by sentence. */
-  switchedShare: number | null
-  /** null: too little data for a colour. */
-  colour: FitColour | null
-  /** 'live' from sessions, or 'load test' from the capacity measurement. */
-  source: 'live' | 'load test'
-}
-
-export interface HardwareFit {
-  /** The reading at the usual load; null when there is too little data. */
-  colour: FitColour | null
-  usualSessions: number | null
-  ttsModel: string
-  gpu: string
-  windowDays: number
-  /** Highest session count each colour holds for; null = never reached. */
-  greenUpTo: number | null
-  yellowUpTo: number | null
-  buckets: HardwareFitBucket[]
-  sentencesSeen: number
-  sentencesNeeded: number
-}
+import type { FitColour, HardwareFit, TtsPlaybackMode } from '../../lib/api-types'
 
 const colourInfo: Record<FitColour, { label: string; text: string; dot: string; soft: string }> = {
   green: {
@@ -68,15 +36,15 @@ function Light({ colour, isDark }: { colour: FitColour | null; isDark: boolean }
   )
 }
 
-function rangeText(fit: HardwareFit): string[] {
+export function rangeText(fit: HardwareFit): string[] {
   const out: string[] = []
-  if (fit.greenUpTo) out.push(`Smooth streaming up to ${fit.greenUpTo} session${fit.greenUpTo === 1 ? '' : 's'} at once`)
+  const plural = (n: number) => `${n} session${n === 1 ? '' : 's'}`
+  if (fit.greenUpTo) out.push(`Smooth streaming up to ${plural(fit.greenUpTo)} at once`)
   const from = (fit.greenUpTo ?? 0) + 1
   if (fit.yellowUpTo && fit.yellowUpTo >= from) {
-    out.push(`Sentence by sentence ${from === fit.yellowUpTo ? `at ${from}` : `from ${from} to ${fit.yellowUpTo}`} sessions`)
+    out.push(`Sentence by sentence ${from === fit.yellowUpTo ? `at ${plural(from)}` : `from ${from} to ${fit.yellowUpTo} sessions`}`)
   }
-  const redFrom = (fit.yellowUpTo ?? fit.greenUpTo ?? 0) + 1
-  out.push(`Too slow from ${redFrom} sessions`)
+  if (fit.redFrom) out.push(`Too slow from ${plural(fit.redFrom)}`)
   return out
 }
 
@@ -102,7 +70,8 @@ export default function HardwareFitPanel({
         <Light colour={fit.colour} isDark={isDark} />
         <div className="flex-1 min-w-0">
           <p className={`text-caption ${muted}`}>
-            How well the voice fits this server · {fit.ttsModel} on {fit.gpu}
+            How well the voice fits this server
+            {fit.ttsModel && fit.gpu ? ` · ${fit.ttsModel} on ${fit.gpu}` : fit.gpu ? ` · ${fit.gpu}` : ''}
           </p>
           <p className={`text-body-sm font-semibold mt-0.5 ${strong}`}>
             {info ? info.label : 'Not enough data yet'}
