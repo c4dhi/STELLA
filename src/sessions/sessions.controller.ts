@@ -17,6 +17,7 @@ import {
   BadRequestException,
   UnauthorizedException,
   Request,
+  UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { Observable } from 'rxjs';
@@ -28,6 +29,11 @@ import { QuerySessionsDto } from './dto/query-sessions.dto.js';
 import { BatchListenerStatusDto } from './dto/batch-listener-status.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { Public } from '../common/decorators/public.decorator.js';
+import { ProjectAccessGuard } from '../auth/guards/project-access.guard.js';
+import {
+  AllowSessionParticipant,
+  SessionAccessGuard,
+} from '../auth/guards/session-access.guard.js';
 import type { LogEntry } from '../message-recorder/room-monitor.service.js';
 
 interface MessageEvent {
@@ -48,6 +54,7 @@ export class SessionsController {
   ) {}
 
   @Post('projects/:projectId/sessions')
+  @UseGuards(ProjectAccessGuard)
   create(
     @Param('projectId') projectId: string,
     @Body() createSessionDto: CreateSessionDto,
@@ -56,6 +63,7 @@ export class SessionsController {
   }
 
   @Get('projects/:projectId/sessions')
+  @UseGuards(ProjectAccessGuard)
   findAll(
     @Param('projectId') projectId: string,
     @Query() query: QuerySessionsDto,
@@ -64,11 +72,13 @@ export class SessionsController {
   }
 
   @Get('sessions/:sessionId')
+  @UseGuards(SessionAccessGuard)
   findOne(@Param('sessionId') id: string) {
     return this.sessionsService.findOne(id);
   }
 
   @Post('sessions/:sessionId/joinToken')
+  @UseGuards(SessionAccessGuard)
   createJoinToken(
     @Param('sessionId') sessionId: string,
     @Body() createTokenDto: CreateTokenDto,
@@ -77,6 +87,7 @@ export class SessionsController {
   }
 
   @Get('sessions/:sessionId/timeline')
+  @UseGuards(SessionAccessGuard)
   getTimeline(
     @Param('sessionId') sessionId: string,
     @Query('skip') skip?: number,
@@ -86,6 +97,7 @@ export class SessionsController {
   }
 
   @Patch('sessions/:sessionId')
+  @UseGuards(SessionAccessGuard)
   update(
     @Param('sessionId') id: string,
     @Body() updateSessionDto: UpdateSessionDto,
@@ -94,17 +106,20 @@ export class SessionsController {
   }
 
   @Patch('sessions/:sessionId/close')
+  @UseGuards(SessionAccessGuard)
   close(@Param('sessionId') id: string) {
     return this.sessionsService.close(id);
   }
 
   @Delete('sessions/:sessionId')
+  @UseGuards(SessionAccessGuard)
   delete(@Param('sessionId') id: string) {
     return this.sessionsService.delete(id);
   }
 
   // Participant management endpoints
   @Post('sessions/:sessionId/participants')
+  @UseGuards(SessionAccessGuard)
   registerParticipant(
     @Param('sessionId') sessionId: string,
     @Body('name') name: string,
@@ -113,12 +128,14 @@ export class SessionsController {
   }
 
   @Get('sessions/:sessionId/participants')
+  @UseGuards(SessionAccessGuard)
   listParticipants(@Param('sessionId') sessionId: string) {
     return this.sessionsService.listParticipants(sessionId);
   }
 
   // Dashboard endpoint: Get participant connection info by ID (user-authenticated)
   @Get('participants/:participantId/connection-info')
+  @UseGuards(SessionAccessGuard)
   getParticipantConnectionInfoById(@Param('participantId') participantId: string) {
     // User-authenticated - dashboard uses this to generate QR codes
     return this.sessionsService.getParticipantConnectionInfoWithToken(participantId);
@@ -160,12 +177,15 @@ export class SessionsController {
   }
 
   @Delete('participants/:participantId')
+  @UseGuards(SessionAccessGuard)
   removeParticipant(@Param('participantId') participantId: string) {
     return this.sessionsService.removeParticipant(participantId);
   }
 
   // Message retrieval endpoints
   @Get('sessions/:sessionId/messages')
+  @UseGuards(SessionAccessGuard)
+  @AllowSessionParticipant()
   async getMessages(
     @Param('sessionId') sessionId: string,
     @Query('cursor') cursor?: string,
@@ -210,6 +230,7 @@ export class SessionsController {
   }
 
   @Get('sessions/:sessionId/messages/latest')
+  @UseGuards(SessionAccessGuard)
   getLatestMessages(
     @Param('sessionId') sessionId: string,
     @Query('since') since?: string,
@@ -221,11 +242,13 @@ export class SessionsController {
   }
 
   @Get('sessions/:sessionId/transcript/types')
+  @UseGuards(SessionAccessGuard)
   async getTranscriptMessageTypes(@Param('sessionId') sessionId: string) {
     return this.sessionsService.getTranscriptMessageTypes(sessionId);
   }
 
   @Get('sessions/:sessionId/transcript')
+  @UseGuards(SessionAccessGuard)
   async exportTranscript(
     @Param('sessionId') sessionId: string,
     @Res() res: Response,
@@ -286,18 +309,25 @@ export class SessionsController {
 
   // Listener monitoring endpoint
   @Get('sessions/:sessionId/listener-status')
+  @UseGuards(SessionAccessGuard)
   getListenerStatus(@Param('sessionId') sessionId: string) {
     return this.sessionsService.getListenerStatus(sessionId);
   }
 
   // Batch listener status endpoint - reduces N requests to 1
   @Post('sessions/listener-status/batch')
-  getBatchListenerStatus(@Body() dto: BatchListenerStatusDto) {
-    return this.sessionsService.getBatchListenerStatus(dto.sessionIds);
+  async getBatchListenerStatus(@Body() dto: BatchListenerStatusDto, @Request() req) {
+    // Only report sessions in the caller's projects.
+    const visible = await this.prisma.session.findMany({
+      where: { id: { in: dto.sessionIds }, projectId: { in: req.user?.projectIds ?? [] } },
+      select: { id: true },
+    });
+    return this.sessionsService.getBatchListenerStatus(visible.map((s) => s.id));
   }
 
   // SSE endpoint for real-time session events (agent ready, agent failed, etc.)
   @Sse('sessions/:sessionId/events')
+  @UseGuards(SessionAccessGuard)
   streamSessionEvents(@Param('sessionId') sessionId: string): Observable<MessageEvent> {
     this.logger.log(`SSE connection opened for session ${sessionId}`);
     return this.sessionsService.getSessionEventStream(sessionId);
@@ -308,6 +338,7 @@ export class SessionsController {
    * Used by SessionsDashboard for real-time updates when new participants join.
    */
   @Sse('projects/:projectId/sessions/events')
+  @UseGuards(ProjectAccessGuard)
   streamProjectEvents(@Param('projectId') projectId: string): Observable<MessageEvent> {
     this.logger.log(`SSE connection opened for project ${projectId} session events`);
     return this.sessionsService.getProjectEventStream(projectId);

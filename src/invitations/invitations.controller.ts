@@ -11,6 +11,7 @@ import { InvitationsService } from './invitations.service.js';
 import { CreateInvitationDto } from './dto/create-invitation.dto.js';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto.js';
 import { Public } from '../common/decorators/public.decorator.js';
+import { SessionAccessGuard } from '../auth/guards/session-access.guard.js';
 
 @Controller()
 export class InvitationsController {
@@ -25,6 +26,7 @@ export class InvitationsController {
    * POST /sessions/:sessionId/invitations
    */
   @Post('sessions/:sessionId/invitations')
+  @UseGuards(SessionAccessGuard)
   create(
     @Param('sessionId') sessionId: string,
     @Body() createInvitationDto: CreateInvitationDto,
@@ -37,6 +39,7 @@ export class InvitationsController {
    * GET /sessions/:sessionId/invitations
    */
   @Get('sessions/:sessionId/invitations')
+  @UseGuards(SessionAccessGuard)
   findBySession(@Param('sessionId') sessionId: string) {
     return this.invitationsService.findBySession(sessionId);
   }
@@ -46,6 +49,7 @@ export class InvitationsController {
    * GET /invitations/:invitationId
    */
   @Get('invitations/:invitationId')
+  @UseGuards(SessionAccessGuard)
   findOne(@Param('invitationId') invitationId: string) {
     return this.invitationsService.findOne(invitationId);
   }
@@ -55,6 +59,7 @@ export class InvitationsController {
    * DELETE /invitations/:invitationId/revoke
    */
   @Delete('invitations/:invitationId/revoke')
+  @UseGuards(SessionAccessGuard)
   revoke(@Param('invitationId') invitationId: string) {
     return this.invitationsService.revoke(invitationId);
   }
@@ -64,6 +69,7 @@ export class InvitationsController {
    * DELETE /invitations/:invitationId
    */
   @Delete('invitations/:invitationId')
+  @UseGuards(SessionAccessGuard)
   delete(@Param('invitationId') invitationId: string) {
     return this.invitationsService.delete(invitationId);
   }
