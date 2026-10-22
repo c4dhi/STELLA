@@ -235,6 +235,7 @@ describe('MCP sign-in (e2e)', () => {
       clientName: 'E2E App',
       redirectHost: 'localhost:53123',
       verifiedBy: 'registration',
+      clientIdHost: null,
     });
     expect(redirect.searchParams.get('state')).toBe('st8');
     const code = redirect.searchParams.get('code')!;

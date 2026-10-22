@@ -200,6 +200,40 @@ describe('sign-in and code exchange', () => {
     ).resolves.toBeNull();
   });
 
+  it('tells the consent page whether the app name was checked', async () => {
+    const s = setup();
+    await registerClient(s.store);
+    const client = (await s.store.getClient('c1'))!;
+    const base = {
+      redirectUri: 'https://claude.ai/api/mcp/auth_callback',
+      codeChallenge: 'c',
+    };
+    const dcrUrl = await s.authorization.createRequest(client, base);
+    await expect(
+      s.authorization.view(new URL(dcrUrl).searchParams.get('request')!),
+    ).resolves.toMatchObject({
+      verifiedBy: 'registration',
+      clientIdHost: null,
+    });
+
+    const cimdId = 'https://claude.ai/oauth/mcp-client.json';
+    s.prisma.oAuthClient.rows.push({
+      ...s.prisma.oAuthClient.rows[0],
+      id: cimdId,
+      source: 'CIMD',
+    });
+    const cimdUrl = await s.authorization.createRequest(
+      { ...client, client_id: cimdId },
+      base,
+    );
+    await expect(
+      s.authorization.view(new URL(cimdUrl).searchParams.get('request')!),
+    ).resolves.toMatchObject({
+      verifiedBy: 'metadata_document',
+      clientIdHost: 'claude.ai',
+    });
+  });
+
   it('refuses unknown scopes and tokens for another resource', async () => {
     const s = setup();
     await registerClient(s.store);
@@ -323,6 +357,64 @@ describe('tokens', () => {
         undefined,
       ),
     ).rejects.toThrow(InvalidScopeError);
+  });
+
+  it('keeps a narrower scope asked for on refresh', async () => {
+    const s = setup();
+    const first = await connected(s);
+    const narrowed = await s.tokens.refresh(
+      'c1',
+      first.refresh_token!,
+      ['mcp:read'],
+      undefined,
+    );
+    expect(narrowed.scope).toBe('mcp:read');
+    expect(
+      (await s.tokens.authenticateAccessToken(narrowed.access_token))?.scopes,
+    ).toEqual(['mcp:read']);
+    // A later refresh without a scope stays narrow.
+    const next = await s.tokens.refresh(
+      'c1',
+      narrowed.refresh_token!,
+      undefined,
+      undefined,
+    );
+    expect(
+      (await s.tokens.authenticateAccessToken(next.access_token))?.scopes,
+    ).toEqual(['mcp:read']);
+  });
+
+  it('caps a token at its grant, and falls back to the grant for tokens without scopes', async () => {
+    const s = setup();
+    const tokens = await connected(s);
+    const grant = s.prisma.oAuthGrant.rows[0];
+    grant.scopes = ['mcp:read'];
+    expect(
+      (await s.tokens.authenticateAccessToken(tokens.access_token))?.scopes,
+    ).toEqual(['mcp:read']);
+    s.prisma.oAuthToken.rows.forEach((r) => (r.scopes = []));
+    grant.scopes = ['mcp:read', 'mcp:write'];
+    expect(
+      (await s.tokens.authenticateAccessToken(tokens.access_token))?.scopes,
+    ).toEqual(['mcp:read', 'mcp:write']);
+  });
+
+  it('refuses an access token issued for another resource', async () => {
+    const s = setup();
+    await connected(s);
+    const grantId = s.prisma.oAuthGrant.rows[0].id;
+    const own = await s.tokens.issueTokens(grantId, ['mcp:read'], MCP);
+    const foreign = await s.tokens.issueTokens(
+      grantId,
+      ['mcp:read'],
+      'https://other.example/mcp',
+    );
+    expect(
+      await s.tokens.authenticateAccessToken(own.access_token),
+    ).not.toBeNull();
+    expect(
+      await s.tokens.authenticateAccessToken(foreign.access_token),
+    ).toBeNull();
   });
 
   it('stops expired access tokens and tokens of a disconnected app', async () => {

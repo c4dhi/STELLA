@@ -41,7 +41,11 @@ export interface AuthorizationRequestView {
   logoUri: string | null;
   // Where the user's browser goes next: the user should recognise it.
   redirectHost: string;
+  // registration: the app named itself when it registered, so anyone could
+  // claim to be "Claude". metadata_document: the name comes from a document
+  // the app publishes at its client_id URL, on clientIdHost.
   verifiedBy: 'registration' | 'metadata_document';
+  clientIdHost: string | null;
   requestedScopes: string[];
   expiresAt: string;
 }
@@ -101,14 +105,15 @@ export class OAuthAuthorizationService {
       client_uri?: string;
       logo_uri?: string;
     };
+    const isCimd = request.client.source === 'CIMD';
     return {
       id: request.id,
       clientName: request.client.name,
       clientUri: metadata.client_uri ?? null,
       logoUri: metadata.logo_uri ?? null,
       redirectHost: new URL(request.redirectUri).host,
-      verifiedBy:
-        request.client.source === 'CIMD' ? 'metadata_document' : 'registration',
+      verifiedBy: isCimd ? 'metadata_document' : 'registration',
+      clientIdHost: isCimd ? new URL(request.client.id).host : null,
       requestedScopes: request.scopes,
       expiresAt: request.expiresAt.toISOString(),
     };

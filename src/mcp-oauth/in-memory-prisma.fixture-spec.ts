@@ -87,7 +87,7 @@ export function createInMemoryOAuthPrisma() {
     grantId: null,
   }));
   const oAuthGrant = table(() => ({ lastUsedAt: null, revokedAt: null }));
-  const oAuthToken = table(() => ({ rotatedAt: null }));
+  const oAuthToken = table(() => ({ rotatedAt: null, scopes: [] }));
 
   const findBy = (t: { rows: Row[] }, where: Row) =>
     t.rows.find((r) => matches(r, where));

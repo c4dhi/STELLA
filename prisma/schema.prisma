@@ -888,6 +888,8 @@ model OAuthToken {
   kind      OAuthTokenKind
   tokenHash String         @unique
   resource  String?
+  // What this token allows; never more than its grant. Empty on tokens issued before this column, which fall back to the grant.
+  scopes    String[]       @default([])
   expiresAt DateTime
   rotatedAt DateTime? // refresh tokens: set once used; a second use means it leaked
   createdAt DateTime       @default(now())

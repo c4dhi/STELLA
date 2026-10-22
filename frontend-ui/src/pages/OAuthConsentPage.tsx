@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { AlertCircle, ShieldCheck } from 'lucide-react'
+import { AlertCircle, AlertTriangle, ShieldCheck } from 'lucide-react'
 import { apiClient } from '../services/ApiClient'
 import { useAuthStore } from '../store/authStore'
 import { OnboardingLayout, OnboardingCard, StellaBranding, GradientButton } from '../components/onboarding'
@@ -104,6 +104,25 @@ export default function OAuthConsentPage() {
                   </p>
                 </div>
               </div>
+
+              {/* A self-registered app picks its own name, so say whether anyone checked it. */}
+              {request.verifiedBy === 'metadata_document' && request.clientIdHost ? (
+                <p className="flex items-start gap-2 text-xs text-content-secondary dark:text-content-inverse-secondary mb-4">
+                  <ShieldCheck className="w-4 h-4 flex-shrink-0 text-green-600 dark:text-green-400" />
+                  <span>
+                    The name comes from <span className="font-mono">{request.clientIdHost}</span>, which this app is
+                    published on.
+                  </span>
+                </p>
+              ) : (
+                <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 mb-4">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>
+                    Name not verified: the app chose “{request.clientName}” itself when it registered. Check where your
+                    browser goes next, below.
+                  </span>
+                </p>
+              )}
 
               <p className="text-sm font-light text-content-secondary dark:text-content-inverse-secondary mb-5">
                 {request.clientName} will act as you in STELLA, with the access you choose below, until you disconnect it
