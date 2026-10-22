@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.4.1] - 2026-10-23
+## [1.4.1] - 2026-10-22
 
 A security fix. **Upgrade if you run Stella with more than one user account.**
 
