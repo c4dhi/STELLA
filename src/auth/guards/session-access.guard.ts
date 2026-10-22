@@ -18,8 +18,10 @@ export const AllowSessionParticipant = () =>
   SetMetadata(ALLOW_SESSION_PARTICIPANT, true);
 
 /**
- * For `:sessionId` routes: the signed-in user must be a member of the session's
- * project. Anything else answers "not found", like a session that does not exist.
+ * For routes that name a session or something inside one (`:sessionId`,
+ * `:agentId`, `:invitationId`, `:participantId`): the signed-in user must be a
+ * member of that session's project. Anything else answers "not found", like
+ * something that does not exist.
  */
 @Injectable()
 export class SessionAccessGuard implements CanActivate {
@@ -31,23 +33,31 @@ export class SessionAccessGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const user = request.user;
-    const sessionId: string = request.params.sessionId;
+    const { sessionId, agentId, invitationId, participantId } = request.params;
 
     if (user?.type === 'participant') {
       const allowed = this.reflector.getAllAndOverride<boolean>(
         ALLOW_SESSION_PARTICIPANT,
         [context.getHandler(), context.getClass()],
       );
-      if (allowed && user.sessionId === sessionId) {
+      if (allowed && sessionId && user.sessionId === sessionId) {
         return true;
       }
-      throw new NotFoundException(`Session ${sessionId} not found`);
+      throw new NotFoundException('Not found');
     }
 
-    await this.access.assertSessionAccess(
-      { projectIds: user?.projectIds ?? [] },
-      sessionId,
-    );
+    const member = { projectIds: user?.projectIds ?? [] };
+    if (sessionId) {
+      await this.access.assertSessionAccess(member, sessionId);
+    } else if (agentId) {
+      await this.access.assertAgentAccess(member, agentId);
+    } else if (invitationId) {
+      await this.access.assertInvitationAccess(member, invitationId);
+    } else if (participantId) {
+      await this.access.assertParticipantAccess(member, participantId);
+    } else {
+      throw new NotFoundException('Not found');
+    }
     return true;
   }
 }
