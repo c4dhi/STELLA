@@ -1,4 +1,5 @@
-import { Controller, Get, Param, Sse, Logger } from '@nestjs/common';
+import { Controller, Get, Param, Sse, Logger, UseGuards } from '@nestjs/common';
+import { ProjectAccessGuard } from '../auth/guards/project-access.guard.js';
 import { Observable } from 'rxjs';
 import { MetricsService } from './metrics.service.js';
 import { ProjectMetricsDto } from './dto/project-metrics.dto.js';
@@ -27,6 +28,7 @@ export class MetricsController {
    * GET /metrics/projects/:projectId
    */
   @Get('projects/:projectId')
+  @UseGuards(ProjectAccessGuard)
   async getProjectMetrics(
     @Param('projectId') projectId: string,
   ): Promise<ProjectMetricsDto> {
@@ -41,6 +43,7 @@ export class MetricsController {
    * Updates every 5 seconds or immediately when project data changes
    */
   @Sse('projects/:projectId/stream')
+  @UseGuards(ProjectAccessGuard)
   streamProjectMetrics(
     @Param('projectId') projectId: string,
   ): Observable<MessageEvent> {

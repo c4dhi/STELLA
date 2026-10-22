@@ -18,6 +18,7 @@ import { AgentImageService } from '../agent-image/agent-image.service.js';
 import { CreateAgentDto } from './dto/create-agent.dto.js';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard.js';
+import { SessionAccessGuard } from '../auth/guards/session-access.guard.js';
 
 interface MessageEvent {
   data: string;
@@ -40,6 +41,7 @@ export class AgentsController {
   }
 
   @Post('sessions/:sessionId/agents')
+  @UseGuards(SessionAccessGuard)
   create(
     @Param('sessionId') sessionId: string,
     @Body() createAgentDto: CreateAgentDto,
@@ -49,16 +51,19 @@ export class AgentsController {
   }
 
   @Get('agents/:agentId')
+  @UseGuards(SessionAccessGuard)
   findOne(@Param('agentId') id: string) {
     return this.agentsService.findOne(id);
   }
 
   @Get('agents/:agentId/logs')
+  @UseGuards(SessionAccessGuard)
   getLogs(@Param('agentId') id: string) {
     return this.agentsService.getLogs(id);
   }
 
   @Sse('agents/:agentId/logs/stream')
+  @UseGuards(SessionAccessGuard)
   streamLogs(@Param('agentId') id: string): Observable<MessageEvent> {
     return new Observable<MessageEvent>((observer) => {
       let cleanup: (() => void) | null = null;
@@ -92,16 +97,19 @@ export class AgentsController {
   }
 
   @Delete('agents/:agentId')
+  @UseGuards(SessionAccessGuard)
   remove(@Param('agentId') id: string) {
     return this.agentsService.remove(id);
   }
 
   @Delete('agents/:agentId/permanent')
+  @UseGuards(SessionAccessGuard)
   permanentDelete(@Param('agentId') id: string) {
     return this.agentsService.delete(id);
   }
 
   @Post('agents/:agentId/restart')
+  @UseGuards(SessionAccessGuard)
   restart(@Param('agentId') id: string) {
     return this.agentsService.restart(id);
   }
