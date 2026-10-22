@@ -34,7 +34,6 @@ import {
   AllowSessionParticipant,
   SessionAccessGuard,
 } from '../auth/guards/session-access.guard.js';
-import { ResourceAccessService } from '../auth/resource-access.service.js';
 import type { LogEntry } from '../message-recorder/room-monitor.service.js';
 
 interface MessageEvent {
@@ -52,19 +51,7 @@ export class SessionsController {
   constructor(
     private readonly sessionsService: SessionsService,
     private readonly prisma: PrismaService,
-    private readonly access: ResourceAccessService,
   ) {}
-
-  /** A participant ID the caller may manage: one in a session of their project. */
-  private async assertParticipantAccess(user: { projectIds?: string[] }, participantId: string) {
-    const participant = await this.prisma.participant.findUnique({
-      where: { id: participantId },
-      select: { session: { select: { projectId: true } } },
-    });
-    if (!participant || !(user.projectIds ?? []).includes(participant.session.projectId)) {
-      throw new NotFoundException(`Participant with ID ${participantId} not found`);
-    }
-  }
 
   @Post('projects/:projectId/sessions')
   @UseGuards(ProjectAccessGuard)
@@ -148,12 +135,9 @@ export class SessionsController {
 
   // Dashboard endpoint: Get participant connection info by ID (user-authenticated)
   @Get('participants/:participantId/connection-info')
-  async getParticipantConnectionInfoById(
-    @Param('participantId') participantId: string,
-    @Request() req,
-  ) {
+  @UseGuards(SessionAccessGuard)
+  getParticipantConnectionInfoById(@Param('participantId') participantId: string) {
     // User-authenticated - dashboard uses this to generate QR codes
-    await this.assertParticipantAccess(req.user, participantId);
     return this.sessionsService.getParticipantConnectionInfoWithToken(participantId);
   }
 
@@ -193,8 +177,8 @@ export class SessionsController {
   }
 
   @Delete('participants/:participantId')
-  async removeParticipant(@Param('participantId') participantId: string, @Request() req) {
-    await this.assertParticipantAccess(req.user, participantId);
+  @UseGuards(SessionAccessGuard)
+  removeParticipant(@Param('participantId') participantId: string) {
     return this.sessionsService.removeParticipant(participantId);
   }
 
