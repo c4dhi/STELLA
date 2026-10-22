@@ -3,6 +3,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuthUserLoader } from '../auth-user.loader.js';
 
 export interface JwtPayload {
   sub: string;
@@ -18,6 +19,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private configService: ConfigService,
     private prisma: PrismaService,
+    private authUserLoader: AuthUserLoader,
   ) {
     const jwtSecret = configService.get<string>('JWT_SECRET');
     if (!jwtSecret) {
@@ -59,43 +61,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       };
     }
 
-    // Handle user token (existing logic)
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        verified: true,
-        isSystemAdmin: true,
-        projectMemberships: {
-          select: {
-            projectId: true,
-            role: true,
-          },
-        },
-      },
-    });
-
-    if (!user) {
-      throw new UnauthorizedException('User not found');
-    }
-
-    // Check if user is verified
-    if (!user.verified) {
-      throw new UnauthorizedException('Your account is pending administrator approval. Please contact your administrator.');
-    }
-
-    return {
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-      isSystemAdmin: user.isSystemAdmin,
-      projectIds: user.projectMemberships.map((m) => m.projectId),
-      projectRoles: user.projectMemberships.reduce(
-        (acc, m) => ({ ...acc, [m.projectId]: m.role }),
-        {},
-      ),
-    };
+    return this.authUserLoader.load(payload.sub);
   }
 }

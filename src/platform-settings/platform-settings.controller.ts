@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Put, UseGuards } from '@nestjs/common';
 import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { PlatformSettingsService, PlatformSettingsView } from './platform-settings.service.js';
@@ -18,12 +18,23 @@ export class PlatformSettingsController {
     return this.platformSettings.getView();
   }
 
-  /** PUT /admin/platform-settings { ttsPlayback: 'auto' | 'stream' | 'sentence' | null } */
+  /**
+   * PUT /admin/platform-settings
+   * { ttsPlayback?: 'auto' | 'stream' | 'sentence' | null, mcpEnabled?: boolean }
+   * Only the keys present are changed.
+   */
   @Put()
-  update(
+  async update(
     @CurrentUser() user: { userId: string },
-    @Body() body: { ttsPlayback?: unknown },
+    @Body() body: { ttsPlayback?: unknown; mcpEnabled?: unknown },
   ): Promise<PlatformSettingsView> {
-    return this.platformSettings.setTtsPlayback(body?.ttsPlayback, user.userId);
+    const has = (key: string) => body != null && Object.prototype.hasOwnProperty.call(body, key);
+    if (!has('ttsPlayback') && !has('mcpEnabled')) {
+      throw new BadRequestException('Send ttsPlayback, mcpEnabled, or both');
+    }
+    let view: PlatformSettingsView | undefined;
+    if (has('ttsPlayback')) view = await this.platformSettings.setTtsPlayback(body.ttsPlayback, user.userId);
+    if (has('mcpEnabled')) view = await this.platformSettings.setMcpEnabled(body.mcpEnabled, user.userId);
+    return view!;
   }
 }
