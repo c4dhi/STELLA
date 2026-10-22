@@ -10,6 +10,11 @@ import {
   parseTtsPlaybackSetting,
 } from './tts-playback.util.js';
 import { HARDWARE_FIT, HardwareFit, scoreHardwareFit } from './hardware-fit.util.js';
+import { MCP_ENABLED_SETTING_KEY, parseMcpEnabledSetting, parseStoredMcpEnabled } from './mcp-enabled.util.js';
+
+// Every MCP request checks the switch, so it is cached. With several backend
+// replicas a change reaches the others within this window.
+const MCP_ENABLED_CACHE_MS = 30_000;
 
 export interface PinnedDeployment {
   name: string;
@@ -24,6 +29,8 @@ export interface PlatformSettingsView {
   updatedBy: string | null;
   // Deployments that set their own mode and so ignore the default.
   pinnedDeployments: PinnedDeployment[];
+  // Whether AI clients may reach /mcp (#772). Off unless an admin turns it on.
+  mcpEnabled: boolean;
   // How well the voice fits this server under its concurrent load (#93);
   // null only when it could not be read.
   hardwareFit: HardwareFit | null;
@@ -33,12 +40,13 @@ const SPEED_STAGE = 'tts_sentence_speed';
 const SWITCH_STAGE = 'tts_playback_switch';
 
 /**
- * Platform-wide defaults a system admin sets in Settings → Platform Defaults.
- * Today that is only the TTS playback mode (#89).
+ * Platform-wide defaults a system admin sets in Settings → Platform Defaults:
+ * the TTS playback mode (#89) and the MCP switch (#772).
  */
 @Injectable()
 export class PlatformSettingsService {
   private readonly logger = new Logger(PlatformSettingsService.name);
+  private mcpEnabledCache: { value: boolean; expiresAt: number } | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -68,11 +76,42 @@ export class PlatformSettingsService {
       updatedAt: row ? row.updatedAt.toISOString() : null,
       updatedBy: row?.updatedBy ? row.updatedBy.name || row.updatedBy.email : null,
       pinnedDeployments: await this.listPinnedDeployments(),
+      mcpEnabled: await this.isMcpEnabled(),
       hardwareFit: await this.getHardwareFit().catch(error => {
         this.logger.warn(`Could not score the hardware fit: ${error.message}`);
         return null;
       }),
     };
+  }
+
+  /** Whether /mcp is open. A failed read counts as off: the switch fails closed. */
+  async isMcpEnabled(): Promise<boolean> {
+    if (this.mcpEnabledCache && this.mcpEnabledCache.expiresAt > Date.now()) {
+      return this.mcpEnabledCache.value;
+    }
+    let value = false;
+    try {
+      const row = await this.prisma.platformSetting.findUnique({ where: { key: MCP_ENABLED_SETTING_KEY } });
+      value = parseStoredMcpEnabled(row?.value);
+    } catch (error) {
+      this.logger.warn(`Could not read ${MCP_ENABLED_SETTING_KEY}, treating MCP as off: ${error.message}`);
+      return false;
+    }
+    this.mcpEnabledCache = { value, expiresAt: Date.now() + MCP_ENABLED_CACHE_MS };
+    return value;
+  }
+
+  async setMcpEnabled(raw: unknown, userId: string): Promise<PlatformSettingsView> {
+    const enabled = parseMcpEnabledSetting(raw);
+    const value = String(enabled);
+    await this.prisma.platformSetting.upsert({
+      where: { key: MCP_ENABLED_SETTING_KEY },
+      create: { key: MCP_ENABLED_SETTING_KEY, value, updatedById: userId },
+      update: { value, updatedById: userId },
+    });
+    this.mcpEnabledCache = null;
+    this.logger.log(`Platform setting ${MCP_ENABLED_SETTING_KEY} set to ${value} by ${userId}`);
+    return this.getView();
   }
 
   /**

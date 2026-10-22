@@ -5,6 +5,7 @@ import ProjectsDashboard from './pages/ProjectsDashboard'
 import SessionsDashboard from './pages/SessionsDashboard'
 import SessionView from './pages/SessionView'
 import SettingsPage from './pages/SettingsPage'
+import OAuthConsentPage from './pages/OAuthConsentPage'
 import ParticipantJoinPage from './pages/ParticipantJoinPage'
 import PublicProjectJoinPage from './pages/PublicProjectJoinPage'
 import StatusPage from './pages/StatusPage'
@@ -95,6 +96,16 @@ export default function App() {
           element={
             <ProtectedRoute>
               <SettingsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* MCP sign-in: an app (Claude, ChatGPT…) asks for access to the account */}
+        <Route
+          path="/oauth/consent"
+          element={
+            <ProtectedRoute>
+              <OAuthConsentPage />
             </ProtectedRoute>
           }
         />
