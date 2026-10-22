@@ -9,6 +9,7 @@ import {
   Query,
   ValidationPipe,
   UsePipes,
+  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ProjectsService } from './projects.service.js';
@@ -16,6 +17,7 @@ import { CreateProjectDto } from './dto/create-project.dto.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
 import { UpdatePublicConfigDto } from './dto/update-public-config.dto.js';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
+import { ProjectAccessGuard } from '../auth/guards/project-access.guard.js';
 
 @Controller('projects')
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
@@ -39,16 +41,19 @@ export class ProjectsController {
   }
 
   @Get(':projectId')
+  @UseGuards(ProjectAccessGuard)
   findOne(@Param('projectId') id: string) {
     return this.projectsService.findOne(id);
   }
 
   @Get(':projectId/stats')
+  @UseGuards(ProjectAccessGuard)
   getStats(@Param('projectId') id: string) {
     return this.projectsService.getStats(id);
   }
 
   @Patch(':projectId')
+  @UseGuards(ProjectAccessGuard)
   update(
     @Param('projectId') id: string,
     @Body() updateProjectDto: UpdateProjectDto,
@@ -57,6 +62,7 @@ export class ProjectsController {
   }
 
   @Delete(':projectId')
+  @UseGuards(ProjectAccessGuard)
   remove(@Param('projectId') id: string) {
     return this.projectsService.remove(id);
   }
@@ -65,6 +71,7 @@ export class ProjectsController {
    * Update public project configuration
    */
   @Patch(':projectId/public-config')
+  @UseGuards(ProjectAccessGuard)
   updatePublicConfig(
     @Param('projectId') id: string,
     @Body() dto: UpdatePublicConfigDto,
@@ -76,6 +83,7 @@ export class ProjectsController {
    * Get public link for a project
    */
   @Get(':projectId/public-link')
+  @UseGuards(ProjectAccessGuard)
   getPublicLink(@Param('projectId') id: string) {
     const baseUrl = this.configService.get<string>('PUBLIC_FRONTEND_URL') || 'http://localhost:8080';
     return this.projectsService.getPublicLink(id, baseUrl);
