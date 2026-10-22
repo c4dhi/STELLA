@@ -103,6 +103,8 @@ All other endpoints require a valid JWT token:
 | `/projects/:id` | GET | Get project details |
 | `/sessions/:id` | GET | Get session details |
 
+Anything inside a project (the project itself, its sessions and their messages, transcripts, agents and invitations) also requires the signed-in user to be a member of that project. System admins are no exception. A request for something in another project is refused with 403 (routes that name the project) or 404 (routes that name a session, agent or invitation inside it).
+
 ## Usage
 
 ### 1. Sign Up

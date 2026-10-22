@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-10-23
+
+A security fix. **Upgrade if you run Stella with more than one user account.**
+
+### Upgrade notes
+
+- No manual step, no new setting and no database migration. The Agent SDK is unchanged (0.8.0)
+- System admins follow the same project membership rule as everyone else. To open a project's sessions, be a member of that project
+
+### Security
+
+- Access checks tightened: signed-in users can only reach data in projects they belong to
+
+---
+
 ## [1.4.0] - 2026-10-21
 
 A companion that keeps up. Stella recovers from a stalled reply within seconds,
