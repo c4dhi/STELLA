@@ -50,6 +50,14 @@ const knownScopes = (scopes: string[]): PatScope[] =>
   );
 
 /**
+ * What a token allows: its own scopes, capped by its grant (the user may have
+ * narrowed the grant since). Tokens from before tokens carried scopes have
+ * none and get the grant's.
+ */
+const tokenScopes = (token: string[], grant: string[]): string[] =>
+  token.length ? token.filter((s) => grant.includes(s)) : grant;
+
+/**
  * Grants and the tokens issued under them (#772 sign-in). A grant is one
  * user's consent for one app; tokens are opaque, stored as sha256, and die
  * with their grant.
@@ -103,6 +111,7 @@ export class OAuthTokensService {
           kind: OAuthTokenKind.ACCESS,
           tokenHash: hashSecret(access),
           resource,
+          scopes,
           expiresAt: new Date(now + ACCESS_TOKEN_TTL_MS),
         },
         {
@@ -110,6 +119,7 @@ export class OAuthTokensService {
           kind: OAuthTokenKind.REFRESH,
           tokenHash: hashSecret(refresh),
           resource,
+          scopes,
           expiresAt: new Date(now + REFRESH_TOKEN_TTL_MS),
         },
       ],
@@ -157,7 +167,10 @@ export class OAuthTokensService {
     if (resource && !this.urls.isOwnResource(resource))
       throw new InvalidTargetError('Unknown resource');
 
-    const scopes = requestedScopes?.length ? requestedScopes : row.grant.scopes;
+    // No scope asked for keeps what this refresh token had (RFC 6749 §6).
+    const scopes = requestedScopes?.length
+      ? requestedScopes
+      : tokenScopes(row.scopes, row.grant.scopes);
     if (!scopes.every((s) => row.grant.scopes.includes(s))) {
       throw new InvalidScopeError('Cannot widen access on refresh');
     }
@@ -210,7 +223,7 @@ export class OAuthTokensService {
       user,
       grantId: row.grantId,
       clientName: row.grant.client.name,
-      scopes: knownScopes(row.grant.scopes),
+      scopes: knownScopes(tokenScopes(row.scopes, row.grant.scopes)),
     };
   }
 

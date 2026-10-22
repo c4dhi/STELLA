@@ -1897,7 +1897,9 @@ export interface OAuthAuthorizationRequestView {
   logoUri: string | null
   /** Where the browser goes after Allow / Deny. */
   redirectHost: string
+  /** registration: the name is self-chosen. metadata_document: it comes from a document on clientIdHost. */
   verifiedBy: 'registration' | 'metadata_document'
+  clientIdHost: string | null
   requestedScopes: AccessTokenScope[]
   expiresAt: string
 }
