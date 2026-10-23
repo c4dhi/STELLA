@@ -104,6 +104,20 @@ check "another namespace's tag survives this namespace's own deploy" "ai-agents-
 rm -rf "$NAMESPACE_B_CHECKSUM_DIR"
 docker rmi "${FAKE_REPO}:ai-agents-review" >/dev/null 2>&1 || true
 
+# Review round 2's regression: previous_tag can end up equal to tag (a build
+# that failed before record_service_tag, or anything else that shifted the
+# window without a real deploy closing it). Treating that as a retiring
+# generation would delete the only real rollback image left. Simulate it by
+# corrupting previous_tag to match the current tag, then deploy once more:
+# the "previous" generation must survive, not get deleted as if it were
+# the stale one.
+echo "gen6" > "${CHECKSUM_DIR}/${FAKE_REPO}.previous_tag"
+deploy_generation gen7
+check "previous_tag == tag: nothing wrongly retired" "cfg-deadbeef1234 gen5 gen6 gen7 latest" "$(tags_now)"
+
+deploy_generation gen8
+check "window resumes advancing normally afterward" "cfg-deadbeef1234 gen5 gen7 gen8 latest" "$(tags_now)"
+
 # Smoke-only: these two just need to run clean on real Docker, no assertion
 # on disk/cache state (that depends on the machine running the test).
 if trim_build_cache; then

@@ -292,11 +292,23 @@ clear_all_checksums() {
 #   window (tracked in ${img}.tag/.previous_tag, next to record_service_tag's
 #   existing file) just dropped, so it can never name a tag it didn't itself
 #   put there.
-# - `k3s ctr images rm` removes the image record whether or not a container
-#   is using it (unlike `crictl rmi`, which goes through the CRI image
-#   service and refuses one a running pod still uses) - switched to crictl.
-#   Needs /etc/crictl.yaml on production (K3s data under /mnt/data/k3s);
-#   skips with a warning, not an abort, if crictl isn't configured.
+# - round 1 switched the K3s side to `crictl rmi` on the theory that it
+#   refuses an in-use ref, unlike `ctr images rm`. Round 2 corrected that:
+#   CRI's RemoveImage deletes the whole image by ID, every tag included, so
+#   on an unchanged service or an agent's shared :latest (reuse_service_image,
+#   tag_agent_images_latest, both above) it would also take the CURRENT tag
+#   down with the stale one. Back to `ctr images rm` on the one specific
+#   stale ref only - safe here because this never targets anything but a
+#   generation this namespace's own history just retired, which nothing
+#   should still be running.
+# Round 2 also found a second bug: if a build fails after record_service_tag
+# updated ${img}.tag but before a later deploy's rollout confirms it (or any
+# path where ${img}.previous_tag was already shifted without a real
+# generation closing the loop), old_previous can equal old_current. Treating
+# that as a retiring generation would delete the only real rollback image
+# left. snapshot_previous_image_tags below guards against it - at the cost
+# of occasionally leaking one generation it should have retired, which is
+# the safe direction to be wrong in.
 #
 # Deliberately NOT attempted here: the untagged digests a tag move leaves
 # behind in K3s containerd (the issue's own biggest reported filler). The
@@ -331,7 +343,13 @@ snapshot_previous_image_tags() {
         if [[ -f "$prev_file" ]]; then
             local old_previous
             old_previous=$(cat "$prev_file" 2>/dev/null || echo "")
-            if [[ -n "$old_previous" && "$old_previous" != "$IMAGE_TAG" ]]; then
+            # Guard (#99 review round 2): old_previous can equal old_current
+            # after a build that failed before confirming a new generation,
+            # or any other path that shifted the window without a real
+            # deploy closing it. Marking that "stale" would delete the only
+            # real rollback image still on disk, so skip - nothing is wrong
+            # with the window itself, there's just nothing new to retire yet.
+            if [[ -n "$old_previous" && "$old_previous" != "$IMAGE_TAG" && "$old_previous" != "$old_current" ]]; then
                 echo "$old_previous" > "$stale_file" 2>/dev/null || true
             fi
         fi
@@ -348,15 +366,6 @@ _is_retention_exempt_tag() {
     return 1
 }
 
-# crictl, not ctr: see the header above. /etc/crictl.yaml is production's
-# setup; a dev/local host may point it at K3s a different way, so this
-# accepts either the file or an explicit endpoint, and otherwise skips.
-_crictl_ready() {
-    command -v crictl >/dev/null 2>&1 || return 1
-    [[ -f /etc/crictl.yaml || -n "${CONTAINER_RUNTIME_ENDPOINT:-}" ]] || return 1
-    return 0
-}
-
 # Remove ONLY the one tag each image's own namespace-scoped history just
 # aged out of - never a sweep over every tag on the repo (see the header).
 # Called once, after a rollout is confirmed healthy - never on a failed
@@ -366,15 +375,6 @@ prune_old_image_generations() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     local images
     read -ra images <<< "$(get_all_image_names)"
-
-    local crictl_ok=1
-    if [[ "$OS_TYPE" == "linux" ]]; then
-        if _crictl_ready; then
-            crictl_ok=0
-        else
-            warning "crictl isn't configured - skipping the K3s containerd side of image cleanup (Docker side still runs)."
-        fi
-    fi
 
     for img in "${images[@]}"; do
         local stale_file="${CHECKSUM_DIR}/${img}.stale_tag"
@@ -388,8 +388,13 @@ prune_old_image_generations() {
 
         docker rmi "${img}:${stale}" >/dev/null 2>&1 || true
 
-        if [[ "$OS_TYPE" == "linux" && $crictl_ok -eq 0 ]]; then
-            crictl rmi "docker.io/library/${img}:${stale}" >/dev/null 2>&1 || true
+        if [[ "$OS_TYPE" == "linux" ]]; then
+            # ctr, not crictl: CRI's RemoveImage deletes the whole image by
+            # ID, every tag included, which would also take an unchanged
+            # service's or an agent's :latest current tag down with this one
+            # stale ref if they share the same underlying image (#99 review
+            # round 2). `ctr images rm` removes just this one reference.
+            sudo k3s ctr -n k8s.io images rm "docker.io/library/${img}:${stale}" >/dev/null 2>&1 || true
         fi
     done
 }
@@ -423,10 +428,13 @@ trim_build_cache() {
     local out total
     out=$(docker buildx prune -f --max-used-space 50GB --reserved-space 50GB 2>&1) || true
     total=$(echo "$out" | grep -E '^Total:' | tail -1)
+    # Normal level, not verbose (#99 review round 2): production CI doesn't
+    # pass --verbose, and this is exactly the line that would have shown the
+    # --max-used-space no-op immediately instead of needing a card to notice it.
     if [[ -n "$total" ]]; then
-        verbose "trim_build_cache: ${total}"
+        echo "   Build cache: ${total}"
     else
-        verbose "trim_build_cache: no 'Total:' line in prune output (nothing reclaimed, or an older buildx) - full output: ${out}"
+        echo "   Build cache: prune produced no 'Total:' line (nothing reclaimed, or an older buildx) - output: ${out}"
     fi
 }
 
