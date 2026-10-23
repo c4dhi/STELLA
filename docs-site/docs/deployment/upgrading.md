@@ -82,7 +82,12 @@ Run the steps of every version you pass, oldest first. A version not listed here
 
 ### 1.4.0
 
-Filled in with the release.
+None. The deploy applies the one new database migration (the `PlatformSetting` table) on its own, so back up first as described above.
+
+Check two things in your configuration, without running anything:
+
+- **Default model.** A deployment or configuration that names no model now runs `gpt-5.4-mini`. Set the model explicitly if your study must keep the old one.
+- **Language settings.** `switch_threshold` and `debounce` are no longer read. If a configuration set them, set `text_bar`, `decay` and `switch_score` instead (defaults 0.85, 0.5 and 1.5).
 
 ### 1.3.0
 
@@ -157,12 +162,9 @@ Database migrations only go forward. To go back, you return to the previous rele
 
 ## Troubleshooting
 
-**The deploy stops at "Database migrations" with only `Script exited with code 1`.** The migration failed, but the deploy does not print why. Two causes are common:
+**The deploy stops at "Database migrations".** Since 1.4.0 the deploy prints the migration's own error, retries up to four times when the database has only just started (a first deploy, or after `--reset-db`), and closes its database connection when it fails. The most common remaining cause: the Node packages are still the previous release's. Run `npm ci` and deploy again.
 
-- The Node packages are still the previous release's. Run `npm ci` and deploy again.
-- The database had only just started (a first deploy, or after `--reset-db`). Deploy again.
-
-If the next attempt says `Port 5433 already in use`, the failed attempt left its database connection open. Close it with `pkill -f "port-forward svc/postgres 5433"` and deploy again. To see the actual error, run the migration yourself with the connection from [1.3.0](#130) open: `npx prisma migrate deploy`.
+Up to 1.3.0 the deploy printed only `Script exited with code 1`, a database that had only just started also failed it (deploy again), and the failed attempt could leave its connection open, so the next one said `Port 5433 already in use`. Close it with `pkill -f "port-forward svc/postgres 5433"` and deploy again. To see the actual error, run the migration yourself with the connection from [1.3.0](#130) open: `npx prisma migrate deploy`.
 
 **The deploy stops at the database migration with `P3009`** ("found failed migrations"). An earlier migration attempt failed halfway. The deploy prints the name of the failed migration and the commands to resolve it. Read which case applies before running them: marking a migration as applied when it was not leaves the database inconsistent. If in doubt, roll back.
 

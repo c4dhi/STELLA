@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Eye,
@@ -9,6 +9,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
+import { safeNextPath } from '../lib/safeNextPath';
 import {
   OnboardingLayout,
   OnboardingCard,
@@ -19,6 +20,8 @@ import {
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const nextPath = safeNextPath(searchParams.get('next')) ?? '/dashboard';
   const [isSignup, setIsSignup] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -43,9 +46,9 @@ export default function LoginPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (isAuthenticated) {
-      navigate('/dashboard');
+      navigate(nextPath, { replace: true });
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, nextPath]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,7 +107,9 @@ export default function LoginPage() {
               <p className="text-content-tertiary dark:text-content-inverse-tertiary text-sm font-light">
                 {isSignup
                   ? 'Submit your request. An admin will review and approve your access.'
-                  : 'Sign in to continue to your dashboard.'}
+                  : nextPath.startsWith('/oauth/consent')
+                    ? 'Sign in to STELLA to connect the app.'
+                    : 'Sign in to continue to your dashboard.'}
               </p>
             </motion.div>
           </div>

@@ -15,9 +15,10 @@ import AdminDashboardSection from '../components/settings/AdminDashboardSection'
 import AgentConfigSection from '../components/settings/AgentConfigSection'
 import AnalyticsSection from '../components/settings/AnalyticsSection'
 import PlatformSettingsSection from '../components/settings/PlatformSettingsSection'
+import McpAccessSection from '../components/settings/McpAccessSection'
 import { useAuthStore } from '../store/authStore'
 
-const validSections: SettingsSection[] = ['profile', 'preferences', 'personas', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin', 'platform']
+const validSections: SettingsSection[] = ['profile', 'preferences', 'personas', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin', 'platform', 'mcp']
 
 // Animation variants for page transitions
 const pageVariants = {
@@ -97,6 +98,8 @@ export default function SettingsPage() {
         return isSystemAdmin ? <AdminDashboardSection /> : <ProfileSection />
       case 'platform':
         return isSystemAdmin ? <PlatformSettingsSection /> : <ProfileSection />
+      case 'mcp':
+        return <McpAccessSection />
       default:
         return <ProfileSection />
     }

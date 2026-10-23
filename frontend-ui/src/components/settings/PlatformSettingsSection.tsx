@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
+import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
 import { apiClient } from '../../services/ApiClient'
 import type { PlatformSettings, TtsPlaybackMode } from '../../lib/api-types'
+import HardwareFitPanel from './HardwareFitPanel'
 
 const containerVariants = {
   hidden: {},
@@ -54,6 +56,8 @@ export default function PlatformSettingsSection() {
   const [mode, setMode] = useState<TtsPlaybackMode>('auto')
   const [saving, setSaving] = useState(false)
   const [showPinned, setShowPinned] = useState(false)
+  const [savingMcp, setSavingMcp] = useState(false)
+  const setMcpFeature = useFeatureFlagsStore(state => state.setMcpEnabled)
 
   const apply = (next: PlatformSettings) => {
     setSettings(next)
@@ -76,6 +80,27 @@ export default function PlatformSettingsSection() {
       addToast({ message: err instanceof Error ? err.message : 'Could not save', type: 'error' })
     } finally {
       setSaving(false)
+    }
+  }
+
+  const toggleMcp = async () => {
+    if (!settings) return
+    const next = !settings.mcpEnabled
+    setSavingMcp(true)
+    try {
+      const updated = await apiClient.setMcpEnabled(next)
+      setSettings(updated)
+      setMcpFeature(updated.mcpEnabled)
+      addToast({
+        message: next
+          ? 'MCP access is on. Users can now create tokens in Settings → MCP Access.'
+          : 'MCP access is off. Existing tokens stop working; they are kept and work again if you switch it back on.',
+        type: 'success',
+      })
+    } catch (err) {
+      addToast({ message: err instanceof Error ? err.message : 'Could not save', type: 'error' })
+    } finally {
+      setSavingMcp(false)
     }
   }
 
@@ -119,6 +144,10 @@ export default function PlatformSettingsSection() {
         <p className={`text-body-sm mb-6 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
           How Stella plays her speech. Takes effect from the next session; conversations already running keep their mode.
         </p>
+
+        {settings?.hardwareFit && (
+          <HardwareFitPanel fit={settings.hardwareFit} mode={mode} isDark={isDark} />
+        )}
 
         <div role="radiogroup" aria-label="Voice playback" className="space-y-3">
           {playbackOptions.map(option => {
@@ -244,6 +273,42 @@ export default function PlatformSettingsSection() {
               {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
+        </div>
+      </motion.div>
+
+      <motion.div
+        className={`mt-6 p-6 rounded-2xl ${
+          isDark ? 'bg-surface-dark-secondary' : 'bg-white border border-neutral-200/60'
+        }`}
+        variants={itemVariants}
+      >
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <h3 className={`text-heading-sm font-semibold mb-2 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+              MCP access
+            </h3>
+            <p className={`text-body-sm ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
+              Lets users connect AI clients such as Claude Code to their account with a personal access token.
+              The client can read and edit their personas, plans and agent configs, and read sessions in their projects.
+              Switching it off stops every token at once, for every user.
+            </p>
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings?.mcpEnabled ?? false}
+            aria-label="MCP access"
+            onClick={() => void toggleMcp()}
+            disabled={!settings || savingMcp}
+            className={`relative flex-shrink-0 w-11 h-6 rounded-full transition-colors duration-200 ${
+              settings?.mcpEnabled ? 'bg-primary-500' : isDark ? 'bg-neutral-600' : 'bg-neutral-300'
+            } ${!settings || savingMcp ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                settings?.mcpEnabled ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
         </div>
       </motion.div>
     </motion.div>

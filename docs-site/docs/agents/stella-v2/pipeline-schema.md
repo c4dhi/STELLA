@@ -134,8 +134,8 @@ Single choice from predefined options.
 - id: model
   label: "Model"
   type: select
-  options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
-  default: "gpt-4o-mini"
+  options: ["gpt-5.4-mini", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+  default: "gpt-5.4-mini"
 ```
 
 | Extra Field | Type | Description |
