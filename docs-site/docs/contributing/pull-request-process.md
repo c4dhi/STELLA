@@ -40,6 +40,9 @@ cd agents/stella-ai-agent-sdk && python -m pytest
 npm run lint
 npm run format:check
 
+# Frontend (oxlint)
+cd frontend-ui && npm run lint
+
 # Python
 black --check agents/
 pylint agents/
@@ -197,7 +200,8 @@ If you're reviewing PRs, consider:
 # Common fixes:
 
 # Lint errors
-npm run lint:fix
+npm run lint                          # backend (fixes what it can)
+cd frontend-ui && npx oxlint --fix   # frontend
 
 # Test failures
 npm test -- --verbose
