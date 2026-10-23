@@ -640,19 +640,20 @@ export class StateMachineService {
       return this.closeGoal(sessionId, state, plan, currentState, 'reached');
     }
 
-    // Find the task
-    const task = currentState.tasks.find(t => t.id === taskId);
+    // Find the task — never among a goal state's own leftover tasks (#770):
+    // tasksFor is empty there, so a stray id just falls through to "not found".
+    const task = this.tasksFor(currentState).find(t => t.id === taskId);
     if (!task) {
       // Hybrid auto-advance (#291) can move the state forward the instant a
       // deliverable completes the final task, so a redundant complete_task the
       // agent emits in the SAME turn may arrive after we've already left that
       // task's state. If the task lives in an already-completed state, treat the
       // tick as a harmless no-op rather than erroring — the task is done.
-      const owningState = plan.states.find(s => s.tasks?.some(t => t.id === taskId));
+      const owningState = plan.states.find(s => this.tasksFor(s).some(t => t.id === taskId));
       if (owningState && this.isPlanStateComplete(state, owningState)) {
         return { success: true, taskCompleted: taskId };
       }
-      const availableTaskIds = currentState.tasks.map(t => t.id);
+      const availableTaskIds = this.tasksFor(currentState).map(t => t.id);
       return {
         success: false,
         error: `Task '${taskId}' not found in current state. Available: ${availableTaskIds.join(', ')}`,
@@ -746,6 +747,19 @@ export class StateMachineService {
     return currentState.type === 'goal' && StateMachineService.GOAL_TASK_ALIASES.has(taskId);
   }
 
+  /**
+   * A goal-type state's tasks and their deliverables play no part in it at
+   * runtime (#770): tasks saved from when the section was flexible/sequential
+   * stay on the stored plan, so switching back restores them unchanged, but a
+   * goal state never counts, shows, completes on, looks up a deliverable in,
+   * or is guided by them — only its own `goal.deliverables` (and discovered
+   * insights) count. Every consumer below reads tasks through this instead of
+   * `planState.tasks` directly, so the rule can't drift between them.
+   */
+  private tasksFor(planState: PlanState): PlanTask[] {
+    return (planState.type || 'loose') === 'goal' ? [] : planState.tasks;
+  }
+
   private goalOutcome(state: SessionState, planState: PlanState): 'reached' | 'skipped' | null {
     const key = this.goalKey(planState.id);
     if (state.completedTasks.includes(key)) return 'reached';
@@ -797,17 +811,14 @@ export class StateMachineService {
     // but it does not carry a goal: the agent has to check it back first.
     const settled = (key: string) =>
       key in deliverables && !deliverables[key]?.discovered && !deliverables[key]?.unconfirmed;
-    const addressed = new Set([...state.completedTasks, ...state.skippedTasks]);
 
+    // Goal needs come only from the goal's own deliverables (#770): this is
+    // always called with a goal-type currentState, and its tasks (if any are
+    // left over from flexible/sequential mode) play no part in what the goal
+    // still needs.
     const needed = (currentState.goal?.deliverables ?? [])
       .filter(d => d.required !== false && !settled(d.key))
       .map(d => d.key);
-    for (const task of currentState.tasks) {
-      if (addressed.has(task.id)) continue;
-      needed.push(
-        ...(task.deliverables ?? []).filter(d => d.required !== false && !settled(d.key)).map(d => d.key),
-      );
-    }
     const required = [...new Set(needed)].map(key => ({ key, unconfirmed: Boolean(deliverables[key]?.unconfirmed) }));
 
     // Without a route to take, the state would be finished with nowhere to go.
@@ -1055,8 +1066,10 @@ export class StateMachineService {
     let foundDeliverable: PlanDeliverable | null = null;
     let isGoalDeliverable = false;
 
-    // 1. Search task-level deliverables (works for all state types)
-    for (const task of currentState.tasks) {
+    // 1. Search task-level deliverables — never for a goal state (#770):
+    // tasksFor is empty there, so this falls straight through to goal
+    // deliverables below.
+    for (const task of this.tasksFor(currentState)) {
       for (const deliverable of task.deliverables || []) {
         if (deliverable.key === key) {
           foundTask = task;
@@ -1301,15 +1314,16 @@ export class StateMachineService {
       return this.closeGoal(sessionId, state, plan, currentState, 'skipped');
     }
 
-    const task = currentState.tasks.find(t => t.id === taskId);
+    // Never among a goal state's own leftover tasks (#770) — see completeTask.
+    const task = this.tasksFor(currentState).find(t => t.id === taskId);
     if (!task) {
       // Mirror completeTask: a stray skip for a task whose state already
       // completed (e.g. after a hybrid auto-advance) is a harmless no-op.
-      const owningState = plan.states.find(s => s.tasks?.some(t => t.id === taskId));
+      const owningState = plan.states.find(s => this.tasksFor(s).some(t => t.id === taskId));
       if (owningState && this.isPlanStateComplete(state, owningState)) {
         return { success: true, taskSkipped: taskId };
       }
-      const availableTaskIds = currentState.tasks.map(t => t.id);
+      const availableTaskIds = this.tasksFor(currentState).map(t => t.id);
       return {
         success: false,
         error: `Task '${taskId}' not found in current state. Available: ${availableTaskIds.join(', ')}`,
@@ -1391,8 +1405,10 @@ export class StateMachineService {
       return { success: false, error: `Current state ${state.currentStateId} not found in plan` };
     }
 
+    // Empty for a goal state (#770) — skipping it is handled below, by the
+    // goal itself, not by marking its leftover tasks skipped.
     const addressed = new Set([...state.completedTasks, ...state.skippedTasks]);
-    const newlySkipped = currentState.tasks
+    const newlySkipped = this.tasksFor(currentState)
       .map(t => t.id)
       .filter(id => !addressed.has(id));
     if (currentState.type === 'goal' && !this.goalOutcome(state, currentState)) {
@@ -1479,7 +1495,10 @@ export class StateMachineService {
     const pendingTasks: PendingTaskInfo[] = [];
     const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
 
-    for (const task of currentState.tasks) {
+    // Empty for a goal state (#770): its own tasks never surface as pending
+    // guidance, only its goal.deliverables do, built into the synthetic
+    // __goal__ entry below.
+    for (const task of this.tasksFor(currentState)) {
       // A task is "addressed" — and so no longer pending — when the agent has
       // explicitly completed/skipped it, OR (hybrid #291) its required
       // deliverables are all collected. This MUST match the canonical rule used
@@ -1577,7 +1596,9 @@ export class StateMachineService {
     const pendingDeliverables: PendingDeliverableInfo[] = [];
     const deliverables = state.deliverables as unknown as Record<string, DeliverableValue>;
 
-    for (const task of currentState.tasks) {
+    // Empty for a goal state (#770): only goal.deliverables (added below)
+    // are ever pending there.
+    for (const task of this.tasksFor(currentState)) {
       // Skip tasks the agent already addressed (completed or skipped).
       if (state.completedTasks.includes(task.id)) continue;
       if (state.skippedTasks.includes(task.id)) continue;
@@ -1764,7 +1785,8 @@ export class StateMachineService {
         }
       }
 
-      for (const task of planState.tasks) {
+      // Empty for a goal state (#770): only its goal.deliverables above count.
+      for (const task of this.tasksFor(planState)) {
         if (task.required === false) continue;
 
         const taskDeliverables = task.deliverables || [];
@@ -2786,7 +2808,9 @@ export class StateMachineService {
         stateStatus = 'completed';
       }
 
-      const tasks: FullStateTaskInfo[] = planState.tasks.map(task => {
+      // Empty for a goal state (#770): the plan/progress view shows only its
+      // synthetic goal-deliverables entry, prepended below, never leftover tasks.
+      const tasks: FullStateTaskInfo[] = this.tasksFor(planState).map(task => {
         const taskDeliverables = task.deliverables || [];
         const hasDeliverables = taskDeliverables.length > 0;
 
@@ -2844,10 +2868,12 @@ export class StateMachineService {
         };
       });
 
-      // For goal states, prepend a synthetic task for goal-level deliverables
+      // For goal states, prepend a synthetic task for goal-level deliverables.
+      // `tasks` (built from tasksFor above) is always empty here, so taskKeys
+      // is too — nothing left to dedupe goal deliverables against (#770).
       if (planState.type === 'goal') {
         const taskKeys = new Set(
-          planState.tasks.flatMap(t => (t.deliverables || []).map(d => d.key)),
+          tasks.flatMap(t => t.deliverables.map(d => d.key)),
         );
 
         const goalDeliverables = planState.goal?.deliverables ?? [];
