@@ -105,6 +105,12 @@ def _turn_speed(bridge_mode) -> float:
 
 logger = logging.getLogger(__name__)
 
+# How far back _find_activity_start pages through history looking for the
+# activity's own "Started" tag, before giving up (#727): a page's worth of
+# messages per request (the backend's own cap), for up to this many pages.
+_ACTIVITY_START_PAGE_SIZE = 500
+_ACTIVITY_START_MAX_PAGES = 5
+
 
 # Prompt-compiler version this agent is written and tested against. Pinned on
 # purpose (not the SDK's latest) so an SDK upgrade can't silently change how this
@@ -1459,23 +1465,44 @@ class StellaV2Agent(BaseAgent):
 
         Its own "Started" decision tag does survive — debug messages are
         persisted like any other turn — so the most recent one naming this
-        activity is read back. None when none is found (pruned history, or a
-        session old enough to predate the tag), in which case the caller
-        falls back to the unscoped history this always used to have.
+        activity is read back. A long activity can push that tag past a
+        single page, so this pages back (#727), one page at a time, newest
+        first, until it finds the tag or runs out of pages to try.
+
+        None when none is found (pruned history, a session old enough to
+        predate the tag, or an activity too long to fit within the page
+        budget), in which case the caller falls back to the unscoped history
+        this always used to have, and a warning is logged so that fallback
+        doesn't pass silently.
         """
         title = activity.get("title")
         if not title or not self.has_history:
             return None
-        try:
-            messages = await self.get_chat_history(include_debug=True, limit=200)
-        except Exception as e:
-            logger.warning("Could not look up when %r started: %s", title, e)
-            return None
         label = started_label(title)
-        for msg in reversed(messages):
-            decision = ((msg.envelope.get("data") or {}).get("metadata") or {}).get("decision") or {}
-            if decision.get("kind") == "activity_started" and decision.get("label") == label:
-                return parse_timestamp(msg.timestamp)
+        before: Optional[str] = None
+        total_scanned = 0
+        for _ in range(_ACTIVITY_START_MAX_PAGES):
+            try:
+                messages = await self.get_chat_history(
+                    include_debug=True, limit=_ACTIVITY_START_PAGE_SIZE, before=before,
+                )
+            except Exception as e:
+                logger.warning("Could not look up when %r started: %s", title, e)
+                return None
+            if not messages:
+                break
+            total_scanned += len(messages)
+            for msg in reversed(messages):
+                decision = ((msg.envelope.get("data") or {}).get("metadata") or {}).get("decision") or {}
+                if decision.get("kind") == "activity_started" and decision.get("label") == label:
+                    return parse_timestamp(msg.timestamp)
+            if len(messages) < _ACTIVITY_START_PAGE_SIZE:
+                break  # fewer than a full page: history is exhausted
+            before = messages[0].timestamp  # oldest in this page; page further back
+        logger.warning(
+            "No 'Started' tag found for %r in the last %d messages — "
+            "falling back to unscoped history", title, total_scanned,
+        )
         return None
 
     def _companion_progress_metadata(self) -> Optional[Dict[str, Any]]:

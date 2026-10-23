@@ -786,6 +786,64 @@ async def test_a_restart_mid_activity_falls_back_when_no_tag_survives():
 
 
 @pytest.mark.asyncio
+async def test_a_tag_past_the_first_page_is_still_found(monkeypatch, caplog):
+    # #727: a long activity can push the "Started" tag past a single page.
+    # The first page (newest) has no tag; the second (older) page does.
+    # A page size of 2, with two DIFFERENT timestamps in the newest page, is
+    # what tells messages[0] (oldest of the page) apart from messages[-1]
+    # (newest) as the next cursor — a page of 1 can't, since they're the same
+    # message there. Getting this backwards is exactly the backend's own
+    # nextCursor bug (#727's PR description), so the test must catch it.
+    monkeypatch.setattr("stella_v2_agent.agent._ACTIVITY_START_PAGE_SIZE", 2)
+    label = started_label("Memory Game")
+    newest_page = [
+        _decision_message("2026-10-23T11:00:00Z", "Started \"Someone Else\""),
+        _decision_message("2026-10-23T12:00:00Z", "Started \"Someone Else\""),
+    ]
+    older_page = [_decision_message("2026-10-23T01:00:00Z", label)]
+    pages = [newest_page, older_page]
+    calls = []
+
+    async def get_chat_history(include_debug=False, limit=20, before=None):
+        calls.append(before)
+        return pages.pop(0) if pages else []
+
+    agent = _agent()
+    agent._history_client = object()
+    agent.get_chat_history = get_chat_history
+
+    with caplog.at_level("WARNING", logger="stella_v2_agent.agent"):
+        await agent._rehydrate_active_activity({"plan_id": "memory"})
+
+    assert agent.companion.started_at == datetime(2026, 10, 23, 1, 0, 0, tzinfo=timezone.utc)
+    # Paged back once, using the first page's own OLDEST message as the
+    # cursor (11:00, not the newest 12:00 — that would be the nextCursor bug).
+    assert calls == [None, "2026-10-23T11:00:00Z"]
+    assert not caplog.records, "found the tag — no fallback warning expected"
+
+
+@pytest.mark.asyncio
+async def test_a_missing_tag_logs_a_fallback_warning(caplog):
+    agent = _agent()
+    agent._history_client = object()
+    agent.get_chat_history = AsyncMock(return_value=[
+        _decision_message("2026-10-23T12:00:00Z", "Started \"Someone Else\""),
+    ])
+
+    with caplog.at_level("WARNING", logger="stella_v2_agent.agent"):
+        await agent._rehydrate_active_activity({"plan_id": "memory"})
+
+    assert agent.companion.started_at is None
+    # A page shorter than the page size means history is exhausted — paging
+    # must stop there, not keep fetching pages that can only come back empty.
+    assert agent.get_chat_history.await_count == 1
+    assert any(
+        "Memory Game" in r.getMessage() and "falling back" in r.getMessage()
+        for r in caplog.records
+    ), "no tag found should log a fallback warning naming the activity"
+
+
+@pytest.mark.asyncio
 async def test_rehydration_never_overwrites_a_live_activity():
     agent = _agent()
     agent.companion.enter(ACTIVITIES[1])
