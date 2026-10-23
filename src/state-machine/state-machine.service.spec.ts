@@ -813,12 +813,15 @@ describe('goal_achieved condition', () => {
     const fullState = await svc.getFullState(sessionId);
     const goalState = fullState?.states.find(s => s.id === 'state-goal');
     expect(goalState?.status).toBe('completed'); // goal closed (skipped outcome)
-
-    // The leftover task was never addressed — it was never in play to begin
-    // with, so skipping the state must not mark it skipped either.
     const goalTask = goalState?.tasks.find(t => t.id === '__goal_deliverables__');
     expect(goalTask).toBeDefined();
-    expect(goalState?.tasks.map(t => t.id)).not.toContain('regular');
+
+    // Asserting via the view alone doesn't pin this: the view already
+    // filters leftover tasks for display, so it would still look right even
+    // if skipState's own newlySkipped list wrongly included 'regular'. The
+    // session's own stored skippedTasks is the real source of truth.
+    const state = await svc.getState(sessionId);
+    expect(state?.skippedTasks).not.toContain('regular');
   });
 
   it('completes on the goal deliverable alone, with an uncollected leftover task deliverable (#770)', async () => {
