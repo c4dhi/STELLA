@@ -1650,6 +1650,8 @@ export interface VerdictDirective {
   template: string
   /** Plain-language explanation of the verdict, handed to the classifying LLM. */
   description?: string
+  /** Per-language overrides of `template`, keyed by language code (e.g. `de`). */
+  template_i18n?: Record<string, string>
 }
 
 /** An agent-declared default expert, as published from config/experts/*.json
@@ -1670,7 +1672,10 @@ export interface ExpertDefault {
   always_triggered?: boolean
   history_limit?: number
   min_confidence?: number
-  verdict_directives?: Record<string, { action?: string; template?: string; description?: string }>
+  verdict_directives?: Record<
+    string,
+    { action?: string; template?: string; description?: string; template_i18n?: Record<string, string> }
+  >
 }
 
 export interface ConfigurableSlot {

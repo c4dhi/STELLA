@@ -448,10 +448,17 @@ export function verdictDirectivesEqual(
     if (
       a[k]?.action !== b[k]?.action ||
       a[k]?.template !== b[k]?.template ||
-      (a[k]?.description ?? '') !== (b[k]?.description ?? '')
+      (a[k]?.description ?? '') !== (b[k]?.description ?? '') ||
+      !templateI18nEqual(a[k]?.template_i18n, b[k]?.template_i18n)
     )
       return false
   }
+  return true
+}
+
+function templateI18nEqual(a?: Record<string, string>, b?: Record<string, string>): boolean {
+  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])
+  for (const k of keys) if (a?.[k] !== b?.[k]) return false
   return true
 }
 
@@ -463,7 +470,7 @@ function parseVerdictVocabulary(outputSchema?: Record<string, unknown>): string[
 }
 
 /** Read a stored verdict_directives override blob into the typed map. */
-function readVerdictDirectives(raw: unknown): Record<string, VerdictDirective> {
+export function readVerdictDirectives(raw: unknown): Record<string, VerdictDirective> {
   if (!raw || typeof raw !== 'object') return {}
   const result: Record<string, VerdictDirective> = {}
   for (const [verdict, dir] of Object.entries(raw as Record<string, unknown>)) {
@@ -484,9 +491,20 @@ function readVerdictDirectives(raw: unknown): Record<string, VerdictDirective> {
         template: typeof d.template === 'string' ? d.template : '',
         description: typeof d.description === 'string' ? d.description : '',
       }
+      const i18n = readTemplateI18n(d.template_i18n)
+      if (i18n) result[verdict].template_i18n = i18n
     }
   }
   return result
+}
+
+/** Keep only string translations of a verdict template (#75); none → undefined. */
+function readTemplateI18n(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const entries = Object.entries(raw as Record<string, unknown>).filter(
+    (e): e is [string, string] => typeof e[1] === 'string',
+  )
+  return entries.length ? Object.fromEntries(entries) : undefined
 }
 
 // ---------------------------------------------------------------------------
