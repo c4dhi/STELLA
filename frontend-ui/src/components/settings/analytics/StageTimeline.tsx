@@ -509,7 +509,6 @@ function DrillDownPanel({
     )
   }
 
-
   const outlierCount = sortedSessions.filter(s => s.avg_timing_ms > outlierThreshold).length
 
   return (
