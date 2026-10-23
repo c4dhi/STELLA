@@ -684,14 +684,10 @@ describe('goal_achieved condition', () => {
     expect(byKey.get('timeframe')).toBe('skipped');
   });
 
-  it('ignores a leftover regular task entirely once the state is goal-type (#770)', async () => {
-    // #310 (above) first established that a goal state CAN carry a regular
-    // task without double-counting its deliverable. Felix's later decision on
-    // #770 overrides that: a goal state ignores its tasks everywhere — a
-    // leftover task from when the section was flexible/sequential stays on
-    // the stored plan (so switching back restores it), but the synthetic
-    // goal task is the ONLY one a goal state ever shows, counts, or is
-    // guided by. This test replaces the old "they coexist" expectation.
+  // Shared fixture for the #770 tests below: a goal state with one goal
+  // deliverable and one leftover task (from when the section was
+  // flexible/sequential) that owns a deliverable of its own.
+  async function setUpGoalWithLeftoverTask() {
     const sessionId = 'session-goal-ignores-leftover-task';
     const { prisma } = createPrismaMock();
     const svc = new StateMachineService(prisma);
@@ -707,6 +703,19 @@ describe('goal_achieved condition', () => {
       },
     ];
     await svc.initializeForSession(sessionId, plan);
+    return { svc, sessionId, plan };
+  }
+
+  it('ignores a leftover regular task entirely once the state is goal-type (#770)', async () => {
+    // #310 (above) first established that a goal state CAN carry a regular
+    // task without double-counting its deliverable. Felix's later decision on
+    // #770 overrides that: a goal state ignores its tasks everywhere — a
+    // leftover task from when the section was flexible/sequential stays on
+    // the stored plan (so switching back restores it), but the synthetic
+    // goal task is the ONLY one a goal state ever shows, counts, or is
+    // guided by. This test replaces the old "they coexist" expectation, for
+    // the plan/progress view (getFullState).
+    const { svc, sessionId, plan } = await setUpGoalWithLeftoverTask();
 
     const fullState = await svc.getFullState(sessionId);
     const goalState = fullState?.states.find(s => s.id === 'state-goal');
@@ -723,15 +732,93 @@ describe('goal_achieved condition', () => {
     // the section back to flexible/sequential would restore it unchanged.
     expect(plan.states[0].tasks.map(t => t.id)).toEqual(['regular']);
 
-    // Nor does it count toward progress, guidance, or completion.
-    expect(await svc.getPendingTasks(sessionId)).toEqual([
-      expect.objectContaining({ id: '__goal__' }),
-    ]);
-    const progressBefore = await svc.getFullState(sessionId);
-    expect(progressBefore?.progress).toBe(0); // goal_d1 not yet collected
-    await svc.setDeliverable(sessionId, 'task_d1', 'ignored in goal mode', 'reasoning');
-    const progressAfter = await svc.getFullState(sessionId);
-    expect(progressAfter?.progress).toBe(0); // task_d1 never counted, so no change
+    expect(fullState?.progress).toBe(0); // goal_d1 not yet collected
+  });
+
+  it('getPendingTasks never leaks a leftover task\'s own deliverable key into goal guidance (#770)', async () => {
+    // The sole pending-task entry in goal mode is the synthetic __goal__
+    // task; its deliverableKeys must be exactly the goal's own, not the
+    // leftover task's — that leak is exactly what let "User Name"/"Feeling"
+    // show up as needed in the reported bug. Asserting only the synthetic
+    // item's `id` (and not its deliverableKeys) would miss this: the goal
+    // branch always returns one synthetic item regardless, built from
+    // pendingTasks.flatMap(...) under the hood.
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const pending = await svc.getPendingTasks(sessionId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe('__goal__');
+    expect(pending[0].deliverableKeys).toEqual(['goal_d1']);
+    expect(pending[0].deliverableKeys).not.toContain('task_d1');
+  });
+
+  it('getPendingDeliverables never surfaces a leftover task\'s deliverable in goal mode (#770)', async () => {
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const pending = await svc.getPendingDeliverables(sessionId);
+    const keys = pending.map(d => d.key);
+    expect(keys).toEqual(['goal_d1']);
+    expect(keys).not.toContain('task_d1');
+  });
+
+  it('setDeliverable with a leftover task\'s key records a discovered insight, never the task deliverable (#770)', async () => {
+    // The search order matters: in goal mode, task-level deliverables must
+    // never be checked at all, so a leftover task's key can never shadow a
+    // goal deliverable, and always falls through to the discovered-insight
+    // path — observable as `discovered: true` on the goal's synthetic task,
+    // never as progress toward the goal.
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const progressBefore = (await svc.getFullState(sessionId))?.progress;
+    expect(progressBefore).toBe(0);
+
+    const result = await svc.setDeliverable(sessionId, 'task_d1', 'mentioned in passing', 'reasoning');
+    expect(result.success).toBe(true);
+
+    const progressAfter = (await svc.getFullState(sessionId))?.progress;
+    expect(progressAfter).toBe(0); // task_d1 never counted, so no change
+
+    const fullState = await svc.getFullState(sessionId);
+    const goalTask = fullState?.states
+      .find(s => s.id === 'state-goal')
+      ?.tasks.find(t => t.id === '__goal_deliverables__');
+    const taskD1 = goalTask?.deliverables.find(d => d.key === 'task_d1');
+    expect(taskD1).toEqual(expect.objectContaining({ key: 'task_d1', discovered: true }));
+  });
+
+  it('a stray skip_task on a leftover task id finds nothing to skip (#770)', async () => {
+    // Mirrors the completeTask case (#770, elsewhere in this file): tasks
+    // play no part in goal mode, including direct skip attempts by a real
+    // (non-goal-alias) task id.
+    const sessionId = 'session-goal-skip-task-leftover-id';
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    const plan = buildGoalStatePlan();
+    plan.states[0].tasks = [
+      { id: 'leftover', description: 'A leftover task', deliverables: [] },
+    ];
+    await svc.initializeForSession(sessionId, plan);
+
+    const result = await svc.skipTask(sessionId, 'leftover', 'tried to skip it directly');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+  });
+
+  it('skipState on a goal state marks the goal skipped, never a leftover task (#770)', async () => {
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const result = await svc.skipState(sessionId, undefined, 'moving on');
+    expect(result.success).toBe(true);
+
+    const fullState = await svc.getFullState(sessionId);
+    const goalState = fullState?.states.find(s => s.id === 'state-goal');
+    expect(goalState?.status).toBe('completed'); // goal closed (skipped outcome)
+
+    // The leftover task was never addressed — it was never in play to begin
+    // with, so skipping the state must not mark it skipped either.
+    const goalTask = goalState?.tasks.find(t => t.id === '__goal_deliverables__');
+    expect(goalTask).toBeDefined();
+    expect(goalState?.tasks.map(t => t.id)).not.toContain('regular');
   });
 
   it('completes on the goal deliverable alone, with an uncollected leftover task deliverable (#770)', async () => {
