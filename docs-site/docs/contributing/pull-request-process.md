@@ -200,7 +200,7 @@ If you're reviewing PRs, consider:
 # Common fixes:
 
 # Lint errors
-npm run lint:fix                      # backend
+npm run lint                          # backend (fixes what it can)
 cd frontend-ui && npx oxlint --fix   # frontend
 
 # Test failures
