@@ -684,8 +684,15 @@ describe('goal_achieved condition', () => {
     expect(byKey.get('timeframe')).toBe('skipped');
   });
 
-  it('renders regular tasks and goal deliverables together without double-counting keys (#310)', async () => {
-    const sessionId = 'session-goal-coexist-no-double-count';
+  it('ignores a leftover regular task entirely once the state is goal-type (#770)', async () => {
+    // #310 (above) first established that a goal state CAN carry a regular
+    // task without double-counting its deliverable. Felix's later decision on
+    // #770 overrides that: a goal state ignores its tasks everywhere — a
+    // leftover task from when the section was flexible/sequential stays on
+    // the stored plan (so switching back restores it), but the synthetic
+    // goal task is the ONLY one a goal state ever shows, counts, or is
+    // guided by. This test replaces the old "they coexist" expectation.
+    const sessionId = 'session-goal-ignores-leftover-task';
     const { prisma } = createPrismaMock();
     const svc = new StateMachineService(prisma);
     const plan = buildGoalStatePlan();
@@ -695,7 +702,7 @@ describe('goal_achieved condition', () => {
     plan.states[0].tasks = [
       {
         id: 'regular',
-        description: 'A regular task in a goal state',
+        description: 'A leftover task from flexible/sequential mode',
         deliverables: [{ key: 'task_d1', description: 'Task deliverable', required: true }],
       },
     ];
@@ -704,15 +711,109 @@ describe('goal_achieved condition', () => {
     const fullState = await svc.getFullState(sessionId);
     const goalState = fullState?.states.find(s => s.id === 'state-goal');
 
-    // Both the synthetic goal task and the real task are present.
+    // Only the synthetic goal task is present; the leftover task is not.
     const taskIds = goalState?.tasks.map(t => t.id) ?? [];
-    expect(taskIds).toContain('__goal_deliverables__');
-    expect(taskIds).toContain('regular');
+    expect(taskIds).toEqual(['__goal_deliverables__']);
 
-    // No deliverable key appears under more than one task (no double count).
+    // Only the goal's own deliverable counts — the leftover task's never does.
     const allKeys = goalState?.tasks.flatMap(t => t.deliverables.map(d => d.key)) ?? [];
-    expect(allKeys.sort()).toEqual(['goal_d1', 'task_d1']);
-    expect(allKeys.length).toBe(new Set(allKeys).size);
+    expect(allKeys).toEqual(['goal_d1']);
+
+    // The leftover task is still on the stored plan, untouched, so switching
+    // the section back to flexible/sequential would restore it unchanged.
+    expect(plan.states[0].tasks.map(t => t.id)).toEqual(['regular']);
+
+    // Nor does it count toward progress, guidance, or completion.
+    expect(await svc.getPendingTasks(sessionId)).toEqual([
+      expect.objectContaining({ id: '__goal__' }),
+    ]);
+    const progressBefore = await svc.getFullState(sessionId);
+    expect(progressBefore?.progress).toBe(0); // goal_d1 not yet collected
+    await svc.setDeliverable(sessionId, 'task_d1', 'ignored in goal mode', 'reasoning');
+    const progressAfter = await svc.getFullState(sessionId);
+    expect(progressAfter?.progress).toBe(0); // task_d1 never counted, so no change
+  });
+
+  it('completes on the goal deliverable alone, with an uncollected leftover task deliverable (#770)', async () => {
+    // Reproduces the production bug directly: a section saved as flexible
+    // (with tasks "User Name" and "Feeling") was switched to goal, and
+    // completion stalled at 0.8 (4 of 5) because a leftover task's
+    // deliverable was still counted as needed. Felix's rule: it never is.
+    const sessionId = 'session-goal-completes-ignoring-leftover';
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    const plan = buildGoalStatePlan();
+    plan.states[0].goal!.deliverables = [
+      { key: 'primary_goal', description: 'The goal', required: true },
+    ];
+    plan.states[0].tasks = [
+      { id: 'user_name', description: 'User Name', deliverables: [{ key: 'user_name', description: '', required: true }] },
+      { id: 'feeling', description: 'Feeling', deliverables: [{ key: 'feeling', description: '', required: true }] },
+    ];
+    await svc.initializeForSession(sessionId, plan);
+
+    await svc.setDeliverable(sessionId, 'primary_goal', 'run a half marathon', 'stated it');
+    // user_name/feeling deliberately left uncollected — the leftover tasks'
+    // own deliverables, which must not gate reaching the goal.
+    const result = await svc.completeTask(sessionId, '__goal__', 'goal reached');
+    expect(result.success).toBe(true);
+
+    const fullState = await svc.getFullState(sessionId);
+    expect(fullState?.states.find(s => s.id === 'state-goal')?.status).toBe('completed');
+    expect(fullState?.progress).toBe(100);
+  });
+
+  it('a stray complete_task on a leftover task id finds nothing to complete (#770)', async () => {
+    // Tasks play no part in goal mode, including direct completion attempts
+    // by a real (non-goal-alias) task id — not just guidance and counting.
+    const sessionId = 'session-goal-complete-task-leftover-id';
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    const plan = buildGoalStatePlan();
+    plan.states[0].tasks = [
+      { id: 'leftover', description: 'A leftover task', deliverables: [] },
+    ];
+    await svc.initializeForSession(sessionId, plan);
+
+    const result = await svc.completeTask(sessionId, 'leftover', 'tried to complete it directly');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+  });
+
+  it('switching a section type back to flexible finds its tasks exactly as they were (#770)', async () => {
+    // tasksFor only ever FILTERS planState.tasks by type — it never deletes
+    // or mutates them. The Plan Builder's own "switch back to flexible" is
+    // just changing `type` on the stored plan; tasksFor already guarantees
+    // the same tasks array is there to read once it does. Proven directly
+    // against the same task list, read once as goal and once as flexible,
+    // rather than through a plan-update API this test harness has no hook
+    // for (initializeForSession resumes existing session state and does not
+    // re-persist planData — switching a plan's authoring is a separate
+    // concern from this state machine).
+    const tasks = [
+      { id: 'user_name', description: 'User Name', deliverables: [{ key: 'user_name', description: '', required: true }] },
+    ];
+
+    const goalSession = 'session-goal-type-filter';
+    const { prisma: goalPrisma } = createPrismaMock();
+    const goalSvc = new StateMachineService(goalPrisma);
+    const goalPlan = buildGoalStatePlan();
+    goalPlan.states[0].tasks = tasks;
+    await goalSvc.initializeForSession(goalSession, goalPlan);
+    expect(await goalSvc.getPendingTasks(goalSession)).toEqual([
+      expect.objectContaining({ id: '__goal__' }),
+    ]);
+
+    const flexibleSession = 'session-flexible-type-filter';
+    const { prisma: flexPrisma } = createPrismaMock();
+    const flexSvc = new StateMachineService(flexPrisma);
+    const flexPlan = buildGoalStatePlan();
+    flexPlan.states[0].type = 'loose';
+    flexPlan.states[0].tasks = tasks; // the exact same tasks, unmodified
+    await flexSvc.initializeForSession(flexibleSession, flexPlan);
+    expect(await flexSvc.getPendingTasks(flexibleSession)).toEqual([
+      expect.objectContaining({ id: 'user_name', deliverableKeys: ['user_name'] }),
+    ]);
   });
 });
 
@@ -2476,7 +2577,7 @@ describe('realistic conversation simulation (#291)', () => {
     expect(await g.at()).toBe('goals');
   });
 
-  it('GOAL STATE: deliverable-less scaffolding is non-blocking and the goal accepts its marker', async () => {
+  it('GOAL STATE: a leftover scaffolding task is invisible, not just non-blocking (#770)', async () => {
     const g = await Grace.start('sim-goal');
     // Fast-forward to the goal state through the normal flow.
     await g.collect('user_name', 'Max');
@@ -2485,9 +2586,11 @@ describe('realistic conversation simulation (#291)', () => {
     await g.collect('session_duration_minutes', '50');
     expect(await g.at()).toBe('goals');
 
-    // The deliverable-less 'goal-explore' task must NOT block the goal (it's
-    // guidance scaffolding); progress is driven by the goal deliverable.
-    expect(await g.taskStatus('goals', 'goal-explore')).toBe('pending');
+    // #770: a goal state ignores its tasks everywhere, not just at the
+    // completion gate. The deliverable-less 'goal-explore' task was already
+    // non-blocking (that's unchanged), but it no longer shows up at all —
+    // taskStatus finds nothing to report a status for.
+    expect(await g.taskStatus('goals', 'goal-explore')).toBeUndefined();
 
     // Collecting the goal deliverable records it without error in goal mode.
     const collected = await g.collect('primary_goal', 'run a half marathon');
