@@ -269,6 +269,162 @@ clear_all_checksums() {
 }
 
 # =============================================================================
+# Image & Build-Cache Retention (#780)
+# =============================================================================
+# CI (deploy-development.yml, deploy-prod.yml) exports a unique IMAGE_TAG per
+# run (<version>-<run_number>-g<sha>); only a plain local run defaults to
+# "latest" or the namespace. unpin_previous_k3s_images (#725, above) already
+# UNPINS every older K3s containerd tag once a rollout is ready, but never
+# removes anything itself -- it leaves that to the kubelet's own image GC,
+# which is reactive (only triggers past 85%) and never touches Docker's own
+# image store or an untagged digest at all. That's the actual gap (#780's
+# evidence: 94 images, 254GB, every release since 0.3.0 still on disk): this
+# ACTIVELY removes, on both Docker and K3s, everything except the running
+# version and the one before it. Reuses the tag record_service_tag already
+# persists per service in ${service}.tag rather than inventing a second
+# scheme: that file holds the tag from the deploy right before this one, for
+# exactly as long as it takes this deploy's own build to overwrite it.
+#
+# Deliberately NOT touched by any of this: base images (CUDA, postgres,
+# livekit, redis - anything outside get_all_image_names), and agent images'
+# own "latest" and "cfg-*" tags, which agent-image.service.ts already builds
+# and prunes at runtime (AGENT_IMAGE_KEEP_VERSIONS) independently of
+# start-k8s.sh. This only ever manages the plain ${img}:${IMAGE_TAG} tag each
+# image gets from THIS script's own build.
+
+# Read each image's current ${service}.tag BEFORE this deploy's builds
+# overwrite it, and keep it as the generation to preserve alongside whatever
+# IMAGE_TAG this run produces. Call once, before any build starts.
+snapshot_previous_image_tags() {
+    local images
+    read -ra images <<< "$(get_all_image_names)"
+    for img in "${images[@]}"; do
+        local tag_file="${CHECKSUM_DIR}/${img}.tag"
+        [[ -f "$tag_file" ]] || continue
+        local prev
+        prev=$(cat "$tag_file" 2>/dev/null || echo "")
+        if [[ -n "$prev" && "$prev" != "$IMAGE_TAG" ]]; then
+            echo "$prev" > "${CHECKSUM_DIR}/${img}.previous_tag" 2>/dev/null || true
+        fi
+    done
+}
+
+# A tag this cleanup must never remove, regardless of IMAGE_TAG/previous_tag:
+# agent images' own "latest" base and any "cfg-*" per-config variant.
+_is_retention_exempt_tag() {
+    local tag="$1"
+    [[ "$tag" == "latest" ]] && return 0
+    [[ "$tag" == cfg-* ]] && return 0
+    return 1
+}
+
+# Remove every OTHER generation of our own images, on Docker and (on Linux)
+# in K3s containerd, plus the untagged digests a moved tag leaves behind.
+# Called once, after a rollout is confirmed healthy - never on a failed
+# deploy, so a half-rolled-out release still has its old images to fall back
+# to manually.
+prune_old_image_generations() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    local images
+    read -ra images <<< "$(get_all_image_names)"
+    for img in "${images[@]}"; do
+        local keep_previous=""
+        if [[ -f "${CHECKSUM_DIR}/${img}.previous_tag" ]]; then
+            keep_previous=$(cat "${CHECKSUM_DIR}/${img}.previous_tag" 2>/dev/null || echo "")
+        fi
+
+        local tag
+        while IFS= read -r tag; do
+            [[ -z "$tag" || "$tag" == "<none>" ]] && continue
+            [[ "$tag" == "$IMAGE_TAG" ]] && continue
+            [[ -n "$keep_previous" && "$tag" == "$keep_previous" ]] && continue
+            _is_retention_exempt_tag "$tag" && continue
+            docker rmi "${img}:${tag}" >/dev/null 2>&1 || true
+        done < <(docker images --format '{{.Tag}}' "${img}" 2>/dev/null)
+
+        if [[ "$OS_TYPE" == "linux" ]]; then
+            local ref
+            while IFS= read -r ref; do
+                [[ -z "$ref" ]] && continue
+                local ref_tag="${ref##*:}"
+                [[ "$ref_tag" == "$IMAGE_TAG" ]] && continue
+                [[ -n "$keep_previous" && "$ref_tag" == "$keep_previous" ]] && continue
+                _is_retention_exempt_tag "$ref_tag" && continue
+                sudo k3s ctr -n k8s.io images rm "$ref" >/dev/null 2>&1 || true
+            done < <(sudo k3s ctr -n k8s.io images ls -q 2>/dev/null | grep -E "/${img}:")
+
+            # Untagged digests for this repo: every reused tag moved to a new
+            # digest and left the old one behind; containerd never collects
+            # it on its own. `images rm` refuses one a running container still
+            # uses, so this is safe to attempt on every digest found.
+            local digest_ref
+            while IFS= read -r digest_ref; do
+                [[ -z "$digest_ref" ]] && continue
+                sudo k3s ctr -n k8s.io images rm "$digest_ref" >/dev/null 2>&1 || true
+            done < <(sudo k3s ctr -n k8s.io images ls -q 2>/dev/null | grep -E "/${img}@sha256:")
+        fi
+    done
+}
+
+# Dangling (untagged) Docker images left behind by the retag-on-build churn
+# above. Never `rmi --prune`/`image prune -a`: either also removes a tagged
+# image nothing currently runs, which is exactly the rollback generation
+# prune_old_image_generations just chose to keep.
+prune_dangling_images() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    docker image prune -f >/dev/null 2>&1 || true
+}
+
+# Bounds the BuildKit cache, on every deploy attempt including a failed one
+# (production's own incident: a build failed on a cache already at 122GB).
+# --max-used-space trims to the cap rather than wiping everything, so an
+# incremental build right after still has cache to reuse.
+trim_build_cache() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
+}
+
+# The used% of the filesystem under $1, or empty if it can't be read.
+_disk_used_pct() {
+    [[ -n "$1" && -d "$1" ]] || return 0
+    df -P "$1" 2>/dev/null | awk 'NR==2 { gsub("%","",$5); print $5 }'
+}
+
+# A plain warning if the image disk is still at or above 85% after the
+# cleanup above - that's where the kubelet starts deleting images on its
+# own, so a deploy that leaves it there needs a human, not a silent retry.
+# Checks Docker's actual data-root (ensure_docker_data_root may have moved
+# it to $STELLA_DATA_ROOT, not necessarily /mnt/data) and, on Linux, K3s's
+# own data-dir too - they can be different mounts.
+warn_if_image_disk_full() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local docker_root worst_pct=0 worst_target=""
+    docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo "")
+    local candidates=("$docker_root")
+    if [[ "$OS_TYPE" == "linux" ]] && command -v k3s_current_data_dir >/dev/null 2>&1; then
+        candidates+=("$(k3s_current_data_dir)")
+    fi
+
+    local target pct
+    for target in "${candidates[@]}"; do
+        pct=$(_disk_used_pct "$target")
+        [[ "$pct" =~ ^[0-9]+$ ]] || continue
+        if (( pct > worst_pct )); then
+            worst_pct=$pct
+            worst_target=$target
+        fi
+    done
+
+    if (( worst_pct >= 85 )); then
+        warning "Image disk ($worst_target) is at ${worst_pct}% - at or above the 85% kubelet GC threshold."
+        echo "  Free space by hand: old Stella image tags, or lower the build-cache cap below 50GB."
+    fi
+}
+
+# =============================================================================
 # Single-Line Build Progress with Descriptive Steps
 # =============================================================================
 
@@ -1022,6 +1178,10 @@ build_images() {
 
     # Auto-discover agents from agents/ directory (needed by cleanup and build)
     discover_agents
+
+    # Snapshot each image's current tag as "the one before" (#780) before this
+    # deploy's builds overwrite it below.
+    snapshot_previous_image_tags
 
     # Clean up if rebuild mode
     if [[ "$REBUILD_MODE" == "true" ]]; then

@@ -1305,6 +1305,15 @@ deploy_services() {
     # The new release is running, so the images it replaced may be collected.
     unpin_previous_k3s_images
 
+    # Old image generations go only once the rollout above is confirmed
+    # healthy (#780) - a half-rolled-out release keeps its old images to
+    # fall back to by hand. The build-cache bound and the disk warning run
+    # regardless of outcome, from start-k8s.sh's own exit trap.
+    echo -ne "   ${ARROW} Image cleanup... "
+    prune_old_image_generations
+    prune_dangling_images
+    printf "\r   ${ARROW} Image cleanup... ${GREEN}${CHECK}${NC}    \n"
+
     success "Deployment complete"
 }
 

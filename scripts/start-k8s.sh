@@ -72,6 +72,16 @@ custom_exit_handler() {
     # Run normal cleanup
     run_cleanup 2>/dev/null || true
 
+    # Bound the build cache and warn on a full image disk on EVERY exit,
+    # failed ones included (#780) - a build can fail on a cache already past
+    # its limit, and that's exactly the run that most needs this to happen.
+    # Guarded: this trap can fire before environment.sh has run (e.g. a very
+    # early validation failure), when IMAGE_TAG/CHECKSUM_DIR aren't set yet.
+    if command -v docker >/dev/null 2>&1 && [[ -n "${IMAGE_TAG:-}" ]]; then
+        trim_build_cache 2>/dev/null || true
+        warn_if_image_disk_full 2>/dev/null || true
+    fi
+
     # Show debug info for ANY non-zero exit (helps debug silent failures)
     if [[ $exit_code -ne 0 ]]; then
         echo ""
