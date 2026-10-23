@@ -277,39 +277,69 @@ clear_all_checksums() {
 # UNPINS every older K3s containerd tag once a rollout is ready, but never
 # removes anything itself -- it leaves that to the kubelet's own image GC,
 # which is reactive (only triggers past 85%) and never touches Docker's own
-# image store or an untagged digest at all. That's the actual gap (#780's
-# evidence: 94 images, 254GB, every release since 0.3.0 still on disk): this
-# ACTIVELY removes, on both Docker and K3s, everything except the running
-# version and the one before it. Reuses the tag record_service_tag already
-# persists per service in ${service}.tag rather than inventing a second
-# scheme: that file holds the tag from the deploy right before this one, for
-# exactly as long as it takes this deploy's own build to overwrite it.
+# image store at all. That's the actual gap (#780's evidence: 94 images,
+# 254GB, every release since 0.3.0 still on disk): this ACTIVELY removes,
+# on both Docker and K3s, the one generation each namespace's own history
+# just aged out of.
 #
-# Deliberately NOT touched by any of this: base images (CUDA, postgres,
-# livekit, redis - anything outside get_all_image_names), and agent images'
-# own "latest" and "cfg-*" tags, which agent-image.service.ts already builds
-# and prunes at runtime (AGENT_IMAGE_KEEP_VERSIONS) independently of
-# start-k8s.sh. This only ever manages the plain ${img}:${IMAGE_TAG} tag each
-# image gets from THIS script's own build.
+# Review round 1 found two correctness bugs in an earlier version of this,
+# both fixed by tracking a namespace's own history instead of sweeping every
+# tag on the repo:
+# - A sweep ("remove every tag except current/previous/exempt") took other
+#   namespaces' running images with it, since image names are shared across
+#   namespaces on one host but IMAGE_TAG/CHECKSUM_DIR are per namespace. This
+#   now only ever removes the ONE tag this namespace's own 2-generation
+#   window (tracked in ${img}.tag/.previous_tag, next to record_service_tag's
+#   existing file) just dropped, so it can never name a tag it didn't itself
+#   put there.
+# - `k3s ctr images rm` removes the image record whether or not a container
+#   is using it (unlike `crictl rmi`, which goes through the CRI image
+#   service and refuses one a running pod still uses) - switched to crictl.
+#   Needs /etc/crictl.yaml on production (K3s data under /mnt/data/k3s);
+#   skips with a warning, not an abort, if crictl isn't configured.
+#
+# Deliberately NOT attempted here: the untagged digests a tag move leaves
+# behind in K3s containerd (the issue's own biggest reported filler). The
+# obvious-looking match pattern for them turned out to be wrong, and without
+# a Linux host to check the real `crictl images` output against, guessing
+# again isn't safe - left as a known gap, not silently dropped (see the PR).
+#
+# Deliberately NOT touched by any of this either: base images (CUDA,
+# postgres, livekit, redis - anything outside get_all_image_names), and
+# agent images' own "latest" and "cfg-*" tags, which agent-image.service.ts
+# already builds and prunes at runtime (AGENT_IMAGE_KEEP_VERSIONS)
+# independently of start-k8s.sh.
 
-# Read each image's current ${service}.tag BEFORE this deploy's builds
-# overwrite it, and keep it as the generation to preserve alongside whatever
-# IMAGE_TAG this run produces. Call once, before any build starts.
+# Shift this namespace's own 2-generation window BEFORE this deploy's builds
+# overwrite ${img}.tag, recording whatever just aged out of it (if anything)
+# as the one tag prune_old_image_generations will remove. Call once, before
+# any build starts.
 snapshot_previous_image_tags() {
     local images
     read -ra images <<< "$(get_all_image_names)"
     for img in "${images[@]}"; do
         local tag_file="${CHECKSUM_DIR}/${img}.tag"
+        local prev_file="${CHECKSUM_DIR}/${img}.previous_tag"
+        local stale_file="${CHECKSUM_DIR}/${img}.stale_tag"
+        rm -f "$stale_file" 2>/dev/null || true
+
         [[ -f "$tag_file" ]] || continue
-        local prev
-        prev=$(cat "$tag_file" 2>/dev/null || echo "")
-        if [[ -n "$prev" && "$prev" != "$IMAGE_TAG" ]]; then
-            echo "$prev" > "${CHECKSUM_DIR}/${img}.previous_tag" 2>/dev/null || true
+        local old_current
+        old_current=$(cat "$tag_file" 2>/dev/null || echo "")
+        [[ -n "$old_current" && "$old_current" != "$IMAGE_TAG" ]] || continue
+
+        if [[ -f "$prev_file" ]]; then
+            local old_previous
+            old_previous=$(cat "$prev_file" 2>/dev/null || echo "")
+            if [[ -n "$old_previous" && "$old_previous" != "$IMAGE_TAG" ]]; then
+                echo "$old_previous" > "$stale_file" 2>/dev/null || true
+            fi
         fi
+        echo "$old_current" > "$prev_file" 2>/dev/null || true
     done
 }
 
-# A tag this cleanup must never remove, regardless of IMAGE_TAG/previous_tag:
+# A tag this cleanup must never remove, regardless of what aged out:
 # agent images' own "latest" base and any "cfg-*" per-config variant.
 _is_retention_exempt_tag() {
     local tag="$1"
@@ -318,50 +348,48 @@ _is_retention_exempt_tag() {
     return 1
 }
 
-# Remove every OTHER generation of our own images, on Docker and (on Linux)
-# in K3s containerd, plus the untagged digests a moved tag leaves behind.
+# crictl, not ctr: see the header above. /etc/crictl.yaml is production's
+# setup; a dev/local host may point it at K3s a different way, so this
+# accepts either the file or an explicit endpoint, and otherwise skips.
+_crictl_ready() {
+    command -v crictl >/dev/null 2>&1 || return 1
+    [[ -f /etc/crictl.yaml || -n "${CONTAINER_RUNTIME_ENDPOINT:-}" ]] || return 1
+    return 0
+}
+
+# Remove ONLY the one tag each image's own namespace-scoped history just
+# aged out of - never a sweep over every tag on the repo (see the header).
 # Called once, after a rollout is confirmed healthy - never on a failed
-# deploy, so a half-rolled-out release still has its old images to fall back
+# deploy, so a half-rolled-out release still has its old image to fall back
 # to manually.
 prune_old_image_generations() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     local images
     read -ra images <<< "$(get_all_image_names)"
-    for img in "${images[@]}"; do
-        local keep_previous=""
-        if [[ -f "${CHECKSUM_DIR}/${img}.previous_tag" ]]; then
-            keep_previous=$(cat "${CHECKSUM_DIR}/${img}.previous_tag" 2>/dev/null || echo "")
+
+    local crictl_ok=1
+    if [[ "$OS_TYPE" == "linux" ]]; then
+        if _crictl_ready; then
+            crictl_ok=0
+        else
+            warning "crictl isn't configured - skipping the K3s containerd side of image cleanup (Docker side still runs)."
         fi
+    fi
 
-        local tag
-        while IFS= read -r tag; do
-            [[ -z "$tag" || "$tag" == "<none>" ]] && continue
-            [[ "$tag" == "$IMAGE_TAG" ]] && continue
-            [[ -n "$keep_previous" && "$tag" == "$keep_previous" ]] && continue
-            _is_retention_exempt_tag "$tag" && continue
-            docker rmi "${img}:${tag}" >/dev/null 2>&1 || true
-        done < <(docker images --format '{{.Tag}}' "${img}" 2>/dev/null)
+    for img in "${images[@]}"; do
+        local stale_file="${CHECKSUM_DIR}/${img}.stale_tag"
+        [[ -f "$stale_file" ]] || continue
+        local stale
+        stale=$(cat "$stale_file" 2>/dev/null || echo "")
+        rm -f "$stale_file" 2>/dev/null || true
+        [[ -z "$stale" ]] && continue
+        [[ "$stale" == "$IMAGE_TAG" ]] && continue
+        _is_retention_exempt_tag "$stale" && continue
 
-        if [[ "$OS_TYPE" == "linux" ]]; then
-            local ref
-            while IFS= read -r ref; do
-                [[ -z "$ref" ]] && continue
-                local ref_tag="${ref##*:}"
-                [[ "$ref_tag" == "$IMAGE_TAG" ]] && continue
-                [[ -n "$keep_previous" && "$ref_tag" == "$keep_previous" ]] && continue
-                _is_retention_exempt_tag "$ref_tag" && continue
-                sudo k3s ctr -n k8s.io images rm "$ref" >/dev/null 2>&1 || true
-            done < <(sudo k3s ctr -n k8s.io images ls -q 2>/dev/null | grep -E "/${img}:")
+        docker rmi "${img}:${stale}" >/dev/null 2>&1 || true
 
-            # Untagged digests for this repo: every reused tag moved to a new
-            # digest and left the old one behind; containerd never collects
-            # it on its own. `images rm` refuses one a running container still
-            # uses, so this is safe to attempt on every digest found.
-            local digest_ref
-            while IFS= read -r digest_ref; do
-                [[ -z "$digest_ref" ]] && continue
-                sudo k3s ctr -n k8s.io images rm "$digest_ref" >/dev/null 2>&1 || true
-            done < <(sudo k3s ctr -n k8s.io images ls -q 2>/dev/null | grep -E "/${img}@sha256:")
+        if [[ "$OS_TYPE" == "linux" && $crictl_ok -eq 0 ]]; then
+            crictl rmi "docker.io/library/${img}:${stale}" >/dev/null 2>&1 || true
         fi
     done
 }
@@ -377,12 +405,29 @@ prune_dangling_images() {
 
 # Bounds the BuildKit cache, on every deploy attempt including a failed one
 # (production's own incident: a build failed on a cache already at 122GB).
-# --max-used-space trims to the cap rather than wiping everything, so an
-# incremental build right after still has cache to reuse.
+# Trims to the cap rather than wiping everything, so an incremental build
+# right after still has cache to reuse.
+#
+# --max-used-space alone was shown to free 0 B on production with the cache
+# at 77GB/53GB reclaimable (this card's own evidence) - it works here against
+# a local buildx 0.37.2 (verified: reclaims real space down to a tiny test
+# cap), so the no-op is specific to production's builder/version, not the
+# flag in general. Tries --reserved-space too (different code path in
+# buildx, same "keep at most this much" intent) and prints what either one
+# actually reclaimed, so the next production run shows plainly whether this
+# still doesn't work there rather than failing silently again.
 trim_build_cache() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     command -v docker >/dev/null 2>&1 || return 0
-    docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
+
+    local out total
+    out=$(docker buildx prune -f --max-used-space 50GB --reserved-space 50GB 2>&1) || true
+    total=$(echo "$out" | grep -E '^Total:' | tail -1)
+    if [[ -n "$total" ]]; then
+        verbose "trim_build_cache: ${total}"
+    else
+        verbose "trim_build_cache: no 'Total:' line in prune output (nothing reclaimed, or an older buildx) - full output: ${out}"
+    fi
 }
 
 # The used% of the filesystem under $1, or empty if it can't be read.
@@ -1270,12 +1315,12 @@ build_images() {
     # Bound the build cache after every build that rebuilt something, not
     # only on --rebuild: incremental deploys never trimmed it, and on the
     # development server it reached 214 GB and pushed the image filesystem
-    # past the kubelet's 85% image-GC threshold (#725).
+    # past the kubelet's 85% image-GC threshold (#725). start-k8s.sh's own
+    # exit trap also calls trim_build_cache unconditionally (#780), so a
+    # failed build is covered too - this call just means a successful one
+    # doesn't wait for the trap to trim it.
     if [[ ${#REBUILT_SERVICES[@]} -gt 0 ]]; then
-        # Bound the cache, do not delete it. A full prune meant the next
-        # build recompiled the entire CUDA/torch stack from nothing.
-        docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
-        verbose "build_images: build cache trimmed to 50GB"
+        trim_build_cache
     fi
 }
 
@@ -1533,7 +1578,7 @@ cleanup_for_rebuild() {
 
     # Trim, don't wipe: --rebuild should force fresh *images*, not throw away
     # the layer cache that makes the rebuild survivable.
-    docker builder prune -f --max-used-space 50GB 2>/dev/null || true
+    trim_build_cache
     [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: build cache pruned"
 
     # Clear checksums
