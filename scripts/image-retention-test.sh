@@ -8,8 +8,11 @@
 # production. This retags a tiny real image under a disposable repo name
 # (get_all_image_names is overridden to return only that name) and drives
 # snapshot_previous_image_tags / prune_old_image_generations through several
-# simulated deploy generations, on real Docker. Touches no cluster, no real
-# Stella image, and removes everything it creates.
+# simulated deploy generations, on real Docker, including a second simulated
+# namespace sharing the same image name (review round 1's regression: a
+# sweep over every tag on the repo took another namespace's running image
+# with it). Touches no cluster, no real Stella image, and removes everything
+# it creates.
 #
 #   ./scripts/image-retention-test.sh
 #
@@ -81,6 +84,25 @@ docker tag alpine:3.20 "${FAKE_REPO}:latest"
 docker tag alpine:3.20 "${FAKE_REPO}:cfg-deadbeef1234"
 deploy_generation gen5
 check "latest and cfg-* survive any generation" "cfg-deadbeef1234 gen4 gen5 latest" "$(tags_now)"
+
+# Review round 1's regression: image names are shared across namespaces on
+# one host, but CHECKSUM_DIR/IMAGE_TAG are per namespace. A sweep over every
+# tag on the repo took another namespace's running image with it; this must
+# only ever remove a tag THIS namespace's own history put there.
+NAMESPACE_B_CHECKSUM_DIR="$(mktemp -d)"
+docker tag alpine:3.20 "${FAKE_REPO}:ai-agents-review"
+(
+    CHECKSUM_DIR="$NAMESPACE_B_CHECKSUM_DIR"
+    IMAGE_TAG="ai-agents-review"
+    export CHECKSUM_DIR IMAGE_TAG
+    snapshot_previous_image_tags
+    record_service_tag "$FAKE_REPO"
+    prune_old_image_generations
+)
+deploy_generation gen6
+check "another namespace's tag survives this namespace's own deploy" "ai-agents-review cfg-deadbeef1234 gen5 gen6 latest" "$(tags_now)"
+rm -rf "$NAMESPACE_B_CHECKSUM_DIR"
+docker rmi "${FAKE_REPO}:ai-agents-review" >/dev/null 2>&1 || true
 
 # Smoke-only: these two just need to run clean on real Docker, no assertion
 # on disk/cache state (that depends on the machine running the test).
