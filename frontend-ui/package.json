@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "eslint .",
+    "lint": "oxlint",
     "test": "vitest",
     "test:ci": "vitest run"
   },
@@ -37,17 +37,15 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "@vitest/mocker": "^5.0.3",
     "autoprefixer": "^10.6.1",
-    "eslint": "^10.12.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-react-hooks": "^7.1.1",
+    "oxlint": "1.89.0",
     "postcss": "^8.5.18",
     "prettier": "^3.9.9",
     "tailwindcss": "^3.4.10",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
-    "vitest": "^5.0.3",
-    "@vitest/mocker": "^5.0.3"
+    "vitest": "^5.0.3"
   },
   "overrides": {
     "js-yaml@4": "^4.3.0",

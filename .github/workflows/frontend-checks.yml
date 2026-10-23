@@ -3,9 +3,10 @@ name: Frontend checks
 # The web interface had no checks: a change that did not compile or broke a
 # test was found only when the development server built it after the merge.
 #
-# Lint is not run here: ESLint 10 ignores frontend-ui/.eslintrc.json, and
-# typescript-eslint does not support the frontend's TypeScript 7 yet. `tsc -b`
-# in the build type-checks. See https://github.com/c4dhi/STELLA/issues/661.
+# Lint is oxlint (frontend-ui/.oxlintrc.json), not ESLint, because
+# typescript-eslint does not support the frontend's TypeScript 7 yet; switch
+# back once it does (https://github.com/c4dhi/STELLA/issues/719). Errors fail
+# the job; warnings are older findings still to be cleared.
 on:
   push:
     branches: [main, development]
@@ -41,6 +42,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Lint
+        run: npm run lint
 
       - name: Build (type-check and bundle)
         run: npm run build
