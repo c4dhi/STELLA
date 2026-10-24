@@ -101,6 +101,7 @@ jobs:
           version="${GITHUB_REF_NAME#sdk-v}"
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
+            --latest=false \
             --title "STELLA Agent SDK $version" \
             --notes "Install with \`pip install stella-ai-agent-sdk==$version\`.
 
