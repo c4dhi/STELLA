@@ -408,36 +408,70 @@ prune_dangling_images() {
     docker image prune -f >/dev/null 2>&1 || true
 }
 
+# A docker-style size string ("85.78GB", "6.563GiB", "512kB") as an integer
+# byte count, or nothing if it doesn't parse. Needed because buildx prune's
+# own "Total:" line reports what it RECLAIMED, not what's left - the two
+# look the same on a quiet cache and are easy to conflate (round-1 bug).
+_size_to_bytes() {
+    local s="$1" num unit factor
+    [[ "$s" =~ ^([0-9.]+)([A-Za-z]+)$ ]] || return 1
+    num="${BASH_REMATCH[1]}"
+    unit=$(echo "${BASH_REMATCH[2]}" | tr '[:upper:]' '[:lower:]')
+    case "$unit" in
+        b) factor=1 ;;
+        kb) factor=1000 ;;
+        kib) factor=1024 ;;
+        mb) factor=1000000 ;;
+        mib) factor=1048576 ;;
+        gb) factor=1000000000 ;;
+        gib) factor=1073741824 ;;
+        tb) factor=1000000000000 ;;
+        tib) factor=1099511627776 ;;
+        *) return 1 ;;
+    esac
+    awk -v n="$num" -v f="$factor" 'BEGIN { printf "%d\n", n*f }'
+}
+
+# The build cache's current total size, as docker system df prints it.
+_build_cache_size() {
+    docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1=="Build" {print $NF}'
+}
+
 # Bounds the BuildKit cache, on every deploy attempt including a failed one
 # (production's own incident: a build failed on a cache already at 122GB).
 # Trims to the cap rather than wiping everything, so an incremental build
 # right after still has cache to reuse.
 #
-# --reserved-space is NOT a second "cap" flag - it's "amount always allowed
-# to keep", a floor prune won't go below. Passing it alongside
-# --max-used-space at the same value (this function's round-1 fix) told
-# buildx to never prune below 50GB of reclaimable cache, which sits on top
-# of whatever's shared/in-use and outside prune's reach entirely - on the
-# dev host that left 85.78GB total (51.91GB reclaimable kept + 33.88GB
-# shared) after a "successful" trim. --max-used-space alone is the actual
-# cap: it deletes LRU records until total used is at or below the value
-# (docs.docker.com/reference/cli/docker/buildx/prune), bounded below only by
-# whatever's genuinely shared/unprunable - which is exactly the bound this
-# card wants. Logs size before and after so a regression is visible without
-# a card to notice it.
+# --max-used-space alone, with no --reserved-space, is the EXACT command
+# already shown to free 0 B on production (21 Oct, cache at 77GB/53GB
+# reclaimable) - that history stays here rather than getting deleted again.
+# On the dev host (buildx v0.34.0, BuildKit v0.30.0) this builder's own
+# default GC policy bakes in a ~47.5GiB reserved floor (see
+# `docker buildx inspect --bootstrap`), which an explicit --reserved-space 0
+# overrides for this one-shot prune rather than leaving the daemon default
+# in effect. If the cache is still over the cap after that - this
+# buildx/BuildKit combo may simply not honour --max-used-space the way the
+# docs describe - fall back to --keep-storage, the older flag some versions
+# still enforce as a hard ceiling. Checks the REAL resulting size via
+# `docker system df` after each attempt, not buildx's own "Total:" (reclaimed,
+# not remaining) line.
 trim_build_cache() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     command -v docker >/dev/null 2>&1 || return 0
 
-    local before out total
-    before=$(docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1=="Build" {print $NF}')
-    out=$(docker buildx prune -f --max-used-space 50GB 2>&1) || true
-    total=$(echo "$out" | grep -E '^Total:' | tail -1)
-    if [[ -n "$total" ]]; then
-        echo "   Build cache: ${total} (before: ${before:-unknown})"
-    else
-        echo "   Build cache: prune produced no 'Total:' line (nothing reclaimed, or an older buildx) - output: ${out}"
+    local cap_bytes=50000000000 before_str after_str after_bytes
+    before_str=$(_build_cache_size)
+
+    docker buildx prune -f --max-used-space 50GB --reserved-space 0 >/dev/null 2>&1 || true
+    after_str=$(_build_cache_size)
+    after_bytes=$(_size_to_bytes "$after_str" 2>/dev/null) || after_bytes=""
+
+    if [[ -z "$after_bytes" || "$after_bytes" -gt "$cap_bytes" ]]; then
+        docker buildx prune -f --keep-storage 50GB >/dev/null 2>&1 || true
+        after_str=$(_build_cache_size)
     fi
+
+    echo "   Build cache: ${after_str:-unknown} (before: ${before_str:-unknown})"
 }
 
 # The used% of the filesystem under $1, or empty if it can't be read.
