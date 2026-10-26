@@ -413,26 +413,28 @@ prune_dangling_images() {
 # Trims to the cap rather than wiping everything, so an incremental build
 # right after still has cache to reuse.
 #
-# --max-used-space alone was shown to free 0 B on production with the cache
-# at 77GB/53GB reclaimable (this card's own evidence) - it works here against
-# a local buildx 0.37.2 (verified: reclaims real space down to a tiny test
-# cap), so the no-op is specific to production's builder/version, not the
-# flag in general. Tries --reserved-space too (different code path in
-# buildx, same "keep at most this much" intent) and prints what either one
-# actually reclaimed, so the next production run shows plainly whether this
-# still doesn't work there rather than failing silently again.
+# --reserved-space is NOT a second "cap" flag - it's "amount always allowed
+# to keep", a floor prune won't go below. Passing it alongside
+# --max-used-space at the same value (this function's round-1 fix) told
+# buildx to never prune below 50GB of reclaimable cache, which sits on top
+# of whatever's shared/in-use and outside prune's reach entirely - on the
+# dev host that left 85.78GB total (51.91GB reclaimable kept + 33.88GB
+# shared) after a "successful" trim. --max-used-space alone is the actual
+# cap: it deletes LRU records until total used is at or below the value
+# (docs.docker.com/reference/cli/docker/buildx/prune), bounded below only by
+# whatever's genuinely shared/unprunable - which is exactly the bound this
+# card wants. Logs size before and after so a regression is visible without
+# a card to notice it.
 trim_build_cache() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     command -v docker >/dev/null 2>&1 || return 0
 
-    local out total
-    out=$(docker buildx prune -f --max-used-space 50GB --reserved-space 50GB 2>&1) || true
+    local before out total
+    before=$(docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1=="Build" {print $NF}')
+    out=$(docker buildx prune -f --max-used-space 50GB 2>&1) || true
     total=$(echo "$out" | grep -E '^Total:' | tail -1)
-    # Normal level, not verbose (#99 review round 2): production CI doesn't
-    # pass --verbose, and this is exactly the line that would have shown the
-    # --max-used-space no-op immediately instead of needing a card to notice it.
     if [[ -n "$total" ]]; then
-        echo "   Build cache: ${total}"
+        echo "   Build cache: ${total} (before: ${before:-unknown})"
     else
         echo "   Build cache: prune produced no 'Total:' line (nothing reclaimed, or an older buildx) - output: ${out}"
     fi
