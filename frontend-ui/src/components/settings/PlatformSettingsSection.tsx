@@ -289,7 +289,7 @@ export default function PlatformSettingsSection() {
             </h3>
             <p className={`text-body-sm ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
               Lets users connect AI clients such as Claude Code to their account with a personal access token.
-              The client can read and edit their personas, plans and agent configs, and read sessions in their projects.
+              The client can read and edit their personas, plans and agent configs, and run sessions in their projects: start them, deploy agents and create invitation links.
               Switching it off stops every token at once, for every user.
             </p>
           </div>

@@ -17,7 +17,10 @@ import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
+import { AgentsTools } from './tools/agents.tools.js';
 import { CreatePersonaDto } from '../personas/dto/create-persona.dto.js';
+import { CreateAgentDto } from '../agents/dto/create-agent.dto.js';
+import { CreateSessionDto } from '../sessions/dto/create-session.dto.js';
 
 const USER = {
   userId: 'u1',
@@ -73,14 +76,68 @@ function setup() {
       hasMore: false,
       nextCursor: null,
     })),
+    create: jest.fn(async (projectId: string, dto: any) => ({
+      id: 's3',
+      projectId,
+      name: dto.name ?? null,
+      status: 'ACTIVE',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      room: { livekitRoomName: 'room-s3' },
+    })),
+    close: jest.fn(async () => ({ message: 'Session closed' })),
   };
+  const agentRow = {
+    id: 'a1',
+    sessionId: 's1',
+    name: 'Grace',
+    status: 'STARTING',
+    agentConfig: { persona: { system_prompt: 'secret sauce' } },
+    podName: 'agent-a1',
+    secretName: 'agent-a1-env',
+    manualEnvVarsEncrypted: 'ciphertext',
+  };
+  const agents = {
+    create: jest.fn(async () => agentRow),
+    findOne: jest.fn(async () => ({ ...agentRow, podStatus: 'Running' })),
+    getLogs: jest.fn(async () => 'line 1\nline 2'),
+    restart: jest.fn(async () => agentRow),
+    remove: jest.fn(async () => ({ message: 'Agent stopped successfully' })),
+  };
+  const invitations = {
+    create: jest.fn(async () => ({
+      invitation: { id: 'i1', token: 'tok', status: 'PENDING' },
+      joinUrl: 'https://stella.test/join/tok',
+    })),
+    joinUrl: (token: string) => `https://stella.test/join/${token}`,
+    findBySession: jest.fn(async () => [
+      { id: 'i1', token: 'tok', status: 'PENDING' },
+    ]),
+    revoke: jest.fn(async () => ({
+      message: 'Invitation revoked successfully',
+    })),
+  };
+  const byId = (rows: Record<string, unknown>) => async (args: any) =>
+    rows[args.where.id] ?? null;
   const prisma = {
     session: {
       findUnique: jest.fn(
-        async (args: any) =>
-          (({ s1: { projectId: 'p1' }, s2: { projectId: 'p2' } }) as any)[
-            args.where.id
-          ] ?? null,
+        byId({ s1: { projectId: 'p1' }, s2: { projectId: 'p2' } }),
+      ),
+    },
+    agentInstance: {
+      findUnique: jest.fn(
+        byId({
+          a1: { session: { projectId: 'p1' } },
+          a2: { session: { projectId: 'p2' } },
+        }),
+      ),
+    },
+    invitation: {
+      findUnique: jest.fn(
+        byId({
+          i1: { session: { projectId: 'p1' } },
+          i2: { session: { projectId: 'p2' } },
+        }),
       ),
     },
   };
@@ -95,13 +152,30 @@ function setup() {
       { findAll: jest.fn(async () => []) } as any,
       sessions as any,
       { getFullState: jest.fn(async () => null) } as any,
+      invitations as any,
+      access,
+    ),
+    new AgentsTools(
+      agents as any,
+      {
+        findAllByUser: jest.fn(async () => [
+          {
+            id: 'e1',
+            userId: 'u1',
+            name: 'Keys',
+            description: null,
+            variableKeys: ['OPENAI_API_KEY'],
+            agentTypeId: 'at1',
+          },
+        ]),
+      } as any,
       access,
     ),
   ];
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
     (factory as any).tools.find((t: any) => t.name === name);
-  return { factory, personas, sessions, audit, tool };
+  return { factory, personas, sessions, agents, invitations, audit, tool };
 }
 
 async function connect(factory: McpServerFactory, auth: McpAuthContext) {
@@ -302,6 +376,171 @@ describe('MCP tool runner', () => {
       READ,
     );
     expect(debug.structuredContent.messages[0].metadata).toEqual({ x: 1 });
+  });
+});
+
+describe('MCP session and agent tools', () => {
+  it('shows following tools to a read-only token, and running tools only with write', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining([
+        'sessions_get',
+        'session_invitations_list',
+        'agents_get',
+        'agent_logs_get',
+        'env_var_templates_list',
+      ]),
+    );
+    for (const write of [
+      'sessions_create',
+      'sessions_close',
+      'session_invitations_create',
+      'agents_deploy',
+      'agents_restart',
+      'agents_stop',
+    ]) {
+      expect(read).not.toContain(write);
+      expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
+    }
+  });
+
+  it('creates sessions only in projects the user is a member of', async () => {
+    const { factory, sessions, tool } = setup();
+    const other: any = await factory.run(
+      tool('sessions_create'),
+      { projectId: 'p2', name: 'X' },
+      READ_WRITE,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(sessions.create).not.toHaveBeenCalled();
+
+    const ok: any = await factory.run(
+      tool('sessions_create'),
+      { projectId: 'p1', name: 'Morning' },
+      READ_WRITE,
+    );
+    expect(sessions.create.mock.calls[0][0]).toBe('p1');
+    expect(sessions.create.mock.calls[0][1]).toBeInstanceOf(CreateSessionDto);
+    expect(ok.structuredContent).toEqual({
+      id: 's3',
+      projectId: 'p1',
+      name: 'Morning',
+      status: 'ACTIVE',
+      createdAt: '2026-10-01T00:00:00.000Z',
+    });
+  });
+
+  it('acts on sessions, agents and invitations only inside the user projects', async () => {
+    const { factory, sessions, agents, invitations, tool } = setup();
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['sessions_close', { sessionId: 's2' }],
+      ['session_invitations_create', { sessionId: 's2' }],
+      ['session_invitations_revoke', { invitationId: 'i2' }],
+      ['agents_deploy', { sessionId: 's2', name: 'A' }],
+      ['agents_get', { agentId: 'a2' }],
+      ['agent_logs_get', { agentId: 'a2' }],
+      ['agents_restart', { agentId: 'a2' }],
+      ['agents_stop', { agentId: 'missing' }],
+    ];
+    for (const [name, args] of calls) {
+      const result: any = await factory.run(tool(name), args, READ_WRITE);
+      expect(parse(result).error.status).toBe(404);
+    }
+    expect(sessions.close).not.toHaveBeenCalled();
+    expect(invitations.create).not.toHaveBeenCalled();
+    expect(invitations.revoke).not.toHaveBeenCalled();
+    for (const fn of Object.values(agents)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('deploys an agent as the token owner, without raw config or env var values', async () => {
+    const { factory, agents, tool } = setup();
+    const result: any = await factory.run(
+      tool('agents_deploy'),
+      {
+        sessionId: 's1',
+        name: 'Grace',
+        planId: '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11',
+        config: { plan: { id: 'smuggled' } },
+        envVars: { OPENAI_API_KEY: 'sk-x' },
+      },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const [sessionId, dto, userId] = agents.create.mock.calls[0] as any[];
+    expect(sessionId).toBe('s1');
+    expect(userId).toBe('u1');
+    expect(dto).toBeInstanceOf(CreateAgentDto);
+    expect(dto.planId).toBe('7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11');
+    expect(dto.config).toBeUndefined();
+    expect(dto.envVars).toBeUndefined();
+  });
+
+  it('rejects an agent the REST DTO would reject', async () => {
+    const { factory, agents, tool } = setup();
+    const result: any = await factory.run(
+      tool('agents_deploy'),
+      { sessionId: 's1', name: 'Grace', planId: 'not-a-uuid' },
+      READ_WRITE,
+    );
+    expect(parse(result).error).toEqual({
+      status: 400,
+      message: expect.stringContaining('planId'),
+    });
+    expect(agents.create).not.toHaveBeenCalled();
+  });
+
+  it('returns agents without their deployment snapshot or secrets', async () => {
+    const { factory, tool } = setup();
+    const result: any = await factory.run(
+      tool('agents_get'),
+      { agentId: 'a1' },
+      READ,
+    );
+    expect(result.structuredContent).toMatchObject({
+      id: 'a1',
+      status: 'STARTING',
+      podStatus: 'Running',
+    });
+    expect(result.content[0].text).not.toContain('secret sauce');
+    expect(result.content[0].text).not.toContain('ciphertext');
+    expect(result.content[0].text).not.toContain('agent-a1-env');
+  });
+
+  it('hands back the join link of an invitation, and never env var values', async () => {
+    const { factory, tool } = setup();
+    const created: any = await factory.run(
+      tool('session_invitations_create'),
+      { sessionId: 's1', participantName: 'Anna' },
+      READ_WRITE,
+    );
+    expect(created.structuredContent).toMatchObject({
+      id: 'i1',
+      status: 'PENDING',
+      joinUrl: 'https://stella.test/join/tok',
+    });
+    const listed: any = await factory.run(
+      tool('session_invitations_list'),
+      { sessionId: 's1' },
+      READ,
+    );
+    expect(listed.structuredContent.items[0].joinUrl).toBe(
+      'https://stella.test/join/tok',
+    );
+    const templates: any = await factory.run(
+      tool('env_var_templates_list'),
+      {},
+      READ,
+    );
+    expect(templates.structuredContent.items).toEqual([
+      {
+        id: 'e1',
+        name: 'Keys',
+        description: null,
+        variableKeys: ['OPENAI_API_KEY'],
+        agentTypeId: 'at1',
+      },
+    ]);
   });
 });
 

@@ -23,7 +23,8 @@ const INSTRUCTIONS = [
   'STELLA hosts conversational voice agents. An agent is deployed from three parts the user owns:',
   'an agent configuration (pipeline settings for one agent type), a persona (who the agent is: system prompt, voice, language)',
   'and a plan template (what happens in the conversation: states, tasks, deliverables).',
-  'Sessions belong to projects and hold the transcript and plan state of past conversations.',
+  'Sessions belong to projects and hold the transcript and plan state of their conversations.',
+  'To run one: sessions_create, then agents_deploy with a plan, persona and configuration, then session_invitations_create for the link a participant opens.',
   'Read before you write: fetch an existing item to see its exact structure before creating or updating one.',
 ].join(' ');
 

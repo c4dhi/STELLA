@@ -19,6 +19,9 @@ import { McpOAuthUrls } from '../src/mcp-oauth/mcp-oauth.urls';
 import { OAuthTokensService } from '../src/mcp-oauth/oauth-tokens.service';
 import { MCP_TOOL_PROVIDERS } from '../src/mcp/mcp.types';
 import { PersonasTools } from '../src/mcp/tools/personas.tools';
+import { SessionsTools } from '../src/mcp/tools/sessions.tools';
+import { AgentsTools } from '../src/mcp/tools/agents.tools';
+import { ResourceAccessService } from '../src/auth/resource-access.service';
 
 /**
  * /mcp over real HTTP: the Nest controller, its guards, the global JWT guard
@@ -32,8 +35,8 @@ const USER = {
   email: 'u@x.test',
   name: 'U',
   isSystemAdmin: false,
-  projectIds: [],
-  projectRoles: {},
+  projectIds: ['p1'],
+  projectRoles: { p1: 'OWNER' },
 };
 
 describe('/mcp (e2e)', () => {
@@ -45,6 +48,36 @@ describe('/mcp (e2e)', () => {
     create: jest.fn(async (_u: string, dto: object) => ({ id: 'pe2', ...dto })),
   };
   const audit = { record: jest.fn(async () => undefined) };
+  const sessions = {
+    create: jest.fn(async (projectId: string, dto: any) => ({
+      id: 's1',
+      projectId,
+      name: dto.name,
+      status: 'ACTIVE',
+      createdAt: new Date('2026-10-26T00:00:00Z'),
+    })),
+    close: jest.fn(async () => ({ message: 'Session closed successfully' })),
+  };
+  const agents = {
+    create: jest.fn(async (sessionId: string, dto: any) => ({
+      id: 'a1',
+      sessionId,
+      name: dto.name,
+      status: 'STARTING',
+    })),
+    remove: jest.fn(async () => ({ message: 'Agent stopped successfully' })),
+  };
+  const projectOf: Record<string, string> = { s1: 'p1', s9: 'p9' };
+  const access = new ResourceAccessService({
+    session: {
+      findUnique: async ({ where }: any) =>
+        projectOf[where.id] ? { projectId: projectOf[where.id] } : null,
+    },
+    agentInstance: {
+      findUnique: async ({ where }: any) =>
+        where.id === 'a1' ? { session: { projectId: 'p1' } } : null,
+    },
+  } as any);
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -69,7 +102,17 @@ describe('/mcp (e2e)', () => {
         { provide: McpAuditService, useValue: audit },
         {
           provide: MCP_TOOL_PROVIDERS,
-          useValue: [new PersonasTools(personas as any)],
+          useValue: [
+            new PersonasTools(personas as any),
+            new SessionsTools(
+              {} as any,
+              sessions as any,
+              {} as any,
+              {} as any,
+              access,
+            ),
+            new AgentsTools(agents as any, {} as any, access),
+          ],
         },
         {
           provide: PlatformSettingsService,
@@ -176,6 +219,82 @@ describe('/mcp (e2e)', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ tool: 'personas_create', success: true }),
     );
+    await client.close();
+  });
+
+  it('runs a session over HTTP: create it, start an agent, stop it, close it', async () => {
+    const client = await connect(GOOD);
+    const call = async (name: string, args: Record<string, unknown>) =>
+      (await client.callTool({ name, arguments: args })) as any;
+
+    const session = await call('sessions_create', {
+      projectId: 'p1',
+      name: 'Morning',
+    });
+    expect(session.structuredContent).toMatchObject({
+      id: 's1',
+      status: 'ACTIVE',
+    });
+    const agent = await call('agents_deploy', {
+      sessionId: 's1',
+      name: 'Grace',
+      planId: '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11',
+    });
+    expect(agent.structuredContent).toMatchObject({
+      id: 'a1',
+      status: 'STARTING',
+    });
+    expect(agents.create).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        planId: '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11',
+      }),
+      'u1',
+    );
+    expect((await call('agents_stop', { agentId: 'a1' })).isError).toBeFalsy();
+    expect(
+      (await call('sessions_close', { sessionId: 's1' })).isError,
+    ).toBeFalsy();
+
+    // Not a member of p9: refused as not found, and nothing runs.
+    const other = await call('sessions_create', { projectId: 'p9' });
+    expect(JSON.parse(other.content[0].text).error.status).toBe(404);
+    const otherAgent = await call('agents_deploy', {
+      sessionId: 's9',
+      name: 'X',
+    });
+    expect(JSON.parse(otherAgent.content[0].text).error.status).toBe(404);
+    expect(sessions.create).toHaveBeenCalledTimes(1);
+    expect(agents.create).toHaveBeenCalledTimes(1);
+
+    for (const tool of [
+      'sessions_create',
+      'agents_deploy',
+      'agents_stop',
+      'sessions_close',
+    ])
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ tool, userId: 'u1', tokenId: 't1' }),
+      );
+    await client.close();
+  });
+
+  it('does not let a read-only token start or stop anything', async () => {
+    const client = await connect(READ_ONLY);
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    for (const tool of [
+      'sessions_create',
+      'sessions_close',
+      'agents_deploy',
+      'agents_stop',
+    ])
+      expect(names).not.toContain(tool);
+    const res: any = await client.callTool({
+      name: 'agents_deploy',
+      arguments: { sessionId: 's1', name: 'Grace' },
+    });
+    expect(res.isError).toBe(true);
+    expect(agents.create).toHaveBeenCalledTimes(1);
     await client.close();
   });
 

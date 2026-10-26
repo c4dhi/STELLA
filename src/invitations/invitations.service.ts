@@ -110,16 +110,18 @@ export class InvitationsService {
       this.eventEmitter.emit('session.cap-changed', { sessionId });
     }
 
-    // Generate the join URL using the frontend URL
-    const baseUrl = this.configService.get<string>('PUBLIC_FRONTEND_URL') || 'http://localhost:8080';
-    const joinUrl = `${baseUrl}/join/${invitation.token}`;
-
     this.logger.log(`Created invitation ${invitation.id} for session ${sessionId}`);
 
     return {
       invitation,
-      joinUrl,
+      joinUrl: this.joinUrl(invitation.token),
     };
+  }
+
+  /** The link a participant opens to join, on the public frontend. */
+  joinUrl(token: string): string {
+    const baseUrl = this.configService.get<string>('PUBLIC_FRONTEND_URL') || 'http://localhost:8080';
+    return `${baseUrl}/join/${token}`;
   }
 
   /**
