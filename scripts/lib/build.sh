@@ -437,6 +437,13 @@ _build_cache_size() {
     docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1=="Build" {print $NF}'
 }
 
+# True if a docker-style size string is missing or over the given byte cap.
+_size_over_cap() {
+    local bytes
+    bytes=$(_size_to_bytes "$1" 2>/dev/null) || bytes=""
+    [[ -z "$bytes" || "$bytes" -gt "$2" ]]
+}
+
 # Bounds the BuildKit cache, on every deploy attempt including a failed one
 # (production's own incident: a build failed on a cache already at 122GB).
 # Trims to the cap rather than wiping everything, so an incremental build
@@ -449,25 +456,43 @@ _build_cache_size() {
 # default GC policy bakes in a ~47.5GiB reserved floor (see
 # `docker buildx inspect --bootstrap`), which an explicit --reserved-space 0
 # overrides for this one-shot prune rather than leaving the daemon default
-# in effect. If the cache is still over the cap after that - this
-# buildx/BuildKit combo may simply not honour --max-used-space the way the
-# docs describe - fall back to --keep-storage, the older flag some versions
-# still enforce as a hard ceiling. Checks the REAL resulting size via
-# `docker system df` after each attempt, not buildx's own "Total:" (reclaimed,
-# not remaining) line.
+# in effect.
+#
+# If that's still not enough, --keep-storage is tried next, but it's an
+# older flag already absent from `prune --help` on both buildx 0.34.0 (this
+# host) and 0.37.2 (@sable's). Confirmed locally on 0.37.2 it's accepted but
+# silently deprecated to --reserved-space ("Flag --keep-storage has been
+# deprecated, keep-storage flag has been changed to reserved-space") - a
+# floor, not the ceiling we want, so it likely does nothing useful here
+# either; output is still checked for an explicit "unknown flag" rejection
+# in case 0.34.0 differs. Either way, the final fallback is an age filter
+# (@sable, round 3): --filter until=168h certainly deletes anything older
+# than a week, regardless of what this builder does with the space-based
+# flags.
+#
+# Checks the REAL resulting size via `docker system df` after each attempt,
+# not buildx's own "Total:" (reclaimed, not remaining) line.
 trim_build_cache() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     command -v docker >/dev/null 2>&1 || return 0
 
-    local cap_bytes=50000000000 before_str after_str after_bytes
+    local cap_bytes=50000000000 before_str after_str out
+
     before_str=$(_build_cache_size)
 
     docker buildx prune -f --max-used-space 50GB --reserved-space 0 >/dev/null 2>&1 || true
     after_str=$(_build_cache_size)
-    after_bytes=$(_size_to_bytes "$after_str" 2>/dev/null) || after_bytes=""
 
-    if [[ -z "$after_bytes" || "$after_bytes" -gt "$cap_bytes" ]]; then
-        docker buildx prune -f --keep-storage 50GB >/dev/null 2>&1 || true
+    if _size_over_cap "$after_str" "$cap_bytes"; then
+        out=$(docker buildx prune -f --keep-storage 50GB 2>&1) || true
+        if echo "$out" | grep -qiE 'unknown flag|unknown shorthand|no such flag'; then
+            echo "   Build cache: --keep-storage not accepted by this buildx, falling back to an age filter"
+        fi
+        after_str=$(_build_cache_size)
+    fi
+
+    if _size_over_cap "$after_str" "$cap_bytes"; then
+        docker buildx prune -f --reserved-space 0 --filter until=168h >/dev/null 2>&1 || true
         after_str=$(_build_cache_size)
     fi
 
