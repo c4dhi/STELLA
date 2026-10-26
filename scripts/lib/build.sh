@@ -269,6 +269,215 @@ clear_all_checksums() {
 }
 
 # =============================================================================
+# Image & Build-Cache Retention (#780)
+# =============================================================================
+# CI (deploy-development.yml, deploy-prod.yml) exports a unique IMAGE_TAG per
+# run (<version>-<run_number>-g<sha>); only a plain local run defaults to
+# "latest" or the namespace. unpin_previous_k3s_images (#725, above) already
+# UNPINS every older K3s containerd tag once a rollout is ready, but never
+# removes anything itself -- it leaves that to the kubelet's own image GC,
+# which is reactive (only triggers past 85%) and never touches Docker's own
+# image store at all. That's the actual gap (#780's evidence: 94 images,
+# 254GB, every release since 0.3.0 still on disk): this ACTIVELY removes,
+# on both Docker and K3s, the one generation each namespace's own history
+# just aged out of.
+#
+# Review round 1 found two correctness bugs in an earlier version of this,
+# both fixed by tracking a namespace's own history instead of sweeping every
+# tag on the repo:
+# - A sweep ("remove every tag except current/previous/exempt") took other
+#   namespaces' running images with it, since image names are shared across
+#   namespaces on one host but IMAGE_TAG/CHECKSUM_DIR are per namespace. This
+#   now only ever removes the ONE tag this namespace's own 2-generation
+#   window (tracked in ${img}.tag/.previous_tag, next to record_service_tag's
+#   existing file) just dropped, so it can never name a tag it didn't itself
+#   put there.
+# - round 1 switched the K3s side to `crictl rmi` on the theory that it
+#   refuses an in-use ref, unlike `ctr images rm`. Round 2 corrected that:
+#   CRI's RemoveImage deletes the whole image by ID, every tag included, so
+#   on an unchanged service or an agent's shared :latest (reuse_service_image,
+#   tag_agent_images_latest, both above) it would also take the CURRENT tag
+#   down with the stale one. Back to `ctr images rm` on the one specific
+#   stale ref only - safe here because this never targets anything but a
+#   generation this namespace's own history just retired, which nothing
+#   should still be running.
+# Round 2 also found a second bug: if a build fails after record_service_tag
+# updated ${img}.tag but before a later deploy's rollout confirms it (or any
+# path where ${img}.previous_tag was already shifted without a real
+# generation closing the loop), old_previous can equal old_current. Treating
+# that as a retiring generation would delete the only real rollback image
+# left. snapshot_previous_image_tags below guards against it - at the cost
+# of occasionally leaking one generation it should have retired, which is
+# the safe direction to be wrong in.
+#
+# Deliberately NOT attempted here: the untagged digests a tag move leaves
+# behind in K3s containerd (the issue's own biggest reported filler). The
+# obvious-looking match pattern for them turned out to be wrong, and without
+# a Linux host to check the real `crictl images` output against, guessing
+# again isn't safe - left as a known gap, not silently dropped (see the PR).
+#
+# Deliberately NOT touched by any of this either: base images (CUDA,
+# postgres, livekit, redis - anything outside get_all_image_names), and
+# agent images' own "latest" and "cfg-*" tags, which agent-image.service.ts
+# already builds and prunes at runtime (AGENT_IMAGE_KEEP_VERSIONS)
+# independently of start-k8s.sh.
+
+# Shift this namespace's own 2-generation window BEFORE this deploy's builds
+# overwrite ${img}.tag, recording whatever just aged out of it (if anything)
+# as the one tag prune_old_image_generations will remove. Call once, before
+# any build starts.
+snapshot_previous_image_tags() {
+    local images
+    read -ra images <<< "$(get_all_image_names)"
+    for img in "${images[@]}"; do
+        local tag_file="${CHECKSUM_DIR}/${img}.tag"
+        local prev_file="${CHECKSUM_DIR}/${img}.previous_tag"
+        local stale_file="${CHECKSUM_DIR}/${img}.stale_tag"
+        rm -f "$stale_file" 2>/dev/null || true
+
+        [[ -f "$tag_file" ]] || continue
+        local old_current
+        old_current=$(cat "$tag_file" 2>/dev/null || echo "")
+        [[ -n "$old_current" && "$old_current" != "$IMAGE_TAG" ]] || continue
+
+        if [[ -f "$prev_file" ]]; then
+            local old_previous
+            old_previous=$(cat "$prev_file" 2>/dev/null || echo "")
+            # Guard (#99 review round 2): old_previous can equal old_current
+            # after a build that failed before confirming a new generation,
+            # or any other path that shifted the window without a real
+            # deploy closing it. Marking that "stale" would delete the only
+            # real rollback image still on disk, so skip - nothing is wrong
+            # with the window itself, there's just nothing new to retire yet.
+            if [[ -n "$old_previous" && "$old_previous" != "$IMAGE_TAG" && "$old_previous" != "$old_current" ]]; then
+                echo "$old_previous" > "$stale_file" 2>/dev/null || true
+            fi
+        fi
+        echo "$old_current" > "$prev_file" 2>/dev/null || true
+    done
+}
+
+# A tag this cleanup must never remove, regardless of what aged out:
+# agent images' own "latest" base and any "cfg-*" per-config variant.
+_is_retention_exempt_tag() {
+    local tag="$1"
+    [[ "$tag" == "latest" ]] && return 0
+    [[ "$tag" == cfg-* ]] && return 0
+    return 1
+}
+
+# Remove ONLY the one tag each image's own namespace-scoped history just
+# aged out of - never a sweep over every tag on the repo (see the header).
+# Called once, after a rollout is confirmed healthy - never on a failed
+# deploy, so a half-rolled-out release still has its old image to fall back
+# to manually.
+prune_old_image_generations() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    local images
+    read -ra images <<< "$(get_all_image_names)"
+
+    for img in "${images[@]}"; do
+        local stale_file="${CHECKSUM_DIR}/${img}.stale_tag"
+        [[ -f "$stale_file" ]] || continue
+        local stale
+        stale=$(cat "$stale_file" 2>/dev/null || echo "")
+        rm -f "$stale_file" 2>/dev/null || true
+        [[ -z "$stale" ]] && continue
+        [[ "$stale" == "$IMAGE_TAG" ]] && continue
+        _is_retention_exempt_tag "$stale" && continue
+
+        docker rmi "${img}:${stale}" >/dev/null 2>&1 || true
+
+        if [[ "$OS_TYPE" == "linux" ]]; then
+            # ctr, not crictl: CRI's RemoveImage deletes the whole image by
+            # ID, every tag included, which would also take an unchanged
+            # service's or an agent's :latest current tag down with this one
+            # stale ref if they share the same underlying image (#99 review
+            # round 2). `ctr images rm` removes just this one reference.
+            sudo k3s ctr -n k8s.io images rm "docker.io/library/${img}:${stale}" >/dev/null 2>&1 || true
+        fi
+    done
+}
+
+# Dangling (untagged) Docker images left behind by the retag-on-build churn
+# above. Never `rmi --prune`/`image prune -a`: either also removes a tagged
+# image nothing currently runs, which is exactly the rollback generation
+# prune_old_image_generations just chose to keep.
+prune_dangling_images() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    docker image prune -f >/dev/null 2>&1 || true
+}
+
+# Bounds the BuildKit cache, on every deploy attempt including a failed one
+# (production's own incident: a build failed on a cache already at 122GB).
+# Trims to the cap rather than wiping everything, so an incremental build
+# right after still has cache to reuse.
+#
+# --max-used-space alone was shown to free 0 B on production with the cache
+# at 77GB/53GB reclaimable (this card's own evidence) - it works here against
+# a local buildx 0.37.2 (verified: reclaims real space down to a tiny test
+# cap), so the no-op is specific to production's builder/version, not the
+# flag in general. Tries --reserved-space too (different code path in
+# buildx, same "keep at most this much" intent) and prints what either one
+# actually reclaimed, so the next production run shows plainly whether this
+# still doesn't work there rather than failing silently again.
+trim_build_cache() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local out total
+    out=$(docker buildx prune -f --max-used-space 50GB --reserved-space 50GB 2>&1) || true
+    total=$(echo "$out" | grep -E '^Total:' | tail -1)
+    # Normal level, not verbose (#99 review round 2): production CI doesn't
+    # pass --verbose, and this is exactly the line that would have shown the
+    # --max-used-space no-op immediately instead of needing a card to notice it.
+    if [[ -n "$total" ]]; then
+        echo "   Build cache: ${total}"
+    else
+        echo "   Build cache: prune produced no 'Total:' line (nothing reclaimed, or an older buildx) - output: ${out}"
+    fi
+}
+
+# The used% of the filesystem under $1, or empty if it can't be read.
+_disk_used_pct() {
+    [[ -n "$1" && -d "$1" ]] || return 0
+    df -P "$1" 2>/dev/null | awk 'NR==2 { gsub("%","",$5); print $5 }'
+}
+
+# A plain warning if the image disk is still at or above 85% after the
+# cleanup above - that's where the kubelet starts deleting images on its
+# own, so a deploy that leaves it there needs a human, not a silent retry.
+# Checks Docker's actual data-root (ensure_docker_data_root may have moved
+# it to $STELLA_DATA_ROOT, not necessarily /mnt/data) and, on Linux, K3s's
+# own data-dir too - they can be different mounts.
+warn_if_image_disk_full() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
+    command -v docker >/dev/null 2>&1 || return 0
+
+    local docker_root worst_pct=0 worst_target=""
+    docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo "")
+    local candidates=("$docker_root")
+    if [[ "$OS_TYPE" == "linux" ]] && command -v k3s_current_data_dir >/dev/null 2>&1; then
+        candidates+=("$(k3s_current_data_dir)")
+    fi
+
+    local target pct
+    for target in "${candidates[@]}"; do
+        pct=$(_disk_used_pct "$target")
+        [[ "$pct" =~ ^[0-9]+$ ]] || continue
+        if (( pct > worst_pct )); then
+            worst_pct=$pct
+            worst_target=$target
+        fi
+    done
+
+    if (( worst_pct >= 85 )); then
+        warning "Image disk ($worst_target) is at ${worst_pct}% - at or above the 85% kubelet GC threshold."
+        echo "  Free space by hand: old Stella image tags, or lower the build-cache cap below 50GB."
+    fi
+}
+
+# =============================================================================
 # Single-Line Build Progress with Descriptive Steps
 # =============================================================================
 
@@ -1023,6 +1232,10 @@ build_images() {
     # Auto-discover agents from agents/ directory (needed by cleanup and build)
     discover_agents
 
+    # Snapshot each image's current tag as "the one before" (#780) before this
+    # deploy's builds overwrite it below.
+    snapshot_previous_image_tags
+
     # Clean up if rebuild mode
     if [[ "$REBUILD_MODE" == "true" ]]; then
         [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] build_images: running cleanup_for_rebuild"
@@ -1110,12 +1323,12 @@ build_images() {
     # Bound the build cache after every build that rebuilt something, not
     # only on --rebuild: incremental deploys never trimmed it, and on the
     # development server it reached 214 GB and pushed the image filesystem
-    # past the kubelet's 85% image-GC threshold (#725).
+    # past the kubelet's 85% image-GC threshold (#725). start-k8s.sh's own
+    # exit trap also calls trim_build_cache unconditionally (#780), so a
+    # failed build is covered too - this call just means a successful one
+    # doesn't wait for the trap to trim it.
     if [[ ${#REBUILT_SERVICES[@]} -gt 0 ]]; then
-        # Bound the cache, do not delete it. A full prune meant the next
-        # build recompiled the entire CUDA/torch stack from nothing.
-        docker builder prune -f --max-used-space 50GB >/dev/null 2>&1 || true
-        verbose "build_images: build cache trimmed to 50GB"
+        trim_build_cache
     fi
 }
 
@@ -1373,7 +1586,7 @@ cleanup_for_rebuild() {
 
     # Trim, don't wipe: --rebuild should force fresh *images*, not throw away
     # the layer cache that makes the rebuild survivable.
-    docker builder prune -f --max-used-space 50GB 2>/dev/null || true
+    trim_build_cache
     [[ "${VERBOSE_MODE:-false}" == "true" ]] && echo "[DEBUG] cleanup_for_rebuild: build cache pruned"
 
     # Clear checksums

@@ -37,6 +37,7 @@ Python agent code conventions including:
 ### [React (Frontend)](./react.md)
 
 React frontend code conventions including:
+- Linting with oxlint
 - Component structure
 - File organization
 - Custom hooks patterns

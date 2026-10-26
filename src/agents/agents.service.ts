@@ -520,6 +520,10 @@ export class AgentsService {
         createAgentDto.availablePlanIds ?? [],
         userId,
       );
+    } else if (createAgentDto.planId) {
+      agentConfig.plan = this.toSdkPlan(
+        await this.loadOwnPlanTemplate(createAgentDto.planId, userId),
+      );
     }
 
     if (!envVarTemplateId && !agentConfigurationId) return;
@@ -568,28 +572,12 @@ export class AgentsService {
     const activities: Array<Record<string, unknown>> = [];
 
     for (const id of planIds) {
-      const template = await this.prisma.planTemplate.findUnique({
-        where: { id },
-      });
-      if (!template || template.userId !== userId) {
-        throw new BadRequestException(
-          `Plan ${id} is not available to this user`,
-        );
-      }
-
-      const content = (template.content ?? {}) as Record<string, unknown>;
+      const template = await this.loadOwnPlanTemplate(id, userId);
       activities.push({
         id: template.id,
         title: template.name,
         description: template.description ?? '',
-        // Mapped to the canonical SDK plan shape, matching what the deploy modal
-        // builds for plan-following mode so both paths hand the agent one shape.
-        plan: {
-          id: template.id,
-          title: template.name,
-          description: template.description ?? '',
-          ...content,
-        },
+        plan: this.toSdkPlan(template),
       });
     }
 
@@ -599,6 +587,38 @@ export class AgentsService {
       );
     }
     return activities;
+  }
+
+  /** One of the user's plan templates; someone else's answers like a missing one. */
+  private async loadOwnPlanTemplate(planId: string, userId: string) {
+    const template = await this.prisma.planTemplate.findUnique({
+      where: { id: planId },
+    });
+    if (!template || template.userId !== userId) {
+      throw new BadRequestException(
+        `Plan ${planId} is not available to this user`,
+      );
+    }
+    return template;
+  }
+
+  /**
+   * A plan template in the canonical SDK plan shape, matching what the deploy
+   * modal builds for plan-following mode so every path hands the agent one shape.
+   */
+  private toSdkPlan(template: {
+    id: string;
+    name: string;
+    description: string | null;
+    content: Prisma.JsonValue;
+  }): Record<string, unknown> {
+    const content = (template.content ?? {}) as Record<string, unknown>;
+    return {
+      id: template.id,
+      title: template.name,
+      description: template.description ?? '',
+      ...content,
+    };
   }
 
   /**
