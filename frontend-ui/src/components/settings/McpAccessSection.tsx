@@ -39,12 +39,12 @@ const accessOptions: { value: AccessTokenAccess; label: string; description: str
   {
     value: 'read_write',
     label: 'Read and write',
-    description: 'Everything read only allows, and also create or change your personas, plans and agent configs.',
+    description: 'Everything read only allows, and also create or change your personas, plans and agent configs, and start and end sessions, agents and invitation links.',
   },
   {
     value: 'read',
     label: 'Read only',
-    description: 'Can list and read your personas, plans, agent configs, projects and session transcripts.',
+    description: 'Can list and read your personas, plans, agent configs, projects, sessions with their transcripts, and agent logs.',
   },
 ]
 

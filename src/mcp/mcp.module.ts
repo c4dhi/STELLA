@@ -2,7 +2,10 @@ import { Module } from '@nestjs/common';
 import { AccessTokensModule } from '../access-tokens/access-tokens.module.js';
 import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module.js';
 import { AgentImageModule } from '../agent-image/agent-image.module.js';
+import { AgentsModule } from '../agents/agents.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
+import { InvitationsModule } from '../invitations/invitations.module.js';
 import { McpOAuthModule } from '../mcp-oauth/mcp-oauth.module.js';
 import { PersonasModule } from '../personas/personas.module.js';
 import { PlanTemplatesModule } from '../plan-templates/plan-templates.module.js';
@@ -18,6 +21,7 @@ import { McpServerFactory } from './mcp-server.factory.js';
 import { McpController } from './mcp.controller.js';
 import { MCP_TOOL_PROVIDERS } from './mcp.types.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
+import { AgentsTools } from './tools/agents.tools.js';
 import { CatalogTools } from './tools/catalog.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
@@ -30,6 +34,7 @@ const TOOL_PROVIDERS = [
   PlanTemplatesTools,
   AgentConfigurationsTools,
   SessionsTools,
+  AgentsTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
@@ -46,6 +51,9 @@ const TOOL_PROVIDERS = [
     ProjectsModule,
     SessionsModule,
     StateMachineModule,
+    InvitationsModule,
+    AgentsModule,
+    EnvVarTemplatesModule,
   ],
   controllers: [McpController],
   providers: [

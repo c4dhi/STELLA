@@ -37,6 +37,14 @@ export class CreateAgentDto {
   @IsOptional()
   personaId?: string;
 
+  // Plan to follow, by ID. Resolved server-side into config.plan (replacing any
+  // client-supplied one) for callers that cannot build the plan themselves,
+  // e.g. MCP. The deploy modal still inlines config.plan. Ignored in companion
+  // mode, which takes availablePlanIds instead.
+  @IsUUID()
+  @IsOptional()
+  planId?: string;
+
   // Companion mode: the agent runs free-flow and the user picks from these plans
   // mid-conversation, instead of one plan being loaded up front. Omitted =
   // today's plan-following behaviour, unchanged.

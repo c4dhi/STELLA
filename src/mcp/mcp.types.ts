@@ -73,3 +73,10 @@ export const UPDATES: ToolAnnotations = {
   idempotentHint: true,
   openWorldHint: false,
 };
+// Ends something running: a session, an agent, an invitation link.
+export const ENDS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
