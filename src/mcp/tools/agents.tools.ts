@@ -72,8 +72,9 @@ export class AgentsTools implements McpToolProvider {
         title: 'Deploy an agent into a session',
         description:
           'Start an agent in an active session. Starting the pod takes a while: poll agents_get until status is ' +
-          'RUNNING. Plan mode follows planId; companion mode offers availablePlanIds instead. personaId omitted = ' +
-          'the default persona. stella-v2-agent needs an agentConfigurationId for its type (agent_configurations_list).',
+          'RUNNING. Plan mode (the default) follows planId; without one the agent runs with no plan. Companion ' +
+          'mode offers availablePlanIds instead and ignores planId. personaId omitted = the default persona. ' +
+          'stella-v2-agent needs an agentConfigurationId for its type (agent_configurations_list).',
         scope: 'mcp:write',
         input: {
           sessionId: z.string(),
@@ -85,7 +86,12 @@ export class AgentsTools implements McpToolProvider {
             .describe(
               'Agent type slug from agent_types_list; default stella-v2-agent',
             ),
-          planId: z.string().optional().describe('Plan template to follow'),
+          planId: z
+            .string()
+            .optional()
+            .describe(
+              'Plan template to follow in plan mode; ignored in companion mode',
+            ),
           personaId: z.string().optional(),
           agentConfigurationId: z.string().optional(),
           mode: z.enum(['plan', 'companion']).optional(),
