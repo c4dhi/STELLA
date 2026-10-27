@@ -437,11 +437,14 @@ _build_cache_size() {
     docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1=="Build" {print $NF}'
 }
 
-# True if a docker-style size string is missing or over the given byte cap.
+# True if a docker-style size string parses and is over the given byte cap.
+# An unparseable size (docker system df failed, or changed its format) is
+# NOT "over cap" - it must stop trim_build_cache's loop, not drive it to the
+# most aggressive tier (@sable, round 4).
 _size_over_cap() {
     local bytes
-    bytes=$(_size_to_bytes "$1" 2>/dev/null) || bytes=""
-    [[ -z "$bytes" || "$bytes" -gt "$2" ]]
+    bytes=$(_size_to_bytes "$1" 2>/dev/null) || return 1
+    [[ "$bytes" -gt "$2" ]]
 }
 
 # Bounds the BuildKit cache, on every deploy attempt including a failed one
@@ -451,26 +454,26 @@ _size_over_cap() {
 #
 # --max-used-space alone, with no --reserved-space, is the EXACT command
 # already shown to free 0 B on production (21 Oct, cache at 77GB/53GB
-# reclaimable). On the dev host, confirmed live (27 Oct) that NONE of the
-# space-based flags do anything on this builder's driver (`docker`, the
-# dockerd-integrated one, not `docker-container`): --max-used-space 50GB
+# reclaimable). On the dev host (27 Oct), --max-used-space 50GB
 # --reserved-space 0 (an explicit zero, overriding the daemon's own ~47.5GiB
-# default GC floor from `docker buildx inspect --bootstrap`) still froze at
+# default GC floor from `docker buildx inspect --bootstrap`) also froze at
 # 0 B freed, verbose output included, even though `docker buildx du
-# --verbose` shows plenty of individually Reclaimable: true records.
-# --keep-storage is the same story one layer removed: it's deprecated and
-# silently aliased to --reserved-space (a floor, not the ceiling wanted) on
-# both buildx 0.34.0 (this host) and 0.37.2 - confirmed locally it prints
-# the deprecation notice and succeeds, so it's dead weight here, not a
-# fallback; dropped rather than kept as a no-op.
+# --verbose` shows plenty of individually Reclaimable: true records - three
+# separate 0 B runs now, on two hosts. That's an observation, not a proven
+# cause; it's kept as a free first try below in case some host's buildx
+# does honour it, but nothing depends on it anymore. --keep-storage is
+# dropped outright: confirmed locally it's deprecated and silently aliased
+# to --reserved-space (a floor, not the ceiling wanted), on both buildx
+# 0.34.0 (dev host) and 0.37.2 - dead weight, not a fallback.
 #
 # What actually works is --filter (a real delete-by-criteria, not a GC
-# policy), also confirmed live: --filter until=168h freed 13.9GB
-# (85.78GB -> 71.88GB, still over cap), and until=24h freed another 26.22GB
-# (71.88GB -> 45.66GB, under cap). So this steps through a few windows,
-# tightest last, stopping as soon as the real size is at or under the cap.
-# The floor is whatever's genuinely shared/in-use (~34GB on the dev host),
-# below the 50GB cap, so the tightest window is a guaranteed last resort.
+# policy), confirmed live: --filter until=168h freed 13.9GB (85.78GB ->
+# 71.88GB, still over cap), and until=24h freed another 26.22GB (71.88GB ->
+# 45.66GB, under cap). Stops there - @sable: until=0h would also delete the
+# cache this very deploy just built, so the next deploy rebuilds from cold,
+# exactly what this function exists to avoid. If 24h still isn't enough,
+# warn with the size and leave the rest to the next deploy, the same way
+# warn_if_image_disk_full does for disk space.
 #
 # Checks the REAL resulting size via `docker system df` after each attempt,
 # not buildx's own "Total:" (reclaimed, not remaining) line.
@@ -485,13 +488,20 @@ trim_build_cache() {
     docker buildx prune -f --max-used-space 50GB --reserved-space 0 >/dev/null 2>&1 || true
     after_str=$(_build_cache_size)
 
-    for window in 168h 24h 1h 0h; do
+    for window in 168h 24h; do
         _size_over_cap "$after_str" "$cap_bytes" || break
         docker buildx prune -f --filter "until=${window}" >/dev/null 2>&1 || true
         after_str=$(_build_cache_size)
     done
 
     echo "   Build cache: ${after_str:-unknown} (before: ${before_str:-unknown})"
+
+    if ! _size_to_bytes "$after_str" >/dev/null 2>&1; then
+        warning "Couldn't read the build cache size after trim ('${after_str:-nothing}') - skipping the cap check."
+    elif _size_over_cap "$after_str" "$cap_bytes"; then
+        warning "Build cache is still ${after_str} after trim - over the 50GB cap."
+        echo "  Leaving the rest for the next deploy rather than wiping what was just built."
+    fi
 }
 
 # The used% of the filesystem under $1, or empty if it can't be read.
