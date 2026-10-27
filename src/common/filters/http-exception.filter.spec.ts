@@ -1,7 +1,7 @@
 import { jest } from '@jest/globals';
-import { ArgumentsHost, BadRequestException, HttpStatus } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, HttpStatus, Logger } from '@nestjs/common';
 import { MulterError } from 'multer';
-import { AllExceptionsFilter, statusForMulterError } from './http-exception.filter.js';
+import { AllExceptionsFilter, redactUrl, statusForMulterError } from './http-exception.filter.js';
 
 function hostFor(response: { status: jest.Mock; json: jest.Mock }): ArgumentsHost {
   return {
@@ -49,5 +49,44 @@ describe('multer errors map by code, not message text', () => {
   it('does not change how other errors are handled', () => {
     expect(run(new Error('boom')).status).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
     expect(run(new BadRequestException('nope')).status).toBe(HttpStatus.BAD_REQUEST);
+  });
+});
+
+describe('secrets in the URL', () => {
+  it('masks token-like query values and keeps the rest', () => {
+    expect(redactUrl('/mcp?token=stella_pat_abc')).toBe('/mcp?token=REDACTED');
+    expect(redactUrl('/sse/events?token=eyJ.x.y&projectId=p1')).toBe('/sse/events?token=REDACTED&projectId=p1');
+    expect(redactUrl('/x?access_token=a&api_key=b&page=2')).toBe('/x?access_token=REDACTED&api_key=REDACTED&page=2');
+    expect(redactUrl('/sessions/s1')).toBe('/sessions/s1');
+  });
+
+  it('keeps a token sent in the URL out of the log and the error body', () => {
+    const logged: string[] = [];
+    const spy = jest.spyOn(Logger.prototype, 'error').mockImplementation((m: any) => {
+      logged.push(String(m));
+    });
+    const json = jest.fn();
+    const response = { status: jest.fn().mockReturnValue({ json }), json };
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => response,
+        getRequest: () => ({
+          method: 'POST',
+          url: '/mcp?token=stella_pat_secret',
+          body: {},
+          params: {},
+          query: { token: 'stella_pat_secret' },
+        }),
+      }),
+    } as unknown as ArgumentsHost;
+
+    const filter = new AllExceptionsFilter();
+    filter.catch(new BadRequestException('Send the access token in the Authorization header'), host);
+    filter.catch(new Error('boom'), host); // 5xx also logs the query
+    spy.mockRestore();
+
+    expect(logged.join('\n')).not.toContain('stella_pat_secret');
+    expect(JSON.stringify(json.mock.calls)).not.toContain('stella_pat_secret');
+    expect(json.mock.calls[0][0]).toMatchObject({ path: '/mcp?token=REDACTED' });
   });
 });

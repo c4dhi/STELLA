@@ -23,6 +23,29 @@ export function statusForMulterError(error: MulterError): number {
     : HttpStatus.BAD_REQUEST;
 }
 
+const SECRET_PARAM = /token|secret|password|api[_-]?key/i;
+
+/**
+ * The request URL with secret-looking query values masked, for logs and error
+ * bodies. SSE endpoints carry the JWT in `?token=`, and an MCP client that puts
+ * its access token in the URL is refused, but its request still ends up here.
+ */
+export function redactUrl(url: string): string {
+  const q = url.indexOf('?');
+  if (q === -1) return url;
+  const params = new URLSearchParams(url.slice(q + 1));
+  for (const key of [...params.keys()]) {
+    if (SECRET_PARAM.test(key)) params.set(key, 'REDACTED');
+  }
+  return `${url.slice(0, q)}?${params.toString()}`;
+}
+
+function redactQuery(query: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(query).map(([k, v]) => [k, SECRET_PARAM.test(k) ? 'REDACTED' : v]),
+  );
+}
+
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger('HttpException');
@@ -59,16 +82,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
       errorMessage = 'Unknown error';
     }
 
+    const path = redactUrl(request.url);
+
     // Always log errors with full details
     this.logger.error(
-      `${request.method} ${request.url} - ${status} - ${errorMessage}`,
+      `${request.method} ${path} - ${status} - ${errorMessage}`,
     );
 
     // Log additional context for server errors (5xx)
     if (status >= 500) {
       this.logger.error(`Request body: ${JSON.stringify(request.body || {})}`);
       this.logger.error(`Request params: ${JSON.stringify(request.params || {})}`);
-      this.logger.error(`Request query: ${JSON.stringify(request.query || {})}`);
+      this.logger.error(`Request query: ${JSON.stringify(redactQuery(request.query || {}))}`);
       if (exception instanceof Error) {
         this.logger.error(`Stack trace: ${exception.stack}`);
       }
@@ -83,7 +108,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     response.status(status).json({
       statusCode: status,
       timestamp: new Date().toISOString(),
-      path: request.url,
+      path,
       message: clientMessage,
     });
   }
