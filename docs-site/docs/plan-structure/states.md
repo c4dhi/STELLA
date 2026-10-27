@@ -109,7 +109,7 @@ A natural conversation towards an objective. The agent is not shown a task list;
 - Closing is refused while a required deliverable of the state is missing. If the state's routes read deliverables, one matching route is enough; when none matches, any one of their keys is asked for.
 - A closed goal whose routes match nothing moves on to the next state in plan order. The stuck-state safety net still releases a goal step that makes no progress, and records it as skipped.
 - Insights the agent notices beyond the declared deliverables are kept (up to 25 per session) but don't count as progress.
-- A goal state's `tasks` stay empty. Tasks left over from switching a state from flexible to goal are a known issue ([#770](https://github.com/c4dhi/STELLA/issues/770)).
+- A goal state has no task list. Tasks left over from switching a state from flexible or sequential to goal stay saved, so switching back restores them, but since 1.5.0 they play no part in the goal: not in its progress, the plan view, the agent's guidance or where collected values are stored ([#770](https://github.com/c4dhi/STELLA/issues/770)).
 
 **Best for:**
 - Coaching and reflective conversations

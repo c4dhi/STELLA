@@ -21,6 +21,7 @@ const sidebars: SidebarsConfig = {
         'guides/custom-tools',
         'guides/add-custom-ui',
         'guides/authentication',
+        'guides/mcp',
       ],
     },
     {

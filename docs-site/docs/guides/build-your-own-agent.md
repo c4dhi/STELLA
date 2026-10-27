@@ -339,6 +339,7 @@ class MyAgent(BaseAgent):
 await self.get_chat_history(
     include_debug: bool = False,  # Include debug/processing messages
     limit: int = 100,             # Max messages (up to 500)
+    before: Optional[str] = None, # ISO timestamp: only messages before it (SDK 0.9.0+)
 ) -> List[ChatMessage]
 ```
 
