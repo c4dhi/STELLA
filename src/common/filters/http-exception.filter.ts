@@ -24,25 +24,59 @@ export function statusForMulterError(error: MulterError): number {
 }
 
 const SECRET_PARAM = /token|secret|password|api[_-]?key/i;
+// Env var maps (template `variables`, agent `envVars`): every value is a key.
+const SECRET_MAP = /^(variables|envVars|manualEnvVars)$/;
 
-/**
- * The request URL with secret-looking query values masked, for logs and error
- * bodies. SSE endpoints carry the JWT in `?token=`, and an MCP client that puts
- * its access token in the URL is refused, but its request still ends up here.
- */
-export function redactUrl(url: string): string {
-  const q = url.indexOf('?');
-  if (q === -1) return url;
-  const params = new URLSearchParams(url.slice(q + 1));
-  for (const key of [...params.keys()]) {
-    if (SECRET_PARAM.test(key)) params.set(key, 'REDACTED');
+function decode(part: string): string {
+  try {
+    return decodeURIComponent(part.replace(/\+/g, ' '));
+  } catch {
+    return part;
   }
-  return `${url.slice(0, q)}?${params.toString()}`;
 }
 
-function redactQuery(query: Record<string, unknown>): Record<string, unknown> {
+/**
+ * The request URL with secrets masked, for logs and error bodies: query values
+ * under secret-looking keys (SSE endpoints carry the JWT in `?token=`, and an
+ * MCP client may put its access token there) and path segments filled from
+ * secret-looking route params (`/invitations/join/:token`, `/p/:publicToken`).
+ * Everything else is left exactly as sent.
+ */
+export function redactUrl(url: string, params: Record<string, unknown> = {}): string {
+  const q = url.indexOf('?');
+  let path = q === -1 ? url : url.slice(0, q);
+  for (const [key, value] of Object.entries(params)) {
+    if (!SECRET_PARAM.test(key) || typeof value !== 'string' || !value) continue;
+    path = path
+      .split('/')
+      .map((segment) => (decode(segment) === value ? 'REDACTED' : segment))
+      .join('/');
+  }
+  if (q === -1) return path;
+  const query = url
+    .slice(q + 1)
+    .split('&')
+    .map((pair) => {
+      const eq = pair.indexOf('=');
+      const key = eq === -1 ? pair : pair.slice(0, eq);
+      return eq !== -1 && SECRET_PARAM.test(decode(key)) ? `${key}=REDACTED` : pair;
+    })
+    .join('&');
+  return `${path}?${query}`;
+}
+
+/** A copy of a request body, params or query with secret values masked, at any depth. */
+export function redactSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value === null || typeof value !== 'object') return value;
   return Object.fromEntries(
-    Object.entries(query).map(([k, v]) => [k, SECRET_PARAM.test(k) ? 'REDACTED' : v]),
+    Object.entries(value as Record<string, unknown>).map(([k, v]) => {
+      if (SECRET_PARAM.test(k)) return [k, 'REDACTED'];
+      if (SECRET_MAP.test(k) && v !== null && typeof v === 'object' && !Array.isArray(v)) {
+        return [k, Object.fromEntries(Object.keys(v).map((name) => [name, 'REDACTED']))];
+      }
+      return [k, redactSecrets(v)];
+    }),
   );
 }
 
@@ -82,7 +116,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       errorMessage = 'Unknown error';
     }
 
-    const path = redactUrl(request.url);
+    const path = redactUrl(request.url, request.params);
 
     // Always log errors with full details
     this.logger.error(
@@ -91,9 +125,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     // Log additional context for server errors (5xx)
     if (status >= 500) {
-      this.logger.error(`Request body: ${JSON.stringify(request.body || {})}`);
-      this.logger.error(`Request params: ${JSON.stringify(request.params || {})}`);
-      this.logger.error(`Request query: ${JSON.stringify(redactQuery(request.query || {}))}`);
+      this.logger.error(`Request body: ${JSON.stringify(redactSecrets(request.body || {}))}`);
+      this.logger.error(`Request params: ${JSON.stringify(redactSecrets(request.params || {}))}`);
+      this.logger.error(`Request query: ${JSON.stringify(redactSecrets(request.query || {}))}`);
       if (exception instanceof Error) {
         this.logger.error(`Stack trace: ${exception.stack}`);
       }
