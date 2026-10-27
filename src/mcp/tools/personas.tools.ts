@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Persona } from '@prisma/client';
 import { z } from 'zod';
 import { PersonasService } from '../../personas/personas.service.js';
 import { CreatePersonaDto } from '../../personas/dto/create-persona.dto.js';
@@ -9,6 +10,7 @@ import {
   READ_ONLY,
   UPDATES,
   defineTool,
+  idArg,
 } from '../mcp.types.js';
 
 // Mirrors CreatePersonaDto / UpdatePersonaDto, which do the real validation.
@@ -39,10 +41,31 @@ const personaFields = {
     .describe('Values other prompts reference as {{persona.<key>}}'),
 };
 
+const personaId = idArg('persona', 'personas_list');
+
+/** What personas_list shows of one: everything but the prompt and its variables. */
+function personaSummary(persona: Persona) {
+  return {
+    id: persona.id,
+    name: persona.name,
+    description: persona.description,
+    icon: persona.icon,
+    voice: persona.voice,
+    language: persona.language,
+    isSystemDefault: persona.isSystemDefault,
+    updatedAt: persona.updatedAt,
+  };
+}
+
 /** Personas: who the agent is (system prompt, voice, language). */
 @Injectable()
 export class PersonasTools implements McpToolProvider {
   constructor(private readonly personas: PersonasService) {}
+
+  /** A persona as personas_get shows it; creates and updates return this too. */
+  private full(personaId: string, userId: string) {
+    return this.personas.findOne(personaId, userId);
+  }
 
   tools() {
     return [
@@ -50,12 +73,15 @@ export class PersonasTools implements McpToolProvider {
         name: 'personas_list',
         title: 'List personas',
         description:
-          "The user's personas plus the system defaults (isSystemDefault: true, read-only).",
+          "The user's personas plus the system defaults (isSystemDefault: true, read-only). personas_get has " +
+          'the system prompt.',
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
         handler: async (_args, { auth }) => ({
-          items: await this.personas.findAllForUser(auth.user.userId),
+          items: (await this.personas.findAllForUser(auth.user.userId)).map(
+            personaSummary,
+          ),
         }),
       }),
       defineTool({
@@ -63,10 +89,10 @@ export class PersonasTools implements McpToolProvider {
         title: 'Get a persona',
         description: 'One persona, including its full system prompt.',
         scope: 'mcp:read',
-        input: { id: z.string() },
+        input: { personaId },
         annotations: READ_ONLY,
-        handler: async ({ id }, { auth }) =>
-          this.personas.findOne(id, auth.user.userId),
+        handler: async ({ personaId }, { auth }) =>
+          this.full(personaId, auth.user.userId),
       }),
       defineTool({
         name: 'personas_create',
@@ -75,11 +101,13 @@ export class PersonasTools implements McpToolProvider {
         scope: 'mcp:write',
         input: personaFields,
         annotations: CREATES,
-        handler: async (args, ctx) =>
-          this.personas.create(
+        handler: async (args, ctx) => {
+          const persona = await this.personas.create(
             ctx.auth.user.userId,
             await ctx.validate(CreatePersonaDto, args),
-          ),
+          );
+          return this.full(persona.id, ctx.auth.user.userId);
+        },
       }),
       defineTool({
         name: 'personas_update',
@@ -87,14 +115,16 @@ export class PersonasTools implements McpToolProvider {
         description:
           'Change fields of a persona the user owns. Omitted fields stay as they are. System defaults cannot be changed.',
         scope: 'mcp:write',
-        input: { id: z.string(), changes: z.object(personaFields).partial() },
+        input: { personaId, ...z.object(personaFields).partial().shape },
         annotations: UPDATES,
-        handler: async ({ id, changes }, ctx) =>
-          this.personas.update(
-            id,
+        handler: async ({ personaId, ...changes }, ctx) => {
+          await this.personas.update(
+            personaId,
             ctx.auth.user.userId,
             await ctx.validate(UpdatePersonaDto, changes),
-          ),
+          );
+          return this.full(personaId, ctx.auth.user.userId);
+        },
       }),
     ];
   }

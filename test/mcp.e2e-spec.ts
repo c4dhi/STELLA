@@ -46,6 +46,7 @@ describe('/mcp (e2e)', () => {
   const personas = {
     findAllForUser: jest.fn(async () => [{ id: 'pe1', name: 'Grace' }]),
     create: jest.fn(async (_u: string, dto: object) => ({ id: 'pe2', ...dto })),
+    findOne: jest.fn(async (id: string) => ({ id, name: 'Ada' })),
   };
   const audit = { record: jest.fn(async () => undefined) };
   const sessions = {
@@ -57,6 +58,15 @@ describe('/mcp (e2e)', () => {
       createdAt: new Date('2026-10-26T00:00:00Z'),
     })),
     close: jest.fn(async () => ({ message: 'Session closed successfully' })),
+    findOne: jest.fn(async (id: string) => ({
+      id,
+      projectId: 'p1',
+      name: 'Morning',
+      status: sessions.close.mock.calls.length ? 'CLOSED' : 'ACTIVE',
+      agents: [],
+      participants: [],
+      _count: { messages: 0 },
+    })),
   };
   const agents = {
     create: jest.fn(async (sessionId: string, dto: any) => ({
@@ -66,6 +76,12 @@ describe('/mcp (e2e)', () => {
       status: 'STARTING',
     })),
     remove: jest.fn(async () => ({ message: 'Agent stopped successfully' })),
+    findOne: jest.fn(async (id: string) => ({
+      id,
+      sessionId: 's1',
+      name: 'Grace',
+      status: 'STOPPED',
+    })),
   };
   const projectOf: Record<string, string> = { s1: 'p1', s9: 'p9' };
   const access = new ResourceAccessService({
@@ -111,7 +127,7 @@ describe('/mcp (e2e)', () => {
               {} as any,
               access,
             ),
-            new AgentsTools(agents as any, {} as any, access),
+            new AgentsTools(agents as any, {} as any, {} as any, access),
           ],
         },
         {
@@ -251,10 +267,13 @@ describe('/mcp (e2e)', () => {
       }),
       'u1',
     );
-    expect((await call('agents_stop', { agentId: 'a1' })).isError).toBeFalsy();
+    // Ending something returns it in its new state.
     expect(
-      (await call('sessions_close', { sessionId: 's1' })).isError,
-    ).toBeFalsy();
+      (await call('agents_stop', { agentId: 'a1' })).structuredContent,
+    ).toMatchObject({ id: 'a1', status: 'STOPPED' });
+    expect(
+      (await call('sessions_close', { sessionId: 's1' })).structuredContent,
+    ).toMatchObject({ id: 's1', status: 'CLOSED' });
 
     // Not a member of p9: refused as not found, and nothing runs.
     const other = await call('sessions_create', { projectId: 'p9' });

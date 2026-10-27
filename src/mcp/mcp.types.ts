@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { AuthUser } from '../auth/auth-user.loader.js';
 import type { PatScope } from '../access-tokens/access-token.util.js';
@@ -56,6 +56,24 @@ export interface McpToolProvider {
 }
 
 export const MCP_TOOL_PROVIDERS = Symbol('MCP_TOOL_PROVIDERS');
+
+/*
+ * Every tool follows the same shape, so a client that learned one knows them all
+ * (the server instructions say the same to the client):
+ * - An id argument is named after what it points to (sessionId, planId,
+ *   agentConfigurationId, ...), the same name in every tool; see idArg.
+ * - <things>_list returns { items } with a summary per item; <things>_get returns
+ *   the full object. Paged lists add their paging fields next to items.
+ * - <things>_update takes the id plus only the fields to change, flat, named as
+ *   in <things>_create.
+ * - Every write returns the resulting object as the matching _get shows it.
+ * - Errors are { error: { status, message } }; 404 also means "not yours".
+ */
+
+/** An id argument, saying which tool lists them. */
+export function idArg(what: string, from: string) {
+  return z.string().describe(`Id of the ${what}, from ${from}`);
+}
 
 export const READ_ONLY: ToolAnnotations = {
   readOnlyHint: true,

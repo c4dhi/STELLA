@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { AgentImageService } from '../../agent-image/agent-image.service.js';
-import { McpToolProvider, READ_ONLY, defineTool } from '../mcp.types.js';
+import { McpToolProvider, READ_ONLY, defineTool, idArg } from '../mcp.types.js';
 
 /** Who the caller is, and what agent types exist to configure. */
 @Injectable()
@@ -34,14 +34,43 @@ export class CatalogTools implements McpToolProvider {
         name: 'agent_types_list',
         title: 'List agent types',
         description:
-          'Agent types available on this platform, with their pipeline schema and defaults. An agent configuration ' +
-          'always belongs to one agent type: use its id as agentTypeId.',
+          'Agent types available on this platform. An agent configuration always belongs to one agent type: ' +
+          'use its id as agentTypeId. agent_types_get has the pipeline schema and defaults of one.',
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
         handler: async () => ({
-          items: await this.agentImages.getAgentTypesWithInfo(),
+          items: (await this.agentImages.getAgentTypesWithInfo()).map(
+            ({ id, slug, name, description, icon, version, capabilities }) => ({
+              id,
+              slug,
+              name,
+              description,
+              icon,
+              version,
+              capabilities,
+            }),
+          ),
         }),
+      }),
+      defineTool({
+        name: 'agent_types_get',
+        title: 'Get an agent type',
+        description:
+          'One agent type with its pipeline schema (configSchema) and defaults: what an agent configuration ' +
+          'for it can override.',
+        scope: 'mcp:read',
+        input: { agentTypeId: idArg('agent type', 'agent_types_list') },
+        annotations: READ_ONLY,
+        handler: async ({ agentTypeId }) => {
+          const type = (await this.agentImages.getAgentTypesWithInfo()).find(
+            (t) => t.id === agentTypeId,
+          );
+          if (!type) {
+            throw new NotFoundException(`Agent type ${agentTypeId} not found`);
+          }
+          return { ...type };
+        },
       }),
     ];
   }
