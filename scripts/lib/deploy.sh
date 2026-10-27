@@ -25,7 +25,7 @@ get_deployment_name() {
 get_service_timeout() {
     local deploy="$1"
     case "$deploy" in
-        "session-management-server") echo 180 ;;
+        "session-management-server") echo 600 ;;  # migrations, then probes; matches the deploy workflows (#105)
         "frontend-ui") echo 120 ;;
         "stt-service") echo 600 ;;  # 10 min for model downloads
         "tts-service") echo 300 ;;  # 5 min for model downloads
@@ -1304,6 +1304,15 @@ deploy_services() {
 
     # The new release is running, so the images it replaced may be collected.
     unpin_previous_k3s_images
+
+    # Old image generations go only once the rollout above is confirmed
+    # healthy (#780) - a half-rolled-out release keeps its old images to
+    # fall back to by hand. The build-cache bound and the disk warning run
+    # regardless of outcome, from start-k8s.sh's own exit trap.
+    echo -ne "   ${ARROW} Image cleanup... "
+    prune_old_image_generations
+    prune_dangling_images
+    printf "\r   ${ARROW} Image cleanup... ${GREEN}${CHECK}${NC}    \n"
 
     success "Deployment complete"
 }

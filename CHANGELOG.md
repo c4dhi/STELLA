@@ -9,7 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.4.1] - 2026-10-23
+## [1.5.0] - 2026-10-28
+
+MCP and steadier companions. AI assistants such as Claude, ChatGPT and Claude
+Code can now connect to a Stella account and work with it: build personas and
+plans, set up a session, start an agent and read what was said. It is off until
+a system admin switches it on. Error logs no longer keep passwords, keys or
+tokens, deploys stop filling the disk, and a companion resuming a long activity
+keeps its place. **If you upgrade, read "Upgrade notes" first.**
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** This release applies three database migrations on its own during the deploy (access tokens and the MCP audit log, MCP sign-in, and token scopes), and nothing backs up for you first
+- **MCP is off after the upgrade.** Nothing is reachable at `/mcp` until a system admin switches it on in Settings → Platform Defaults. Sign-in from Claude and ChatGPT uses the existing `PUBLIC_API_URL` and `PUBLIC_FRONTEND_URL`, so both must be the addresses the outside world reaches
+- No manual step and no new required setting. Agent SDK 0.9.0 ships with this release
+
+### Added
+
+**MCP: AI assistants work with your Stella account**
+- Stella has an MCP server at `/mcp`. An AI assistant connected to it can list, read, create and update personas, plan templates and agent configurations, and read projects, sessions, transcripts and a session's plan state. Nothing can be deleted over MCP. A system admin switches it on or off for the whole platform in Settings → Platform Defaults; while it is off, `/mcp` and its sign-in pages answer 404 and every token stops working (#772)
+- Two ways to connect, both in Settings → MCP Access:
+  - **Sign in with Stella:** paste the connector address into Claude (claude.ai, Desktop, mobile), ChatGPT or Claude Code. A Stella page opens, you sign in and allow read or read/write access, and the app gets its own tokens. Connected apps are listed there and can be disconnected
+  - **Personal access tokens,** for scripts: read or read/write, valid 7 to 365 days, shown once and revocable. They go in the `Authorization` header only; a token in the address is refused
+- Every MCP call is recorded in an audit log (which user, which app, which tool, arguments with secrets removed), kept for 90 days
+- An assistant can also run a session from start to end, the way the session view does: create a session, make an invitation link for the participant, deploy an agent with a plan, persona and configuration, follow it and read its log, restart it, stop it, and close the session. Deploying needs read/write access. Env var templates are listed by variable name only, never their values, and agents can't be started in a closed session (#803)
+- All 32 tools follow one shape, which the server explains to every assistant when it connects: ids are named after what they point to (`personaId`, `planId`, `agentTypeId`, …), lists return short summaries and `_get` the full object, updates take only the fields to change, and every change returns the result. `agent_types_get` is new; `agent_types_list` now returns summaries instead of every pipeline schema (#817, #806)
+
+**Admin settings**
+- Platform Defaults shows how well the voice fits this machine's hardware: how fast speech is synthesised, and how often sessions had to fall back to sentence-by-sentence playback, at each number of sessions running at once. Each range is coloured green, yellow or red from what was actually measured, and it says when there isn't enough data yet (#765)
+
+**Analytics**
+- Each sentence's synthesis speed (`tts_sentence_speed`) and the switch to sentence-by-sentence playback (`tts_playback_switch`) are now kept as analytics events. Before, they were only in the agent's log, which is deleted when the session ends (#765)
+
+**Agent SDK**
+- Agent SDK 0.9.0 (`pip install stella-ai-agent-sdk==0.9.0`). For agent authors: the pipeline publishes `tts_sentence_speed` and `tts_playback_switch`, and `get_chat_history()` passes a `before` cursor, so an agent can page back through a long history. Details in the [SDK changelog](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md)
+
+### Changed
+
+- Deploys clean up after themselves (`start-k8s.sh`). After a healthy rollout, each deploy removes the image generation that has just aged out, so the running image and the one before it stay for rollback, and removes untagged Docker images. The build cache is trimmed towards 50 GB on every deploy, failed ones included, by removing entries older than a week and then older than a day; if it is still bigger, the deploy says so. A warning appears when the image disk is 85% full or more (#780)
+- A full deploy waits up to 600 s for the backend to become ready (was 180 s), so a deploy whose backend is slow to run its migrations no longer ends red while the backend comes up fine (#790)
+
+### Fixed
+
+- Companion mode: an agent resuming a long activity finds when it started even when the start lies far back in the history. Before, it looked only at the last 200 messages and quietly fell back to the whole conversation (#727)
+- A goal step ignores tasks left over from when it was flexible or sequential everywhere: in its progress, the plan view, the agent's guidance and where it stores what it collects. The tasks stay saved, so switching back restores them. Before, such a step could stay below 100% (#770)
+- Editing a medical or legal expert's verdicts in the Agent Configurator keeps the translated caution line. Before, saving put it back to English only (#722)
+- The analytics drill-down no longer breaks when switched between one session and all sessions (#719)
+- Publishing the Agent SDK no longer takes GitHub's "Latest release" label from Stella's release (#781)
+
+### Security
+
+- Error logs and error responses no longer contain secrets. Tokens in a request's address (an access token sent as `?token=`, the sign-in token live updates carry, invitation and public-project links) are masked, and so are passwords, keys and env var values in the body of a request that failed with a server error. Logs written before this upgrade may still contain them (#814, #815)
+
+### Known limitations
+
+- Old service images from before this release stay on disk: each deploy now removes one old generation, so the backlog shrinks by one per release. A one-off clean-up is planned ([#811](https://github.com/c4dhi/STELLA/issues/811)), and untagged images left in K3s by moved tags aren't removed yet ([#799](https://github.com/c4dhi/STELLA/issues/799))
+- Over MCP, an agent that has been stopped still shows its last health as `ready` ([#807](https://github.com/c4dhi/STELLA/issues/807)), and a session's `messageCount` counts every stored message, not just what was said ([#808](https://github.com/c4dhi/STELLA/issues/808))
+- Load balancer or proxy access logs, if your installation keeps them, still record request addresses in full
+
+---
+
+## [1.4.1] - 2026-10-22
 
 A security fix. **Upgrade if you run Stella with more than one user account.**
 

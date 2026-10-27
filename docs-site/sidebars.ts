@@ -163,6 +163,16 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: '🔌 MCP',
+      collapsed: false,
+      items: ['mcp/index', 'mcp/tools'],
+    },
+    {
+      type: 'html',
+      value: '<div class="sidebar-section-spacer"></div>',
+    },
+    {
+      type: 'category',
       label: '🤝 Contributing',
       collapsed: false,
       items: [

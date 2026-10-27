@@ -9,6 +9,12 @@ import {
   isPinnedTtsPlayback,
   parseTtsPlaybackSetting,
 } from './tts-playback.util.js';
+import { HARDWARE_FIT, HardwareFit, scoreHardwareFit } from './hardware-fit.util.js';
+import { MCP_ENABLED_SETTING_KEY, parseMcpEnabledSetting, parseStoredMcpEnabled } from './mcp-enabled.util.js';
+
+// Every MCP request checks the switch, so it is cached. With several backend
+// replicas a change reaches the others within this window.
+const MCP_ENABLED_CACHE_MS = 30_000;
 
 export interface PinnedDeployment {
   name: string;
@@ -23,15 +29,24 @@ export interface PlatformSettingsView {
   updatedBy: string | null;
   // Deployments that set their own mode and so ignore the default.
   pinnedDeployments: PinnedDeployment[];
+  // Whether AI clients may reach /mcp (#772). Off unless an admin turns it on.
+  mcpEnabled: boolean;
+  // How well the voice fits this server under its concurrent load (#93);
+  // null only when it could not be read.
+  hardwareFit: HardwareFit | null;
 }
 
+const SPEED_STAGE = 'tts_sentence_speed';
+const SWITCH_STAGE = 'tts_playback_switch';
+
 /**
- * Platform-wide defaults a system admin sets in Settings → Platform Defaults.
- * Today that is only the TTS playback mode (#89).
+ * Platform-wide defaults a system admin sets in Settings → Platform Defaults:
+ * the TTS playback mode (#89) and the MCP switch (#772).
  */
 @Injectable()
 export class PlatformSettingsService {
   private readonly logger = new Logger(PlatformSettingsService.name);
+  private mcpEnabledCache: { value: boolean; expiresAt: number } | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -61,7 +76,90 @@ export class PlatformSettingsService {
       updatedAt: row ? row.updatedAt.toISOString() : null,
       updatedBy: row?.updatedBy ? row.updatedBy.name || row.updatedBy.email : null,
       pinnedDeployments: await this.listPinnedDeployments(),
+      mcpEnabled: await this.isMcpEnabled(),
+      hardwareFit: await this.getHardwareFit().catch(error => {
+        this.logger.warn(`Could not score the hardware fit: ${error.message}`);
+        return null;
+      }),
     };
+  }
+
+  /** Whether /mcp is open. A failed read counts as off: the switch fails closed. */
+  async isMcpEnabled(): Promise<boolean> {
+    if (this.mcpEnabledCache && this.mcpEnabledCache.expiresAt > Date.now()) {
+      return this.mcpEnabledCache.value;
+    }
+    let value = false;
+    try {
+      const row = await this.prisma.platformSetting.findUnique({ where: { key: MCP_ENABLED_SETTING_KEY } });
+      value = parseStoredMcpEnabled(row?.value);
+    } catch (error) {
+      this.logger.warn(`Could not read ${MCP_ENABLED_SETTING_KEY}, treating MCP as off: ${error.message}`);
+      return false;
+    }
+    this.mcpEnabledCache = { value, expiresAt: Date.now() + MCP_ENABLED_CACHE_MS };
+    return value;
+  }
+
+  async setMcpEnabled(raw: unknown, userId: string): Promise<PlatformSettingsView> {
+    const enabled = parseMcpEnabledSetting(raw);
+    const value = String(enabled);
+    await this.prisma.platformSetting.upsert({
+      where: { key: MCP_ENABLED_SETTING_KEY },
+      create: { key: MCP_ENABLED_SETTING_KEY, value, updatedById: userId },
+      update: { value, updatedById: userId },
+    });
+    this.mcpEnabledCache = null;
+    this.logger.log(`Platform setting ${MCP_ENABLED_SETTING_KEY} set to ${value} by ${userId}`);
+    return this.getView();
+  }
+
+  /**
+   * Score the voice against this server from the last two weeks of sessions:
+   * every sentence's speed and every `auto` switch the agents published, plus
+   * all other analytics as the sign a session was in conversation. The newest
+   * load test fills in session counts the live data has not reached.
+   */
+  async getHardwareFit(now: Date = new Date()): Promise<HardwareFit> {
+    const since = new Date(now.getTime() - HARDWARE_FIT.windowDays * 24 * 3600 * 1000);
+    const analytics = { messageType: 'analytics', timestamp: { gte: since } };
+    const stage = (name: string) => ({ metadata: { path: ['envelope', 'data', 'stage'], equals: name } });
+
+    const [measured, activity, loadTest] = await Promise.all([
+      this.prisma.message.findMany({
+        where: { ...analytics, OR: [stage(SPEED_STAGE), stage(SWITCH_STAGE)] },
+        select: { sessionId: true, timestamp: true, metadata: true },
+      }),
+      // Only "was this session in conversation around then" is needed, so one
+      // row per session per 10 s instead of every analytics row: well inside
+      // the minute-wide window, at a fraction of the rows.
+      this.prisma.$queryRaw<{ sessionId: string; at: Date }[]>`
+        SELECT DISTINCT "sessionId", date_bin('10 seconds', "timestamp", TIMESTAMP '2000-01-01') AS at
+        FROM "Message"
+        WHERE "messageType" = 'analytics' AND "timestamp" >= ${since}`,
+      this.prisma.capacityMeasurement.findFirst({
+        orderBy: { measuredAt: 'desc' },
+        select: { maxSessions: true, reachedTopLevel: true, gpuName: true, ttsProvider: true },
+      }),
+    ]);
+
+    const speeds: { sessionId: string; at: number; rtf: number }[] = [];
+    const switches: { sessionId: string; at: number }[] = [];
+    for (const row of measured) {
+      const data = (row.metadata as any)?.envelope?.data;
+      const at = row.timestamp.getTime();
+      if (data?.stage === SPEED_STAGE && typeof data.rtf === 'number' && Number.isFinite(data.rtf)) {
+        speeds.push({ sessionId: row.sessionId, at, rtf: data.rtf });
+      } else if (data?.stage === SWITCH_STAGE) {
+        switches.push({ sessionId: row.sessionId, at });
+      }
+    }
+    return scoreHardwareFit({
+      speeds,
+      switches,
+      activity: activity.map(row => ({ sessionId: row.sessionId, at: new Date(row.at).getTime() })),
+      loadTest,
+    });
   }
 
   /** Set the default (null clears it, back to the built-in default). */

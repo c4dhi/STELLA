@@ -1,9 +1,11 @@
+import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { useNotificationStore } from '../../store/notificationStore'
 import { useAuthStore } from '../../store/authStore'
+import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
 
-export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin' | 'platform'
+export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin' | 'platform' | 'mcp'
 
 interface SettingsSidebarProps {
   activeSection: SettingsSection
@@ -17,6 +19,8 @@ interface SectionItem {
   description: string
   hasBadge?: boolean
   adminOnly?: boolean
+  /** Shown only while a system admin has MCP switched on. */
+  requiresMcp?: boolean
 }
 
 const sections: SectionItem[] = [
@@ -112,6 +116,17 @@ const sections: SectionItem[] = [
     ),
   },
   {
+    id: 'mcp',
+    label: 'MCP Access',
+    description: 'Connect AI clients',
+    requiresMcp: true,
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+      </svg>
+    ),
+  },
+  {
     id: 'analytics',
     label: 'Analytics',
     description: 'Agent performance metrics',
@@ -163,9 +178,15 @@ export default function SettingsSidebar({ activeSection, onSectionChange }: Sett
   const { unreadCount } = useNotificationStore()
   const { user } = useAuthStore()
   const isSystemAdmin = user?.isSystemAdmin ?? false
+  const { mcpEnabled, load: loadFeatureFlags } = useFeatureFlagsStore()
 
-  // Filter sections based on admin status
-  const visibleSections = sections.filter(section => !section.adminOnly || isSystemAdmin)
+  useEffect(() => {
+    void loadFeatureFlags()
+  }, [loadFeatureFlags])
+
+  // Filter sections based on admin status and switched-on features
+  const visibleSections = sections.filter(section =>
+    (!section.adminOnly || isSystemAdmin) && (!section.requiresMcp || mcpEnabled))
 
   return (
     <aside

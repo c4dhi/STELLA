@@ -11,6 +11,15 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-28
+
+Ships with STELLA 1.5.0. What changes for agent authors:
+
+### Added
+
+- `BaseAgent.get_chat_history()` takes `before`, an ISO timestamp cursor, so an agent can page back past the 500-message cap. The v2 agent uses it to find a long activity's start (#727)
+- Each sentence long enough to measure (`_MIN_MEASURABLE_AUDIO_MS`) publishes a `tts_sentence_speed` analytics event: `audio_ms`, `synth_ms`, `rtf` and the `playback` mode it played in. The `auto` switch to `sentence` publishes `tts_playback_switch` once, with `rtf` and `slow_sentences`. Neither carries `elapsed_ms`, so the latency stats and stage timeline skip them. Platform Defaults scores the hardware from these (#765)
+
 ## [0.8.0] - 2026-10-21
 
 Ships with STELLA 1.4.0. What changes for agent authors:

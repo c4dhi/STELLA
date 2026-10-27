@@ -464,6 +464,21 @@ function DrillDownPanel({
   // Outlier threshold: > 2x median
   const outlierThreshold = stage.p50_ms * 2
 
+  // Aggregate mode's per-session list. Computed before the session-mode
+  // return so the hook runs on every render, whichever mode is shown.
+  const sortedSessions = useMemo(() => {
+    const sessions = [...(dataPoints || [])]
+    sessions.sort((a, b) => {
+      if (sortBy === 'timing') {
+        return sortDir === 'desc' ? b.avg_timing_ms - a.avg_timing_ms : a.avg_timing_ms - b.avg_timing_ms
+      }
+      return sortDir === 'asc'
+        ? a.sessionName.localeCompare(b.sessionName)
+        : b.sessionName.localeCompare(a.sessionName)
+    })
+    return sessions
+  }, [dataPoints, sortBy, sortDir])
+
   if (mode === 'session') {
     const points = (sessionPoints || []).map(p => ({
       value: p.timing_ms,
@@ -493,20 +508,6 @@ function DrillDownPanel({
       </div>
     )
   }
-
-  // Aggregate mode: show per-session list
-  const sortedSessions = useMemo(() => {
-    const sessions = [...(dataPoints || [])]
-    sessions.sort((a, b) => {
-      if (sortBy === 'timing') {
-        return sortDir === 'desc' ? b.avg_timing_ms - a.avg_timing_ms : a.avg_timing_ms - b.avg_timing_ms
-      }
-      return sortDir === 'asc'
-        ? a.sessionName.localeCompare(b.sessionName)
-        : b.sessionName.localeCompare(a.sessionName)
-    })
-    return sessions
-  }, [dataPoints, sortBy, sortDir])
 
   const outlierCount = sortedSessions.filter(s => s.avg_timing_ms > outlierThreshold).length
 

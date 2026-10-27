@@ -1,6 +1,6 @@
 {
   "name": "session-management-server",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "",
   "type": "module",
   "author": "Universität St. Gallen (HSG) & University of Zurich (UZH)",
@@ -61,6 +61,7 @@
     "@grpc/proto-loader": "^0.8.1",
     "@kubernetes/client-node": "^2.0.0",
     "@livekit/rtc-node": "^1.1.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@nestjs/common": "^12.1.2",
     "@nestjs/config": "^12.0.1",
     "@nestjs/core": "^12.1.2",

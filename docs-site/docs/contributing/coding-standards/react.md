@@ -12,6 +12,17 @@ Standards for the React frontend codebase.
 
 We follow the [React TypeScript Cheatsheet](https://react-typescript-cheatsheet.netlify.app/).
 
+## Linting
+
+The frontend is linted with [oxlint](https://oxc.rs/docs/guide/usage/linter), not ESLint like the backend. `typescript-eslint` does not support the frontend's TypeScript 7 yet, so ESLint cannot parse it. Switch the frontend back to ESLint once `typescript-eslint` supports the TypeScript version in `frontend-ui/package.json`.
+
+```bash
+cd frontend-ui
+npm run lint
+```
+
+The rules are in `frontend-ui/.oxlintrc.json`. Breaking the rules of hooks (`react-hooks/rules-of-hooks`) is an error and fails the Frontend checks job on a pull request. Everything else is a warning for now.
+
 ## Component Structure
 
 ```tsx

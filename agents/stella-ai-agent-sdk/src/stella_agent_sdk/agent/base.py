@@ -359,6 +359,7 @@ class BaseAgent(ABC):
         self,
         include_debug: bool = False,
         limit: int = 100,
+        before: Optional[str] = None,
     ) -> List[ChatMessage]:
         """
         Fetch chat history for the current session.
@@ -377,6 +378,8 @@ class BaseAgent(ABC):
                           Default is False (only chat messages: user_text,
                           transcript, agent_text).
             limit: Maximum number of messages to return (default: 100, max: 500).
+            before: Cursor for pagination - ISO timestamp to fetch messages
+                   strictly before. Used to page back into older history.
 
         Returns:
             List of ChatMessage objects in chronological order.
@@ -415,6 +418,7 @@ class BaseAgent(ABC):
         return await self._history_client.get_chat_history(
             include_debug=include_debug,
             limit=limit,
+            before=before,
         )
 
     def set_state(self, state: AgentState) -> None:
