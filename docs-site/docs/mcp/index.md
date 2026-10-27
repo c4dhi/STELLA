@@ -59,6 +59,13 @@ A connection only gets the tools its scopes allow. A read-only connection that c
 
 Read/write covers starting and ending sessions, agents and invitation links, not only editing personas and plans.
 
+Which tools need which scope:
+
+| Scope | Tools |
+|---|---|
+| `mcp:read` (18) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `agents_get`, `agent_logs_get` |
+| `mcp:write` (14) | `personas_create`, `personas_update`, `plan_templates_create`, `plan_templates_update`, `agent_configurations_create`, `agent_configurations_update`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop` |
+
 ## The tools
 
 There are 32 tools. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:

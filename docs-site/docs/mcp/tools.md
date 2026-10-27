@@ -12,12 +12,12 @@ Conventions used on this page:
 
 - An input marked *optional* can be left out. On an `…_update` tool, every field except the id is optional, and a field left out stays as it is.
 - Ids are strings. Each id's description, as the assistant sees it, says which tool lists them.
-- "Read" tools need `mcp:read`, and "Write" tools need `mcp:write`.
+- Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets `403` if it calls one by name.
 - On failure, every tool returns `{ "error": { "status", "message" } }` instead of the result shown here. `404` also means "not yours".
 
 ## Account
 
-### `whoami` · Read
+### `whoami` · `mcp:read`
 
 Who this connection acts as.
 
@@ -29,7 +29,7 @@ Who this connection acts as.
 
 Who the agent is: its system prompt, voice and language.
 
-### `personas_list` · Read
+### `personas_list` · `mcp:read`
 
 The user's personas plus the system defaults.
 
@@ -37,7 +37,7 @@ The user's personas plus the system defaults.
 
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `icon`, `voice`, `language`, `isSystemDefault` and `updatedAt`, but not the system prompt or variables. System defaults have `isSystemDefault: true` and are read-only.
 
-### `personas_get` · Read
+### `personas_get` · `mcp:read`
 
 One persona in full.
 
@@ -45,7 +45,7 @@ One persona in full.
 
 **Returns:** the persona, including `systemPrompt` and `variables`.
 
-### `personas_create` · Write
+### `personas_create` · `mcp:write`
 
 Create a persona owned by the user.
 
@@ -63,7 +63,7 @@ Create a persona owned by the user.
 
 **Returns:** the new persona, as `personas_get` shows it.
 
-### `personas_update` · Write
+### `personas_update` · `mcp:write`
 
 Change a persona the user owns. System defaults can't be changed.
 
@@ -75,7 +75,7 @@ Change a persona the user owns. System defaults can't be changed.
 
 What happens in a conversation: states, tasks, transitions and deliverables. See [Plan structure](../plan-structure/index.md).
 
-### `plan_templates_list` · Read
+### `plan_templates_list` · `mcp:read`
 
 The user's plan templates.
 
@@ -83,7 +83,7 @@ The user's plan templates.
 
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `defaultPersonaId` and `updatedAt`, but not the content.
 
-### `plan_templates_get` · Read
+### `plan_templates_get` · `mcp:read`
 
 One plan template in full.
 
@@ -91,7 +91,7 @@ One plan template in full.
 
 **Returns:** the plan template, including `content`.
 
-### `plan_templates_create` · Write
+### `plan_templates_create` · `mcp:write`
 
 Create a plan template owned by the user.
 
@@ -105,7 +105,7 @@ Create a plan template owned by the user.
 
 **Returns:** the new plan template, as `plan_templates_get` shows it.
 
-### `plan_templates_update` · Write
+### `plan_templates_update` · `mcp:write`
 
 Change a plan template the user owns.
 
@@ -117,7 +117,7 @@ Change a plan template the user owns.
 
 An agent configuration holds the pipeline settings for one agent type, as sparse overrides of that type's defaults.
 
-### `agent_types_list` · Read
+### `agent_types_list` · `mcp:read`
 
 The agent types on this platform.
 
@@ -125,7 +125,7 @@ The agent types on this platform.
 
 **Returns:** `{ items }`. Each item has `id`, `slug`, `name`, `description`, `icon`, `version` and `capabilities`.
 
-### `agent_types_get` · Read
+### `agent_types_get` · `mcp:read`
 
 One agent type with what a configuration for it can change.
 
@@ -133,7 +133,7 @@ One agent type with what a configuration for it can change.
 
 **Returns:** the agent type, including its pipeline schema (`configSchema`) and defaults.
 
-### `agent_configurations_list` · Read
+### `agent_configurations_list` · `mcp:read`
 
 The user's agent configurations.
 
@@ -141,7 +141,7 @@ The user's agent configurations.
 
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `agentTypeId`, `compatibility` and `updatedAt`, but not the overrides.
 
-### `agent_configurations_get` · Read
+### `agent_configurations_get` · `mcp:read`
 
 One agent configuration in full.
 
@@ -149,7 +149,7 @@ One agent configuration in full.
 
 **Returns:** the configuration, with its overrides, whether it is still compatible with its agent type, and `agentType` as `{ id, slug, name, icon }`.
 
-### `agent_configurations_create` · Write
+### `agent_configurations_create` · `mcp:write`
 
 Create a configuration for one agent type, owned by the user.
 
@@ -164,7 +164,7 @@ Create a configuration for one agent type, owned by the user.
 
 **Returns:** the new configuration, as `agent_configurations_get` shows it.
 
-### `agent_configurations_update` · Write
+### `agent_configurations_update` · `mcp:write`
 
 Change a configuration the user owns.
 
@@ -174,7 +174,7 @@ Change a configuration the user owns.
 
 ## Projects and sessions
 
-### `projects_list` · Read
+### `projects_list` · `mcp:read`
 
 The projects the user is a member of.
 
@@ -182,7 +182,7 @@ The projects the user is a member of.
 
 **Returns:** `{ items }`. Each item has `id`, `name`, `isOwner`, `isPublic`, `agentInactivityTimeoutMinutes`, `activeSessions`, `activeAgents`, `totalSessions` and `createdAt`.
 
-### `sessions_list` · Read
+### `sessions_list` · `mcp:read`
 
 The sessions in a project, newest first.
 
@@ -202,7 +202,7 @@ The sessions in a project, newest first.
 - `hasHumanParticipant`, `humanJoinedAt`, `humanLeftAt`, `firstAgentMessageAt`;
 - `agentCount`, `participantCount`, `messageCount`.
 
-### `sessions_get` · Read
+### `sessions_get` · `mcp:read`
 
 One session with its agents and the participants in it now.
 
@@ -214,7 +214,7 @@ One session with its agents and the participants in it now.
 - `agents`, each as `agents_get` shows it;
 - `participants`, each with `id`, `name` and `joinedAt`.
 
-### `sessions_create` · Write
+### `sessions_create` · `mcp:write`
 
 Create an empty session in a project. Next, deploy an agent with `agents_deploy` and invite a participant with `session_invitations_create`.
 
@@ -222,7 +222,7 @@ Create an empty session in a project. Next, deploy an agent with `agents_deploy`
 
 **Returns:** the new session, as `sessions_get` shows it.
 
-### `sessions_update` · Write
+### `sessions_update` · `mcp:write`
 
 Rename a session.
 
@@ -230,7 +230,7 @@ Rename a session.
 
 **Returns:** the session, as `sessions_get` shows it.
 
-### `sessions_close` · Write
+### `sessions_close` · `mcp:write`
 
 End a session. Its agents stop and nobody can join any more. The transcript stays readable. This can't be undone over MCP.
 
@@ -238,7 +238,7 @@ End a session. Its agents stop and nobody can join any more. The transcript stay
 
 **Returns:** the closed session, as `sessions_get` shows it.
 
-### `session_transcript_get` · Read
+### `session_transcript_get` · `mcp:read`
 
 A session's messages in time order, one page at a time.
 
@@ -253,7 +253,7 @@ A session's messages in time order, one page at a time.
 
 **Returns:** `{ items, hasMore, nextCursor }`. Each item has `id`, `timestamp`, `role`, `messageType` and `content`, plus `metadata` when `includeDebug` is set.
 
-### `session_state_get` · Read
+### `session_state_get` · `mcp:read`
 
 Where a session stands in its plan.
 
@@ -265,7 +265,7 @@ Where a session stands in its plan.
 
 The link a participant opens to join a session, without an account.
 
-### `session_invitations_list` · Read
+### `session_invitations_list` · `mcp:read`
 
 A session's invitations, newest first.
 
@@ -278,7 +278,7 @@ A session's invitations, newest first.
 - `createdAt`, `expiresAt`, `acceptedAt`;
 - `joinUrl`.
 
-### `session_invitations_create` · Write
+### `session_invitations_create` · `mcp:write`
 
 Create the join link for an active session. A session has at most one open invitation: revoke it before making a new one.
 
@@ -296,7 +296,7 @@ Create the join link for an active session. A session has at most one open invit
 
 **Returns:** the invitation, as `session_invitations_list` shows each one, including its `joinUrl`.
 
-### `session_invitations_revoke` · Write
+### `session_invitations_revoke` · `mcp:write`
 
 Make an open invitation link stop working. A participant who already joined stays.
 
@@ -306,7 +306,7 @@ Make an open invitation link stop working. A participant who already joined stay
 
 ## Agents
 
-### `env_var_templates_list` · Read
+### `env_var_templates_list` · `mcp:read`
 
 The user's env var templates, which hold the API keys an agent needs.
 
@@ -314,7 +314,7 @@ The user's env var templates, which hold the API keys an agent needs.
 
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys` and `agentTypeId`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
 
-### `agents_deploy` · Write
+### `agents_deploy` · `mcp:write`
 
 Start an agent in an active session. Starting takes a while: poll `agents_get` until `status` is `RUNNING`. Refused in a session that is closing or closed.
 
@@ -337,7 +337,7 @@ It takes no raw configuration and no env var values.
 
 **Returns:** the agent, as `agents_get` shows it.
 
-### `agents_get` · Read
+### `agents_get` · `mcp:read`
 
 The status and health of one agent.
 
@@ -351,7 +351,7 @@ The status and health of one agent.
 
 The deployment snapshot, the Kubernetes names and the env vars are left out.
 
-### `agent_logs_get` · Read
+### `agent_logs_get` · `mcp:read`
 
 The last 100 lines of the agent's log.
 
@@ -359,7 +359,7 @@ The last 100 lines of the agent's log.
 
 **Returns:** `{ logs }`. It is empty once the agent's pod is gone.
 
-### `agents_restart` · Write
+### `agents_restart` · `mcp:write`
 
 Restart an agent with the configuration it was deployed with. Its current turn is cut off. Refused in a session that is closing or closed.
 
@@ -367,7 +367,7 @@ Restart an agent with the configuration it was deployed with. Its current turn i
 
 **Returns:** the agent, as `agents_get` shows it.
 
-### `agents_stop` · Write
+### `agents_stop` · `mcp:write`
 
 Stop an agent and remove its pod. The agent and its messages stay, and `agents_restart` brings it back.
 
