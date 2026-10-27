@@ -9,6 +9,7 @@ import {
   READ_ONLY,
   UPDATES,
   defineTool,
+  idArg,
 } from '../mcp.types.js';
 
 // Mirrors CreatePlanTemplateDto; IsPlanContent checks the content itself.
@@ -24,6 +25,19 @@ const planFields = {
     ),
 };
 
+const planId = idArg('plan template', 'plan_templates_list');
+
+/** What plan_templates_list shows of one: everything but its content. */
+function planSummary(plan: Record<string, any>) {
+  return {
+    id: plan.id,
+    name: plan.name,
+    description: plan.description,
+    defaultPersonaId: plan.defaultPersonaId,
+    updatedAt: plan.updatedAt,
+  };
+}
+
 /** Plan templates: what happens in a conversation. */
 @Injectable()
 export class PlanTemplatesTools implements McpToolProvider {
@@ -34,12 +48,14 @@ export class PlanTemplatesTools implements McpToolProvider {
       defineTool({
         name: 'plan_templates_list',
         title: 'List plan templates',
-        description: "The user's plan templates.",
+        description: "The user's plan templates. plan_templates_get has the content of one.",
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
         handler: async (_args, { auth }) => ({
-          items: await this.plans.findAllByUser(auth.user.userId),
+          items: (await this.plans.findAllByUser(auth.user.userId)).map(
+            planSummary,
+          ),
         }),
       }),
       defineTool({
@@ -47,10 +63,10 @@ export class PlanTemplatesTools implements McpToolProvider {
         title: 'Get a plan template',
         description: 'One plan template with its full content.',
         scope: 'mcp:read',
-        input: { id: z.string() },
+        input: { planId },
         annotations: READ_ONLY,
-        handler: async ({ id }, { auth }) =>
-          this.plans.findOne(id, auth.user.userId),
+        handler: async ({ planId }, { auth }) =>
+          this.plans.findOne(planId, auth.user.userId),
       }),
       defineTool({
         name: 'plan_templates_create',
@@ -71,11 +87,11 @@ export class PlanTemplatesTools implements McpToolProvider {
         description:
           'Change fields of a plan template the user owns. content replaces the whole plan content.',
         scope: 'mcp:write',
-        input: { id: z.string(), changes: z.object(planFields).partial() },
+        input: { planId, ...z.object(planFields).partial().shape },
         annotations: UPDATES,
-        handler: async ({ id, changes }, ctx) =>
+        handler: async ({ planId, ...changes }, ctx) =>
           this.plans.update(
-            id,
+            planId,
             ctx.auth.user.userId,
             await ctx.validate(UpdatePlanTemplateDto, changes),
           ),

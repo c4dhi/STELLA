@@ -17,8 +17,13 @@ import {
   READ_ONLY,
   UPDATES,
   defineTool,
+  idArg,
 } from '../mcp.types.js';
 import { agentSummary } from './agents.tools.js';
+
+const projectId = idArg('project', 'projects_list');
+const sessionId = idArg('session', 'sessions_list');
+const invitationId = idArg('invitation', 'session_invitations_list');
 
 /** Projects and their sessions, only where the user is a member. */
 @Injectable()
@@ -47,18 +52,54 @@ export class SessionsTools implements McpToolProvider {
     };
   }
 
+  /** A session as sessions_get shows it; every session write returns this too. */
+  private async sessionDetail(id: string) {
+    const session = await this.sessions.findOne(id);
+    return {
+      id: session.id,
+      projectId: session.projectId,
+      name: session.name,
+      status: session.status,
+      createdAt: session.createdAt,
+      closedAt: session.closedAt,
+      agentSpawnMode: session.agentSpawnMode,
+      hasHumanParticipant: session.hasHumanParticipant,
+      maxSessionDurationSeconds: session.maxSessionDurationSeconds,
+      agents: session.agents.map(agentSummary),
+      participants: session.participants.map((p) => ({
+        id: p.id,
+        name: p.name,
+        joinedAt: p.joinedAt,
+      })),
+      messageCount: session._count.messages,
+    };
+  }
+
   tools() {
     return [
       defineTool({
         name: 'projects_list',
         title: 'List projects',
         description:
-          'Projects the user is a member of. Sessions live in projects.',
+          'Projects the user is a member of, with session counts. Sessions live in projects.',
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
         handler: async (_args, { auth }) => ({
-          items: await this.projects.findAll(auth.user.userId),
+          items: (await this.projects.findAll(auth.user.userId)).map(
+            (project: Record<string, any>) => ({
+              id: project.id,
+              name: project.name,
+              isOwner: project.isOwner,
+              isPublic: project.isPublic,
+              agentInactivityTimeoutMinutes:
+                project.agentInactivityTimeoutMinutes,
+              activeSessions: project.activeSessions,
+              activeAgents: project.activeAgents,
+              totalSessions: project.totalSessions,
+              createdAt: project.createdAt,
+            }),
+          ),
         }),
       }),
       defineTool({
@@ -69,7 +110,7 @@ export class SessionsTools implements McpToolProvider {
           'sessions_get has the agents and participants of one.',
         scope: 'mcp:read',
         input: {
-          projectId: z.string(),
+          projectId,
           status: z
             .enum(
               Object.values(SessionStatus) as [
@@ -122,29 +163,11 @@ export class SessionsTools implements McpToolProvider {
           'One session with its agents and the participants currently in it. Agent ids are for agents_get, ' +
           'agent_logs_get, agents_restart and agents_stop.',
         scope: 'mcp:read',
-        input: { sessionId: z.string() },
+        input: { sessionId },
         annotations: READ_ONLY,
         handler: async ({ sessionId }, { auth }) => {
           await this.access.assertSessionAccess(auth.user, sessionId);
-          const session = await this.sessions.findOne(sessionId);
-          return {
-            id: session.id,
-            projectId: session.projectId,
-            name: session.name,
-            status: session.status,
-            createdAt: session.createdAt,
-            closedAt: session.closedAt,
-            agentSpawnMode: session.agentSpawnMode,
-            hasHumanParticipant: session.hasHumanParticipant,
-            maxSessionDurationSeconds: session.maxSessionDurationSeconds,
-            agents: session.agents.map(agentSummary),
-            participants: session.participants.map((p) => ({
-              id: p.id,
-              name: p.name,
-              joinedAt: p.joinedAt,
-            })),
-            messageCount: session._count.messages,
-          };
+          return this.sessionDetail(sessionId);
         },
       }),
       defineTool({
@@ -155,7 +178,7 @@ export class SessionsTools implements McpToolProvider {
           'a participant with session_invitations_create.',
         scope: 'mcp:write',
         input: {
-          projectId: z.string(),
+          projectId,
           name: z.string().max(255).optional(),
         },
         annotations: CREATES,
@@ -165,29 +188,23 @@ export class SessionsTools implements McpToolProvider {
             projectId,
             await ctx.validate(CreateSessionDto, fields),
           );
-          return {
-            id: session.id,
-            projectId: session.projectId,
-            name: session.name,
-            status: session.status,
-            createdAt: session.createdAt,
-          };
+          return this.sessionDetail(session.id);
         },
       }),
       defineTool({
         name: 'sessions_update',
         title: 'Rename a session',
-        description: 'Change the name of a session.',
+        description: 'Change fields of a session; for now that is its name.',
         scope: 'mcp:write',
-        input: { sessionId: z.string(), name: z.string().max(255) },
+        input: { sessionId, name: z.string().max(255).optional() },
         annotations: UPDATES,
         handler: async ({ sessionId, ...fields }, ctx) => {
           await this.access.assertSessionAccess(ctx.auth.user, sessionId);
-          const session = await this.sessions.update(
+          await this.sessions.update(
             sessionId,
             await ctx.validate(UpdateSessionDto, fields),
           );
-          return { id: session.id, name: session.name };
+          return this.sessionDetail(sessionId);
         },
       }),
       defineTool({
@@ -197,11 +214,12 @@ export class SessionsTools implements McpToolProvider {
           'End a session: its agents stop and nobody can join any more. The transcript stays readable. ' +
           'Cannot be undone.',
         scope: 'mcp:write',
-        input: { sessionId: z.string() },
+        input: { sessionId },
         annotations: ENDS,
         handler: async ({ sessionId }, { auth }) => {
           await this.access.assertSessionAccess(auth.user, sessionId);
-          return this.sessions.close(sessionId);
+          await this.sessions.close(sessionId);
+          return this.sessionDetail(sessionId);
         },
       }),
       defineTool({
@@ -210,7 +228,7 @@ export class SessionsTools implements McpToolProvider {
         description:
           'Invitations of a session with their join links, newest first.',
         scope: 'mcp:read',
-        input: { sessionId: z.string() },
+        input: { sessionId },
         annotations: READ_ONLY,
         handler: async ({ sessionId }, { auth }) => {
           await this.access.assertSessionAccess(auth.user, sessionId);
@@ -227,7 +245,7 @@ export class SessionsTools implements McpToolProvider {
           'caps the conversation from the first agent message.',
         scope: 'mcp:write',
         input: {
-          sessionId: z.string(),
+          sessionId,
           participantName: z.string().optional(),
           customMessage: z
             .string()
@@ -257,22 +275,25 @@ export class SessionsTools implements McpToolProvider {
         description:
           'Make an open invitation link stop working. A participant who already joined is not removed.',
         scope: 'mcp:write',
-        input: { invitationId: z.string() },
+        input: { invitationId },
         annotations: ENDS,
         handler: async ({ invitationId }, { auth }) => {
           await this.access.assertInvitationAccess(auth.user, invitationId);
-          return this.invitations.revoke(invitationId);
+          await this.invitations.revoke(invitationId);
+          return this.invitationSummary(
+            await this.invitations.findOne(invitationId),
+          );
         },
       }),
       defineTool({
         name: 'session_transcript_get',
         title: 'Get a session transcript',
         description:
-          'Messages of a session in time order, oldest first, one page at a time. Pass nextCursor back as cursor ' +
+          'Messages (items) of a session in time order, oldest first, one page at a time. Pass nextCursor back as cursor ' +
           'to get the page before. includeDebug adds agent-internal messages (expert decisions, plan updates).',
         scope: 'mcp:read',
         input: {
-          sessionId: z.string(),
+          sessionId,
           cursor: z.string().optional(),
           limit: z.number().int().min(1).max(100).optional(),
           includeDebug: z.boolean().optional(),
@@ -289,7 +310,7 @@ export class SessionsTools implements McpToolProvider {
             includeDebug,
           });
           return {
-            messages: page.messages.map((m) => ({
+            items: page.messages.map((m) => ({
               id: m.id,
               timestamp: m.timestamp,
               role: m.role,
@@ -309,7 +330,7 @@ export class SessionsTools implements McpToolProvider {
           'Where a session stands in its plan: current state, progress, turn counters, task status per state ' +
           'and collected deliverables. null when the session never ran a plan.',
         scope: 'mcp:read',
-        input: { sessionId: z.string() },
+        input: { sessionId },
         annotations: READ_ONLY,
         handler: async ({ sessionId }, { auth }) => {
           await this.access.assertSessionAccess(auth.user, sessionId);

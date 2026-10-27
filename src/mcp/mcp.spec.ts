@@ -85,6 +85,21 @@ function setup() {
       room: { livekitRoomName: 'room-s3' },
     })),
     close: jest.fn(async () => ({ message: 'Session closed' })),
+    findOne: jest.fn(async (id: string) => ({
+      id,
+      projectId: 'p1',
+      name: 'Morning',
+      status: 'ACTIVE',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      closedAt: null,
+      agentSpawnMode: 'immediate',
+      hasHumanParticipant: false,
+      maxSessionDurationSeconds: null,
+      lastAgentConfig: { manualEnvVarsEncrypted: 'ciphertext' },
+      agents: [],
+      participants: [],
+      _count: { messages: 0 },
+    })),
   };
   const agentRow = {
     id: 'a1',
@@ -115,6 +130,11 @@ function setup() {
     revoke: jest.fn(async () => ({
       message: 'Invitation revoked successfully',
     })),
+    findOne: jest.fn(async (id: string) => ({
+      id,
+      token: 'tok',
+      status: 'REVOKED',
+    })),
   };
   const byId = (rows: Record<string, unknown>) => async (args: any) =>
     rows[args.where.id] ?? null;
@@ -143,8 +163,24 @@ function setup() {
   };
   const audit = { record: jest.fn(async () => undefined) };
   const access = new ResourceAccessService(prisma as any);
+  const agentImages = {
+    getAgentTypesWithInfo: jest.fn(async () => [
+      {
+        id: 'at1',
+        slug: 'stella-v2-agent',
+        name: 'STELLA V2',
+        description: 'Pipeline',
+        icon: null,
+        version: '1.1.0',
+        isBuiltIn: true,
+        capabilities: ['voice'],
+        defaultConfig: {},
+        configSchema: { type: 'object' },
+      },
+    ]),
+  };
   const providers = [
-    new CatalogTools({ getAgentTypesWithInfo: jest.fn(async () => []) } as any),
+    new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
     new PlanTemplatesTools({} as any),
     new AgentConfigurationsTools({} as any),
@@ -169,6 +205,7 @@ function setup() {
           },
         ]),
       } as any,
+      agentImages as any,
       access,
     ),
   ];
@@ -228,7 +265,7 @@ describe('MCP server over the SDK client', () => {
     const client = await connect(factory, READ);
     const result: any = await client.callTool({
       name: 'personas_get',
-      arguments: { id: 'pe1' },
+      arguments: { personaId: 'pe1' },
     });
     expect(personas.findOne).toHaveBeenCalledWith('pe1', 'u1');
     expect(result.isError).toBeFalsy();
@@ -244,7 +281,7 @@ describe('MCP server over the SDK client', () => {
     const { factory } = setup();
     const result: any = await (
       await connect(factory, READ)
-    ).callTool({ name: 'personas_get', arguments: { id: 'missing' } });
+    ).callTool({ name: 'personas_get', arguments: { personaId: 'missing' } });
     expect(result.isError).toBe(true);
     expect(parse(result)).toEqual({
       error: { status: 404, message: 'Persona missing not found' },
@@ -255,7 +292,7 @@ describe('MCP server over the SDK client', () => {
     const { factory } = setup();
     const result: any = await (
       await connect(factory, READ)
-    ).callTool({ name: 'personas_get', arguments: { id: 'boom' } });
+    ).callTool({ name: 'personas_get', arguments: { personaId: 'boom' } });
     expect(result.isError).toBe(true);
     expect(result.content[0].text).not.toContain('10.0.0.3');
     expect(parse(result).error.status).toBe(500);
@@ -314,8 +351,8 @@ describe('MCP tool runner', () => {
 
   it('records an audit entry for every call', async () => {
     const { factory, audit, tool } = setup();
-    await factory.run(tool('personas_get'), { id: 'pe1' }, READ);
-    await factory.run(tool('personas_get'), { id: 'missing' }, READ);
+    await factory.run(tool('personas_get'), { personaId: 'pe1' }, READ);
+    await factory.run(tool('personas_get'), { personaId: 'missing' }, READ);
     expect(audit.record).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -363,7 +400,7 @@ describe('MCP tool runner', () => {
       { sessionId: 's1' },
       READ,
     );
-    expect(plain.structuredContent.messages[0]).toEqual({
+    expect(plain.structuredContent.items[0]).toEqual({
       id: 'm1',
       timestamp: '2026-10-01T00:00:00.000Z',
       role: 'user',
@@ -375,7 +412,7 @@ describe('MCP tool runner', () => {
       { sessionId: 's1', includeDebug: true },
       READ,
     );
-    expect(debug.structuredContent.messages[0].metadata).toEqual({ x: 1 });
+    expect(debug.structuredContent.items[0].metadata).toEqual({ x: 1 });
   });
 });
 
@@ -422,13 +459,16 @@ describe('MCP session and agent tools', () => {
     );
     expect(sessions.create.mock.calls[0][0]).toBe('p1');
     expect(sessions.create.mock.calls[0][1]).toBeInstanceOf(CreateSessionDto);
-    expect(ok.structuredContent).toEqual({
+    // The session as sessions_get shows it, without its deploy snapshot.
+    expect(ok.structuredContent).toMatchObject({
       id: 's3',
       projectId: 'p1',
       name: 'Morning',
       status: 'ACTIVE',
-      createdAt: '2026-10-01T00:00:00.000Z',
+      agents: [],
+      messageCount: 0,
     });
+    expect(ok.content[0].text).not.toContain('ciphertext');
   });
 
   it('acts on sessions, agents and invitations only inside the user projects', async () => {
@@ -582,6 +622,94 @@ describe('MCP session and agent tools', () => {
         agentTypeId: 'at1',
       },
     ]);
+  });
+});
+
+describe('One shape for every tool', () => {
+  async function schemas() {
+    const { factory } = setup();
+    const client = await connect(factory, READ_WRITE);
+    return (await client.listTools()).tools;
+  }
+
+  it('names every id after what it points to, and says where to get one', async () => {
+    const offenders: string[] = [];
+    let ids = 0;
+    for (const t of await schemas()) {
+      const properties = (t.inputSchema.properties ?? {}) as Record<string, any>;
+      for (const [key, schema] of Object.entries(properties)) {
+        if (key === 'id') offenders.push(`${t.name}: bare id`);
+        if (!key.endsWith('Id')) continue;
+        ids++;
+        if (!/from \w+/.test(schema.description ?? '')) {
+          offenders.push(`${t.name}.${key}: no "from <tool>"`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+    expect(ids).toBeGreaterThan(20);
+  });
+
+  it('takes updates as flat fields next to the id', async () => {
+    const updates = (await schemas()).filter((t) => t.name.endsWith('_update'));
+    expect(updates.map((t) => t.name).sort()).toEqual([
+      'agent_configurations_update',
+      'personas_update',
+      'plan_templates_update',
+      'sessions_update',
+    ]);
+    for (const t of updates) {
+      const keys = Object.keys(t.inputSchema.properties ?? {});
+      expect({ tool: t.name, changes: keys.includes('changes'), ids: keys.filter((k) => k.endsWith('Id')).length })
+        .toEqual({ tool: t.name, changes: false, ids: 1 });
+    }
+  });
+
+  it('returns the resulting object from writes that end something', async () => {
+    const { factory, tool } = setup();
+    const stopped: any = await factory.run(tool('agents_stop'), { agentId: 'a1' }, READ_WRITE);
+    expect(stopped.structuredContent).toMatchObject({ id: 'a1', sessionId: 's1' });
+    const closed: any = await factory.run(tool('sessions_close'), { sessionId: 's1' }, READ_WRITE);
+    expect(closed.structuredContent).toMatchObject({ id: 's1', agents: [] });
+    const revoked: any = await factory.run(
+      tool('session_invitations_revoke'),
+      { invitationId: 'i1' },
+      READ_WRITE,
+    );
+    expect(revoked.structuredContent).toMatchObject({
+      id: 'i1',
+      status: 'REVOKED',
+      joinUrl: 'https://stella.test/join/tok',
+    });
+  });
+
+  it('lists agent types briefly and gets one in full', async () => {
+    const { factory, tool } = setup();
+    const listed: any = await factory.run(tool('agent_types_list'), {}, READ);
+    expect(listed.structuredContent.items).toEqual([
+      expect.objectContaining({ id: 'at1', slug: 'stella-v2-agent' }),
+    ]);
+    expect(listed.structuredContent.items[0].configSchema).toBeUndefined();
+    const one: any = await factory.run(tool('agent_types_get'), { agentTypeId: 'at1' }, READ);
+    expect(one.structuredContent.configSchema).toEqual({ type: 'object' });
+    const missing: any = await factory.run(tool('agent_types_get'), { agentTypeId: 'nope' }, READ);
+    expect(parse(missing).error.status).toBe(404);
+  });
+
+  it('deploys by agent type id', async () => {
+    const { factory, agents, tool } = setup();
+    await factory.run(
+      tool('agents_deploy'),
+      { sessionId: 's1', name: 'Grace', agentTypeId: 'at1' },
+      READ_WRITE,
+    );
+    expect((agents.create.mock.calls[0] as any[])[1].agentType).toBe('stella-v2-agent');
+    const unknown: any = await factory.run(
+      tool('agents_deploy'),
+      { sessionId: 's1', name: 'Grace', agentTypeId: 'nope' },
+      READ_WRITE,
+    );
+    expect(parse(unknown).error.status).toBe(404);
   });
 });
 

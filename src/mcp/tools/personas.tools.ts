@@ -9,6 +9,7 @@ import {
   READ_ONLY,
   UPDATES,
   defineTool,
+  idArg,
 } from '../mcp.types.js';
 
 // Mirrors CreatePersonaDto / UpdatePersonaDto, which do the real validation.
@@ -39,6 +40,22 @@ const personaFields = {
     .describe('Values other prompts reference as {{persona.<key>}}'),
 };
 
+const personaId = idArg('persona', 'personas_list');
+
+/** What personas_list shows of one: everything but the prompt and its variables. */
+function personaSummary(persona: Record<string, any>) {
+  return {
+    id: persona.id,
+    name: persona.name,
+    description: persona.description,
+    icon: persona.icon,
+    voice: persona.voice,
+    language: persona.language,
+    isSystemDefault: persona.isSystemDefault,
+    updatedAt: persona.updatedAt,
+  };
+}
+
 /** Personas: who the agent is (system prompt, voice, language). */
 @Injectable()
 export class PersonasTools implements McpToolProvider {
@@ -50,12 +67,15 @@ export class PersonasTools implements McpToolProvider {
         name: 'personas_list',
         title: 'List personas',
         description:
-          "The user's personas plus the system defaults (isSystemDefault: true, read-only).",
+          "The user's personas plus the system defaults (isSystemDefault: true, read-only). personas_get has " +
+          'the system prompt.',
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
         handler: async (_args, { auth }) => ({
-          items: await this.personas.findAllForUser(auth.user.userId),
+          items: (await this.personas.findAllForUser(auth.user.userId)).map(
+            personaSummary,
+          ),
         }),
       }),
       defineTool({
@@ -63,10 +83,10 @@ export class PersonasTools implements McpToolProvider {
         title: 'Get a persona',
         description: 'One persona, including its full system prompt.',
         scope: 'mcp:read',
-        input: { id: z.string() },
+        input: { personaId },
         annotations: READ_ONLY,
-        handler: async ({ id }, { auth }) =>
-          this.personas.findOne(id, auth.user.userId),
+        handler: async ({ personaId }, { auth }) =>
+          this.personas.findOne(personaId, auth.user.userId),
       }),
       defineTool({
         name: 'personas_create',
@@ -87,11 +107,11 @@ export class PersonasTools implements McpToolProvider {
         description:
           'Change fields of a persona the user owns. Omitted fields stay as they are. System defaults cannot be changed.',
         scope: 'mcp:write',
-        input: { id: z.string(), changes: z.object(personaFields).partial() },
+        input: { personaId, ...z.object(personaFields).partial().shape },
         annotations: UPDATES,
-        handler: async ({ id, changes }, ctx) =>
+        handler: async ({ personaId, ...changes }, ctx) =>
           this.personas.update(
-            id,
+            personaId,
             ctx.auth.user.userId,
             await ctx.validate(UpdatePersonaDto, changes),
           ),

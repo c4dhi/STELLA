@@ -26,6 +26,13 @@ const INSTRUCTIONS = [
   'Sessions belong to projects and hold the transcript and plan state of their conversations.',
   'To run one: sessions_create, then agents_deploy with a plan, persona and configuration, then session_invitations_create for the link a participant opens.',
   'Read before you write: fetch an existing item to see its exact structure before creating or updating one.',
+  'Every tool works the same way.',
+  'Ids are named after what they point to (projectId, sessionId, agentId, invitationId, personaId, planId,',
+  'agentConfigurationId, agentTypeId, envVarTemplateId), with the same name in every tool.',
+  '<things>_list returns { items } with a summary of each; <things>_get returns one in full.',
+  '<things>_update takes the id and only the fields to change.',
+  'Every write returns the resulting object as the matching _get shows it, so there is no need to fetch it again.',
+  'A failed call returns { error: { status, message } }; 404 also means the user has no access to it.',
 ].join(' ');
 
 // The same settings as the global pipe in main.ts.
