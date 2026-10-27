@@ -21,7 +21,6 @@ const sidebars: SidebarsConfig = {
         'guides/custom-tools',
         'guides/add-custom-ui',
         'guides/authentication',
-        'guides/mcp',
       ],
     },
     {
@@ -157,6 +156,16 @@ const sidebars: SidebarsConfig = {
         'integration/livekit-production',
         'integration/frontend',
       ],
+    },
+    {
+      type: 'html',
+      value: '<div class="sidebar-section-spacer"></div>',
+    },
+    {
+      type: 'category',
+      label: '🔌 MCP',
+      collapsed: false,
+      items: ['mcp/index', 'mcp/tools'],
     },
     {
       type: 'html',
