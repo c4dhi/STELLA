@@ -133,4 +133,32 @@ else
     FAILED=1
 fi
 
+# _size_over_cap: garbage never counts as over cap - round 4's fix (an
+# unparseable docker system df result must stop trim_build_cache's loop,
+# not drive it to the most aggressive filter tier).
+if _size_over_cap "61.5GB" 50000000000; then
+    echo "ok   _size_over_cap: 61.5GB is over a 50GB cap"
+else
+    echo "FAIL _size_over_cap: 61.5GB should be over a 50GB cap"
+    FAILED=1
+fi
+if _size_over_cap "not-a-size" 50000000000; then
+    echo "FAIL _size_over_cap: garbage should not count as over cap"
+    FAILED=1
+else
+    echo "ok   _size_over_cap: garbage does not count as over cap"
+fi
+
+# trim_build_cache: if docker system df's size can't be parsed, stop
+# instead of escalating, and say so rather than going quiet.
+_build_cache_size() { echo "not-a-size"; }
+out=$(trim_build_cache 2>&1)
+if echo "$out" | grep -q "Couldn't read the build cache size"; then
+    echo "ok   trim_build_cache warns on an unreadable size instead of escalating"
+else
+    echo "FAIL trim_build_cache: expected a warning about an unreadable size, got: $out"
+    FAILED=1
+fi
+unset -f _build_cache_size
+
 exit "$FAILED"

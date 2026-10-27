@@ -408,33 +408,99 @@ prune_dangling_images() {
     docker image prune -f >/dev/null 2>&1 || true
 }
 
+# A docker-style size string ("85.78GB", "6.563GiB", "512kB") as an integer
+# byte count, or nothing if it doesn't parse. Needed because buildx prune's
+# own "Total:" line reports what it RECLAIMED, not what's left - the two
+# look the same on a quiet cache and are easy to conflate (round-1 bug).
+_size_to_bytes() {
+    local s="$1" num unit factor
+    [[ "$s" =~ ^([0-9.]+)([A-Za-z]+)$ ]] || return 1
+    num="${BASH_REMATCH[1]}"
+    unit=$(echo "${BASH_REMATCH[2]}" | tr '[:upper:]' '[:lower:]')
+    case "$unit" in
+        b) factor=1 ;;
+        kb) factor=1000 ;;
+        kib) factor=1024 ;;
+        mb) factor=1000000 ;;
+        mib) factor=1048576 ;;
+        gb) factor=1000000000 ;;
+        gib) factor=1073741824 ;;
+        tb) factor=1000000000000 ;;
+        tib) factor=1099511627776 ;;
+        *) return 1 ;;
+    esac
+    awk -v n="$num" -v f="$factor" 'BEGIN { printf "%d\n", n*f }'
+}
+
+# The build cache's current total size, as docker system df prints it.
+_build_cache_size() {
+    docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1=="Build" {print $NF}'
+}
+
+# True if a docker-style size string parses and is over the given byte cap.
+# An unparseable size (docker system df failed, or changed its format) is
+# NOT "over cap" - it must stop trim_build_cache's loop, not drive it to the
+# most aggressive tier (@sable, round 4).
+_size_over_cap() {
+    local bytes
+    bytes=$(_size_to_bytes "$1" 2>/dev/null) || return 1
+    [[ "$bytes" -gt "$2" ]]
+}
+
 # Bounds the BuildKit cache, on every deploy attempt including a failed one
 # (production's own incident: a build failed on a cache already at 122GB).
 # Trims to the cap rather than wiping everything, so an incremental build
 # right after still has cache to reuse.
 #
-# --max-used-space alone was shown to free 0 B on production with the cache
-# at 77GB/53GB reclaimable (this card's own evidence) - it works here against
-# a local buildx 0.37.2 (verified: reclaims real space down to a tiny test
-# cap), so the no-op is specific to production's builder/version, not the
-# flag in general. Tries --reserved-space too (different code path in
-# buildx, same "keep at most this much" intent) and prints what either one
-# actually reclaimed, so the next production run shows plainly whether this
-# still doesn't work there rather than failing silently again.
+# --max-used-space alone, with no --reserved-space, is the EXACT command
+# already shown to free 0 B on production (21 Oct, cache at 77GB/53GB
+# reclaimable). On the dev host (27 Oct), --max-used-space 50GB
+# --reserved-space 0 (an explicit zero, overriding the daemon's own ~47.5GiB
+# default GC floor from `docker buildx inspect --bootstrap`) also froze at
+# 0 B freed, verbose output included, even though `docker buildx du
+# --verbose` shows plenty of individually Reclaimable: true records - three
+# separate 0 B runs now, on two hosts. That's an observation, not a proven
+# cause; it's kept as a free first try below in case some host's buildx
+# does honour it, but nothing depends on it anymore. --keep-storage is
+# dropped outright: confirmed locally it's deprecated and silently aliased
+# to --reserved-space (a floor, not the ceiling wanted), on both buildx
+# 0.34.0 (dev host) and 0.37.2 - dead weight, not a fallback.
+#
+# What actually works is --filter (a real delete-by-criteria, not a GC
+# policy), confirmed live: --filter until=168h freed 13.9GB (85.78GB ->
+# 71.88GB, still over cap), and until=24h freed another 26.22GB (71.88GB ->
+# 45.66GB, under cap). Stops there - @sable: until=0h would also delete the
+# cache this very deploy just built, so the next deploy rebuilds from cold,
+# exactly what this function exists to avoid. If 24h still isn't enough,
+# warn with the size and leave the rest to the next deploy, the same way
+# warn_if_image_disk_full does for disk space.
+#
+# Checks the REAL resulting size via `docker system df` after each attempt,
+# not buildx's own "Total:" (reclaimed, not remaining) line.
 trim_build_cache() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     command -v docker >/dev/null 2>&1 || return 0
 
-    local out total
-    out=$(docker buildx prune -f --max-used-space 50GB --reserved-space 50GB 2>&1) || true
-    total=$(echo "$out" | grep -E '^Total:' | tail -1)
-    # Normal level, not verbose (#99 review round 2): production CI doesn't
-    # pass --verbose, and this is exactly the line that would have shown the
-    # --max-used-space no-op immediately instead of needing a card to notice it.
-    if [[ -n "$total" ]]; then
-        echo "   Build cache: ${total}"
-    else
-        echo "   Build cache: prune produced no 'Total:' line (nothing reclaimed, or an older buildx) - output: ${out}"
+    local cap_bytes=50000000000 before_str after_str window
+
+    before_str=$(_build_cache_size)
+
+    docker buildx prune -f --max-used-space 50GB --reserved-space 0 >/dev/null 2>&1 || true
+    after_str=$(_build_cache_size)
+
+    for window in 168h 24h; do
+        _size_over_cap "$after_str" "$cap_bytes" || break
+        docker buildx prune -f --filter "until=${window}" >/dev/null 2>&1 || true
+        after_str=$(_build_cache_size)
+    done
+
+    echo "   Build cache: ${after_str:-unknown} (before: ${before_str:-unknown})"
+
+    if ! _size_to_bytes "$after_str" >/dev/null 2>&1; then
+        warning "Couldn't read the build cache size after trim ('${after_str:-nothing}') - skipping the cap check."
+    elif _size_over_cap "$after_str" "$cap_bytes"; then
+        warning "Build cache is still ${after_str} after trim - over the 50GB cap."
+        echo "  Leaving the rest for the next deploy rather than wiping what was just built."
     fi
 }
 
