@@ -65,7 +65,8 @@ export class SessionsTools implements McpToolProvider {
         name: 'sessions_list',
         title: 'List sessions',
         description:
-          'Sessions in a project, newest first. Page with skip and take (at most 100).',
+          'Sessions in a project, newest first, with counts. Page with skip and take (at most 100); ' +
+          'sessions_get has the agents and participants of one.',
         scope: 'mcp:read',
         input: {
           projectId: z.string(),
@@ -87,10 +88,31 @@ export class SessionsTools implements McpToolProvider {
         annotations: READ_ONLY,
         handler: async ({ projectId, ...query }, ctx) => {
           this.access.assertProjectMember(ctx.auth.user, projectId);
-          return this.sessions.findAll(
+          const page = await this.sessions.findAll(
             projectId,
             await ctx.validate(QuerySessionsDto, query),
           );
+          // Not lastAgentConfig: it holds the deploy snapshot with encrypted env vars,
+          // and runs to tens of kilobytes per session.
+          return {
+            items: page.data.map((session) => ({
+              id: session.id,
+              name: session.name,
+              status: session.status,
+              createdAt: session.createdAt,
+              closedAt: session.closedAt,
+              hasHumanParticipant: session.hasHumanParticipant,
+              humanJoinedAt: session.humanJoinedAt,
+              humanLeftAt: session.humanLeftAt,
+              firstAgentMessageAt: session.firstAgentMessageAt,
+              agentCount: session._count.agents,
+              participantCount: session._count.participants,
+              messageCount: session._count.messages,
+            })),
+            total: page.total,
+            skip: page.skip,
+            take: page.take,
+          };
         },
       }),
       defineTool({

@@ -507,6 +507,47 @@ describe('MCP session and agent tools', () => {
     expect(result.content[0].text).not.toContain('agent-a1-env');
   });
 
+  it('lists sessions with counts, not their deploy snapshot', async () => {
+    const { factory, sessions, tool } = setup();
+    sessions.findAll.mockResolvedValueOnce({
+      data: [
+        {
+          id: 's1',
+          name: 'Morning',
+          status: 'ACTIVE',
+          lastAgentConfig: {
+            agentConfig: { persona: { system_prompt: 'secret sauce' } },
+            manualEnvVarsEncrypted: 'ciphertext',
+          },
+          room: { livekitRoomName: 'session-1' },
+          _count: { agents: 1, participants: 2, messages: 7 },
+        },
+      ],
+      total: 1,
+      skip: 0,
+      take: 20,
+    } as any);
+    const result: any = await factory.run(
+      tool('sessions_list'),
+      { projectId: 'p1' },
+      READ,
+    );
+    expect(result.structuredContent).toMatchObject({
+      items: [
+        {
+          id: 's1',
+          name: 'Morning',
+          agentCount: 1,
+          participantCount: 2,
+          messageCount: 7,
+        },
+      ],
+      total: 1,
+    });
+    expect(result.content[0].text).not.toContain('ciphertext');
+    expect(result.content[0].text).not.toContain('secret sauce');
+  });
+
   it('hands back the join link of an invitation, and never env var values', async () => {
     const { factory, tool } = setup();
     const created: any = await factory.run(

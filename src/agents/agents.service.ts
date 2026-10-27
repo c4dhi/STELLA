@@ -17,7 +17,7 @@ import {
   MetricsSummaryDto,
   PlanCompletionSessionDto,
 } from './dto/agent-metrics.dto.js';
-import { AgentStatus, Prisma } from '@prisma/client';
+import { AgentStatus, Prisma, SessionStatus } from '@prisma/client';
 import { sanitizeAgentConfig } from '../common/utils/sanitize-config.js';
 import { EncryptionService } from '../env-var-templates/encryption.service.js';
 import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service.js';
@@ -277,6 +277,7 @@ export class AgentsService {
     if (!session.room) {
       throw new NotFoundException('Session does not have an associated room');
     }
+    this.assertSessionOpen(session);
 
     // Determine agent type. Defaults to stella-v2: an omitted agentType used
     // to land silently on stella-light, which is deprecated — the least
@@ -1017,6 +1018,7 @@ export class AgentsService {
     if (!agent.session.room) {
       throw new Error('Session does not have an associated room');
     }
+    this.assertSessionOpen(agent.session);
 
     this.logger.log(`Restarting agent ${id} (keeping same ID)`);
 
@@ -1193,6 +1195,18 @@ export class AgentsService {
     // Delegate to centralized delete logic (handles stopping if needed)
     await this.deleteAgent(id);
     return { message: 'Agent deleted successfully' };
+  }
+
+  /**
+   * Agents only start in an active session. A closing or closed one keeps its
+   * transcript, but a pod started there would run with nobody able to join.
+   */
+  private assertSessionOpen(session: { id: string; status: SessionStatus }) {
+    if (session.status !== SessionStatus.ACTIVE) {
+      throw new BadRequestException(
+        `Session ${session.id} is ${session.status.toLowerCase()}: agents can only start in an active session`,
+      );
+    }
   }
 
   async restart(id: string) {

@@ -193,7 +193,8 @@ export default function McpAccessSection() {
         </h2>
         <p className={`text-body-sm ${muted}`}>
           Connect Claude, ChatGPT or another AI assistant to your STELLA account. It can then read and edit your
-          personas, plans and agent configs, and read the sessions in your projects, acting as you.
+          personas, plans and agent configs, and run sessions in your projects with agents and invitation links,
+          acting as you.
         </p>
       </motion.div>
 
@@ -278,6 +279,9 @@ export default function McpAccessSection() {
       {/* Apps connected by sign-in */}
       <motion.div variants={itemVariants} className={card}>
         <h3 className={heading}>Connected apps</h3>
+        <p className={`text-body-sm mb-4 ${muted}`}>
+          Apps you connected by signing in. Tokens you created yourself are under Personal access tokens below.
+        </p>
         {apps && apps.length === 0 && <p className={`text-body-sm ${muted}`}>No apps connected yet.</p>}
         {apps && apps.length > 0 && (
           <ul className="space-y-2">
@@ -314,10 +318,14 @@ export default function McpAccessSection() {
         )}
       </motion.div>
 
-      <motion.div variants={itemVariants}>
-        <h3 className={`text-heading-sm font-semibold mt-4 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+      {/* A separate way in: set apart so it isn't read as part of Connected apps */}
+      <motion.div
+        variants={itemVariants}
+        className={`!mt-14 pt-10 border-t ${isDark ? 'border-border-dark' : 'border-border'}`}
+      >
+        <h2 className={`text-heading-lg mb-2 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
           Personal access tokens
-        </h3>
+        </h2>
         <p className={`text-body-sm ${muted}`}>
           For scripts and clients that can’t sign in. A token works like a password for MCP: keep it secret.
         </p>
