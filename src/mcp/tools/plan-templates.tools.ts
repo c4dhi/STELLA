@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { PlanTemplate } from '@prisma/client';
 import { z } from 'zod';
 import { PlanTemplatesService } from '../../plan-templates/plan-templates.service.js';
 import { CreatePlanTemplateDto } from '../../plan-templates/dto/create-plan-template.dto.js';
@@ -28,7 +29,7 @@ const planFields = {
 const planId = idArg('plan template', 'plan_templates_list');
 
 /** What plan_templates_list shows of one: everything but its content. */
-function planSummary(plan: Record<string, any>) {
+function planSummary(plan: PlanTemplate) {
   return {
     id: plan.id,
     name: plan.name,
@@ -43,12 +44,18 @@ function planSummary(plan: Record<string, any>) {
 export class PlanTemplatesTools implements McpToolProvider {
   constructor(private readonly plans: PlanTemplatesService) {}
 
+  /** A plan as plan_templates_get shows it; creates and updates return this too. */
+  private full(planId: string, userId: string) {
+    return this.plans.findOne(planId, userId);
+  }
+
   tools() {
     return [
       defineTool({
         name: 'plan_templates_list',
         title: 'List plan templates',
-        description: "The user's plan templates. plan_templates_get has the content of one.",
+        description:
+          "The user's plan templates. plan_templates_get has the content of one.",
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
@@ -66,7 +73,7 @@ export class PlanTemplatesTools implements McpToolProvider {
         input: { planId },
         annotations: READ_ONLY,
         handler: async ({ planId }, { auth }) =>
-          this.plans.findOne(planId, auth.user.userId),
+          this.full(planId, auth.user.userId),
       }),
       defineTool({
         name: 'plan_templates_create',
@@ -75,11 +82,13 @@ export class PlanTemplatesTools implements McpToolProvider {
         scope: 'mcp:write',
         input: planFields,
         annotations: CREATES,
-        handler: async (args, ctx) =>
-          this.plans.create(
+        handler: async (args, ctx) => {
+          const plan = await this.plans.create(
             ctx.auth.user.userId,
             await ctx.validate(CreatePlanTemplateDto, args),
-          ),
+          );
+          return this.full(plan.id, ctx.auth.user.userId);
+        },
       }),
       defineTool({
         name: 'plan_templates_update',
@@ -89,12 +98,14 @@ export class PlanTemplatesTools implements McpToolProvider {
         scope: 'mcp:write',
         input: { planId, ...z.object(planFields).partial().shape },
         annotations: UPDATES,
-        handler: async ({ planId, ...changes }, ctx) =>
-          this.plans.update(
+        handler: async ({ planId, ...changes }, ctx) => {
+          await this.plans.update(
             planId,
             ctx.auth.user.userId,
             await ctx.validate(UpdatePlanTemplateDto, changes),
-          ),
+          );
+          return this.full(planId, ctx.auth.user.userId);
+        },
       }),
     ];
   }

@@ -87,7 +87,7 @@ export class SessionsTools implements McpToolProvider {
         annotations: READ_ONLY,
         handler: async (_args, { auth }) => ({
           items: (await this.projects.findAll(auth.user.userId)).map(
-            (project: Record<string, any>) => ({
+            (project) => ({
               id: project.id,
               name: project.name,
               isOwner: project.isOwner,

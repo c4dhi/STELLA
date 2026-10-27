@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Persona } from '@prisma/client';
 import { z } from 'zod';
 import { PersonasService } from '../../personas/personas.service.js';
 import { CreatePersonaDto } from '../../personas/dto/create-persona.dto.js';
@@ -43,7 +44,7 @@ const personaFields = {
 const personaId = idArg('persona', 'personas_list');
 
 /** What personas_list shows of one: everything but the prompt and its variables. */
-function personaSummary(persona: Record<string, any>) {
+function personaSummary(persona: Persona) {
   return {
     id: persona.id,
     name: persona.name,
@@ -60,6 +61,11 @@ function personaSummary(persona: Record<string, any>) {
 @Injectable()
 export class PersonasTools implements McpToolProvider {
   constructor(private readonly personas: PersonasService) {}
+
+  /** A persona as personas_get shows it; creates and updates return this too. */
+  private full(personaId: string, userId: string) {
+    return this.personas.findOne(personaId, userId);
+  }
 
   tools() {
     return [
@@ -86,7 +92,7 @@ export class PersonasTools implements McpToolProvider {
         input: { personaId },
         annotations: READ_ONLY,
         handler: async ({ personaId }, { auth }) =>
-          this.personas.findOne(personaId, auth.user.userId),
+          this.full(personaId, auth.user.userId),
       }),
       defineTool({
         name: 'personas_create',
@@ -95,11 +101,13 @@ export class PersonasTools implements McpToolProvider {
         scope: 'mcp:write',
         input: personaFields,
         annotations: CREATES,
-        handler: async (args, ctx) =>
-          this.personas.create(
+        handler: async (args, ctx) => {
+          const persona = await this.personas.create(
             ctx.auth.user.userId,
             await ctx.validate(CreatePersonaDto, args),
-          ),
+          );
+          return this.full(persona.id, ctx.auth.user.userId);
+        },
       }),
       defineTool({
         name: 'personas_update',
@@ -109,12 +117,14 @@ export class PersonasTools implements McpToolProvider {
         scope: 'mcp:write',
         input: { personaId, ...z.object(personaFields).partial().shape },
         annotations: UPDATES,
-        handler: async ({ personaId, ...changes }, ctx) =>
-          this.personas.update(
+        handler: async ({ personaId, ...changes }, ctx) => {
+          await this.personas.update(
             personaId,
             ctx.auth.user.userId,
             await ctx.validate(UpdatePersonaDto, changes),
-          ),
+          );
+          return this.full(personaId, ctx.auth.user.userId);
+        },
       }),
     ];
   }

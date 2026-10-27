@@ -43,7 +43,22 @@ const READ_WRITE: McpAuthContext = {
 
 function setup() {
   const personas = {
-    findAllForUser: jest.fn(async () => [{ id: 'pe1', name: 'Grace' }]),
+    findAllForUser: jest.fn(async () => [
+      {
+        id: 'pe1',
+        userId: 'u1',
+        name: 'Grace',
+        description: null,
+        icon: '🌿',
+        systemPrompt: 'secret sauce',
+        voice: null,
+        language: 'de',
+        variables: { mood: 'calm' },
+        isSystemDefault: false,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        updatedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ]),
     findOne: jest.fn(async (id: string) => {
       if (id === 'missing')
         throw new NotFoundException('Persona missing not found');
@@ -59,6 +74,77 @@ function setup() {
       id,
       ...(dto as object),
     })),
+  };
+  // Writes return a bare row; the tools must answer with what findOne gives.
+  const plans = {
+    findAllByUser: jest.fn(async () => [
+      {
+        id: 'pl1',
+        userId: 'u1',
+        name: 'Walk',
+        description: null,
+        content: { states: [{ id: 'whole-plan-content' }] },
+        defaultPersonaId: null,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        updatedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ]),
+    findOne: jest.fn(async (id: string) => ({
+      id,
+      name: 'Walk',
+      content: { states: [] },
+      from: 'findOne',
+    })),
+    create: jest.fn(async () => ({ id: 'pl2', from: 'create' })),
+    update: jest.fn(async (id: string) => ({ id, from: 'update' })),
+  };
+  const configurations = {
+    findAllByUser: jest.fn(async () => [
+      {
+        id: 'c1',
+        userId: 'u1',
+        name: 'Default',
+        description: null,
+        agentTypeId: 'at1',
+        configuration: { nodes: { prompt: 'whole-override' } },
+        compatibility: 'CURRENT',
+        updatedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ]),
+    findOne: jest.fn(async (id: string) => ({
+      id,
+      name: 'Default',
+      configuration: {},
+      agentType: {
+        id: 'at1',
+        slug: 'stella-v2-agent',
+        name: 'STELLA V2',
+        icon: null,
+        pipelineSchema: { huge: 'pipeline-schema' },
+      },
+      from: 'findOne',
+    })),
+    create: jest.fn(async () => ({ id: 'c2', from: 'create' })),
+    update: jest.fn(async (id: string) => ({ id, from: 'update' })),
+  };
+  const projects = {
+    findAll: jest.fn(async () => [
+      {
+        id: 'p1',
+        name: 'Testing',
+        ownerId: 'u1',
+        isOwner: true,
+        isPublic: true,
+        publicToken: 'public-join-secret',
+        publicEnabled: true,
+        agentInactivityTimeoutMinutes: 5,
+        activeSessions: 1,
+        activeAgents: 0,
+        totalSessions: 2,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        updatedAt: new Date('2026-10-01T00:00:00Z'),
+      },
+    ]),
   };
   const sessions = {
     findAll: jest.fn(async () => ({ data: [], total: 0, skip: 0, take: 20 })),
@@ -182,10 +268,10 @@ function setup() {
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
-    new PlanTemplatesTools({} as any),
-    new AgentConfigurationsTools({} as any),
+    new PlanTemplatesTools(plans as any),
+    new AgentConfigurationsTools(configurations as any),
     new SessionsTools(
-      { findAll: jest.fn(async () => []) } as any,
+      projects as any,
       sessions as any,
       { getFullState: jest.fn(async () => null) } as any,
       invitations as any,
@@ -212,7 +298,17 @@ function setup() {
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
     (factory as any).tools.find((t: any) => t.name === name);
-  return { factory, personas, sessions, agents, invitations, audit, tool };
+  return {
+    factory,
+    personas,
+    plans,
+    configurations,
+    sessions,
+    agents,
+    invitations,
+    audit,
+    tool,
+  };
 }
 
 async function connect(factory: McpServerFactory, auth: McpAuthContext) {
@@ -681,6 +777,65 @@ describe('One shape for every tool', () => {
       status: 'REVOKED',
       joinUrl: 'https://stella.test/join/tok',
     });
+  });
+
+  it('lists summaries, never prompts, plan content, overrides or join tokens', async () => {
+    const { factory, tool } = setup();
+    const list = async (name: string) =>
+      ((await factory.run(tool(name), {}, READ)) as any).structuredContent.items[0];
+
+    const persona = await list('personas_list');
+    expect(persona).toMatchObject({ id: 'pe1', name: 'Grace', language: 'de' });
+    for (const field of ['systemPrompt', 'variables', 'userId'])
+      expect(persona[field]).toBeUndefined();
+
+    const plan = await list('plan_templates_list');
+    expect(plan).toMatchObject({ id: 'pl1', name: 'Walk' });
+    for (const field of ['content', 'userId']) expect(plan[field]).toBeUndefined();
+
+    const configuration = await list('agent_configurations_list');
+    expect(configuration).toMatchObject({ id: 'c1', agentTypeId: 'at1' });
+    for (const field of ['configuration', 'userId'])
+      expect(configuration[field]).toBeUndefined();
+
+    const project = await list('projects_list');
+    expect(project).toMatchObject({ id: 'p1', name: 'Testing', totalSessions: 2 });
+    for (const field of ['publicToken', 'publicEnabled', 'ownerId'])
+      expect(project[field]).toBeUndefined();
+  });
+
+  it('answers creates and updates with exactly what _get shows', async () => {
+    const { factory, tool } = setup();
+    const run = async (name: string, args: Record<string, unknown>) =>
+      ((await factory.run(tool(name), args, READ_WRITE)) as any).structuredContent;
+    const cases = [
+      ['personas', 'personaId', { name: 'Ada', systemPrompt: 'You are Ada.' }],
+      ['plan_templates', 'planId', { name: 'Walk', content: { states: [] } }],
+      ['agent_configurations', 'agentConfigurationId', { name: 'D', agentTypeId: 'at1', configuration: {} }],
+    ] as const;
+    for (const [things, idKey, fields] of cases) {
+      const created = await run(`${things}_create`, fields);
+      expect(created).toEqual(await run(`${things}_get`, { [idKey]: created.id }));
+      const updated = await run(`${things}_update`, { [idKey]: created.id, name: 'New' });
+      expect(updated).toEqual(await run(`${things}_get`, { [idKey]: created.id }));
+      expect(updated.from).toBe(things === 'personas' ? undefined : 'findOne');
+    }
+  });
+
+  it('gives a configuration its agent type by summary, not the pipeline schema', async () => {
+    const { factory, tool } = setup();
+    const result: any = await factory.run(
+      tool('agent_configurations_get'),
+      { agentConfigurationId: 'c1' },
+      READ,
+    );
+    expect(result.structuredContent.agentType).toEqual({
+      id: 'at1',
+      slug: 'stella-v2-agent',
+      name: 'STELLA V2',
+      icon: null,
+    });
+    expect(result.content[0].text).not.toContain('pipeline-schema');
   });
 
   it('lists agent types briefly and gets one in full', async () => {

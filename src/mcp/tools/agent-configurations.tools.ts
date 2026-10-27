@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { AgentConfiguration } from '@prisma/client';
 import { z } from 'zod';
 import { AgentConfigurationsService } from '../../agent-configurations/agent-configurations.service.js';
 import { CreateAgentConfigurationDto } from '../../agent-configurations/dto/create-agent-configuration.dto.js';
@@ -25,7 +26,7 @@ const agentConfigurationId = idArg(
 );
 
 /** What agent_configurations_list shows of one: everything but the overrides. */
-function configurationSummary(configuration: Record<string, any>) {
+function configurationSummary(configuration: AgentConfiguration) {
   return {
     id: configuration.id,
     name: configuration.name,
@@ -40,6 +41,27 @@ function configurationSummary(configuration: Record<string, any>) {
 @Injectable()
 export class AgentConfigurationsTools implements McpToolProvider {
   constructor(private readonly configurations: AgentConfigurationsService) {}
+
+  /**
+   * A configuration as agent_configurations_get shows it; creates and updates
+   * return this too. Its agent type without the pipeline schema, which is
+   * agent_types_get's to give.
+   */
+  private async full(agentConfigurationId: string, userId: string) {
+    const { agentType, ...configuration } = await this.configurations.findOne(
+      agentConfigurationId,
+      userId,
+    );
+    return {
+      ...configuration,
+      agentType: {
+        id: agentType.id,
+        slug: agentType.slug,
+        name: agentType.name,
+        icon: agentType.icon,
+      },
+    };
+  }
 
   tools() {
     return [
@@ -72,7 +94,7 @@ export class AgentConfigurationsTools implements McpToolProvider {
         input: { agentConfigurationId },
         annotations: READ_ONLY,
         handler: async ({ agentConfigurationId }, { auth }) =>
-          this.configurations.findOne(agentConfigurationId, auth.user.userId),
+          this.full(agentConfigurationId, auth.user.userId),
       }),
       defineTool({
         name: 'agent_configurations_create',
@@ -87,11 +109,13 @@ export class AgentConfigurationsTools implements McpToolProvider {
           configuration: configurationField,
         },
         annotations: CREATES,
-        handler: async (args, ctx) =>
-          this.configurations.create(
+        handler: async (args, ctx) => {
+          const configuration = await this.configurations.create(
             ctx.auth.user.userId,
             await ctx.validate(CreateAgentConfigurationDto, args),
-          ),
+          );
+          return this.full(configuration.id, ctx.auth.user.userId);
+        },
       }),
       defineTool({
         name: 'agent_configurations_update',
@@ -106,12 +130,14 @@ export class AgentConfigurationsTools implements McpToolProvider {
           configuration: configurationField.optional(),
         },
         annotations: UPDATES,
-        handler: async ({ agentConfigurationId, ...changes }, ctx) =>
-          this.configurations.update(
+        handler: async ({ agentConfigurationId, ...changes }, ctx) => {
+          await this.configurations.update(
             agentConfigurationId,
             ctx.auth.user.userId,
             await ctx.validate(UpdateAgentConfigurationDto, changes),
-          ),
+          );
+          return this.full(agentConfigurationId, ctx.auth.user.userId);
+        },
       }),
     ];
   }

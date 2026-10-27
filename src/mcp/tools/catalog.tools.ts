@@ -1,11 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { AgentImageService } from '../../agent-image/agent-image.service.js';
-import {
-  McpToolProvider,
-  READ_ONLY,
-  defineTool,
-  idArg,
-} from '../mcp.types.js';
+import { McpToolProvider, READ_ONLY, defineTool, idArg } from '../mcp.types.js';
 
 /** Who the caller is, and what agent types exist to configure. */
 @Injectable()

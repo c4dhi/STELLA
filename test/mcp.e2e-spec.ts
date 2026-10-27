@@ -46,6 +46,7 @@ describe('/mcp (e2e)', () => {
   const personas = {
     findAllForUser: jest.fn(async () => [{ id: 'pe1', name: 'Grace' }]),
     create: jest.fn(async (_u: string, dto: object) => ({ id: 'pe2', ...dto })),
+    findOne: jest.fn(async (id: string) => ({ id, name: 'Ada' })),
   };
   const audit = { record: jest.fn(async () => undefined) };
   const sessions = {
