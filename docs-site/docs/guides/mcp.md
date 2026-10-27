@@ -25,14 +25,14 @@ Claude and ChatGPT reach Stella from their own servers, so the address must be p
 2. A Stella page opens. Sign in and allow **read** or **read/write** access.
 3. The app now has its own tokens. It appears under **Connected apps** in Settings → MCP Access, where you can disconnect it.
 
-Sign-in tokens last an hour and renew themselves for up to 30 days of use. A replayed or stolen refresh token ends the connection.
+Access tokens last an hour and renew themselves. A connection that goes unused for 30 days ends, and the app has to sign in again. A replayed or stolen refresh token also ends the connection.
 
 ### Personal access tokens (scripts)
 
 For scripts and tools that can't sign in, create a personal access token in Settings → MCP Access:
 
 - read or read/write access;
-- valid for 7 to 365 days;
+- valid for 7, 30, 90 or 365 days;
 - shown **once**, so copy it right away;
 - revocable at any time.
 
@@ -69,7 +69,7 @@ Limits:
 
 - Nothing can be **deleted** over MCP.
 - An assistant only reaches projects its user is a member of.
-- `env_var_templates_list` returns variable names, never their values. Raw agent configuration and env var values can't be sent over MCP: `agents_deploy` names a plan, persona, configuration and env var template instead.
+- `env_var_templates_list` returns variable names, never their values. `agents_deploy` doesn't take raw configuration or env var values: it names a plan, persona, configuration and env var template instead.
 - Agents don't start or restart in a session that is closing or closed.
 - `agents_stop` stops the agent; it doesn't delete it.
 
