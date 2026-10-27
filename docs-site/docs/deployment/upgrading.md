@@ -80,6 +80,12 @@ Then open the web interface and sign in. **Settings** shows the version at the b
 
 Run the steps of every version you pass, oldest first. A version not listed here needs none.
 
+### 1.5.0
+
+None. The deploy applies three new database migrations on its own (access tokens and the MCP audit log, MCP sign-in, token scopes), so back up first as described above.
+
+MCP is off after the upgrade. To let AI assistants connect, a system admin switches it on in **Settings → Platform Defaults**. Sign-in from Claude and ChatGPT builds on `PUBLIC_API_URL` and `PUBLIC_FRONTEND_URL`, so check that both are the addresses the outside world reaches.
+
 ### 1.4.0
 
 None. The deploy applies the one new database migration (the `PlatformSetting` table) on its own, so back up first as described above.
