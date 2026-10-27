@@ -451,24 +451,26 @@ _size_over_cap() {
 #
 # --max-used-space alone, with no --reserved-space, is the EXACT command
 # already shown to free 0 B on production (21 Oct, cache at 77GB/53GB
-# reclaimable) - that history stays here rather than getting deleted again.
-# On the dev host (buildx v0.34.0, BuildKit v0.30.0) this builder's own
-# default GC policy bakes in a ~47.5GiB reserved floor (see
-# `docker buildx inspect --bootstrap`), which an explicit --reserved-space 0
-# overrides for this one-shot prune rather than leaving the daemon default
-# in effect.
+# reclaimable). On the dev host, confirmed live (27 Oct) that NONE of the
+# space-based flags do anything on this builder's driver (`docker`, the
+# dockerd-integrated one, not `docker-container`): --max-used-space 50GB
+# --reserved-space 0 (an explicit zero, overriding the daemon's own ~47.5GiB
+# default GC floor from `docker buildx inspect --bootstrap`) still froze at
+# 0 B freed, verbose output included, even though `docker buildx du
+# --verbose` shows plenty of individually Reclaimable: true records.
+# --keep-storage is the same story one layer removed: it's deprecated and
+# silently aliased to --reserved-space (a floor, not the ceiling wanted) on
+# both buildx 0.34.0 (this host) and 0.37.2 - confirmed locally it prints
+# the deprecation notice and succeeds, so it's dead weight here, not a
+# fallback; dropped rather than kept as a no-op.
 #
-# If that's still not enough, --keep-storage is tried next, but it's an
-# older flag already absent from `prune --help` on both buildx 0.34.0 (this
-# host) and 0.37.2 (@sable's). Confirmed locally on 0.37.2 it's accepted but
-# silently deprecated to --reserved-space ("Flag --keep-storage has been
-# deprecated, keep-storage flag has been changed to reserved-space") - a
-# floor, not the ceiling we want, so it likely does nothing useful here
-# either; output is still checked for an explicit "unknown flag" rejection
-# in case 0.34.0 differs. Either way, the final fallback is an age filter
-# (@sable, round 3): --filter until=168h certainly deletes anything older
-# than a week, regardless of what this builder does with the space-based
-# flags.
+# What actually works is --filter (a real delete-by-criteria, not a GC
+# policy), also confirmed live: --filter until=168h freed 13.9GB
+# (85.78GB -> 71.88GB, still over cap), and until=24h freed another 26.22GB
+# (71.88GB -> 45.66GB, under cap). So this steps through a few windows,
+# tightest last, stopping as soon as the real size is at or under the cap.
+# The floor is whatever's genuinely shared/in-use (~34GB on the dev host),
+# below the 50GB cap, so the tightest window is a guaranteed last resort.
 #
 # Checks the REAL resulting size via `docker system df` after each attempt,
 # not buildx's own "Total:" (reclaimed, not remaining) line.
@@ -476,25 +478,18 @@ trim_build_cache() {
     [[ "${DRY_RUN_MODE:-false}" == "true" ]] && return 0
     command -v docker >/dev/null 2>&1 || return 0
 
-    local cap_bytes=50000000000 before_str after_str out
+    local cap_bytes=50000000000 before_str after_str window
 
     before_str=$(_build_cache_size)
 
     docker buildx prune -f --max-used-space 50GB --reserved-space 0 >/dev/null 2>&1 || true
     after_str=$(_build_cache_size)
 
-    if _size_over_cap "$after_str" "$cap_bytes"; then
-        out=$(docker buildx prune -f --keep-storage 50GB 2>&1) || true
-        if echo "$out" | grep -qiE 'unknown flag|unknown shorthand|no such flag'; then
-            echo "   Build cache: --keep-storage not accepted by this buildx, falling back to an age filter"
-        fi
+    for window in 168h 24h 1h 0h; do
+        _size_over_cap "$after_str" "$cap_bytes" || break
+        docker buildx prune -f --filter "until=${window}" >/dev/null 2>&1 || true
         after_str=$(_build_cache_size)
-    fi
-
-    if _size_over_cap "$after_str" "$cap_bytes"; then
-        docker buildx prune -f --reserved-space 0 --filter until=168h >/dev/null 2>&1 || true
-        after_str=$(_build_cache_size)
-    fi
+    done
 
     echo "   Build cache: ${after_str:-unknown} (before: ${before_str:-unknown})"
 }
