@@ -136,6 +136,15 @@ updates:
       # Bump this only together with the node driver, and only after actually
       # starting the image on a GPU host. See stt-service/Dockerfile.
       - dependency-name: "nvidia/cuda"
+      # onnxruntime has no wheel for Python 3.15 yet, so bumping the base
+      # image breaks message-recorder-python/stt-service/tts-service's build
+      # (#828 round 1 review: `pip install onnxruntime` fails on 3.15-slim,
+      # succeeds on 3.14-slim). Pin the minor version until a 3.15 wheel
+      # exists; patch bumps within 3.14 are still allowed.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
     groups:
       docker-base-images:
         patterns:
