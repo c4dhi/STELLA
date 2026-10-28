@@ -1312,6 +1312,7 @@ deploy_services() {
     echo -ne "   ${ARROW} Image cleanup... "
     prune_old_image_generations
     prune_dangling_images
+    prune_untagged_containerd_images
     printf "\r   ${ARROW} Image cleanup... ${GREEN}${CHECK}${NC}    \n"
 
     success "Deployment complete"

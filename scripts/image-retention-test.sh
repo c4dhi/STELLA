@@ -161,4 +161,101 @@ else
 fi
 unset -f _build_cache_size
 
+# --- prune_untagged_containerd_images (#107): stubbed crictl, no real K3s ---
+# `sudo` is overridden here because the function under test calls
+# `sudo crictl ...`; running it directly against our stub keeps this test
+# from needing real root or a real K3s host.
+CRICTL_STUB_DIR="$(mktemp -d)"
+CRICTL_STUB_STATE="$(mktemp -d)"
+cat > "$CRICTL_STUB_DIR/crictl" <<'STUB'
+#!/usr/bin/env bash
+# Fake crictl for image-retention-test.sh. Never touches real Docker/K3s.
+set -euo pipefail
+state="${CRICTL_STUB_STATE:?CRICTL_STUB_STATE not set}"
+case "${1:-}" in
+    images)
+        if [[ -f "$state/unconfigured" ]]; then
+            echo "fake crictl: not configured" >&2
+            exit 1
+        fi
+        cat <<'TABLE'
+IMAGE                            TAG      IMAGE ID       SIZE
+<none>                           <none>   aaaa11111111   10MB
+<none>                           <none>   bbbb22222222   10MB
+docker.io/library/frontend-ui    v1       cccc33333333   10MB
+TABLE
+        ;;
+    ps)
+        # containerd's RemoveImage doesn't refuse in-use images itself (unlike
+        # Docker) - the function under test has to build this set and check
+        # it before calling rmi, so this is what it's checking against.
+        echo "CONTAINER       IMAGE          CREATED         STATE      NAME     ATTEMPT   POD ID   POD   NAMESPACE"
+        if [[ -f "$state/in-use-bbbb22222222" ]]; then
+            echo "deadbeef00001   bbbb22222222   20 hours ago   Running    server   0         podid    pod   ai-agents"
+        fi
+        ;;
+    rmi)
+        shift
+        echo "$*" >> "$state/rmi-calls.log"
+        for arg in "$@"; do
+            if [[ "$arg" == "--prune" ]]; then
+                echo "fake crictl: refusing --prune" >&2
+                exit 1
+            fi
+        done
+        echo "$1" >> "$state/removed.log"
+        ;;
+    *)
+        echo "fake crictl: unsupported subcommand $*" >&2
+        exit 1
+        ;;
+esac
+STUB
+chmod +x "$CRICTL_STUB_DIR/crictl"
+
+ORIGINAL_PATH="$PATH"
+PATH="$CRICTL_STUB_DIR:$PATH"
+export PATH CRICTL_STUB_STATE
+OS_TYPE=linux
+sudo() { "$@"; }
+
+prune_untagged_containerd_images
+check "prune_untagged_containerd_images: removes only the <none> digests" \
+    "aaaa11111111 bbbb22222222" "$(sort "$CRICTL_STUB_STATE/removed.log" | tr '\n' ' ' | sed 's/ *$//')"
+if grep -q -- '--prune' "$CRICTL_STUB_STATE/rmi-calls.log" 2>/dev/null; then
+    echo "FAIL prune_untagged_containerd_images: called crictl rmi with --prune"
+    FAILED=1
+else
+    echo "ok   prune_untagged_containerd_images: never uses --prune"
+fi
+
+# An image a container still uses (crictl ps -a, exited included) is left
+# alone - containerd's own rmi doesn't refuse it the way Docker's does, so
+# this has to be the function's own check, not a refusal it can rely on.
+rm -f "$CRICTL_STUB_STATE/removed.log" "$CRICTL_STUB_STATE/rmi-calls.log"
+touch "$CRICTL_STUB_STATE/in-use-bbbb22222222"
+prune_untagged_containerd_images
+check "prune_untagged_containerd_images: an in-use digest is left alone" \
+    "aaaa11111111" "$(cat "$CRICTL_STUB_STATE/removed.log" 2>/dev/null)"
+
+# crictl not configured (no /etc/crictl.yaml, e.g. production's relocated
+# data-dir): skip with a warning, never abort the deploy over housekeeping.
+rm -f "$CRICTL_STUB_STATE/removed.log" "$CRICTL_STUB_STATE/rmi-calls.log" "$CRICTL_STUB_STATE/in-use-bbbb22222222"
+touch "$CRICTL_STUB_STATE/unconfigured"
+out=$(prune_untagged_containerd_images 2>&1)
+rc=$?
+if [[ $rc -eq 0 ]] && echo "$out" | grep -q "warn.*crictl isn't configured"; then
+    echo "ok   prune_untagged_containerd_images: unconfigured crictl warns and does not abort"
+else
+    echo "FAIL prune_untagged_containerd_images: expected a warning and exit 0 when crictl isn't configured, got rc=$rc: $out"
+    FAILED=1
+fi
+check "prune_untagged_containerd_images: unconfigured crictl removes nothing" \
+    "" "$(cat "$CRICTL_STUB_STATE/removed.log" 2>/dev/null)"
+
+unset -f sudo
+PATH="$ORIGINAL_PATH"
+OS_TYPE=macos
+rm -rf "$CRICTL_STUB_DIR" "$CRICTL_STUB_STATE"
+
 exit "$FAILED"
