@@ -208,6 +208,7 @@ export class AgentsService {
           data: {
             status: AgentStatus.STOPPED,
             stoppedAt: new Date(),
+            healthState: null,
           },
         });
         return AgentStatus.STOPPED;
@@ -242,6 +243,7 @@ export class AgentsService {
             stoppedAt: actualStatus === AgentStatus.STOPPED || actualStatus === AgentStatus.FAILED
               ? new Date()
               : null,
+            ...(actualStatus === AgentStatus.STOPPED ? { healthState: null } : {}),
           },
         });
 
@@ -830,6 +832,10 @@ export class AgentsService {
         podName: null,
         secretName: null,
         configMapName: null,
+        // A stopped agent isn't "ready" - without this the last healthState
+        // written by AgentServerService lingers and agents_get / GET
+        // /agents/:id keep reporting it (#807).
+        healthState: null,
       },
     });
 
@@ -966,7 +972,7 @@ export class AgentsService {
           await this.cleanupK8sResources(agent).catch(() => {});
           await this.prisma.agentInstance.update({
             where: { id: agent.id },
-            data: { status: AgentStatus.STOPPED, stoppedAt: new Date() },
+            data: { status: AgentStatus.STOPPED, stoppedAt: new Date(), healthState: null },
           }).catch(e => this.logger.error(`Failed to force-stop agent ${agent.id}: ${e.message}`));
           throw error;
         }
