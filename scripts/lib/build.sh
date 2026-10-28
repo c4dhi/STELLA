@@ -408,6 +408,54 @@ prune_dangling_images() {
     docker image prune -f >/dev/null 2>&1 || true
 }
 
+# Untagged ("<none>") digests left in K3s containerd by the same retag-on-
+# build churn, one layer down from prune_dangling_images above (Docker and
+# containerd keep separate image stores). This is production's actual
+# biggest filler, not build cache or agent tags: 87 untagged digests, about
+# 88GB, on the first cleanup (29 Aug 2026). `crictl rmi <id>` refuses any
+# image still referenced by a tag or a running container, so this only ever
+# removes genuinely orphaned digests. Never `crictl rmi --prune`: it also
+# drops TAGGED images nothing currently runs, which would take the
+# `:rollback` anchors prune_old_image_generations just chose to keep down
+# with it.
+#
+# Uses the standalone `crictl` binary, not the `k3s crictl` wrapper,
+# because it's the one that needs - and can be checked for - a working
+# /etc/crictl.yaml pointing at K3s's containerd socket. Production runs K3s
+# with a relocated data-dir and needs that file; if crictl isn't
+# configured, skip with a warning instead of aborting the deploy over
+# housekeeping.
+prune_untagged_containerd_images() {
+    [[ "${DRY_RUN_MODE:-false}" == "true" || "$OS_TYPE" != "linux" ]] && return 0
+    command -v crictl >/dev/null 2>&1 || return 0
+
+    if ! sudo crictl images >/dev/null 2>&1; then
+        warning "crictl isn't configured (no /etc/crictl.yaml?) - skipping untagged K3s image cleanup"
+        return 0
+    fi
+
+    local ids
+    ids=$(sudo crictl images 2>/dev/null | awk '$1 == "<none>" && $2 == "<none>" { print $3 }')
+    [[ -z "$ids" ]] && return 0
+
+    local data_dir="" before_pct="" after_pct="" id removed=0
+    command -v k3s_current_data_dir >/dev/null 2>&1 && data_dir=$(k3s_current_data_dir)
+    before_pct=$(_disk_used_pct "$data_dir")
+
+    while read -r id; do
+        [[ -z "$id" ]] && continue
+        sudo crictl rmi "$id" >/dev/null 2>&1 && removed=$((removed + 1))
+    done <<< "$ids"
+
+    [[ "$removed" -eq 0 ]] && return 0
+    after_pct=$(_disk_used_pct "$data_dir")
+    if [[ "$before_pct" =~ ^[0-9]+$ && "$after_pct" =~ ^[0-9]+$ ]]; then
+        verbose "Removed ${removed} untagged K3s image(s) (${data_dir}: ${before_pct}% -> ${after_pct}%)"
+    else
+        verbose "Removed ${removed} untagged K3s image(s)"
+    fi
+}
+
 # A docker-style size string ("85.78GB", "6.563GiB", "512kB") as an integer
 # byte count, or nothing if it doesn't parse. Needed because buildx prune's
 # own "Total:" line reports what it RECLAIMED, not what's left - the two
