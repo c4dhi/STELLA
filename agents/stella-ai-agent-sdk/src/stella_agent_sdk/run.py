@@ -50,6 +50,7 @@ from stella_agent_sdk.agent.base import BaseAgent
 from stella_agent_sdk.audio.pipeline import AudioPipeline
 from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient
+from stella_agent_sdk.services.stt_readiness import SttReadiness
 from stella_agent_sdk.services.tts_client import TTSClient
 from stella_agent_sdk.services.history_client import HistoryClient
 from stella_agent_sdk.services.agent_server_client import AgentServerClient
@@ -342,6 +343,15 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         agent._agent_id = agent_id
         agent._agent_icon = agent_icon
 
+        # Tell the screens when speech recognition is still warming up
+        # (#564). The language is the session's locked one, if any, so the
+        # participant card is worded in it; otherwise the browser decides.
+        def _session_language() -> Optional[str]:
+            resolver = getattr(agent, "language_resolver", None)
+            return getattr(resolver, "locked", None)
+
+        stt_readiness = SttReadiness(room_manager.publish_data, language=_session_language)
+
         # 6a. Wire barge-in: the agent declares whether it supports barge-in
         # (an intrinsic capability — its config depends on it). If so, enable it
         # on the pipeline, honoring any explicit BARGE_IN_ENABLED override.
@@ -515,8 +525,17 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             # Warm up STT model when participant joins (in case agent was idle)
             # The warmup has a TTL, so this is a no-op if model is already warm
             if os.environ.get("STT_WARMUP_ENABLED", "true").lower() != "false":
+                # A participant joining mid-warmup is told the state now; the
+                # call already running announces ready or failed to everyone.
+                if stt_readiness.needs_resend():
+                    audio_pipeline._room.publish_data_ordered(stt_readiness.payload())
+
                 async def do_warmup():
-                    result = await stt_client.warmup(session_id=session_id)
+                    # Longer than the client's 30 s default: past 30 s the
+                    # screens say "taking longer than usual", not "failed".
+                    result = await stt_readiness.track(
+                        stt_client.warmup(session_id=session_id, timeout=90.0)
+                    )
                     if result["success"]:
                         logger.info(f"STT warmup on participant join completed in {result['warmup_time_ms']}ms")
                 asyncio.create_task(do_warmup())
