@@ -185,6 +185,15 @@ IMAGE                            TAG      IMAGE ID       SIZE
 docker.io/library/frontend-ui    v1       cccc33333333   10MB
 TABLE
         ;;
+    ps)
+        # containerd's RemoveImage doesn't refuse in-use images itself (unlike
+        # Docker) - the function under test has to build this set and check
+        # it before calling rmi, so this is what it's checking against.
+        echo "CONTAINER       IMAGE          CREATED         STATE      NAME     ATTEMPT   POD ID   POD   NAMESPACE"
+        if [[ -f "$state/in-use-bbbb22222222" ]]; then
+            echo "deadbeef00001   bbbb22222222   20 hours ago   Running    server   0         podid    pod   ai-agents"
+        fi
+        ;;
     rmi)
         shift
         echo "$*" >> "$state/rmi-calls.log"
@@ -194,10 +203,6 @@ TABLE
                 exit 1
             fi
         done
-        if [[ "$1" == "bbbb22222222" && -f "$state/refuse-bbbb22222222" ]]; then
-            echo "fake crictl: image in use" >&2
-            exit 1
-        fi
         echo "$1" >> "$state/removed.log"
         ;;
     *)
@@ -224,17 +229,18 @@ else
     echo "ok   prune_untagged_containerd_images: never uses --prune"
 fi
 
-# An image crictl refuses (still in use, e.g. a running container) is left
-# alone, not retried or forced - crictl's own refusal is trusted as-is.
+# An image a container still uses (crictl ps -a, exited included) is left
+# alone - containerd's own rmi doesn't refuse it the way Docker's does, so
+# this has to be the function's own check, not a refusal it can rely on.
 rm -f "$CRICTL_STUB_STATE/removed.log" "$CRICTL_STUB_STATE/rmi-calls.log"
-touch "$CRICTL_STUB_STATE/refuse-bbbb22222222"
+touch "$CRICTL_STUB_STATE/in-use-bbbb22222222"
 prune_untagged_containerd_images
 check "prune_untagged_containerd_images: an in-use digest is left alone" \
     "aaaa11111111" "$(cat "$CRICTL_STUB_STATE/removed.log" 2>/dev/null)"
 
 # crictl not configured (no /etc/crictl.yaml, e.g. production's relocated
 # data-dir): skip with a warning, never abort the deploy over housekeeping.
-rm -f "$CRICTL_STUB_STATE/removed.log" "$CRICTL_STUB_STATE/rmi-calls.log" "$CRICTL_STUB_STATE/refuse-bbbb22222222"
+rm -f "$CRICTL_STUB_STATE/removed.log" "$CRICTL_STUB_STATE/rmi-calls.log" "$CRICTL_STUB_STATE/in-use-bbbb22222222"
 touch "$CRICTL_STUB_STATE/unconfigured"
 out=$(prune_untagged_containerd_images 2>&1)
 rc=$?

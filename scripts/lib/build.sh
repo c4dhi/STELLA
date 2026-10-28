@@ -412,12 +412,20 @@ prune_dangling_images() {
 # build churn, one layer down from prune_dangling_images above (Docker and
 # containerd keep separate image stores). This is production's actual
 # biggest filler, not build cache or agent tags: 87 untagged digests, about
-# 88GB, on the first cleanup (29 Aug 2026). `crictl rmi <id>` refuses any
-# image still referenced by a tag or a running container, so this only ever
-# removes genuinely orphaned digests. Never `crictl rmi --prune`: it also
-# drops TAGGED images nothing currently runs, which would take the
+# 88GB, on the first cleanup (29 Aug 2026). Never `crictl rmi --prune`: it
+# also drops TAGGED images nothing currently runs, which would take the
 # `:rollback` anchors prune_old_image_generations just chose to keep down
 # with it.
+#
+# Unlike Docker, containerd's CRI RemoveImage does NOT refuse an image a
+# container still uses - that's normally the kubelet GC's job, but this
+# runs right after a deploy, before GC has necessarily caught up (@sable,
+# round 1). The case that matters: a running agent pod whose tag a deploy
+# just moved - its digest is now the thing this function sees as "<none>",
+# and deleting it would break that pod's next restart (no registry to
+# re-pull from). So the in-use set is built here, from `crictl ps -a`
+# (exited containers included - a crash-looping one still points at its
+# image), and anything in it is skipped rather than handed to `crictl rmi`.
 #
 # Uses the standalone `crictl` binary, not the `k3s crictl` wrapper,
 # because it's the one that needs - and can be checked for - a working
@@ -438,12 +446,16 @@ prune_untagged_containerd_images() {
     ids=$(sudo crictl images 2>/dev/null | awk '$1 == "<none>" && $2 == "<none>" { print $3 }')
     [[ -z "$ids" ]] && return 0
 
+    local in_use
+    in_use=$(sudo crictl ps -a 2>/dev/null | awk 'NR > 1 { print $2 }' | sort -u)
+
     local data_dir="" before_pct="" after_pct="" id removed=0
     command -v k3s_current_data_dir >/dev/null 2>&1 && data_dir=$(k3s_current_data_dir)
     before_pct=$(_disk_used_pct "$data_dir")
 
     while read -r id; do
         [[ -z "$id" ]] && continue
+        grep -qx "$id" <<< "$in_use" && continue
         sudo crictl rmi "$id" >/dev/null 2>&1 && removed=$((removed + 1))
     done <<< "$ids"
 
