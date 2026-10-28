@@ -3,6 +3,7 @@ import {
   checkEnvVarValue,
   defaultLabel,
   invalidSettings,
+  removedTemplateKeys,
   settingsFromSchema,
   settingsTabs,
   splitVariables,
@@ -64,5 +65,17 @@ describe('agent settings', () => {
       settings: { TTS_SPEED: '1' },
       custom: { STUDY_ARM: 'A' },
     })
+  })
+
+  it('takes out the settings reset and the custom rows deleted, never a stored secret', () => {
+    const template = {
+      variableKeys: ['OPENAI_API_KEY', 'TTS_SPEED', 'BARGE_IN_ENABLED', 'STUDY_ARM', 'SITE'],
+      settings: { TTS_SPEED: '0.9', BARGE_IN_ENABLED: 'false' },
+    }
+    // TTS_SPEED reset, BARGE_IN_ENABLED kept, STUDY_ARM row deleted.
+    expect(removedTemplateKeys(template, settings, { BARGE_IN_ENABLED: 'false' }, ['SITE'])).toEqual([
+      'TTS_SPEED',
+      'STUDY_ARM',
+    ])
   })
 })

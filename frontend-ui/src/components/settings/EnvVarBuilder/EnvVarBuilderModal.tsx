@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../../store/themeStore'
 import { useToastStore } from '../../../store/toastStore'
 import { apiClient } from '../../../services/ApiClient'
-import { parseDeclaredEnvVars, type EnvVarTemplate, type AgentType } from '../../../lib/api-types'
+import type { EnvVarTemplate, AgentType } from '../../../lib/api-types'
+import { invalidSettings, removedTemplateKeys, settingsFromSchema, splitVariables } from '../../../lib/agentSettings'
 import { useEnvVarListEditor } from '../../shared/EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from '../../shared/EnvVarListEditor/EnvVarListEditor'
+import AgentSettingsForm from '../../shared/AgentSettings/AgentSettingsForm'
 
 interface EnvVarBuilderModalProps {
   isOpen: boolean
@@ -34,25 +36,42 @@ export default function EnvVarBuilderModal({
   const [error, setError] = useState<string | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [showCloseConfirmation, setShowCloseConfirmation] = useState(false)
-  // Pending agent-type switch awaiting confirmation (set when it would reshuffle user content).
-  const [pendingAgentType, setPendingAgentType] = useState<{ id: string; apply: () => void } | null>(null)
+  // Pending agent-type switch awaiting confirmation (set when it would move entered values).
+  const [pendingAgentType, setPendingAgentType] = useState<string | null>(null)
 
   const isEditing = !!template
 
-  // Empty values are never persisted (toVariablesMap omits them) and updates MERGE
-  // rather than full-replace, so editing a key set no longer forces re-entering
-  // untouched secrets — hence no requireAllValues invariant.
+  // The settings the agent type declares (#585), one control each. `values`
+  // holds what the template sets; secrets are only in it once typed, since
+  // stored ones never reach the browser.
+  const settings = useMemo(
+    () => settingsFromSchema(agentTypes.find((t) => t.id === agentTypeId)?.configSchema),
+    [agentTypes, agentTypeId],
+  )
+  const declared = useMemo(() => new Set(settings.map((s) => s.name)), [settings])
+  const [values, setValues] = useState<Record<string, string>>({})
+  const storedSecrets = useMemo(
+    () => new Set((template?.variableKeys ?? []).filter((k) => declared.has(k) && template?.settings?.[k] === undefined)),
+    [template, declared],
+  )
+  const invalid = invalidSettings(settings, values)
+
+  // Everything the agent does not declare. Empty values are never persisted
+  // (toVariablesMap omits them) and updates MERGE rather than full-replace, so
+  // untouched stored values need no re-entry.
   const editor = useEnvVarListEditor({
     mode: isEditing ? 'edit' : 'create',
     allowEmptyValues: true,
   })
+  const customCount = editor.rows.filter((r) => r.key.trim()).length
 
   // Check if form has content (for unsaved changes tracking)
   const hasContent = useCallback(() => {
     return name.trim() !== '' ||
       description.trim() !== '' ||
+      Object.keys(values).length > 0 ||
       editor.rows.some(e => e.key.trim() !== '' || e.value.trim() !== '')
-  }, [name, description, editor.rows])
+  }, [name, description, values, editor.rows])
 
   // Request close - shows confirmation if there are unsaved changes
   const requestClose = useCallback(() => {
@@ -82,26 +101,25 @@ export default function EnvVarBuilderModal({
         setName(template.name)
         setDescription(template.description || '')
         setAgentTypeId(template.agentTypeId) // immutable; shown read-only
-        // Editing: only keys are returned (values are encrypted at rest). Seed
+        setValues({ ...(template.settings ?? {}) })
+        // Custom keys come back without values (encrypted at rest); seeded as
         // preserved rows so a rename needs no value re-entry.
+        const declaredKeys = new Set(
+          settingsFromSchema(agentTypes.find((t) => t.id === template.agentTypeId)?.configSchema).map((s) => s.name),
+        )
         editor.reset({
           mode: 'edit',
-          initial: Object.fromEntries(template.variableKeys.map((key) => [key, ''])),
+          initial: Object.fromEntries(
+            template.variableKeys.filter((key) => !declaredKeys.has(key)).map((key) => [key, '']),
+          ),
         })
       } else {
         setName('')
         setDescription('')
         // Preselect when there's exactly one type; otherwise force an explicit choice.
-        const preselected = agentTypes.length === 1 ? agentTypes[0].id : ''
-        setAgentTypeId(preselected)
-        const declared = preselected
-          ? parseDeclaredEnvVars(agentTypes[0].configSchema)
-          : { required: [], optional: [] }
-        editor.reset({
-          mode: 'create',
-          requiredKeys: declared.required,
-          optionalKeys: declared.optional,
-        })
+        setAgentTypeId(agentTypes.length === 1 ? agentTypes[0].id : '')
+        setValues({})
+        editor.reset({ mode: 'create' })
       }
       setError(null)
       setHasUnsavedChanges(false)
@@ -128,26 +146,41 @@ export default function EnvVarBuilderModal({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isOpen, showCloseConfirmation, pendingAgentType, requestClose, cancelClose])
 
-  // Switching agent type prefills that type's declared env vars. Reconcile keeps
-  // any value the user already typed; confirm first when content would be reshuffled.
+  // Switching agent type keeps every value: the ones the new type declares stay
+  // settings, the rest move to Custom (and custom keys it declares move up).
+  // Confirm first when something was entered.
+  const switchAgentType = (id: string) => {
+    const nextSettings = settingsFromSchema(agentTypes.find((t) => t.id === id)?.configSchema)
+    const custom = editor.toVariablesMap() ?? {}
+    const split = splitVariables(nextSettings, { ...custom, ...values })
+    setAgentTypeId(id)
+    setValues(split.settings)
+    editor.reset({ mode: 'create', initial: split.custom })
+    setHasUnsavedChanges(true)
+  }
+
   const handleAgentTypeChange = (id: string) => {
-    const declared = parseDeclaredEnvVars(agentTypes.find((t) => t.id === id)?.configSchema)
-    const { hasUserContent, apply } = editor.applyAgentType(declared.required, declared.optional)
-    if (hasUserContent) {
-      setPendingAgentType({ id, apply })
+    if (Object.keys(values).length > 0 || customCount > 0) {
+      setPendingAgentType(id)
     } else {
-      setAgentTypeId(id)
-      apply()
-      setHasUnsavedChanges(true)
+      switchAgentType(id)
     }
   }
 
   const confirmAgentTypeChange = () => {
     if (!pendingAgentType) return
-    setAgentTypeId(pendingAgentType.id)
-    pendingAgentType.apply()
-    setHasUnsavedChanges(true)
+    switchAgentType(pendingAgentType)
     setPendingAgentType(null)
+  }
+
+  const handleSettingChange = (key: string, value: string | undefined) => {
+    setValues((prev) => {
+      const next = { ...prev }
+      if (value === undefined) delete next[key]
+      else next[key] = value
+      return next
+    })
+    setHasUnsavedChanges(true)
   }
 
   // Update name with change tracking
@@ -177,17 +210,21 @@ export default function EnvVarBuilderModal({
       return
     }
 
-    // Shared editor surfaces per-row issues inline; null means something is invalid.
-    // toVariablesMap now returns only the keys that carry a typed value (blank /
-    // preserved rows are omitted), so it never serializes an empty string.
-    const variables = editor.toVariablesMap()
-    if (variables === null) {
-      setError('Please fix the highlighted variables')
+    if (Object.keys(invalid).length > 0) {
+      setError('Please fix the highlighted settings')
       return
     }
 
+    // Shared editor surfaces per-row issues inline; null means something is invalid.
+    const custom = editor.toVariablesMap()
+    if (custom === null) {
+      setError('Please fix the highlighted custom variables')
+      return
+    }
+    const variables = { ...custom, ...values }
+
     if (!isEditing && Object.keys(variables).length === 0) {
-      setError('At least one environment variable is required')
+      setError('Set at least one setting or custom variable')
       return
     }
 
@@ -195,16 +232,21 @@ export default function EnvVarBuilderModal({
 
     try {
       if (isEditing && template) {
-        // Updates MERGE server-side: send only typed values plus the keys that were
-        // removed. Untouched secrets keep their stored value (no re-entry needed).
-        const currentKeys = new Set(
+        // Updates MERGE server-side: send what is set plus the keys that were
+        // reset or removed. Untouched secrets and custom values keep their
+        // stored value (no re-entry needed).
+        const removeKeys = removedTemplateKeys(
+          template,
+          settings,
+          values,
           editor.rows.map((r) => r.key.trim()).filter((k) => k !== ''),
         )
-        const removeKeys = template.variableKeys.filter((k) => !currentKeys.has(k))
+        // Always sent, so saving re-checks a migrated template's values.
         await apiClient.updateEnvVarTemplate(template.id, {
           name: name.trim(),
           description: description.trim() || undefined,
-          ...(editor.variablesTouched ? { variables, removeKeys } : {}),
+          variables,
+          removeKeys,
         })
         addToast({ message: 'Template updated successfully', type: 'success' })
       } else {
@@ -243,7 +285,7 @@ export default function EnvVarBuilderModal({
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             className={`
-              backdrop-blur-xl rounded-[20px] w-full max-w-xl overflow-hidden
+              backdrop-blur-xl rounded-[20px] w-full max-w-2xl overflow-hidden
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
@@ -381,16 +423,45 @@ export default function EnvVarBuilderModal({
                   </p>
                 </div>
 
-                {/* Environment Variables */}
+                {/* Settings (#585) */}
                 <div>
                   <label className={`block text-xs font-medium tracking-wider uppercase mb-2 ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
-                    Environment Variables <span className="text-red-500">*</span>
+                    Settings
                   </label>
-                  <EnvVarListEditor
-                    editor={editor}
-                    isDark={isDark}
-                    onChange={() => setHasUnsavedChanges(true)}
-                  />
+                  {template && (template.needsCheck || Object.keys(template.invalid ?? {}).length > 0) && (
+                    <div className={`mb-3 p-3 rounded-xl text-xs ${
+                      Object.keys(template.invalid ?? {}).length > 0
+                        ? isDark ? 'bg-red-500/10 border border-red-500/20 text-red-300' : 'bg-red-50 border border-red-200 text-red-700'
+                        : isDark ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300' : 'bg-amber-50 border border-amber-200 text-amber-700'
+                    }`}>
+                      {Object.keys(template.invalid ?? {}).length > 0
+                        ? 'Some values this template stores no longer fit the agent. They are marked below; fix them and save.'
+                        : 'This template was written before settings had types. Check the values below and save to confirm them.'}
+                    </div>
+                  )}
+                  {agentTypeId ? (
+                    <AgentSettingsForm
+                      settings={settings}
+                      values={values}
+                      onChange={handleSettingChange}
+                      isDark={isDark}
+                      invalid={invalid}
+                      storedSecrets={storedSecrets}
+                      requireKeys={false}
+                      custom={
+                        <EnvVarListEditor
+                          editor={editor}
+                          isDark={isDark}
+                          onChange={() => setHasUnsavedChanges(true)}
+                        />
+                      }
+                      customCount={customCount}
+                    />
+                  ) : (
+                    <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+                      Choose an agent type to see its settings.
+                    </p>
+                  )}
                 </div>
 
                 {/* Security notice */}
@@ -545,7 +616,7 @@ export default function EnvVarBuilderModal({
                       Switch agent type?
                     </h3>
                     <p className={`text-sm mb-6 ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
-                      This will load the new agent type's declared variables. Values you've already entered are kept, but variables specific to the previous type will be reorganized.
+                      Values you've entered are kept: the ones the new agent type declares stay settings, the rest move to Custom.
                     </p>
                     <div className="flex gap-3">
                       <button

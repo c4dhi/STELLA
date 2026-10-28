@@ -146,3 +146,21 @@ export function invalidSettings(settings: EnvVarSetting[], values: Record<string
   }
   return invalid
 }
+
+/**
+ * The keys a template edit takes out: settings it stored that were reset, and
+ * custom keys whose row was deleted. A stored secret stays until replaced, as
+ * its value never reaches the browser.
+ */
+export function removedTemplateKeys(
+  template: { variableKeys: string[]; settings?: Record<string, string> },
+  settings: EnvVarSetting[],
+  values: Record<string, string>,
+  customKeys: string[],
+): string[] {
+  const declared = new Set(settings.map((s) => s.name))
+  const custom = new Set(customKeys)
+  return template.variableKeys.filter((k) =>
+    declared.has(k) ? template.settings?.[k] !== undefined && values[k] === undefined : !custom.has(k),
+  )
+}

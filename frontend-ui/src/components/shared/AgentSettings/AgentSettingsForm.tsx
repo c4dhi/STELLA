@@ -22,6 +22,8 @@ export interface AgentSettingsFormProps {
   storedSecrets?: Set<string>
   /** Keys whose value comes from a template and cannot be unset here. */
   lockedKeys?: Set<string>
+  /** Flag required keys that have no value. Off where a template may leave them to the deploy. */
+  requireKeys?: boolean
   /** The Custom tab's content, and how many variables it holds. */
   custom: ReactNode
   customCount: number
@@ -35,13 +37,14 @@ export default function AgentSettingsForm({
   invalid = {},
   storedSecrets,
   lockedKeys,
+  requireKeys = true,
   custom,
   customCount,
 }: AgentSettingsFormProps) {
   const tabs = useMemo(() => settingsTabs(settings), [settings])
   const [active, setActive] = useState<string>(() => tabs.find((t) => t.id !== 'Keys')?.id ?? tabs[0]?.id ?? 'custom')
 
-  const missingSecret = (s: EnvVarSetting) => s.required && !values[s.name] && !storedSecrets?.has(s.name)
+  const missingSecret = (s: EnvVarSetting) => requireKeys && s.required && !values[s.name] && !storedSecrets?.has(s.name)
 
   const tabButton = (id: string, label: string, badge: ReactNode) => (
     <button
