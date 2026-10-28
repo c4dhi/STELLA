@@ -95,4 +95,8 @@ describe('invalidEnvVarValues', () => {
       TTS_SPEED: 'must be between 0.5 and 2',
     })
   })
+
+  it('leaves an empty value alone, which the agent reads as unset', () => {
+    expect(invalidEnvVarValues({ 'x-stella-optional-env-vars': [speed] }, { TTS_SPEED: '' })).toEqual({})
+  })
 })

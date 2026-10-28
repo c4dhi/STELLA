@@ -110,7 +110,11 @@ export function classifyEnvVars(
   return { settings, custom }
 }
 
-/** The declared keys whose value does not fit, with the reason. Custom keys are not checked. */
+/**
+ * The declared keys whose value does not fit, with the reason. Custom keys are
+ * not checked, and neither is an empty value: templates may hold one, and the
+ * agent reads it as unset.
+ */
 export function invalidEnvVarValues(
   configSchema: Record<string, unknown> | null | undefined,
   variables: Record<string, string>,
@@ -118,7 +122,7 @@ export function invalidEnvVarValues(
   const invalid: Record<string, string> = {}
   for (const setting of extractEnvVarSettings(configSchema)) {
     const value = variables[setting.name]
-    if (value === undefined) continue
+    if (value === undefined || value === '') continue
     const problem = checkEnvVarValue(setting, value)
     if (problem) invalid[setting.name] = problem
   }

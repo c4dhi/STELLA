@@ -165,4 +165,75 @@ describe('EnvVarTemplatesService', () => {
       expect(encrypt).not.toHaveBeenCalled();
     });
   });
+
+  describe('typed settings (#585)', () => {
+    const configSchema = {
+      'x-stella-env-vars': ['OPENAI_API_KEY'],
+      'x-stella-optional-env-vars': [
+        { name: 'TTS_SPEED', type: 'number', min: 0.5, max: 2 },
+        { name: 'BARGE_IN_ENABLED', type: 'boolean' },
+      ],
+    };
+
+    function createTypedService(stored: Record<string, string>, checkedAt: Date | null = null) {
+      const row = { ...makeRow({ id: 't1', userId: 'user-1' }), checkedAt, agentType: { configSchema } };
+      const prisma = {
+        envVarTemplate: {
+          findUnique: jest.fn(async () => row),
+          findMany: jest.fn(async () => [row]),
+          create: jest.fn(async ({ data }: any) => ({ ...row, ...data })),
+          update: jest.fn(async ({ data }: any) => ({ ...row, ...data })),
+        },
+        agentType: { findUnique: jest.fn(async () => ({ id: 'type-A', configSchema })) },
+      } as unknown as PrismaService;
+      let current = stored;
+      const encryption = {
+        encrypt: jest.fn((obj: Record<string, string>) => {
+          current = obj;
+          return 'enc';
+        }),
+        decrypt: jest.fn(() => current),
+        getKeys: jest.fn(() => Object.keys(current)),
+      } as unknown as EncryptionService;
+      return { svc: new EnvVarTemplatesService(prisma, encryption), prisma };
+    }
+
+    it('rejects a new template whose declared setting does not fit, naming it', async () => {
+      const { svc } = createTypedService({});
+      await expect(
+        svc.create('user-1', { name: 'T', agentTypeId: 'type-A', variables: { TTS_SPEED: '3' } }),
+      ).rejects.toThrow('TTS_SPEED must be between 0.5 and 2');
+    });
+
+    it('rejects an update that leaves a declared setting out of range', async () => {
+      const { svc } = createTypedService({ TTS_SPEED: '1' });
+      await expect(svc.update('t1', 'user-1', { variables: { TTS_SPEED: 'fast' } })).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('accepts custom variables of any shape', async () => {
+      const { svc } = createTypedService({});
+      await expect(
+        svc.create('user-1', { name: 'T', agentTypeId: 'type-A', variables: { STUDY_ARM: '???' } }),
+      ).resolves.toBeDefined();
+    });
+
+    it('returns declared non-secret values, what does not fit, and whether it was checked since #585', async () => {
+      const { svc } = createTypedService({ OPENAI_API_KEY: 'sk-x', TTS_SPEED: '3', STUDY_ARM: 'A' });
+      const [res] = await svc.findAllByUser('user-1');
+      expect(res.settings).toEqual({ TTS_SPEED: '3' }); // never the key, never custom values
+      expect(res.invalid).toEqual({ TTS_SPEED: 'must be between 0.5 and 2' });
+      expect(res.needsCheck).toBe(true);
+      expect(res.variableKeys.sort()).toEqual(['OPENAI_API_KEY', 'STUDY_ARM', 'TTS_SPEED']);
+    });
+
+    it('marks a template checked when it is saved', async () => {
+      const { svc, prisma } = createTypedService({ TTS_SPEED: '3' });
+      const res = await svc.update('t1', 'user-1', { variables: { TTS_SPEED: '1' } });
+      const data = (prisma.envVarTemplate.update as jest.Mock).mock.calls[0][0] as any;
+      expect(data.data.checkedAt).toBeInstanceOf(Date);
+      expect(res.needsCheck).toBe(false);
+    });
+  });
 });

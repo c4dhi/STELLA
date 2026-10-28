@@ -9,6 +9,15 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { EncryptionService } from './encryption.service.js';
 import { CreateEnvVarTemplateDto } from './dto/create-env-var-template.dto.js';
 import { UpdateEnvVarTemplateDto } from './dto/update-env-var-template.dto.js';
+import {
+  extractEnvVarSettings,
+  invalidEnvVarValues,
+} from '../agent-package/env-var-settings.js';
+
+type ConfigSchema = Record<string, unknown> | null | undefined;
+
+// Every read loads the agent type's declared settings with the template.
+const WITH_SETTINGS = { agentType: { select: { configSchema: true } } } as const;
 
 /**
  * Response type for env var templates (without sensitive values)
@@ -20,6 +29,15 @@ export interface EnvVarTemplateResponse {
   description: string | null;
   variableKeys: string[];
   agentTypeId: string;
+  /**
+   * Values of the settings the agent type declares, except secrets (#585), so
+   * the form can show them. Custom variables and secrets stay write-only.
+   */
+  settings: Record<string, string>;
+  /** Declared settings whose stored value does not fit, with the reason. */
+  invalid: Record<string, string>;
+  /** Written before typed settings and not saved since: the UI asks for a check. */
+  needsCheck: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -55,6 +73,11 @@ export class EnvVarTemplatesService {
       );
     }
 
+    this.assertSettingsFit(
+      agentType.configSchema as ConfigSchema,
+      dto.variables,
+    );
+
     // Encrypt the variables
     const encryptedVariables = this.encryption.encrypt(dto.variables);
 
@@ -65,7 +88,9 @@ export class EnvVarTemplatesService {
         variables: encryptedVariables,
         agentTypeId: dto.agentTypeId,
         userId,
+        checkedAt: new Date(),
       },
+      include: WITH_SETTINGS,
     });
 
     return this.toResponse(template);
@@ -78,6 +103,7 @@ export class EnvVarTemplatesService {
     const templates = await this.prisma.envVarTemplate.findMany({
       where: { userId },
       orderBy: { updatedAt: 'desc' },
+     include: WITH_SETTINGS,
     });
 
     return templates.map((t) => this.toResponse(t));
@@ -94,6 +120,7 @@ export class EnvVarTemplatesService {
     const templates = await this.prisma.envVarTemplate.findMany({
       where: { userId, agentTypeId },
       orderBy: { updatedAt: 'desc' },
+     include: WITH_SETTINGS,
     });
 
     return templates.map((t) => this.toResponse(t));
@@ -121,8 +148,14 @@ export class EnvVarTemplatesService {
    * Find a single template by ID
    */
   async findOne(id: string, userId: string): Promise<EnvVarTemplateResponse> {
+    return this.toResponse(await this.findTemplateRow(id, userId));
+  }
+
+  /** The owned row with its agent type's declared settings; 404 otherwise. */
+  private async findTemplateRow(id: string, userId: string) {
     const template = await this.prisma.envVarTemplate.findUnique({
       where: { id },
+      include: WITH_SETTINGS,
     });
 
     if (!template) {
@@ -133,7 +166,24 @@ export class EnvVarTemplatesService {
       throw new NotFoundException(`Env var template with ID ${id} not found`);
     }
 
-    return this.toResponse(template);
+    return template;
+  }
+
+  /**
+   * 400 when a declared setting holds a value that does not fit its type or
+   * range, naming each one. Custom variables are passed through unchecked.
+   */
+  private assertSettingsFit(
+    configSchema: ConfigSchema,
+    variables: Record<string, string>,
+  ): void {
+    const invalid = invalidEnvVarValues(configSchema, variables);
+    const problems = Object.entries(invalid).map(
+      ([key, reason]) => `${key} ${reason}`,
+    );
+    if (problems.length > 0) {
+      throw new BadRequestException(problems.join('; '));
+    }
   }
 
   /**
@@ -145,13 +195,15 @@ export class EnvVarTemplatesService {
     dto: UpdateEnvVarTemplateDto,
   ): Promise<EnvVarTemplateResponse> {
     // Verify ownership
-    await this.findOne(id, userId);
+    const current = await this.findTemplateRow(id, userId);
 
     // agentTypeId is immutable post-create (templates belong to the type they were
     // authored for); rebind via duplicate. It is intentionally absent from the DTO.
     const updateData: any = {
       name: dto.name,
       description: dto.description,
+      // Saved through the current form, so it has been looked at (#585).
+      checkedAt: new Date(),
     };
 
     // Variable changes are MERGED into the existing (decrypted) set, not a full
@@ -171,6 +223,7 @@ export class EnvVarTemplatesService {
       for (const [key, value] of Object.entries(dto.variables ?? {})) {
         merged[key] = value;
       }
+      this.assertSettingsFit(current.agentType?.configSchema as ConfigSchema, merged);
       updateData.variables = this.encryption.encrypt(merged);
     }
 
@@ -184,6 +237,7 @@ export class EnvVarTemplatesService {
     const template = await this.prisma.envVarTemplate.update({
       where: { id },
       data: updateData,
+      include: WITH_SETTINGS,
     });
 
     return this.toResponse(template);
@@ -237,7 +291,10 @@ export class EnvVarTemplatesService {
         variables: existingTemplate.variables,
         agentTypeId: existingTemplate.agentTypeId,
         userId,
+        // A copy of an unchecked template is just as unchecked.
+        checkedAt: existingTemplate.checkedAt,
       },
+      include: WITH_SETTINGS,
     });
 
     return this.toResponse(template);
@@ -324,9 +381,19 @@ export class EnvVarTemplatesService {
     description: string | null;
     variables: string;
     agentTypeId: string;
+    checkedAt?: Date | null;
+    agentType?: { configSchema: unknown } | null;
     createdAt: Date;
     updatedAt: Date;
   }): EnvVarTemplateResponse {
+    const configSchema = template.agentType?.configSchema as ConfigSchema;
+    const values = this.encryption.decrypt(template.variables);
+    const settings: Record<string, string> = {};
+    for (const setting of extractEnvVarSettings(configSchema)) {
+      if (setting.type === 'secret') continue;
+      const value = values[setting.name];
+      if (value !== undefined) settings[setting.name] = value;
+    }
     return {
       id: template.id,
       userId: template.userId,
@@ -334,6 +401,9 @@ export class EnvVarTemplatesService {
       description: template.description,
       variableKeys: this.encryption.getKeys(template.variables),
       agentTypeId: template.agentTypeId,
+      settings,
+      invalid: invalidEnvVarValues(configSchema, values),
+      needsCheck: !template.checkedAt,
       createdAt: template.createdAt,
       updatedAt: template.updatedAt,
     };
