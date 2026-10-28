@@ -172,6 +172,8 @@ describe('EnvVarTemplatesService', () => {
       'x-stella-optional-env-vars': [
         { name: 'TTS_SPEED', type: 'number', min: 0.5, max: 2 },
         { name: 'BARGE_IN_ENABLED', type: 'boolean' },
+        // A package from before #585 declaring a key as an untyped optional setting.
+        { name: 'LEGACY_API_KEY', description: 'Provider key' },
       ],
     };
 
@@ -234,6 +236,22 @@ describe('EnvVarTemplatesService', () => {
       const data = (prisma.envVarTemplate.update as jest.Mock).mock.calls[0][0] as any;
       expect(data.data.checkedAt).toBeInstanceOf(Date);
       expect(res.needsCheck).toBe(false);
+    });
+
+    it('never returns the value of an untyped declared setting, which may be a key', async () => {
+      const { svc } = createTypedService({ LEGACY_API_KEY: 'sk-legacy', BARGE_IN_ENABLED: 'false' });
+      const [res] = await svc.findAllByUser('user-1');
+      expect(res.settings).toEqual({ BARGE_IN_ENABLED: 'false' });
+      expect(JSON.stringify(res)).not.toContain('sk-legacy');
+      expect(res.variableKeys.sort()).toEqual(['BARGE_IN_ENABLED', 'LEGACY_API_KEY']);
+    });
+
+    it('does not mark a template checked on a save that leaves its variables alone', async () => {
+      const { svc, prisma } = createTypedService({ TTS_SPEED: '3' });
+      const res = await svc.update('t1', 'user-1', { name: 'Renamed' });
+      const data = (prisma.envVarTemplate.update as jest.Mock).mock.calls[0][0] as any;
+      expect(data.data.checkedAt).toBeUndefined();
+      expect(res.needsCheck).toBe(true);
     });
   });
 });

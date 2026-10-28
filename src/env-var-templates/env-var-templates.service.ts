@@ -16,6 +16,9 @@ import {
 
 type ConfigSchema = Record<string, unknown> | null | undefined;
 
+// Declared settings whose stored value a read may return (#585).
+const READABLE_TYPES = new Set(['string', 'boolean', 'integer', 'number', 'enum']);
+
 // Every read loads the agent type's declared settings with the template.
 const WITH_SETTINGS = { agentType: { select: { configSchema: true } } } as const;
 
@@ -30,8 +33,9 @@ export interface EnvVarTemplateResponse {
   variableKeys: string[];
   agentTypeId: string;
   /**
-   * Values of the settings the agent type declares, except secrets (#585), so
-   * the form can show them. Custom variables and secrets stay write-only.
+   * Values of the settings the agent type declares with a non-secret type
+   * (#585), so the form can show them. Secrets, untyped settings and custom
+   * variables stay write-only.
    */
   settings: Record<string, string>;
   /** Declared settings whose stored value does not fit, with the reason. */
@@ -202,8 +206,6 @@ export class EnvVarTemplatesService {
     const updateData: any = {
       name: dto.name,
       description: dto.description,
-      // Saved through the current form, so it has been looked at (#585).
-      checkedAt: new Date(),
     };
 
     // Variable changes are MERGED into the existing (decrypted) set, not a full
@@ -225,6 +227,9 @@ export class EnvVarTemplatesService {
       }
       this.assertSettingsFit(current.agentType?.configSchema as ConfigSchema, merged);
       updateData.variables = this.encryption.encrypt(merged);
+      // Its values were just checked against the declaration (#585); a rename
+      // alone checks nothing, so it leaves the template marked.
+      updateData.checkedAt = new Date();
     }
 
     // Remove undefined values
@@ -390,7 +395,9 @@ export class EnvVarTemplatesService {
     const values = this.encryption.decrypt(template.variables);
     const settings: Record<string, string> = {};
     for (const setting of extractEnvVarSettings(configSchema)) {
-      if (setting.type === 'secret') continue;
+      // Only an explicit non-secret type is readable. An untyped setting may be
+      // a key declared by a package from before #585, so it stays write-only.
+      if (!setting.type || !READABLE_TYPES.has(setting.type)) continue;
       const value = values[setting.name];
       if (value !== undefined) settings[setting.name] = value;
     }

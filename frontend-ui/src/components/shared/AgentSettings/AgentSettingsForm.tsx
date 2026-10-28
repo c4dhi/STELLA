@@ -18,7 +18,7 @@ export interface AgentSettingsFormProps {
   isDark: boolean
   /** Per key: why its value does not fit. Marks the tab and the row. */
   invalid?: Record<string, string>
-  /** Secrets a template already stores (values never reach the browser). */
+  /** Secrets and untyped settings a template already stores (values never reach the browser). */
   storedSecrets?: Set<string>
   /** Keys whose value comes from a template and cannot be unset here. */
   lockedKeys?: Set<string>
@@ -276,7 +276,8 @@ function Control({
           type="text"
           aria-label={s.label ?? s.name}
           className={`${input} w-56 font-mono`}
-          placeholder={fallback ?? s.unsetLabel ?? ''}
+          // An untyped setting's stored value is never sent back: it may be a key.
+          placeholder={stored && !s.type ? '•••••••• stored — type to replace' : fallback ?? s.unsetLabel ?? ''}
           value={value ?? ''}
           onChange={(e) => onChange(e.target.value === '' ? undefined : e.target.value)}
         />

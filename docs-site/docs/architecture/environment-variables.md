@@ -388,7 +388,7 @@ The manifest validator refuses an enum without options, options or ranges on the
 
 Values are checked against the declaration when a template is saved and when an agent is deployed; a value that does not fit is refused with the key and the reason. Variables the agent does not declare are passed through unchecked, under the form's "Custom" tab.
 
-Templates keep their values encrypted, and the declaration is applied when a template is read: the API returns the values of declared non-secret settings, so the form can show them, and never a secret or a custom value. A template saved before typed settings is marked "Migrated · check" until it is saved again, and one holding a value that no longer fits is marked "Needs a fix".
+Templates keep their values encrypted, and the declaration is applied when a template is read: the API returns the values of settings declared with a non-secret `type`, so the form can show them. It never returns a secret, an untyped setting (a package from before typed settings may declare a key that way) or a custom value. A template saved before typed settings is marked "Migrated · check" until its values are saved again (a rename alone does not clear it), and one holding a value that no longer fits is marked "Needs a fix".
 
 ---
 

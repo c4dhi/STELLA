@@ -187,6 +187,8 @@ export function migrationNotes(
     const setting = byName.get(key)
     const value = template.settings?.[key]
     if (setting?.type === 'secret') return { key, note: 'stored key, kept as it is' }
+    // Untyped values are never sent back, as one may be a key.
+    if (setting && !setting.type) return { key, note: 'stored value, kept as it is' }
     if (setting) {
       const problem = template.invalid?.[key]
       return { key, value, note: problem ? `setting, but it ${problem}: needs a value` : `the "${setting.label ?? key}" setting` }

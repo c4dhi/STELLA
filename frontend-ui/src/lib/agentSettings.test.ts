@@ -83,7 +83,7 @@ describe('agent settings', () => {
   it('says what became of each variable of a template written before typed settings', () => {
     const notes = migrationNotes(
       {
-        variableKeys: ['OPENAI_API_KEY', 'BARGE_IN_ENABLED', 'TTS_SPEED', 'STUDY_ARM', 'TTS_PLAYBACK_MODE'],
+        variableKeys: ['OPENAI_API_KEY', 'BARGE_IN_ENABLED', 'TTS_SPEED', 'STELLA_EXPERTS_DIR', 'STUDY_ARM', 'TTS_PLAYBACK_MODE'],
         settings: { BARGE_IN_ENABLED: 'false', TTS_SPEED: '3' },
         invalid: { TTS_SPEED: 'must be between 0.5 and 2' },
       },
@@ -93,6 +93,7 @@ describe('agent settings', () => {
       { key: 'OPENAI_API_KEY', note: 'stored key, kept as it is' },
       { key: 'BARGE_IN_ENABLED', value: 'false', note: 'the "BARGE_IN_ENABLED" setting' },
       { key: 'TTS_SPEED', value: '3', note: 'setting, but it must be between 0.5 and 2: needs a value' },
+      { key: 'STELLA_EXPERTS_DIR', note: 'stored value, kept as it is' },
       { key: 'STUDY_ARM', note: 'not declared by this agent: kept as a custom variable' },
       { key: 'TTS_PLAYBACK_MODE', note: 'not declared (did you mean STELLA_TTS_PLAYBACK?): kept as a custom variable' },
     ])
