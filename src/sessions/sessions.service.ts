@@ -65,6 +65,17 @@ interface MessageEvent {
   type?: string;
 }
 
+/**
+ * Message types that count as transcript lines (what session_transcript_get
+ * returns by default, i.e. includeDebug: false) — as opposed to internal
+ * bookkeeping rows (analytics, state, debug). Used both to fetch the
+ * transcript and to size `messageCount` so the two stay in agreement.
+ */
+export const TRANSCRIPT_MESSAGE_TYPES = [
+  'user_text', 'transcript', 'transcript_chunk', 'agent_text',
+  'participant_joined', 'participant_left', 'participant_event',
+];
+
 @Injectable()
 export class SessionsService {
   private readonly logger = new Logger(SessionsService.name);
@@ -151,7 +162,7 @@ export class SessionsService {
           select: {
             agents: true,
             participants: true,
-            messages: true,
+            messages: { where: { messageType: { in: TRANSCRIPT_MESSAGE_TYPES } } },
           },
         },
       },
@@ -197,7 +208,7 @@ export class SessionsService {
             select: {
               agents: true,
               participants: true,
-              messages: true,
+              messages: { where: { messageType: { in: TRANSCRIPT_MESSAGE_TYPES } } },
             },
           },
         },
@@ -241,7 +252,7 @@ export class SessionsService {
           },
           _count: {
             select: {
-              messages: true,
+              messages: { where: { messageType: { in: TRANSCRIPT_MESSAGE_TYPES } } },
               events: true,
             },
           },
@@ -894,10 +905,7 @@ export class SessionsService {
     const limit = options.limit || 50;
 
     // Define message types to include (matching getChatHistory logic)
-    const chatMessageTypes = [
-      'user_text', 'transcript', 'transcript_chunk', 'agent_text',
-      'participant_joined', 'participant_left', 'participant_event'
-    ];
+    const chatMessageTypes = TRANSCRIPT_MESSAGE_TYPES;
     const debugMessageTypes = [
       'debug', 'decision_stream', 'expert_status', 'prompt_execution',
       'safety_check', 'plan_progress_update', 'plan_deliverable_update',
