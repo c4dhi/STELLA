@@ -12,7 +12,7 @@ ARG ENABLE_GPU=false
 # ============================================================================
 # CPU-only base image
 # ============================================================================
-FROM python:3.15-slim AS base-cpu
+FROM python:3.14-slim AS base-cpu
 
 WORKDIR /app
 
