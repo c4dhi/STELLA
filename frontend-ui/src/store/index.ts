@@ -17,6 +17,7 @@ import { StateType, StateStatus, TaskStatus, DeliverableStatus } from '../lib/ty
 import { apiClient } from '../services/ApiClient'
 import { PeerTransport } from '../services/PeerTransport'
 import { progressUpdateToTodoList } from '../lib/progressConversion'
+import { nextSttStatus, type SttStatus, type SttStatusEnvelope } from '../lib/sttStatus'
 
 type ConnectionState = {
   status: 'idle' | 'connecting' | 'connected' | 'error'
@@ -77,6 +78,8 @@ type MediaState = {
    * command. True until an agent says otherwise.
    */
   faceSleepAllowed: boolean
+  /** Speech recognition still warming up, or failed to (#564); null when listening works. */
+  sttStatus: SttStatus | null
   // Agent readiness state - controls audio processing
   agentReady: boolean
 }
@@ -98,6 +101,8 @@ type MediaActions = {
   setFaceSleepPhase: (phase: 'awake' | 'asleep' | 'waking') => void
   /** Act on an `agent_command` envelope. A command this client does not know is ignored. */
   applyAgentCommand: (data: { command?: string; allowed?: boolean }) => void
+  /** Act on an `stt_status` envelope. */
+  applySttStatus: (data: SttStatusEnvelope) => void
   setAudioLevel: (v: number) => void
   setIsRemoteSpeaking: (v: boolean) => void
   // Agent readiness action
@@ -309,6 +314,7 @@ export const useStore = create<
   faceState: null,
   faceSleepPhase: 'awake',
   faceSleepAllowed: true,
+  sttStatus: null,
   agentReady: false, // Audio disabled until agent is ready
   setMicGranted: (v) => set({ micGranted: v }),
   setVu: (v) => set({ vu: v }),
@@ -338,6 +344,7 @@ export const useStore = create<
       set(s => ({ faceState: { tag: data.command as string, seq: (s.faceState?.seq ?? 0) + 1 } }))
     }
   },
+  applySttStatus: (data) => set({ sttStatus: nextSttStatus(data) }),
   setAudioLevel: (v) => set({ audioLevel: v }),
   setIsRemoteSpeaking: (v) => set({ isRemoteSpeaking: v }),
   setAgentReady: (v) => set({ agentReady: v }),

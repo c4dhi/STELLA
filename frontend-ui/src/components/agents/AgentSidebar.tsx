@@ -10,6 +10,7 @@ import { AgentStatus, POLL_INTERVALS } from '../../lib/api-types'
 import { getRuntimeConfig } from '../../config/runtime'
 import { usePageVisibility } from '../../hooks/usePageVisibility'
 import { areAgentListsEqual } from '../../lib/sessionPollEquality'
+import { SttStatusLine } from '../SttStatusChip'
 
 interface AgentSidebarProps {
   sessionId: string
@@ -662,6 +663,9 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
                       </div>
                     )
                   })()}
+
+                  {/* Speech recognition still warming up, or failed to (#564) */}
+                  {agent.status === 'RUNNING' && <SttStatusLine isDark={isDark} />}
 
                   {/* Created Date */}
                   <div className={`text-[10px] font-light tracking-wider uppercase mb-3 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
