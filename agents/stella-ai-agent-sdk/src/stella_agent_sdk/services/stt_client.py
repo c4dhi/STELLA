@@ -3,8 +3,8 @@
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
-from typing import AsyncIterator, Callable, Optional
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 import grpc
 
@@ -35,6 +35,10 @@ class TranscriptEvent:
     # classifier as the fallback signal (RFC §8.3).
     detected_language: str = ""
     language_confidence: float = 0.0
+    # Set when the AGENT opened this turn itself (BaseAgent.start_turn): nothing
+    # was said, ``text`` is empty, and this is what the agent passed along. None
+    # for everything the user said or typed.
+    agent_initiated: Optional[Dict[str, Any]] = None
     # True when this transcript was produced by a committed barge-in and is
     # being injected as a new turn (set by the pipeline, not the STT service).
     is_barge_in: bool = False
@@ -42,6 +46,15 @@ class TranscriptEvent:
     # has STT_DECODE_DIAGNOSTICS enabled. Forwarded verbatim — the SDK does not
     # interpret the schema, it only surfaces it for analytics.
     decode_diagnostics: str = ""
+    # End-of-speech timing on a final (#92): the silence STT waited through
+    # before ending the turn, the final decode, and how long the user spoke.
+    # None when STT does not send them. Logging only.
+    trailing_silence_ms: Optional[int] = None
+    decode_ms: Optional[int] = None
+    speech_ms: Optional[int] = None
+    # Pauses in this utterance that nearly ended the turn: each a dict of
+    # pause_ms, into_window_ms, silence_threshold_ms, continuation_window_ms.
+    rescued_pauses: List[Dict[str, int]] = field(default_factory=list)
 
     @classmethod
     def from_proto(cls, proto) -> "TranscriptEvent":
@@ -59,7 +72,27 @@ class TranscriptEvent:
             detected_language=getattr(proto, "detected_language", "") or "",
             language_confidence=getattr(proto, "language_confidence", 0.0) or 0.0,
             decode_diagnostics=getattr(proto, "decode_diagnostics", "") or "",
+            trailing_silence_ms=_optional_int(proto, "trailing_silence_ms"),
+            decode_ms=_optional_int(proto, "decode_ms"),
+            speech_ms=_optional_int(proto, "speech_ms"),
+            rescued_pauses=[
+                {
+                    "pause_ms": p.pause_ms,
+                    "into_window_ms": p.into_window_ms,
+                    "silence_threshold_ms": p.silence_threshold_ms,
+                    "continuation_window_ms": p.continuation_window_ms,
+                }
+                for p in getattr(proto, "rescued_pauses", ())
+            ],
         )
+
+
+def _optional_int(proto, name: str) -> Optional[int]:
+    """A proto3 `optional` field's value, or None when it was not sent."""
+    try:
+        return getattr(proto, name) if proto.HasField(name) else None
+    except ValueError:  # stubs older than the field
+        return None
 
 
 class STTClient:
@@ -256,6 +289,43 @@ class STTClient:
         except grpc.RpcError as e:
             logger.error(f"STT stream error: {e}")
             raise
+
+    async def redecode(
+        self,
+        audio_data: bytes,
+        language: str,
+        session_id: str = "",
+        sample_rate: int = 16000,
+        timeout: float = 5.0,
+    ) -> Optional[str]:
+        """One-shot re-decode of a doubtful utterance's own audio, forced to
+        ``language`` (#57). Call this only for a turn the caller's
+        ``LanguageResolver.needs_redecode`` found doubtful — never on a
+        confident turn — and never pass the result back into that same
+        resolver's ``resolve()`` as a signal; only the ORIGINAL free decode
+        from ``stream_transcribe`` is ever evidence (RFC §7/§8).
+
+        Returns ``None`` on any failure, or when the provider cannot force a
+        language (the lightweight dev default) — the caller keeps the
+        original free-decode text in that case rather than losing it.
+        """
+        if not self._connected:
+            return None
+        try:
+            request = self._pb2.RedecodeRequest(
+                audio_data=audio_data,
+                session_id=session_id,
+                language=language,
+                sample_rate=sample_rate,
+            )
+            response = await asyncio.wait_for(self._stub.Redecode(request), timeout=timeout)
+            return response.text or None
+        except asyncio.TimeoutError:
+            logger.warning(f"STT redecode timed out after {timeout}s")
+            return None
+        except Exception as e:
+            logger.error(f"STT redecode failed: {e}")
+            return None
 
     async def health_check(self) -> bool:
         """Check if the STT service is healthy."""

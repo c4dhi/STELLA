@@ -491,6 +491,26 @@ class AgentOutput:
             },
         )
 
+    @classmethod
+    def client_command(cls, session_id: str, command: str, **data: Any) -> "AgentOutput":
+        """Tell the user's device to do something, e.g. ``"sleep"``.
+
+        Yielded from ``process()`` like any other output, but delivered only
+        once everything this turn says has been heard: a device that went to
+        sleep while its goodbye was still playing would be woken by it again.
+        A turn the user interrupted drops its commands. Outside a turn, use
+        ``BaseAgent.send_client_command``.
+
+        Which commands exist is between the agent and its client; a client
+        ignores one it does not know.
+        """
+        return cls(
+            session_id=session_id,
+            type=OutputType.CLIENT_COMMAND,
+            content=command,
+            metadata=dict(data),
+        )
+
     # --- Side-channel dispatch ---
 
     def to_data_payload(
@@ -571,6 +591,9 @@ class AgentOutput:
                 "timing_ms": md.get("timing_ms", 0),
                 **{k: v for k, v in md.items() if k not in ("stage", "timing_ms")},
             }}
+
+        if self.type == OutputType.CLIENT_COMMAND:
+            return {"type": "agent_command", "data": {**md, "command": self.content}}
 
         # TEXT_CHUNK / TEXT_FINAL / HEALTH_STATUS — handled by the caller.
         return None

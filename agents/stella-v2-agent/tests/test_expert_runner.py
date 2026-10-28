@@ -167,17 +167,34 @@ def test_append_output_format_false_skips_output_format():
     assert '{"verdict": "..."}' not in messages[0].content
 
 
-def test_tool_guidance_injected_from_sdk_when_requested():
-    # Tool-calling experts get the canonical tool-usage contract appended from the
-    # SDK (single source of truth) — never hand-written in the expert prompt.
+def test_each_tools_guidance_is_injected_once():
+    # An expert is taught exactly the tools it has, from the SDK — never from
+    # its editable prompt, and each contract once however many tools share it.
+    from stella_agent_sdk.tools.state_machine import create_state_machine_tools
     from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
 
     runner = _runner()
     config = _config(system_prompt="Extract things.")
     messages = runner._build_messages(
-        config, "hi", [], {}, append_output_format=False, append_tool_guidance=True
+        config, "hi", [], {}, append_output_format=False,
+        tools=create_state_machine_tools(client=None),
     )
-    assert STATE_MACHINE_TOOL_GUIDANCE in messages[0].content
+    assert messages[0].content.count(STATE_MACHINE_TOOL_GUIDANCE) == 1
+
+
+def test_the_router_is_not_taught_the_state_machine_tools():
+    # companion_router got the set_deliverable contract appended, for tools it
+    # cannot call, contradicting its own prompt.
+    from stella_v2_agent.companion_tools import COMPANION_TOOL_GUIDANCE, create_companion_tools
+    from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
+
+    runner = _runner()
+    messages = runner._build_messages(
+        _config(system_prompt="Route."), "hi", [], {}, append_output_format=False,
+        tools=create_companion_tools([]),
+    )
+    assert COMPANION_TOOL_GUIDANCE in messages[0].content
+    assert STATE_MACHINE_TOOL_GUIDANCE not in messages[0].content
 
 
 def test_tool_guidance_not_injected_by_default():

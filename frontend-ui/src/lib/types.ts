@@ -197,6 +197,19 @@ export interface AgentEmotionCue {
 }
 
 /**
+ * An `agent_command` envelope: the agent telling this device to do something.
+ * Unlike a `[sleep]` tag in a reply, it is decided by the agent's code and can
+ * arrive with no speech at all. The agent sends it only once the turn's speech
+ * has been heard. A client ignores a command it does not know.
+ */
+export interface AgentCommand {
+  command?: string
+  /** For `sleep_allowed`: whether the face may fall asleep at all. */
+  allowed?: boolean
+  agent_id?: string
+}
+
+/**
  * An `agent_emotion_cues` envelope. Carries the FULL cue list for the
  * transcript every time, not a delta — replace by `transcript_id`, so a dropped
  * packet heals on the next one rather than stranding the face on a stale
@@ -228,6 +241,8 @@ export interface TransportEvents {
   onSpeechProgress: (data: AgentSpeechProgress) => void
   /** Emotion tags (#face-emotions): face cues keyed to offsets in agent_text. */
   onEmotionCues: (data: AgentEmotionCues) => void
+  /** A command from the agent to this device, e.g. `sleep`. */
+  onAgentCommand: (data: AgentCommand) => void
   onProcessingMessage: (message: ProcessingMessage) => void
   onServerMessage: (msg: unknown) => void
   onTTSStart: () => void
@@ -256,6 +271,8 @@ export interface Transport extends TransportEvents {
   muteAudio: () => Promise<void>
   unmuteAudio: () => Promise<void>
   hasPublishedAudio: () => boolean
+  /** Report something that happened on this device; the agent decides what it means. */
+  sendClientEvent: (event: string, data?: Record<string, unknown>) => void
   setUserName: (name: string) => void
   // Connection state helpers
   isConnectedToRoom: (roomName: string) => boolean
@@ -277,6 +294,8 @@ export type EnvelopeType =
   | 'agent_text'
   | 'agent_speech_progress'
   | 'agent_emotion_cues'
+  | 'agent_command'
+  | 'client_event'
   | 'agent_playback'
   | 'system'
   | 'audio_data'

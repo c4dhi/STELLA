@@ -11,9 +11,10 @@
  * read by a human before anything is stripped. Safe to re-run.
  */
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg'
 import { extractPlanPersonas } from '../../src/personas/persona-extraction.js';
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 
 extractPlanPersonas(prisma, {
   apply: process.argv.includes('--apply'),

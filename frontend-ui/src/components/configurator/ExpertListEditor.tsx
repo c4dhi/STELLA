@@ -639,6 +639,7 @@ function SortableExpertCard({
                       className={inputClass}
                     >
                       <option value="">{info.defaultModel ? `Default (${info.defaultModel})` : 'Default'}</option>
+                      <option value="gpt-5.4-mini">gpt-5.4-mini</option>
                       <option value="gpt-4o-mini">gpt-4o-mini</option>
                       <option value="gpt-4o">gpt-4o</option>
                       <option value="gpt-4.1-mini">gpt-4.1-mini</option>
@@ -738,7 +739,7 @@ function AddCustomExpertForm({
     name: '',
     description: '',
     priority: 50,
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.4-mini',
     temperature: 0.3,
     max_tokens: 200,
     system_prompt: '',
@@ -780,6 +781,7 @@ function AddCustomExpertForm({
         <div>
           <label className={`text-[10px] font-medium ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>Model</label>
           <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} className={inputClass}>
+            <option value="gpt-5.4-mini">gpt-5.4-mini</option>
             <option value="gpt-4o-mini">gpt-4o-mini</option>
             <option value="gpt-4o">gpt-4o</option>
             <option value="gpt-4.1-mini">gpt-4.1-mini</option>

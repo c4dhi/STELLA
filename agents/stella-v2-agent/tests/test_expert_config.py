@@ -24,6 +24,24 @@ def test_coerce_from_dict():
     assert vd.description == "emergency"
 
 
+def test_coerce_from_dict_keeps_template_i18n_overrides():
+    # #705: template_i18n carries per-language overrides of template, kept
+    # separate from it — the Configurator's TS contract assumes template is
+    # always a plain string, so a dict value there would silently blank it.
+    vd = VerdictDirective.coerce({
+        "action": "prepend",
+        "template": "Careful.",
+        "template_i18n": {"de": "Vorsicht."},
+    })
+    assert vd.template == "Careful."
+    assert vd.template_i18n == {"de": "Vorsicht."}
+
+
+def test_coerce_from_dict_defaults_template_i18n_to_empty():
+    vd = VerdictDirective.coerce({"action": "prepend", "template": "Careful."})
+    assert vd.template_i18n == {}
+
+
 def test_coerce_passes_through_instance():
     original = VerdictDirective("prepend", "x")
     assert VerdictDirective.coerce(original) is original
@@ -60,7 +78,7 @@ def test_to_dict_serializes_verdict_directives():
     )
     data = cfg.to_dict()
     assert data["verdict_directives"] == {
-        "high": {"action": "prepend", "template": "x", "description": "a high concern"}
+        "high": {"action": "prepend", "template": "x", "description": "a high concern", "template_i18n": {}}
     }
 
 
@@ -144,7 +162,7 @@ def test_shipped_experts_only_get_their_own_tools():
 
     config_dir = Path(__file__).parent.parent / "config" / "experts"
     registry = ExpertRegistry(experts_dir=str(config_dir))
-    activity_tools = {"list_activities", "start_activity", "end_activity"}
+    activity_tools = {"list_activities", "start_activity", "go_to_sleep"}
     assert set(registry.get("companion_router").tools) == activity_tools
     assert not activity_tools & set(registry.get("task_extraction").tools)
     assert registry.get("task_extraction").tools

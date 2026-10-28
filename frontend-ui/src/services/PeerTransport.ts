@@ -4,6 +4,7 @@ import type {
   TranscriptChunk,
   AgentSpeechProgress,
   AgentEmotionCues,
+  AgentCommand,
   ProcessingMessage,
   ProcessingMessageType,
   DecisionStreamData,
@@ -116,6 +117,7 @@ export class PeerTransport implements Transport {
   onTranscript = (_chunk: TranscriptChunk) => {}
   onSpeechProgress = (_data: AgentSpeechProgress) => {}
   onEmotionCues = (_data: AgentEmotionCues) => {}
+  onAgentCommand = (_data: AgentCommand) => {}
   onProcessingMessage = (_message: ProcessingMessage) => {}
   onServerMessage = (_msg: unknown) => {}
   onTTSStart = () => {}
@@ -299,6 +301,12 @@ export class PeerTransport implements Transport {
           // Emotion tags (#face-emotions): face cues for the reply being spoken.
           if (env.type === 'agent_emotion_cues') {
             this.onEmotionCues(env.data || {})
+            return
+          }
+
+          // A command from the agent to this device (e.g. sleep).
+          if (env.type === 'agent_command') {
+            this.onAgentCommand(env.data || {})
             return
           }
 
@@ -744,6 +752,22 @@ export class PeerTransport implements Transport {
       this.room.localParticipant.publishData(data, { reliable: true })
     } catch (error) {
       console.error('Error sending mute signal:', error)
+    }
+  }
+
+  // Tell the agent something happened on this device that is neither speech nor
+  // text. The agent decides what, if anything, an event means.
+  sendClientEvent(event: string, data: Record<string, unknown> = {}) {
+    if (!this.room || this.room.state !== 'connected') return
+
+    const env = { type: 'client_event', data: { ...data, event, timestamp: Date.now() } }
+    try {
+      this.room.localParticipant.publishData(
+        new TextEncoder().encode(JSON.stringify(env)),
+        { reliable: true }
+      )
+    } catch (error) {
+      console.error('Error sending client event:', error)
     }
   }
 

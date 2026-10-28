@@ -9,6 +9,10 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { CreatePersonaDto } from './dto/create-persona.dto.js';
 import { UpdatePersonaDto } from './dto/update-persona.dto.js';
 
+/** The built-in persona for companion deployments (see prisma/seed.ts). */
+export const COMPANION_DEFAULT_PERSONA_ID =
+  '00000000-0000-4000-8000-000000000002';
+
 /**
  * Personas — agent identity, separate from what the agent does (PlanTemplate) and
  * how it runs (AgentConfiguration). See docs/rfcs/2026-08-29_persona-separation.md.
@@ -101,8 +105,19 @@ export class PersonasService {
    * deleted (userId is SET NULL, not cascaded, precisely so that degrades to this
    * rather than breaking a resumable session).
    */
-  async findSystemDefault(): Promise<Persona | null> {
-    return this.prisma.persona.findFirst({ where: { isSystemDefault: true } });
+  async findSystemDefault(mode?: unknown): Promise<Persona | null> {
+    // Two built-in defaults: one written for plans, one for companion
+    // deployments. The companion one is found by its fixed id; anything else,
+    // and a companion on a database that lacks it, gets the plan default.
+    if (mode === 'companion') {
+      const companion = await this.prisma.persona.findFirst({
+        where: { id: COMPANION_DEFAULT_PERSONA_ID, isSystemDefault: true },
+      });
+      if (companion) return companion;
+    }
+    return this.prisma.persona.findFirst({
+      where: { isSystemDefault: true, id: { not: COMPANION_DEFAULT_PERSONA_ID } },
+    });
   }
 
   /**
@@ -145,7 +160,7 @@ export class PersonasService {
       return null;
     }
 
-    return this.resolveForDeploy(effectiveId, userId);
+    return this.resolveForDeploy(effectiveId, userId, agentConfig.mode);
   }
 
   /**
@@ -175,10 +190,11 @@ export class PersonasService {
   async resolveForDeploy(
     personaId: string | undefined | null,
     userId: string,
+    mode?: unknown,
   ): Promise<Record<string, unknown> | null> {
     const persona = personaId
       ? await this.findOne(personaId, userId)
-      : await this.findSystemDefault();
+      : await this.findSystemDefault(mode);
 
     if (!persona) {
       // Only reachable if the seeded default row was deleted out from under us.

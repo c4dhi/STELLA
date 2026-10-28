@@ -93,10 +93,9 @@ class StateMachineClient:
     async def load_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         """Replace the session's plan, discarding any progress.
 
-        Companion mode: the user has just chosen an activity and expects it from
-        the top. ``initialize`` deliberately RESUMES an existing state (so a
-        paused agent restarts where it left off), which is the wrong behaviour
-        here — running the same activity twice in one session must start over.
+        For an agent that switches plans mid-session. ``initialize`` deliberately
+        RESUMES an existing state (so a paused agent restarts where it left off);
+        this starts the given plan from the top, even if it ran before.
 
         Returns:
             Dict with success, error, current_state_id, plan_title
@@ -127,7 +126,7 @@ class StateMachineClient:
             }
 
     async def clear_plan(self) -> Dict[str, Any]:
-        """Drop the session's plan — back to free-flow companion conversation.
+        """Drop the session's plan, leaving the session with no plan at all.
 
         Returns:
             Dict with success, error

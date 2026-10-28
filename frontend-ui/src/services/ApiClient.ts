@@ -68,6 +68,16 @@ import type {
   UserNotificationEvent,
   AdminDashboardMetrics,
   CapacityMeasurement,
+  PlatformSettings,
+  PlatformFeatures,
+  AccessToken,
+  CreateAccessTokenRequest,
+  AccessTokenAccess,
+  CreateAccessTokenResponse,
+  OAuthAuthorizationRequestView,
+  OAuthRedirect,
+  ConnectedApp,
+  TtsPlaybackMode,
   SessionActivityDay,
   HistoricalUsageData,
   ServerMetrics,
@@ -1728,6 +1738,91 @@ class SessionManagementClient {
       method: 'PATCH',
       body: JSON.stringify({ isAdmin }),
     })
+  }
+
+  /**
+   * Platform defaults a system admin sets (today: the TTS playback mode).
+   */
+  async getPlatformSettings(): Promise<PlatformSettings> {
+    return this.get<PlatformSettings>('/admin/platform-settings')
+  }
+
+  /**
+   * Set the platform TTS playback default; null goes back to the built-in default.
+   * Applies from the next session; running sessions keep their mode.
+   */
+  async updatePlatformSettings(ttsPlayback: TtsPlaybackMode | null): Promise<PlatformSettings> {
+    return this.request<PlatformSettings>('/admin/platform-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ ttsPlayback }),
+    })
+  }
+
+  /**
+   * Switch MCP access on or off for every user. Off keeps existing tokens but
+   * makes them unusable.
+   */
+  async setMcpEnabled(mcpEnabled: boolean): Promise<PlatformSettings> {
+    return this.request<PlatformSettings>('/admin/platform-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ mcpEnabled }),
+    })
+  }
+
+  // ============================================================================
+  // Platform features API
+  // ============================================================================
+
+  /** Which optional features are on, for any signed-in user. */
+  async getPlatformFeatures(): Promise<PlatformFeatures> {
+    return this.get<PlatformFeatures>('/platform/features')
+  }
+
+  // ============================================================================
+  // MCP access tokens API
+  // ============================================================================
+
+  async listAccessTokens(): Promise<AccessToken[]> {
+    return this.get<AccessToken[]>('/me/access-tokens')
+  }
+
+  /** The response carries the secret; it cannot be fetched again. */
+  async createAccessToken(data: CreateAccessTokenRequest): Promise<CreateAccessTokenResponse> {
+    return this.post<CreateAccessTokenResponse>('/me/access-tokens', data)
+  }
+
+  async revokeAccessToken(id: string): Promise<AccessToken> {
+    return this.delete<AccessToken>(`/me/access-tokens/${id}`)
+  }
+
+  // ============================================================================
+  // MCP sign-in (consent page, connected apps)
+  // ============================================================================
+
+  async getOAuthRequest(id: string): Promise<OAuthAuthorizationRequestView> {
+    return this.get<OAuthAuthorizationRequestView>(`/oauth/requests/${encodeURIComponent(id)}`)
+  }
+
+  /** Returns where to send the browser: back to the app, with a one-time code. */
+  async approveOAuthRequest(id: string, access: AccessTokenAccess): Promise<OAuthRedirect> {
+    return this.post<OAuthRedirect>(`/oauth/requests/${encodeURIComponent(id)}/approve`, { access })
+  }
+
+  async denyOAuthRequest(id: string): Promise<OAuthRedirect> {
+    return this.post<OAuthRedirect>(`/oauth/requests/${encodeURIComponent(id)}/deny`)
+  }
+
+  async listConnectedApps(): Promise<ConnectedApp[]> {
+    return this.get<ConnectedApp[]>('/me/connected-apps')
+  }
+
+  async disconnectApp(id: string): Promise<void> {
+    await this.request<void>(`/me/connected-apps/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  }
+
+  /** Absolute URL of the MCP endpoint, for client setup instructions. */
+  getMcpUrl(): string {
+    return new URL(`${this.getBaseUrl().replace(/\/$/, '')}/mcp`, window.location.origin).toString()
   }
 
   // ============================================================================

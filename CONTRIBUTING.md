@@ -195,7 +195,7 @@ Almost everything ships the moment it merges. Two exceptions:
 ### TypeScript/JavaScript
 
 - Use TypeScript for all new code
-- Follow the existing code style (enforced by ESLint)
+- Follow the existing code style (enforced by ESLint in the backend and oxlint in `frontend-ui`)
 - Use meaningful variable and function names
 - Add JSDoc comments for public APIs
 

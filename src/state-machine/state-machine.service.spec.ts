@@ -501,7 +501,7 @@ describe('goal_achieved condition', () => {
     expect(result.newStateId).toBeUndefined();
   });
 
-  it('treats required goal tasks without deliverables as auto-complete in state completion checks', async () => {
+  it('does not count a goal state as complete because its scaffolding tasks need nothing (#706)', async () => {
     const sessionId = 'session-goal-action-task-auto-complete';
     const { prisma } = createPrismaMock();
     const svc = new StateMachineService(prisma);
@@ -518,7 +518,7 @@ describe('goal_achieved condition', () => {
     const planState = (state.planData as PlanData).states.find((s) => s.id === 'state-goal');
     const isComplete = (svc as any).isCurrentStateComplete(state, planState);
 
-    expect(isComplete).toBe(true);
+    expect(isComplete).toBe(false);
   });
 
   it('transitions when __goal_achieved__ is set truthy', async () => {
@@ -600,8 +600,9 @@ describe('goal_achieved condition', () => {
     const pendingTasks = await svc.getPendingTasks(sessionId);
     const goalTask = pendingTasks.find((task) => task.id === '__goal__');
 
-    expect(goalTask?.instruction).toContain('success criteria is met');
-    expect(goalTask?.instruction).toContain('setDeliverable("__goal_achieved__", true)');
+    expect(goalTask?.instruction).toContain('This goal is reached when: Participant states');
+    expect(goalTask?.instruction).toContain('complete the task "__goal__"');
+    expect(goalTask?.instruction).toContain('skip_task "__goal__"');
   });
 
   it('migrates goal all_tasks_complete transitions to goal_achieved', async () => {
@@ -683,8 +684,11 @@ describe('goal_achieved condition', () => {
     expect(byKey.get('timeframe')).toBe('skipped');
   });
 
-  it('renders regular tasks and goal deliverables together without double-counting keys (#310)', async () => {
-    const sessionId = 'session-goal-coexist-no-double-count';
+  // Shared fixture for the #770 tests below: a goal state with one goal
+  // deliverable and one leftover task (from when the section was
+  // flexible/sequential) that owns a deliverable of its own.
+  async function setUpGoalWithLeftoverTask() {
+    const sessionId = 'session-goal-ignores-leftover-task';
     const { prisma } = createPrismaMock();
     const svc = new StateMachineService(prisma);
     const plan = buildGoalStatePlan();
@@ -694,24 +698,212 @@ describe('goal_achieved condition', () => {
     plan.states[0].tasks = [
       {
         id: 'regular',
-        description: 'A regular task in a goal state',
+        description: 'A leftover task from flexible/sequential mode',
         deliverables: [{ key: 'task_d1', description: 'Task deliverable', required: true }],
       },
     ];
     await svc.initializeForSession(sessionId, plan);
+    return { svc, sessionId, plan };
+  }
+
+  it('ignores a leftover regular task entirely once the state is goal-type (#770)', async () => {
+    // #310 (above) first established that a goal state CAN carry a regular
+    // task without double-counting its deliverable. Felix's later decision on
+    // #770 overrides that: a goal state ignores its tasks everywhere — a
+    // leftover task from when the section was flexible/sequential stays on
+    // the stored plan (so switching back restores it), but the synthetic
+    // goal task is the ONLY one a goal state ever shows, counts, or is
+    // guided by. This test replaces the old "they coexist" expectation, for
+    // the plan/progress view (getFullState).
+    const { svc, sessionId, plan } = await setUpGoalWithLeftoverTask();
 
     const fullState = await svc.getFullState(sessionId);
     const goalState = fullState?.states.find(s => s.id === 'state-goal');
 
-    // Both the synthetic goal task and the real task are present.
+    // Only the synthetic goal task is present; the leftover task is not.
     const taskIds = goalState?.tasks.map(t => t.id) ?? [];
-    expect(taskIds).toContain('__goal_deliverables__');
-    expect(taskIds).toContain('regular');
+    expect(taskIds).toEqual(['__goal_deliverables__']);
 
-    // No deliverable key appears under more than one task (no double count).
+    // Only the goal's own deliverable counts — the leftover task's never does.
     const allKeys = goalState?.tasks.flatMap(t => t.deliverables.map(d => d.key)) ?? [];
-    expect(allKeys.sort()).toEqual(['goal_d1', 'task_d1']);
-    expect(allKeys.length).toBe(new Set(allKeys).size);
+    expect(allKeys).toEqual(['goal_d1']);
+
+    // The leftover task is still on the stored plan, untouched, so switching
+    // the section back to flexible/sequential would restore it unchanged.
+    expect(plan.states[0].tasks.map(t => t.id)).toEqual(['regular']);
+
+    expect(fullState?.progress).toBe(0); // goal_d1 not yet collected
+  });
+
+  it('getPendingTasks never leaks a leftover task\'s own deliverable key into goal guidance (#770)', async () => {
+    // The sole pending-task entry in goal mode is the synthetic __goal__
+    // task; its deliverableKeys must be exactly the goal's own, not the
+    // leftover task's — that leak is exactly what let "User Name"/"Feeling"
+    // show up as needed in the reported bug. Asserting only the synthetic
+    // item's `id` (and not its deliverableKeys) would miss this: the goal
+    // branch always returns one synthetic item regardless, built from
+    // pendingTasks.flatMap(...) under the hood.
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const pending = await svc.getPendingTasks(sessionId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].id).toBe('__goal__');
+    expect(pending[0].deliverableKeys).toEqual(['goal_d1']);
+    expect(pending[0].deliverableKeys).not.toContain('task_d1');
+  });
+
+  it('getPendingDeliverables never surfaces a leftover task\'s deliverable in goal mode (#770)', async () => {
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const pending = await svc.getPendingDeliverables(sessionId);
+    const keys = pending.map(d => d.key);
+    expect(keys).toEqual(['goal_d1']);
+    expect(keys).not.toContain('task_d1');
+  });
+
+  it('setDeliverable with a leftover task\'s key records a discovered insight, never the task deliverable (#770)', async () => {
+    // The search order matters: in goal mode, task-level deliverables must
+    // never be checked at all, so a leftover task's key can never shadow a
+    // goal deliverable, and always falls through to the discovered-insight
+    // path — observable as `discovered: true` on the goal's synthetic task,
+    // never as progress toward the goal.
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const progressBefore = (await svc.getFullState(sessionId))?.progress;
+    expect(progressBefore).toBe(0);
+
+    const result = await svc.setDeliverable(sessionId, 'task_d1', 'mentioned in passing', 'reasoning');
+    expect(result.success).toBe(true);
+
+    const progressAfter = (await svc.getFullState(sessionId))?.progress;
+    expect(progressAfter).toBe(0); // task_d1 never counted, so no change
+
+    const fullState = await svc.getFullState(sessionId);
+    const goalTask = fullState?.states
+      .find(s => s.id === 'state-goal')
+      ?.tasks.find(t => t.id === '__goal_deliverables__');
+    const taskD1 = goalTask?.deliverables.find(d => d.key === 'task_d1');
+    expect(taskD1).toEqual(expect.objectContaining({ key: 'task_d1', discovered: true }));
+  });
+
+  it('a stray skip_task on a leftover task id finds nothing to skip (#770)', async () => {
+    // Mirrors the completeTask case (#770, elsewhere in this file): tasks
+    // play no part in goal mode, including direct skip attempts by a real
+    // (non-goal-alias) task id.
+    const sessionId = 'session-goal-skip-task-leftover-id';
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    const plan = buildGoalStatePlan();
+    plan.states[0].tasks = [
+      { id: 'leftover', description: 'A leftover task', deliverables: [] },
+    ];
+    await svc.initializeForSession(sessionId, plan);
+
+    const result = await svc.skipTask(sessionId, 'leftover', 'tried to skip it directly');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+  });
+
+  it('skipState on a goal state marks the goal skipped, never a leftover task (#770)', async () => {
+    const { svc, sessionId } = await setUpGoalWithLeftoverTask();
+
+    const result = await svc.skipState(sessionId, undefined, 'moving on');
+    expect(result.success).toBe(true);
+
+    const fullState = await svc.getFullState(sessionId);
+    const goalState = fullState?.states.find(s => s.id === 'state-goal');
+    expect(goalState?.status).toBe('completed'); // goal closed (skipped outcome)
+    const goalTask = goalState?.tasks.find(t => t.id === '__goal_deliverables__');
+    expect(goalTask).toBeDefined();
+
+    // Asserting via the view alone doesn't pin this: the view already
+    // filters leftover tasks for display, so it would still look right even
+    // if skipState's own newlySkipped list wrongly included 'regular'. The
+    // session's own stored skippedTasks is the real source of truth.
+    const state = await svc.getState(sessionId);
+    expect(state?.skippedTasks).not.toContain('regular');
+  });
+
+  it('completes on the goal deliverable alone, with an uncollected leftover task deliverable (#770)', async () => {
+    // Reproduces the production bug directly: a section saved as flexible
+    // (with tasks "User Name" and "Feeling") was switched to goal, and
+    // completion stalled at 0.8 (4 of 5) because a leftover task's
+    // deliverable was still counted as needed. Felix's rule: it never is.
+    const sessionId = 'session-goal-completes-ignoring-leftover';
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    const plan = buildGoalStatePlan();
+    plan.states[0].goal!.deliverables = [
+      { key: 'primary_goal', description: 'The goal', required: true },
+    ];
+    plan.states[0].tasks = [
+      { id: 'user_name', description: 'User Name', deliverables: [{ key: 'user_name', description: '', required: true }] },
+      { id: 'feeling', description: 'Feeling', deliverables: [{ key: 'feeling', description: '', required: true }] },
+    ];
+    await svc.initializeForSession(sessionId, plan);
+
+    await svc.setDeliverable(sessionId, 'primary_goal', 'run a half marathon', 'stated it');
+    // user_name/feeling deliberately left uncollected — the leftover tasks'
+    // own deliverables, which must not gate reaching the goal.
+    const result = await svc.completeTask(sessionId, '__goal__', 'goal reached');
+    expect(result.success).toBe(true);
+
+    const fullState = await svc.getFullState(sessionId);
+    expect(fullState?.states.find(s => s.id === 'state-goal')?.status).toBe('completed');
+    expect(fullState?.progress).toBe(100);
+  });
+
+  it('a stray complete_task on a leftover task id finds nothing to complete (#770)', async () => {
+    // Tasks play no part in goal mode, including direct completion attempts
+    // by a real (non-goal-alias) task id — not just guidance and counting.
+    const sessionId = 'session-goal-complete-task-leftover-id';
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    const plan = buildGoalStatePlan();
+    plan.states[0].tasks = [
+      { id: 'leftover', description: 'A leftover task', deliverables: [] },
+    ];
+    await svc.initializeForSession(sessionId, plan);
+
+    const result = await svc.completeTask(sessionId, 'leftover', 'tried to complete it directly');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('not found');
+  });
+
+  it('switching a section type back to flexible finds its tasks exactly as they were (#770)', async () => {
+    // tasksFor only ever FILTERS planState.tasks by type — it never deletes
+    // or mutates them. The Plan Builder's own "switch back to flexible" is
+    // just changing `type` on the stored plan; tasksFor already guarantees
+    // the same tasks array is there to read once it does. Proven directly
+    // against the same task list, read once as goal and once as flexible,
+    // rather than through a plan-update API this test harness has no hook
+    // for (initializeForSession resumes existing session state and does not
+    // re-persist planData — switching a plan's authoring is a separate
+    // concern from this state machine).
+    const tasks = [
+      { id: 'user_name', description: 'User Name', deliverables: [{ key: 'user_name', description: '', required: true }] },
+    ];
+
+    const goalSession = 'session-goal-type-filter';
+    const { prisma: goalPrisma } = createPrismaMock();
+    const goalSvc = new StateMachineService(goalPrisma);
+    const goalPlan = buildGoalStatePlan();
+    goalPlan.states[0].tasks = tasks;
+    await goalSvc.initializeForSession(goalSession, goalPlan);
+    expect(await goalSvc.getPendingTasks(goalSession)).toEqual([
+      expect.objectContaining({ id: '__goal__' }),
+    ]);
+
+    const flexibleSession = 'session-flexible-type-filter';
+    const { prisma: flexPrisma } = createPrismaMock();
+    const flexSvc = new StateMachineService(flexPrisma);
+    const flexPlan = buildGoalStatePlan();
+    flexPlan.states[0].type = 'loose';
+    flexPlan.states[0].tasks = tasks; // the exact same tasks, unmodified
+    await flexSvc.initializeForSession(flexibleSession, flexPlan);
+    expect(await flexSvc.getPendingTasks(flexibleSession)).toEqual([
+      expect.objectContaining({ id: 'user_name', deliverableKeys: ['user_name'] }),
+    ]);
   });
 });
 
@@ -2475,7 +2667,7 @@ describe('realistic conversation simulation (#291)', () => {
     expect(await g.at()).toBe('goals');
   });
 
-  it('GOAL STATE: deliverable-less scaffolding is non-blocking and the goal accepts its marker', async () => {
+  it('GOAL STATE: a leftover scaffolding task is invisible, not just non-blocking (#770)', async () => {
     const g = await Grace.start('sim-goal');
     // Fast-forward to the goal state through the normal flow.
     await g.collect('user_name', 'Max');
@@ -2484,9 +2676,11 @@ describe('realistic conversation simulation (#291)', () => {
     await g.collect('session_duration_minutes', '50');
     expect(await g.at()).toBe('goals');
 
-    // The deliverable-less 'goal-explore' task must NOT block the goal (it's
-    // guidance scaffolding); progress is driven by the goal deliverable.
-    expect(await g.taskStatus('goals', 'goal-explore')).toBe('pending');
+    // #770: a goal state ignores its tasks everywhere, not just at the
+    // completion gate. The deliverable-less 'goal-explore' task was already
+    // non-blocking (that's unchanged), but it no longer shows up at all —
+    // taskStatus finds nothing to report a status for.
+    expect(await g.taskStatus('goals', 'goal-explore')).toBeUndefined();
 
     // Collecting the goal deliverable records it without error in goal mode.
     const collected = await g.collect('primary_goal', 'run a half marathon');
@@ -2971,5 +3165,335 @@ describe('StateMachineService — the last state ends the conversation (#452)', 
     let last: any;
     for (let i = 0; i < 30; i++) last = await svc.incrementTurn('s');
     expect(last.sessionCompleted).toBeFalsy();
+  });
+});
+
+// The goal of a goal state is one task, `__goal__`, closed per state (#706).
+describe('goal state completion (#706)', () => {
+  const sessionId = 'session-706';
+  const goalState = (id: string, goal: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({
+    id, title: id, type: 'goal' as const, tasks: [], transitions: [],
+    goal: { objective: `objective of ${id}`, success_description: `success of ${id}`, ...goal },
+    ...extra,
+  });
+  const looseState = (id: string, tasks: unknown[] = []) =>
+    ({ id, title: id, type: 'loose' as const, tasks, transitions: [] });
+  // A loose state with a task, so the conversation rests in it (an empty one advances at once).
+  const resting = (id: string) => looseState(id, [{ id: `task-${id}`, description: 'talk' }]);
+  const planOf = (...states: unknown[]): PlanData =>
+    ({ id: 'p', title: 'p', initial_state_id: (states[0] as { id: string }).id, states }) as PlanData;
+
+  async function start(plan: PlanData) {
+    const { prisma } = createPrismaMock();
+    const svc = new StateMachineService(prisma);
+    await svc.initializeForSession(sessionId, plan);
+    return svc;
+  }
+  const where = async (svc: StateMachineService) => (await svc.getCurrentState(sessionId))?.stateId;
+  const counter = async (svc: StateMachineService) => (await svc.getFullState(sessionId))?.turnsWithoutProgress;
+
+  it.each(['__goal__', '__goal_deliverables__'])('completing %s ends the goal state', async (id) => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.completeTask(sessionId, id, 'they named a step');
+    expect(result).toMatchObject({ success: true, transitioned: true, newStateId: 'next' });
+  });
+
+  it('skipping the goal ends the state too', async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.skipTask(sessionId, '__goal__', 'they would rather not');
+    expect(result).toMatchObject({ success: true, transitioned: true, newStateId: 'next' });
+  });
+
+  it('skip_state on a goal state moves on', async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.skipState(sessionId, undefined, 'not relevant');
+    expect(result).toMatchObject({ success: true, transitioned: true, newStateId: 'next' });
+  });
+
+  it('is not a task id outside a goal state', async () => {
+    const svc = await start(planOf(looseState('a', [{ id: 't1', description: 'x' }]), looseState('b')));
+    expect((await svc.completeTask(sessionId, '__goal__', 'x')).success).toBe(false);
+  });
+
+  it('each goal state has its own goal: reaching the first does not finish the next', async () => {
+    const svc = await start(planOf(goalState('g1'), goalState('g2'), goalState('g3'), looseState('after')));
+    expect((await svc.completeTask(sessionId, '__goal__', 'g1 done')).newStateId).toBe('g2');
+    expect(await where(svc)).toBe('g2');
+    expect((await svc.completeTask(sessionId, '__goal__', 'g2 done')).newStateId).toBe('g3');
+  });
+
+  it('a goal state after another kind of state still has to be reached', async () => {
+    const svc = await start(planOf(
+      goalState('g1'), looseState('mid', [{ id: 't1', description: 'say something' }]), goalState('g2'), looseState('after'),
+    ));
+    await svc.completeTask(sessionId, '__goal__', 'g1 done');
+    await svc.completeTask(sessionId, 't1', 'said');
+    expect(await where(svc)).toBe('g2');
+  });
+
+  it('ends the session when the last state is a goal state', async () => {
+    const svc = await start(planOf(goalState('g1')));
+    const result = await svc.completeTask(sessionId, '__goal__', 'done');
+    expect(result).toMatchObject({ success: true, sessionCompleted: true, newStateId: '__end__' });
+  });
+
+  it('still understands the old marker when it says yes', async () => {
+    const svc = await start(planOf(goalState('g1'), goalState('g2'), looseState('after')));
+    const result = await svc.setDeliverable(sessionId, '__goal_achieved__', true, 'old instruction');
+    expect(result).toMatchObject({ success: true, newStateId: 'g2' });
+    expect(await svc.getCollectedDeliverables(sessionId)).not.toHaveProperty('__goal_achieved__');
+  });
+
+  it("drops the user's answer written into the old marker: no value, no progress, no move", async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    for (let i = 0; i < 4; i++) await svc.incrementTurn(sessionId);
+    const result = await svc.setDeliverable(sessionId, '__goal_achieved__', 'Walk to the bakery on Tuesday', 'x');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("complete_task '__goal__'");
+    expect(await where(svc)).toBe('g1');
+    expect(await counter(svc)).toBe(4);
+    expect(await svc.getCollectedDeliverables(sessionId)).toEqual({});
+  });
+
+  it('refuses the goal task id as a deliverable key', async () => {
+    const svc = await start(planOf(goalState('g1'), looseState('next')));
+    const result = await svc.setDeliverable(sessionId, '__goal__', 'Dancing', 'x');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('task id');
+  });
+
+  describe('with required goal deliverables', () => {
+    const plan = () => planOf(
+      goalState('g1', { deliverables: [
+        { key: 'next_step', description: 'the step', required: true },
+        { key: 'why', description: 'the reason', required: false },
+      ] }),
+      looseState('next'),
+    );
+
+    it('cannot be completed while one is missing, and says which', async () => {
+      const svc = await start(plan());
+      const result = await svc.completeTask(sessionId, '__goal__', 'they seemed done');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('next_step');
+      expect(result.error).not.toContain('why');
+      expect(await where(svc)).toBe('g1');
+      const [task] = await svc.getPendingTasks(sessionId);
+      expect(task.instruction).toContain('cannot be completed before these are recorded and confirmed: next_step.');
+    });
+
+    it('a rejected completion is not progress', async () => {
+      const svc = await start(plan());
+      for (let i = 0; i < 3; i++) await svc.incrementTurn(sessionId);
+      await svc.completeTask(sessionId, '__goal__', 'too early');
+      expect(await counter(svc)).toBe(3);
+    });
+
+    it('can be completed once they are collected', async () => {
+      const svc = await start(plan());
+      // Collecting the answer alone does not end the state: reaching the goal is a judgment.
+      expect((await svc.setDeliverable(sessionId, 'next_step', 'walk on Tuesday', 'said so')).transitioned).toBe(false);
+      const [task] = await svc.getPendingTasks(sessionId);
+      expect(task.instruction).not.toContain('cannot be completed before');
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('next');
+    });
+
+    it('an answer only mentioned in passing does not carry the goal', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'next_step', 'maybe a picnic', 'said in passing', true);
+      const result = await svc.completeTask(sessionId, '__goal__', 'they have a step');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('next_step (recorded but not confirmed by the participant)');
+      const [task] = await svc.getPendingTasks(sessionId);
+      expect(task.instruction).toContain('next_step (recorded but not confirmed by the participant)');
+
+      // Confirming it — the same key again, without the flag — is what unlocks the goal.
+      await svc.setDeliverable(sessionId, 'next_step', 'a picnic on Sunday', 'confirmed when asked');
+      expect((await svc.completeTask(sessionId, '__goal__', 'confirmed')).newStateId).toBe('next');
+    });
+
+    it('re-recording a hesitant answer as hesitant is not progress; confirming it is', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'next_step', 'maybe a walk', 'hesitant', true);
+      for (let i = 0; i < 3; i++) await svc.incrementTurn(sessionId);
+      await svc.setDeliverable(sessionId, 'next_step', 'perhaps the park', 'still hesitant', true);
+      expect(await counter(svc)).toBe(3);
+      await svc.setDeliverable(sessionId, 'next_step', 'the park on Sunday', 'confirmed');
+      expect(await counter(svc)).toBe(0);
+    });
+
+    it('a state where the same hesitant answer keeps coming is still released', async () => {
+      const svc = await start(plan());
+      let turn = 0;
+      while ((await where(svc)) === 'g1' && turn < 40) {
+        turn++;
+        await svc.setDeliverable(sessionId, 'next_step', `maybe ${turn}`, 'hesitant', true);
+        if (turn > 1) await svc.incrementTurn(sessionId); // the first write is progress
+      }
+      expect(turn).toBe(11);
+      expect(await where(svc)).toBe('next');
+    });
+
+    it('an unconfirmed optional answer does not hold the goal', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'next_step', 'walk on Tuesday', 'said so');
+      await svc.setDeliverable(sessionId, 'why', 'fresh air, perhaps', 'in passing', true);
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('next');
+    });
+
+    it('can always be skipped', async () => {
+      const svc = await start(plan());
+      expect((await svc.skipTask(sessionId, '__goal__', 'declined')).newStateId).toBe('next');
+    });
+
+    it('an insight under the same key does not stand in for the required answer', async () => {
+      const svc = await start(planOf(goalState('g0'), plan().states[0], looseState('next')));
+      await svc.setDeliverable(sessionId, 'next_step', 'maybe a walk', 'insight while in g0');
+      await svc.completeTask(sessionId, '__goal__', 'g0 done');
+      expect((await svc.completeTask(sessionId, '__goal__', 'g1 done')).success).toBe(false);
+    });
+  });
+
+  describe('insights', () => {
+    it('do not count as progress, so the stuck-state net still releases the state', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      let turn = 0;
+      while ((await where(svc)) === 'g1' && turn < 40) {
+        turn++;
+        await svc.setDeliverable(sessionId, `noticed_${turn}`, 'x', 'noticed');
+        await svc.incrementTurn(sessionId); // the agent counts an insight-only turn
+      }
+      expect(turn).toBe(10);
+      expect(await where(svc)).toBe('next');
+    });
+
+    it('a state the net released shows as left behind, not as open', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      for (let i = 0; i < 10; i++) await svc.incrementTurn(sessionId);
+      const full = await svc.getFullState(sessionId);
+      expect(full?.states.find(s => s.id === 'g1')?.status).toBe('completed');
+    });
+
+    it('are capped per session', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      for (let i = 0; i < 25; i++) {
+        expect((await svc.setDeliverable(sessionId, `k${i}`, 'v', 'r')).success).toBe(true);
+      }
+      expect((await svc.setDeliverable(sessionId, 'one_more', 'v', 'r')).success).toBe(false);
+      // An insight already kept can still be updated.
+      expect((await svc.setDeliverable(sessionId, 'k3', 'v2', 'r')).success).toBe(true);
+    });
+
+    it('are shown back in the plan view even when the goal declares no deliverables', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      await svc.setDeliverable(sessionId, 'likes_gardening', 'yes', 'said so');
+      const full = await svc.getFullState(sessionId);
+      const keys = full!.states[0].tasks.flatMap(t => t.deliverables.map(d => d.key));
+      expect(keys).toEqual(['likes_gardening']);
+    });
+
+    it('do not make an open goal look done in the plan view', async () => {
+      const svc = await start(planOf(goalState('g1'), looseState('next')));
+      await svc.setDeliverable(sessionId, 'likes_walks', 'yes', 'said so');
+      const full = await svc.getFullState(sessionId);
+      expect(full!.states[0].tasks.map(t => [t.id, t.status])).toEqual([['__goal_deliverables__', 'pending']]);
+    });
+  });
+
+  describe('a goal state whose routes read a deliverable', () => {
+    const plan = () => planOf(
+      goalState('g1', {}, { transitions: [
+        { target_state_id: 'yes_branch', condition_type: 'deliverable_value', condition_config: { key: 'wants_followup', value: 'yes' } },
+        { target_state_id: 'no_branch', condition_type: 'deliverable_value', condition_config: { key: 'wants_followup', value: 'no' } },
+      ] }),
+      resting('fallback'), resting('yes_branch'), resting('no_branch'),
+    );
+
+    it('cannot be completed before the routing answer exists', async () => {
+      const svc = await start(plan());
+      const result = await svc.completeTask(sessionId, '__goal__', 'done');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('wants_followup');
+    });
+
+    it('routes on the answer once it is there', async () => {
+      const svc = await start(plan());
+      const result = await svc.setDeliverable(sessionId, 'wants_followup', 'no', 'said no');
+      // Recording the answer does not move the conversation; closing the goal does.
+      expect(result.success).toBe(true);
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('no_branch');
+    });
+
+    it('takes the next state in plan order when the answer matches no route', async () => {
+      const svc = await start(plan());
+      await svc.setDeliverable(sessionId, 'wants_followup', 'maybe', 'unsure');
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('fallback');
+    });
+
+    it('takes the next state in plan order when the goal is skipped without the answer', async () => {
+      const svc = await start(plan());
+      expect((await svc.skipTask(sessionId, '__goal__', 'declined')).newStateId).toBe('fallback');
+    });
+
+    describe('routes on different keys', () => {
+      const twoKeys = () => planOf(
+        goalState('g1', {}, { transitions: [
+          { target_state_id: 'sleep', condition_type: 'deliverable_value', condition_config: { key: 'topic', value: 'sleep' } },
+          { target_state_id: 'low', condition_type: 'deliverable_value', condition_config: { key: 'mood', value: 'low' } },
+        ] }),
+        resting('fallback'), resting('sleep'), resting('low'),
+      );
+
+      it('one matching route is enough: the other key is not asked for', async () => {
+        const svc = await start(twoKeys());
+        await svc.setDeliverable(sessionId, 'topic', 'sleep', 'wants to talk about sleep');
+        const result = await svc.completeTask(sessionId, '__goal__', 'done');
+        expect(result).toMatchObject({ success: true, newStateId: 'sleep' });
+        const full = await svc.getFullState(sessionId);
+        expect(full!.states.find(s => s.id === 'g1')?.status).toBe('completed');
+      });
+
+      it('with no answer yet, asks for any one of the keys, not all', async () => {
+        const svc = await start(twoKeys());
+        const result = await svc.completeTask(sessionId, '__goal__', 'done');
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('one of: topic / mood');
+      });
+    });
+
+    it('an escape route beside a completion route does not block completion', async () => {
+      const svc = await start(planOf(
+        goalState('g1', {}, { transitions: [
+          { target_state_id: 'support', condition_type: 'deliverable_value', condition_config: { key: 'distress', value: 'yes' }, priority: 1 },
+          { target_state_id: 'next', condition_type: 'goal_achieved', priority: 2 },
+        ] }),
+        resting('next'), resting('support'),
+      ));
+      expect((await svc.completeTask(sessionId, '__goal__', 'done')).newStateId).toBe('next');
+    });
+  });
+
+  it('is not complete on entry, however little it requires (#400)', async () => {
+    const svc = await start(planOf(
+      looseState('first', [{ id: 't1', description: 'greet' }]),
+      goalState('g1', { deliverables: [{ key: 'opt', description: 'optional', required: false }] }),
+    ));
+    const full = await svc.getFullState(sessionId);
+    expect(full?.states.find(s => s.id === 'g1')?.status).toBe('pending');
+  });
+
+  it('a goal state entered again has to be reached again', async () => {
+    const svc = await start(planOf(
+      goalState('g1'),
+      { ...looseState('review', [{ id: 't1', description: 'check' }]),
+        transitions: [{ target_state_id: 'g1', condition_type: 'all_tasks_complete' }] },
+    ));
+    await svc.completeTask(sessionId, '__goal__', 'first time');
+    expect(await where(svc)).toBe('review');
+    await svc.completeTask(sessionId, 't1', 'send them back');
+    expect(await where(svc)).toBe('g1');
+    // It rests there instead of bouncing straight back out.
+    await svc.incrementTurn(sessionId);
+    expect(await where(svc)).toBe('g1');
   });
 });

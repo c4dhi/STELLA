@@ -1,0 +1,184 @@
+"""The three companion tools the router proposes transitions with.
+
+  list_activities()          what can we do?
+  start_activity(id)         run that plan
+  go_to_sleep()              the user is done for now
+
+They only PROPOSE. Each returns a ``command`` in its result data and touches
+nothing; the agent decides, against the session's actual mode, whether to act on
+it (``companion.py``). So the tools cannot race the other experts in the same
+turn and cannot leave a half-applied transition behind.
+
+There is no tool for leaving. The router only runs in free conversation; inside
+an activity the exit dialogue is the one judge.
+
+They live with this agent, not in the SDK: what an activity is, and when one may
+start, is this agent's policy. The SDK only offers loading and clearing a plan.
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from stella_agent_sdk.tools.base import BaseTool, ToolResult
+
+logger = logging.getLogger(__name__)
+
+
+COMPANION_TOOL_GUIDANCE = """
+ACTIVITY TOOLS — use them only when the user's intent is unmistakable. Call NO
+tool for ordinary conversation: that is the common case.
+
+- `list_activities` — the user asked what they can do, or is looking for
+  something to do. Read-only; it commits them to nothing.
+- `start_activity` — the user has clearly CHOSEN one: named it, described it, or
+  said an unambiguous yes to one just offered. Unsure which one they meant? Call
+  no tool, and let the reply ask.
+- `go_to_sleep` — the user is done for now: they say good night or goodbye, tell
+  you to go (back) to sleep, or say they need nothing more. A thank-you alone,
+  or talk about their own sleep, is not that.
+
+Call no more than one tool per turn.
+"""
+
+
+def _activity_view(activity: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "id": activity.get("id") or "",
+        "title": activity.get("title") or activity.get("name") or "Untitled",
+        "description": activity.get("description") or "",
+    }
+
+
+class ListActivitiesTool(BaseTool):
+    """What the user can choose from, answered from the deploy-time snapshot."""
+
+    guidance = COMPANION_TOOL_GUIDANCE
+
+    def __init__(self, activities: List[Dict[str, Any]]):
+        self._activities = activities
+
+    @property
+    def name(self) -> str:
+        return "list_activities"
+
+    @property
+    def description(self) -> str:
+        return (
+            "List the activities available to the user. Call when they ask what "
+            "you can do together, or are looking for something to do."
+        )
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **_kwargs) -> ToolResult:
+        return ToolResult(
+            success=True,
+            data={
+                "command": "list",
+                "activities": [_activity_view(a) for a in self._activities],
+            },
+        )
+
+
+class StartActivityTool(BaseTool):
+    """Propose starting the activity the user chose."""
+
+    guidance = COMPANION_TOOL_GUIDANCE
+
+    def __init__(self, activities: List[Dict[str, Any]]):
+        self._activities = activities
+
+    @property
+    def name(self) -> str:
+        return "start_activity"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Start the activity the user has explicitly chosen — named, described, "
+            "or clearly agreed to when offered."
+        )
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        # Titles AND descriptions: the reply offers activities in its own words,
+        # usually from their descriptions ("a quick check-in on your fitness
+        # goals"), so the user picks by description too. With titles alone the
+        # router matched "fitness goals" to the only title containing "Fitness",
+        # which was the other activity (Felix, 29 Sep).
+        options = "; ".join(
+            f'{v["id"]} = "{v["title"]}"' + (f' ({v["description"]})' if v["description"] else "")
+            for v in map(_activity_view, self._activities)
+            if v["id"]
+        )
+        return {
+            "type": "object",
+            "properties": {
+                "activity_id": {
+                    "type": "string",
+                    "description": f"id of the activity the user chose. The options: {options}",
+                    "enum": [a.get("id") for a in self._activities if a.get("id")],
+                },
+            },
+            "required": ["activity_id"],
+        }
+
+    def _find(self, activity_id: str) -> Optional[Dict[str, Any]]:
+        for a in self._activities:
+            if a.get("id") == activity_id:
+                return a
+        # Tolerate a title where an id was asked for: the model has both in
+        # context and confusing them is a likelier failure than a wrong choice.
+        for a in self._activities:
+            if (a.get("title") or "").lower() == (activity_id or "").lower():
+                return a
+        return None
+
+    async def execute(self, activity_id: str = "", **_kwargs) -> ToolResult:
+        activity = self._find(activity_id)
+        if not activity:
+            known = ", ".join(a.get("id", "?") for a in self._activities)
+            return ToolResult(
+                success=False,
+                error=f"Unknown activity '{activity_id}'. Available: {known}",
+            )
+        return ToolResult(
+            success=True,
+            data={
+                "command": "start",
+                "activity_id": activity.get("id"),
+                "activity_title": activity.get("title"),
+            },
+        )
+
+
+class GoToSleepTool(BaseTool):
+    """Propose ending the conversation: a goodbye, then the device sleeps."""
+
+    guidance = COMPANION_TOOL_GUIDANCE
+
+    @property
+    def name(self) -> str:
+        return "go_to_sleep"
+
+    @property
+    def description(self) -> str:
+        return (
+            "The user is done for now: they said good night or goodbye, told you "
+            "to go to sleep, or said they need nothing more. You say goodbye and "
+            "go to sleep until they wake you."
+        )
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **_kwargs) -> ToolResult:
+        return ToolResult(success=True, data={"command": "sleep"})
+
+
+def create_companion_tools(activities: List[Dict[str, Any]]) -> List[BaseTool]:
+    """Build the companion toolset for one session."""
+    return [ListActivitiesTool(activities), StartActivityTool(activities), GoToSleepTool()]

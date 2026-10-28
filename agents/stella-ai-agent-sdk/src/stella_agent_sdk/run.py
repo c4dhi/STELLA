@@ -644,6 +644,21 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             return_when=asyncio.FIRST_COMPLETED,
         )
 
+        # An audio loop that ended by itself is the session ending — unless it
+        # died. Its exception is otherwise never retrieved, so the agent left
+        # the room mid-reply with nothing in the log to say why.
+        if audio_loop_task in done:
+            if audio_loop_task.cancelled():
+                logger.error(
+                    "Agent audio loop was cancelled from inside a turn (no shutdown "
+                    "was requested); the session ends here"
+                )
+            elif audio_loop_task.exception() is not None:
+                logger.error(
+                    "Agent audio loop crashed; the session ends here",
+                    exc_info=audio_loop_task.exception(),
+                )
+
         # Cancel pending tasks
         for task in pending:
             task.cancel()

@@ -8,6 +8,8 @@ import { SessionsModule } from '../sessions/sessions.module.js';
 import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
 import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module.js';
 import { PersonasModule } from '../personas/personas.module.js';
+import { PlatformSettingsModule } from '../platform-settings/platform-settings.module.js';
+import { AuthModule } from '../auth/auth.module.js';
 
 /**
  * AgentsModule - Manages agent lifecycle.
@@ -27,6 +29,10 @@ import { PersonasModule } from '../personas/personas.module.js';
     AgentConfigurationsModule,
     // Resolve the persona (agent identity) snapshot at deploy time.
     PersonasModule,
+    // Platform playback default, applied at pod creation.
+    PlatformSettingsModule,
+    // Membership checks on session and agent routes.
+    AuthModule,
     forwardRef(() => AgentServerModule),
     forwardRef(() => SessionsModule),
   ],

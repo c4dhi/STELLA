@@ -34,7 +34,7 @@ interface ExpertCardProps {
   isDark: boolean
 }
 
-const MODEL_OPTIONS = ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano']
+const MODEL_OPTIONS = ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano']
 
 function CollapsibleSettings({ isDark, children }: { isDark: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false)

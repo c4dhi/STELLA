@@ -229,6 +229,21 @@ class SpeechToTextServicer(stt_pb2_grpc.SpeechToTextServicer):
             message=result["message"],
         )
 
+    async def Redecode(self, request, context):
+        """One-shot re-decode of a doubtful utterance, forced to a language (#57)."""
+        text = ""
+        if self.engine.provider:
+            try:
+                sample_rate = request.sample_rate if request.sample_rate > 0 else 16000
+                text = await self.engine.provider.redecode(
+                    request.audio_data, request.language, sample_rate=sample_rate
+                ) or ""
+            except Exception as e:
+                print(f"[STT Service] Redecode error: {e}")
+        print(f"[STT Service] Redecode session={request.session_id or 'unknown'} "
+              f"language={request.language}: {'ok' if text else 'no result'}")
+        return stt_pb2.RedecodeResponse(text=text)
+
 
 async def serve():
     """Start the gRPC server."""

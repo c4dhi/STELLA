@@ -41,7 +41,7 @@ class LLMToolCall:
 @dataclass
 class LLMConfig:
     """Configuration for LLM requests."""
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5.4-mini"
     temperature: float = 0.7
     max_tokens: int = 800
     provider: LLMProvider = LLMProvider.OPENAI_LANGCHAIN
@@ -356,7 +356,9 @@ class OpenAIDirectProvider(LLMProviderInterface):
                 "model": config.model,
                 "messages": openai_messages,
                 "temperature": config.temperature,
-                "max_tokens": config.max_tokens,
+                # Not "max_tokens": the gpt-5 family rejects it outright, and a
+                # tool-calling expert moved to one failed every turn.
+                "max_completion_tokens": config.max_tokens,
             }
             if config.json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
@@ -408,7 +410,9 @@ class OpenAIDirectProvider(LLMProviderInterface):
                 "model": config.model,
                 "messages": openai_messages,
                 "temperature": config.temperature,
-                "max_tokens": config.max_tokens,
+                # Not "max_tokens": the gpt-5 family rejects it outright, and a
+                # tool-calling expert moved to one failed every turn.
+                "max_completion_tokens": config.max_tokens,
                 "stream": True,
             }
             if config.json_mode:
@@ -821,11 +825,18 @@ class LLMService:
         self.usage_stats = LLMUsageStats()
 
 
+class FirstTokenTimeout(asyncio.TimeoutError):
+    """No first token within the budget, on the first attempt or its retry."""
+
+
 async def stream_completion(
     llm_service: "LLMService",
     messages: List[LLMMessage],
     config: LLMConfig,
     component_name: str = "unknown",
+    first_token_timeout: Optional[float] = None,
+    retry_first_token_timeout: Optional[float] = None,
+    log_context: str = "",
 ) -> AsyncIterator[Tuple[str, bool]]:
     """Consume a streaming LLM generation as an async iterator.
 
@@ -840,41 +851,88 @@ async def stream_completion(
     generation errors (the provider signals ``on_error``, or the underlying task
     raises before any callback fires — covered by the done-callback below, so the
     consumer never hangs on a silent failure).
+
+    ``first_token_timeout`` bounds the wait for the FIRST event only (#684). A
+    stalled call is abandoned and, if ``retry_first_token_timeout`` is given,
+    started once more with that budget; a second stall raises
+    ``FirstTokenTimeout``. Once anything has arrived there is no limit: a reply
+    that started in time is never cut for being long. Without this, a stalled
+    connection cost the client's whole request timeout (30s) plus its own
+    retry before anything could be spoken. Both events are logged with
+    ``log_context`` (the turn), as ``[REPLY-TIMEOUT]`` and ``[REPLY-RETRY]``.
     """
-    queue: asyncio.Queue = asyncio.Queue()
+    ctx = f" ({log_context})" if log_context else ""
 
-    class _QueueCallback(LLMStreamingCallback):
-        async def on_token(self, token: str, accumulated_text: str) -> None:
-            await queue.put(("token", accumulated_text))
+    def start():
+        queue: asyncio.Queue = asyncio.Queue()
 
-        async def on_complete(self, final_response: LLMResponse) -> None:
-            await queue.put(("complete", final_response))
+        class _QueueCallback(LLMStreamingCallback):
+            async def on_token(self, token: str, accumulated_text: str) -> None:
+                await queue.put(("token", accumulated_text))
 
-        async def on_error(self, error: Exception) -> None:
-            await queue.put(("error", error))
+            async def on_complete(self, final_response: LLMResponse) -> None:
+                await queue.put(("complete", final_response))
 
-    task = asyncio.create_task(
-        llm_service.generate(
-            messages=messages, config=config,
-            callback=_QueueCallback(), component_name=component_name,
+            async def on_error(self, error: Exception) -> None:
+                await queue.put(("error", error))
+
+        task = asyncio.create_task(
+            llm_service.generate(
+                messages=messages, config=config,
+                callback=_QueueCallback(), component_name=component_name,
+            )
         )
-    )
 
-    # If generate() raises BEFORE any callback fires, no event is ever queued and
-    # the drain below would hang. Surface that exception as an error event.
-    def _on_done(t: asyncio.Task) -> None:
-        if t.cancelled():
-            return
-        exc = t.exception()
-        if exc is not None:
-            queue.put_nowait(("error", exc))
+        # If generate() raises BEFORE any callback fires, no event is ever queued and
+        # the drain below would hang. Surface that exception as an error event.
+        def _on_done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                queue.put_nowait(("error", exc))
 
-    task.add_done_callback(_on_done)
+        task.add_done_callback(_on_done)
+        return queue, task
 
-    last = ""
+    budgets = [first_token_timeout]
+    if first_token_timeout is not None and retry_first_token_timeout is not None:
+        budgets.append(retry_first_token_timeout)
+
+    queue, task = None, None
+    first = None
     try:
+        for attempt, budget in enumerate(budgets, start=1):
+            queue, task = start()
+            started = time.monotonic()
+            try:
+                first = await asyncio.wait_for(queue.get(), timeout=budget)
+            except asyncio.TimeoutError:
+                task.cancel()
+                if attempt < len(budgets):
+                    logger.warning(
+                        f"[REPLY-TIMEOUT] {component_name}: no first token after "
+                        f"{budget:.1f}s{ctx} — retrying once with {budgets[attempt]:.1f}s"
+                    )
+                    continue
+                logger.warning(
+                    f"[REPLY-TIMEOUT] {component_name}: no first token after "
+                    f"{budget:.1f}s on attempt {attempt}{ctx} — giving up"
+                )
+                raise FirstTokenTimeout(
+                    f"{component_name}: no first token within {budget:.1f}s"
+                ) from None
+            if attempt > 1:
+                logger.info(
+                    f"[REPLY-RETRY] {component_name}: first token on the retry after "
+                    f"{time.monotonic() - started:.2f}s{ctx}"
+                )
+            break
+
+        last = ""
+        event = first
         while True:
-            kind, payload = await queue.get()
+            kind, payload = event
             if kind == "token":
                 last = payload
                 yield last, False
@@ -884,6 +942,7 @@ async def stream_completion(
                 return
             else:  # "error"
                 raise payload
+            event = await queue.get()
     finally:
-        if not task.done():
+        if task is not None and not task.done():
             task.cancel()

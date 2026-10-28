@@ -19,6 +19,7 @@ import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
 import VisualizerRenderer from '../face/VisualizerRenderer'
 import { useSleepMicrophone } from '../face/hooks/useSleepMicrophone'
+import { useSleepEvents } from '../face/hooks/useSleepEvents'
 import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
@@ -189,6 +190,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const triggerFaceState = useStore(s => s.triggerFaceState)
+  // What one session's agent told the face must not carry into the next one
+  // opened in the same page load.
+  useEffect(() => {
+    useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
+  }, [sessionData.sessionId])
+
   useEffect(() => {
     setFaceExpression(faceExpression)
   }, [faceExpression, setFaceExpression])
@@ -600,6 +607,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         if (envelope.type === 'agent_emotion_cues') {
           const data = envelope.data || {}
           noteEmotionCues(data.transcript_id || '', data.cues || [])
+          return
+        }
+
+        // A command from the agent to this device (e.g. sleep).
+        if (envelope.type === 'agent_command') {
+          useStore.getState().applyAgentCommand(envelope.data || {})
           return
         }
 
@@ -1088,6 +1101,22 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     enabled: room?.state === 'connected'
   })
 
+  // Tell the agent when the face falls asleep or wakes (same envelope as
+  // PeerTransport.sendClientEvent).
+  const sendClientEvent = useCallback((event: string) => {
+    if (!room || room.state !== 'connected') return
+    const envelope = { type: 'client_event', data: { event, timestamp: Date.now() } }
+    try {
+      room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(envelope)), { reliable: true })
+    } catch (error) {
+      console.error('[Participant] Error sending client event:', error)
+    }
+  }, [room])
+  useSleepEvents({ send: sendClientEvent, enabled: room?.state === 'connected' })
+  // Captions go when she falls asleep: the last thing she said should not
+  // stay on screen under a sleeping face.
+  const isAsleep = useStore((s) => s.faceSleepPhase === 'asleep')
+
   // Cleanup audio resources
   const cleanupAudio = () => {
     // Cancel audio analysis animation frame
@@ -1529,14 +1558,14 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         text={teleprompterText}
         spokenChar={teleprompterSpokenChar}
         theme={currentVisualizer}
-        isVisible={showAgentTranscript && !isChatOpen && (sessionTimeUp || !userTranscript.trim())}
+        isVisible={showAgentTranscript && !isChatOpen && !isAsleep && (sessionTimeUp || !userTranscript.trim())}
       />
 
       {/* Transcript Overlay — hidden once time is up so it can't mask the farewell. */}
       <TranscriptOverlay
         transcript={userTranscript}
         theme={currentVisualizer}
-        isVisible={showUserTranscript && !sessionTimeUp}
+        isVisible={showUserTranscript && !sessionTimeUp && !isAsleep}
       />
 
       {/* Bottom hint */}

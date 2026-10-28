@@ -55,7 +55,7 @@ const componentDetails: Record<string, ComponentInfo> = {
     id: 'agent',
     label: 'Agent Pod',
     sublabel: 'Python',
-    description: 'Ephemeral K8s pod running stella-agent or stella-light. Created per session. Receives audio from LiveKit, processes via STT→LLM→TTS pipeline, streams responses back.',
+    description: 'Ephemeral K8s pod running stella-v2 or your own agent. Created per session. Receives audio from LiveKit, processes via STT→LLM→TTS pipeline, streams responses back.',
     color: '#ec4899',
   },
   stt: {

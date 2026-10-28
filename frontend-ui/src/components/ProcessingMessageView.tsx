@@ -18,6 +18,8 @@ const DECISION_ICONS: Record<string, string> = {
   activity_started: 'M8 5v14l11-7z',                                    // play
   activity_ended: 'M6 6h12v12H6z',                                      // stop
   activity_completed: 'M5 13l4 4L19 7',                                 // check
+  going_to_sleep: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z',          // moon
+  woken_up: 'M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M6.3 17.7l1.4-1.4M16.3 7.7l1.4-1.4M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z', // sun
 }
 
 const DEFAULT_DECISION_ICON = 'M4 17h6l4-10h6M14 7l-4 10'               // fork

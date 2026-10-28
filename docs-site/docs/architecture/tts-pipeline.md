@@ -198,7 +198,7 @@ All are read by the SDK inside the agent pod. Declare them in `agent.yaml` under
 
 | Variable | Default | Description |
 |---|---|---|
-| `STELLA_TTS_PLAYBACK` | `stream` | `stream` starts each sentence as it is generated; `sentence` generates the whole sentence first and then plays it (the 1.1.0 behaviour). Use `sentence` when the TTS runs slower than real time, e.g. Qwen3 on a T4, where `stream` can run dry mid-word (`Playout starved` in the agent log). Declared in `agent.yaml`, so it is set per deployment in the deploy modal and two deployments can run side by side. Read once at pipeline construction; unknown values fall back to `stream`. |
+| `STELLA_TTS_PLAYBACK` | `auto` | **Unset, or `auto`: Stella picks it itself.** The session starts in `stream`, exactly as before, and switches once to `sentence` — never back — after 3 consecutive sentences measure slower than real time (`synth_ms > audio_ms`, the same RTF the pre-roll rule above uses; a sentence too short to measure neither advances nor resets that count). `stream` always starts each sentence as it is generated; `sentence` always generates the whole sentence first and then plays it (the 1.1.0 behaviour), and pinning either one explicitly turns the auto-switch off. `stream` can run dry mid-word on a TTS slower than real time, e.g. Qwen3 on a T4 (`Playout starved` in the agent log) — pin `sentence` to rule that out entirely. `synth_ms` includes the provider's own first-chunk latency, so a fast-synthesizing but high-latency REMOTE provider can measure as "slower than real time" on short sentences without actually being so — pin `stream` by hand if that happens. Declared in `agent.yaml`, so it is set per deployment in the deploy modal and two deployments can run side by side. **Platform default:** a system admin sets the mode for every deployment in Settings → Platform Defaults. Precedence at each pod creation (deploy, restart, wake): `stream`/`sentence` pinned on the deployment, then the platform default, then `auto`. `auto` on the deployment does not pin: it is the `agent.yaml` default, so an env-var template or deployment can carry it without anyone having chosen it. The backend writes the source into `STELLA_TTS_PLAYBACK_SOURCE` and the agent logs it (`[TTS] Playback mode: sentence (from the platform default)`). Read once at pipeline construction, so a running session keeps its mode; unknown values fall back to `auto`. |
 | `STELLA_TTS_PREROLL_MS` | auto (starts at `200`) | Jitter buffer held before the first frame of each sentence. **Unset, Stella chooses it itself**: it measures the real-time factor of the sentences it synthesizes, applies the rule below (bounded 200 ms to 3 s), raises it at once on `Playout starved` / non-zero `bridged Xms`, and lowers it slowly when there is slack; changes are logged as `Pre-roll A -> B`. Setting a value pins it and turns this off; `0` also disables the underrun guard. The first sentence of a session still starts at 200 ms. |
 | `TTS_PROGRESS_TICK_MS` | `200` | How often a teleprompter progress envelope is emitted during playback. |
 | `TTS_ENABLED` | `true` | `false` = text-only mode; the TTS connection is skipped entirely. |
@@ -207,6 +207,18 @@ All are read by the SDK inside the agent pod. Declare them in `agent.yaml` under
 | `STELLA_TELEPROMPTER_ENABLED` | on | Word-by-word highlight synchronized to playback. |
 
 Changing any of these takes effect on the **next session** — the value is read when the agent pod builds its pipeline, so a running agent keeps the value it started with.
+
+### How well the voice fits the hardware
+
+Settings → Platform Defaults shows a traffic light above the playback choice. It answers one question for the admin choosing a mode: can this server's GPU keep up with the voice, at the number of conversations it usually runs at once?
+
+- **Measured, not guessed.** Each sentence long enough to measure (≥ 800 ms of audio) publishes a `tts_sentence_speed` analytics event with its RTF (`synth_ms / audio_ms`) and the playback mode it played in; the `auto` switch publishes `tts_playback_switch` once. Both are stored like any other turn analytics and read back from the last 14 days.
+- **Under concurrent load.** Sessions share the GPU, so each sentence is grouped by how many sessions were in conversation when it was spoken: a session counts if it published any analytics within a minute either side.
+- **Colours**, per group, from the 90th-percentile RTF (the slowest 10% of sentences decide): **green** at ≤ 0.8 with fewer than 5% of sessions switched; **yellow** at ≤ 1.5 (sentence by sentence works, the wait before each sentence is at most about half its length); **red** beyond. The headline is the group at the usual load, the median number of sessions at once across all sentences.
+- **Too little data.** No reading below 200 sentences from 3 sessions; a group gets its own colour from 50 sentences across 2 sessions. Groups the live data has not reached take the colour from the newest load test (`CapacityMeasurement`): levels it passed take the colour of the nearest measured group above them (more load is never faster), or of the highest one beyond all of them, and one past its limit is red, shown dimmed as an estimate.
+- A session that switched to `sentence` stays there until it ends, so the reading can stay yellow for a while after a busy spell.
+
+The scoring lives in `src/platform-settings/hardware-fit.util.ts`; the thresholds are its `HARDWARE_FIT` constants.
 
 ### Internal constants
 

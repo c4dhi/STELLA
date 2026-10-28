@@ -1,7 +1,10 @@
 import { jest } from '@jest/globals';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { PersonasService } from './personas.service.js';
+import {
+  COMPANION_DEFAULT_PERSONA_ID,
+  PersonasService,
+} from './personas.service.js';
 
 type PersonaRow = {
   id: string;
@@ -45,7 +48,13 @@ function createService(rows: PersonaRow[]) {
         async ({ where: { id } }: any) => rows.find((r) => r.id === id) ?? null,
       ),
       findFirst: jest.fn(
-        async () => rows.find((r) => r.isSystemDefault) ?? null,
+        async ({ where }: any = {}) =>
+          rows.find(
+            (r) =>
+              r.isSystemDefault &&
+              (typeof where?.id === 'string' ? r.id === where.id : true) &&
+              (where?.id?.not ? r.id !== where.id.not : true),
+          ) ?? null,
       ),
       create: jest.fn(async ({ data }: any) => ({ id: 'new', ...data })),
       update: jest.fn(async ({ data }: any) => ({ ...rows[0], ...data })),
@@ -103,6 +112,55 @@ describe('PersonasService.resolveForDeploy', () => {
     await expect(
       createService([THEIRS, DEFAULT_ROW]).resolveForDeploy('persona-2', 'user-1'),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('PersonasService built-in defaults', () => {
+  const COMPANION_ROW: PersonaRow = {
+    ...DEFAULT_ROW,
+    id: COMPANION_DEFAULT_PERSONA_ID,
+    name: 'STELLA Companion (default)',
+    systemPrompt: 'You keep someone company.',
+  };
+
+  it('gives a companion deployment that names no persona the companion default', async () => {
+    const service = createService([COMPANION_ROW, DEFAULT_ROW]);
+    const persona = await service.resolveForDeployConfig(
+      { mode: 'companion' },
+      undefined,
+      'user-1',
+    );
+    expect(persona).toMatchObject({
+      id: COMPANION_DEFAULT_PERSONA_ID,
+      system_prompt: 'You keep someone company.',
+      is_system_default: true,
+    });
+  });
+
+  it('gives a plan deployment the plan default, whichever row comes first', async () => {
+    const service = createService([COMPANION_ROW, DEFAULT_ROW]);
+    const persona = await service.resolveForDeployConfig({}, undefined, 'user-1');
+    expect(persona).toMatchObject({ id: 'persona-default' });
+  });
+
+  it('never replaces a persona the operator chose, in either mode', async () => {
+    const service = createService([MINE, COMPANION_ROW, DEFAULT_ROW]);
+    const persona = await service.resolveForDeployConfig(
+      { mode: 'companion' },
+      'persona-1',
+      'user-1',
+    );
+    expect(persona).toMatchObject({ id: 'persona-1', is_system_default: false });
+  });
+
+  it('falls back to the plan default where the companion one does not exist yet', async () => {
+    const service = createService([DEFAULT_ROW]);
+    const persona = await service.resolveForDeployConfig(
+      { mode: 'companion' },
+      undefined,
+      'user-1',
+    );
+    expect(persona).toMatchObject({ id: 'persona-default' });
   });
 });
 

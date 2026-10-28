@@ -39,9 +39,12 @@ const run = (state: SleepState, over: Partial<SleepInput>, forMs: number, stepMs
 }
 
 describe('falling asleep', () => {
-  it('nods off once nobody has been visible for the timeout', () => {
-    const s = run(initialSleepState(T0), {}, SLEEP_AFTER_MS + 400)
-    expect(s.phase).toBe('asleep')
+  it('never nods off by herself in a session, however long nobody is visible', () => {
+    // Only the agent sends her to sleep: it alone knows whether the
+    // conversation is over, and a face that dozed off on its own timer could
+    // do so while the agent was waiting for an answer.
+    const s = run(initialSleepState(T0), {}, SLEEP_AFTER_MS * 5)
+    expect(s.phase).toBe('awake')
   })
 
   it('stays awake as long as someone is in front of the camera', () => {
@@ -64,24 +67,8 @@ describe('falling asleep', () => {
     expect(s.phase).toBe('awake')
   })
 
-  it('gives a returning camera a full countdown rather than a stale one', () => {
-    // The bug this rules out: treat the camera as a guard on the TRANSITION and
-    // the timer keeps running while the camera is off, so the moment it comes
-    // back it finds a minute-old timestamp and sleeps on the spot.
-    const dark = run(initialSleepState(T0), { cameraActive: false }, SLEEP_AFTER_MS * 2)
-    const back = stepSleep(dark, input(), T0 + SLEEP_AFTER_MS * 2 + 200)
-    expect(back.phase).toBe('awake')
-
-    // ...and then sleeps normally once the timeout has actually elapsed.
-    let s = back
-    for (let t = 400; t <= SLEEP_AFTER_MS + 400; t += 200) {
-      s = stepSleep(s, input(), T0 + SLEEP_AFTER_MS * 2 + t)
-    }
-    expect(s.phase).toBe('asleep')
-  })
-
-  it('honours a shortened timeout, so the preview can be iterated on', () => {
-    const s = run(initialSleepState(T0), { sleepAfterMs: 3000 }, 3400)
+  it('keeps a countdown for the preview page, which has no agent to ask', () => {
+    const s = run(initialSleepState(T0), { force: true, sleepAfterMs: 3000 }, 3400)
     expect(s.phase).toBe('asleep')
   })
 
@@ -145,7 +132,8 @@ describe('a commanded sleep — the agent\'s [sleep] tag (#face-sleep)', () => {
 })
 
 describe('waking', () => {
-  const asleep = (): SleepState => run(initialSleepState(T0), {}, SLEEP_AFTER_MS + 400)
+  // Told to sleep by the agent, the only way she gets there in a session.
+  const asleep = (): SleepState => run(initialSleepState(T0), { sleepRequested: true }, SLEEP_AFTER_MS + 400)
 
   it('wakes on a tap', () => {
     const s = stepSleep(asleep(), input({ wakeRequested: true }), T0 + 60_000)
@@ -189,5 +177,25 @@ describe('waking', () => {
     const woke = stepSleep(asleep(), input({ wakeRequested: true }), T0 + 60_000)
     expect(isYawningAt(woke, T0 + 60_000)).toBe(true)
     expect(isYawningAt(woke, T0 + 60_000 + WAKE_MS * YAWN_FRACTION + 1)).toBe(false)
+  })
+})
+
+describe('held awake by the agent', () => {
+  it('does not nod off on the timer, however long nobody is visible', () => {
+    const s = run(initialSleepState(T0), { sleepAllowed: false }, SLEEP_AFTER_MS * 3)
+    expect(s.phase).toBe('awake')
+  })
+
+  it('does not sleep when told to', () => {
+    const s = run(initialSleepState(T0), { sleepAllowed: false, sleepRequested: true }, 2_000)
+    expect(s.phase).toBe('awake')
+  })
+
+  it('obeys the agent again once sleep is allowed', () => {
+    const held = run(initialSleepState(T0), { sleepAllowed: false }, SLEEP_AFTER_MS * 2)
+    const idle = stepSleep(held, input(), T0 + SLEEP_AFTER_MS * 4)
+    expect(idle.phase).toBe('awake')
+    const told = stepSleep(idle, input({ sleepRequested: true }), T0 + SLEEP_AFTER_MS * 4 + 200)
+    expect(told.phase).toBe('asleep')
   })
 })

@@ -72,6 +72,16 @@ custom_exit_handler() {
     # Run normal cleanup
     run_cleanup 2>/dev/null || true
 
+    # Bound the build cache and warn on a full image disk on EVERY exit,
+    # failed ones included (#780) - a build can fail on a cache already past
+    # its limit, and that's exactly the run that most needs this to happen.
+    # Guarded: this trap can fire before environment.sh has run (e.g. a very
+    # early validation failure), when IMAGE_TAG/CHECKSUM_DIR aren't set yet.
+    if command -v docker >/dev/null 2>&1 && [[ -n "${IMAGE_TAG:-}" ]]; then
+        trim_build_cache 2>/dev/null || true
+        warn_if_image_disk_full 2>/dev/null || true
+    fi
+
     # Show debug info for ANY non-zero exit (helps debug silent failures)
     if [[ $exit_code -ne 0 ]]; then
         echo ""
@@ -152,10 +162,12 @@ parse_args() {
             --namespace)
                 shift
                 KUBERNETES_NAMESPACE="$1"
+                STELLA_CLI_NAMESPACE="$1"
                 ;;
             --port-offset)
                 shift
                 PORT_OFFSET="$1"
+                STELLA_CLI_PORT_OFFSET="$1"
                 ;;
             --help|-h)
                 show_help
@@ -176,6 +188,8 @@ parse_args() {
     export SKIP_BUILD_MODE DRY_RUN_MODE VERBOSE_MODE ENV_FLAG
     export SETUP_MODE CONFIG_MODE
     export KUBERNETES_NAMESPACE PORT_OFFSET
+    # Kept apart so load_env_file can put them back after the env file (#729).
+    export STELLA_CLI_NAMESPACE STELLA_CLI_PORT_OFFSET
 }
 
 show_help() {
@@ -262,23 +276,25 @@ main() {
     echo -e "${EMOJI_ROCKET} ${BOLD}STELLA - Kubernetes Deployment${NC}${mode_suffix}"
     echo ""
 
-    # Phase 2: Handle stop mode early
+    # Phase 2: Load configuration. Before stopping, so that --stop and the
+    # stop half of --restart act on the namespace the env file names, not
+    # always ai-agents (#736).
+    load_environment
+
+    # Phase 2b: Handle stop mode early
     if [[ "$STOP_MODE" == "true" ]]; then
         stop_services
         exit 0
     fi
 
-    # Phase 2b: Handle restart mode - stop first, then continue with normal startup
+    # Phase 2c: Handle restart mode - stop first, then continue with normal startup
     if [[ "$RESTART_MODE" == "true" ]]; then
         info "Restart mode: stopping existing services first..."
         stop_services
         echo ""
     fi
 
-    # Phase 3: Load Configuration
-    load_environment
-
-    # Phase 3b: Check if setup is complete, offer wizard if not
+    # Phase 3: Check if setup is complete, offer wizard if not
     if ! check_setup_status; then
         echo ""
         warning "Setup not complete or missing required configuration"
@@ -390,4 +406,7 @@ cleanup() {
 # Run Main
 # =============================================================================
 
-main "$@"
+# Sourcing the script (scripts/namespace-flag-test.sh) loads its functions only.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

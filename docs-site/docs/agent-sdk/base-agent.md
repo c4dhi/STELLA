@@ -223,6 +223,61 @@ def is_connected(self) -> bool:
     """Whether the agent is connected to a room."""
 ```
 
+## Beyond Speech: the Device Channel
+
+An agent can do more on the user's device than speak, and can learn about more than what the user said. The SDK carries these messages and gives them no meaning of its own: which commands and events exist is between your agent and its client. The built-in face client, for example, understands the commands `sleep` and `sleep_allowed` and reports the events `sleep` and `wake`.
+
+### Commands to the device
+
+```python
+# Inside process(): delivered once this turn's speech has been heard,
+# and dropped if the user interrupts the turn.
+yield AgentOutput.client_command(session_id, "sleep")
+
+# Outside a turn: delivered right away.
+await self.send_client_command("sleep_allowed", allowed=False)
+```
+
+The client receives `{"type": "agent_command", "data": {"command": ..., ...}}`.
+
+### on_client_event
+
+Called when the client sends `{"type": "client_event", "data": {"event": ..., ...}}`: something the user did that is neither speech nor text.
+
+```python
+async def on_client_event(self, session_id: str, event: str, data: dict) -> None:
+    if event == "wake":
+        self.start_turn(event="wake")
+```
+
+### start_turn
+
+Opens a turn nobody spoke. `process()` is called with empty text and `input.metadata["agent_initiated"]` set to what you passed; what it yields is published and spoken like any reply. The turn waits behind one that is running, and a message the user sends in the meantime replaces it.
+
+```python
+async def process(self, input):
+    opened_by_me = input.metadata.get("agent_initiated")
+    if opened_by_me is not None:
+        yield AgentOutput.text_final(input.session_id, "Hello! How are you?")
+        return
+    ...
+```
+
+### on_idle
+
+Set `idle_timeout_seconds` and `on_idle` is called once per quiet stretch: no turn, no speech, nothing done on the device for that long. `None` (the default) switches it off.
+
+```python
+self.idle_timeout_seconds = 45
+
+async def on_idle(self, session_id: str, idle_seconds: float) -> None:
+    await self.send_client_command("sleep", reason="idle")
+```
+
+### Transcript confidence
+
+`input.metadata["stt_confidence"]` says how far a spoken transcript can be trusted, from 0 to 1. It is 1.0 for typed text and 0 when the STT provider gave no signal. Short filler that a transcriber invents over near-silence scores low, so an agent can decline to act on it.
+
 ## Configuration
 
 The `AgentConfig` class configures agent behavior:

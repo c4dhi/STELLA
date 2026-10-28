@@ -16,10 +16,13 @@ This page documents the full plan JSON structure used by STELLA, including build
 | `description` | `string` | No | Short summary |
 | `initial_state_id` | `string` | Recommended | Entry state |
 | `states` | `PlanState[]` | Yes | Conversation states |
-| `system_prompt` | `string` | No | Agent persona/style |
 | `language` | `string` | No | ISO 639-1 code (e.g. `de`). Fixes the session to this language: speech recognition is pinned from the first utterance and language detection is switched off. A deployment-wide `STELLA_LANGUAGE` still takes precedence. Omit for auto-detect |
 | `session_context` | `SessionContext` | No | Pre-session input fields |
 | `metadata` | `PlanMetadata` | No | Builder metadata and custom extensions |
+
+:::note Personas, since 1.3.0
+A plan no longer carries a `system_prompt` or a `voice`. Who the agent is lives in a [persona](../agents/personas.md), chosen when deploying. Saving a plan with either field is rejected. A plan can still name the agent with persona variables such as `{{persona.name}}`.
+:::
 
 ## PlanState Object
 
@@ -32,6 +35,19 @@ This page documents the full plan JSON structure used by STELLA, including build
 | `tasks` | `PlanTask[]` | Yes | Use empty array for terminal or goal-driven states |
 | `transitions` | `StateTransition[]` | No | Outgoing routing rules |
 | `goal` | `StateGoal` | Only for `type: "goal"` | Goal-mode context |
+
+## StateGoal Object
+
+Used on a state with `type: "goal"`.
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `objective` | `string` | Yes | What the conversation should achieve |
+| `context` | `string` | No | Background the agent should know |
+| `depth_guidance` | `string` | No | How deep to go before moving on |
+| `boundaries` | `string` | No | Topics or behaviour to stay away from |
+| `success_description` | `string` | No | When the goal counts as reached; the closing check judges against it |
+| `deliverables` | `PlanDeliverable[]` | No | Answers to collect on the way; required ones must be in before the goal can close |
 
 ## PlanTask Object
 
@@ -225,7 +241,6 @@ A terminal end path is represented by both execution and builder metadata:
   "title": "Support Router",
   "description": "Routes conversations by category and urgency",
   "initial_state_id": "state_intake",
-  "system_prompt": "You are a concise support routing assistant.",
   "session_context": {
     "fields": [
       {

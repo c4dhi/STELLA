@@ -3,6 +3,7 @@
 from typing import Any, Dict
 
 from stella_agent_sdk.tools.base import BaseTool, ToolResult
+from stella_agent_sdk.tools.state_machine.guidance import STATE_MACHINE_TOOL_GUIDANCE
 from stella_agent_sdk.tools.state_machine.result import state_transition_data
 from stella_agent_sdk.services.state_machine_client import StateMachineClient
 
@@ -17,6 +18,8 @@ class SkipTaskTool(BaseTool):
     is advisory only — you may skip any task, including required ones, when it
     genuinely does not apply.
     """
+
+    guidance = STATE_MACHINE_TOOL_GUIDANCE
 
     def __init__(self, client: StateMachineClient):
         self._client = client

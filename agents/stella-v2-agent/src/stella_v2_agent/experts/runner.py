@@ -15,10 +15,10 @@ import time
 from typing import Dict, Any, List, Optional
 
 from stella_agent_sdk.tools import BaseTool
-from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
 from stella_agent_sdk import prompts as sdk_prompts
 
 from stella_v2_agent.experts.base import ExpertConfig
+from stella_v2_agent.experts.goal_check import GoalCloseCheck
 from stella_v2_agent.experts.template_compiler import (
     has_user_message_placeholder,
     HISTORY_PATTERN,
@@ -56,6 +56,7 @@ class ExpertRunner:
         """
         self._llm_service = llm_service
         self._compiler_version = compiler_version
+        self._goal_check = GoalCloseCheck(llm_service)
 
     async def run(
         self,
@@ -143,8 +144,14 @@ class ExpertRunner:
             messages = self._build_messages(
                 config, user_input, conversation_history, sm_context,
                 append_output_format=False,
-                append_tool_guidance=True,
+                tools=tools,
             )
+            # What became of the expert's last attempt to close or skip a goal:
+            # it never sees its tool results otherwise (#706).
+            goal_check = getattr(self, "_goal_check", None)
+            note = goal_check.note_for(sm_context) if goal_check else ""
+            if note and messages:
+                messages[0] = LLMMessage(role=messages[0].role, content=f"{messages[0].content}\n\n{note}")
 
             # Use OPENAI_DIRECT provider (supports tool calling, unlike LANGCHAIN)
             tool_schemas = [t.to_openai_schema() for t in tools]
@@ -173,7 +180,17 @@ class ExpertRunner:
             # even when the LLM returns no tool calls.
             results: List[Dict[str, Any]] = []
 
-            if response.tool_calls:
+            # Closing a goal as reached, or giving it up, gets a second,
+            # single-purpose opinion first (#706). Held back, that one action is
+            # dropped from the calls and the rest of them still runs.
+            tool_calls = response.tool_calls or []
+            goal_checks: list = []
+            if tool_calls and goal_check:
+                tool_calls, goal_checks = await goal_check.filter(
+                    tool_calls, user_input, conversation_history, sm_context, config.model
+                )
+
+            if tool_calls:
                 tool_map = {t.name: t for t in tools}
 
                 async def _execute_single(tc):
@@ -194,7 +211,7 @@ class ExpertRunner:
                     except Exception as e:
                         return {"name": tc.name, "arguments": tc.arguments, "error": str(e), "success": False}
 
-                results = await asyncio.gather(*[_execute_single(tc) for tc in response.tool_calls])
+                results = await asyncio.gather(*[_execute_single(tc) for tc in tool_calls])
 
                 for r in results:
                     tool_calls_made.append(r)
@@ -275,6 +292,10 @@ class ExpertRunner:
                     # post-transition response re-anchoring in agent.py.
                     "transitioned": transitioned,
                     "new_state_id": new_state_id,
+                    # Set when the expert tried to close a goal or give it up:
+                    # whether the check let it, and the user's words it rested on.
+                    "goal_close": next((c.as_dict() for c in goal_checks if c.kind == "close"), None),
+                    "goal_skip": next((c.as_dict() for c in goal_checks if c.kind == "skip"), None),
                 },
             )
 
@@ -299,7 +320,7 @@ class ExpertRunner:
         conversation_history: List[Dict[str, str]],
         sm_context: Dict[str, Any],
         append_output_format: bool = True,
-        append_tool_guidance: bool = False,
+        tools: Optional[List[BaseTool]] = None,
     ) -> List[LLMMessage]:
         """Build LLM messages for the expert call.
 
@@ -311,10 +332,10 @@ class ExpertRunner:
         Args:
             append_output_format: If False, skip appending output_format
                 (used in tool mode where tools replace structured JSON output).
-            append_tool_guidance: If True, append the SDK's canonical
-                state-machine tool-usage contract (single source of truth) to the
-                system prompt. Set for tool-calling experts so the tool mechanics
-                are injected from code, never hand-written in the expert prompt.
+            tools: The tools this call can use. Each one's ``guidance`` (the SDK's
+                usage contract for it) is appended once — so an expert is taught
+                exactly the tools it has, from code, never from its editable
+                prompt.
         """
         template = config.system_prompt or ""
 
@@ -345,11 +366,12 @@ class ExpertRunner:
             )
             compiled_prompt = template
 
-        # Tool-calling experts get the canonical tool-usage contract from the SDK
-        # (single source of truth, shared with stella-light) — never from the
-        # editable expert prompt.
-        if append_tool_guidance:
-            compiled_prompt += "\n\n" + STATE_MACHINE_TOOL_GUIDANCE
+        # The usage contract of each tool this expert can call, once per distinct
+        # text. It used to be the state-machine contract for ANY tool-calling
+        # expert, which taught companion_router set_deliverable rules it could
+        # not even call.
+        for guidance in dict.fromkeys(t.guidance for t in tools or [] if t.guidance):
+            compiled_prompt += "\n\n" + guidance
 
         # Append output format instruction if configured (not in tool mode)
         if append_output_format and config.output_format:

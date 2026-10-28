@@ -73,4 +73,17 @@ describe('AgentPackageService.readExpertDefaults', () => {
     })
     expect(() => service.readExpertDefaults(buf, ['experts'])).not.toThrow()
   })
+
+  it('publishes template_i18n with the verdict directive (#75)', () => {
+    const buf = zipOf({
+      'config/experts/medical.json': {
+        name: 'medical',
+        verdict_directives: {
+          high: { action: 'prepend', template: 'Careful.', template_i18n: { de: 'Vorsicht.' } },
+        },
+      },
+    })
+    const result = service.readExpertDefaults(buf, ['experts'])
+    expect((result![0].verdict_directives as any).high.template_i18n).toEqual({ de: 'Vorsicht.' })
+  })
 })

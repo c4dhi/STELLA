@@ -78,11 +78,14 @@ def build_response_system_prompt(
     guidelines = custom_guidelines or _conversation_guidelines()
     ctx = {
         "conversationHistory": format_history(conversation_history, history_limit),
-        "stateContext": _state_machine_section(sm_context),
+        "stateContext": _state_machine_section(
+            sm_context, tone=directive.tone if directive else ""
+        ),
         "directive": directive.to_prompt_section() if directive else "",
         "language": _language_directive(
             sm_context.get("language"), pinned=bool(sm_context.get("language_pinned"))
         ) or "",
+        "contentLanguage": _content_language_directive(sm_context.get("content_language")) or "",
         "bridge": bridge or "",
         "emotionTags": _emotion_tag_directive() if emotion_tags else "",
         # {{persona.*}} in the configured guidelines. This engine and the
@@ -151,7 +154,7 @@ When you are CONTINUING something you have already begun saying out loud, the ta
 - already said "Got it, that makes sense." -> continue "[thinking] So where does that leave the rest of the week?"   NOT "[happy] Great!"
 
 How to use them:
-- Open with the expression that matches how you feel about what you are about to say.
+- Open with the expression that matches how you feel about what you are about to say — UNLESS you are continuing something you already began (see above): then there is no "opening" left to do, and the first tag goes before the next new thing you say, not before a restated greeting or reaction.
 - Then tag every point where a person's face would have moved. Read your own words back and ask where your expression would have shifted, where you would have nodded, where your eyebrows would have gone up — and put a tag there. A human face does not hold one shape for a whole answer, and yours must not either.
 - Change the expression whenever the feeling changes: [thinking] while you work something out, [laughing] at something funny, [concerned] at something heavy, [curious] as you ask.
 - Gestures are the small beats between them and belong in nearly every reply — a [nod] as you agree, a [brow_flash] as something lands, a [wink] at a shared joke, a [lean_in] as you get interested. They cost nothing, and their absence is what makes a face look dead.
@@ -200,6 +203,25 @@ def _language_directive(language: Optional[str], pinned: bool = False) -> Option
         )
     return head + (
         f"- This is the language detected for this conversation; do not switch languages on your own."
+    )
+
+
+def _content_language_directive(content_language: Optional[str]) -> Optional[str]:
+    """A translation hint for an activity whose own content was written in a
+    different language than the conversation (#58). Turn-scoped by the
+    caller: only passed while that specific activity is running (see
+    agent.py's per-turn `content_language`), so it needs no restore when the
+    activity ends — the activity's language never reaches the LANGUAGE
+    directive above at all, only this one, informational note.
+    """
+    if not content_language:
+        return None
+    name = LANGUAGE_NAMES.get(content_language, content_language)
+    return (
+        f"This activity's own material was originally written in {name}. "
+        f"Keep speaking the conversation's language above regardless — "
+        f"translate and adapt the activity's content naturally rather than "
+        f"switching to {name} or mixing the two."
     )
 
 
@@ -288,7 +310,7 @@ CONTINUE FROM WHAT YOU ALREADY SAID — you have just spoken this opener aloud: 
 _MAX_VISIBLE_PENDING = 1
 
 
-def _state_machine_section(sm_context: Dict[str, Any]) -> str:
+def _state_machine_section(sm_context: Dict[str, Any], tone: str = "") -> str:
     """Render the turn's state-machine context as orientation, not as a form.
 
     This section is the single largest structural pull toward sounding scripted.
@@ -311,6 +333,11 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
         extraction expert's business and it builds its own context, so exposing
         them here just invited field-shaped turns;
       * acceptance criteria for items not currently in play.
+
+    ``tone``: the arbitration directive's tone for this turn. When
+    ``"cautious"`` (a medical/legal "high"/"critical" verdict), the current
+    task's ``Instruction:`` line is marked subordinate to that caution instead
+    of read as a plain instruction to act on (#705).
     """
     if not sm_context:
         return ""
@@ -352,7 +379,19 @@ def _state_machine_section(sm_context: Dict[str, Any]) -> str:
         # guidelines, gated on the {{taskJustCollected}} / {{stateCompleting}} /
         # {{stateJustChanged}} runtime flags (see _state_conditions).
         if not (task_del_keys & collected_keys) and instruction:
-            parts.append(f"Instruction: {instruction}")
+            if tone == "cautious":
+                # A step like "give a small personal suggestion" was winning
+                # outright over a live medical/legal flag, because this line
+                # read as a plain instruction to act on (#705). The caution
+                # above is the actual directive this turn; the step is noted,
+                # not followed.
+                parts.append(
+                    "Instruction (subordinate to the caution above — a "
+                    "flagged concern is active this turn, so do not act on "
+                    f"this as a suggestion, tip or home remedy): {instruction}"
+                )
+            else:
+                parts.append(f"Instruction: {instruction}")
 
     deliverables = sm_context.get("deliverables", [])
     pending = [

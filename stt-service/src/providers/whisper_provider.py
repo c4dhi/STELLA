@@ -7,6 +7,7 @@ Follows industry best practices (LiveKit, OpenAI Realtime, Deepgram, Pipecat):
 - Configurable endpointing delays for conversational speech
 """
 
+import math
 import asyncio
 import difflib
 import json
@@ -21,9 +22,9 @@ from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, Future
 import numpy as np
 
-from .base import STTProvider, STTSession
+from .base import STTProvider, STTSession, end_of_speech_fields
 import stt_pb2
-from vad.speech_gate import GateConfig, GateSignal, SpeechGate, SpeechState
+from vad.speech_gate import GateConfig, GateSignal, SpeechGate, SpeechState, clamp_endpointing_ceiling
 
 # ── Decode diagnostics (STT_DECODE_DIAGNOSTICS) ──────────────────────────────
 # Logging-only instrumentation for the endpointing/hallucination investigation.
@@ -123,6 +124,58 @@ def _collect_segments(segments) -> Tuple[str, dict]:
         "no_speech_prob": _stats(no_speech, max),
         "compression_ratio": _stats(compression, max),
     }
+
+
+def _transcript_confidence(metrics: dict) -> float:
+    """How far a final transcript can be trusted, 0..1, from the decode itself.
+
+    The chance it was speech at all, times the model's average confidence in the
+    words it chose: ``(1 - no_speech_prob) * exp(avg_logprob)``. Both halves
+    matter to whoever acts on a short answer. Filler invented over near-silence
+    ("Thank you.") can be decoded confidently and is only given away by the
+    no-speech probability; a real but mumbled "yes" is the reverse.
+
+    The worst segment's no-speech probability is used, because one invented
+    segment is what a hallucination looks like in a longer decode. Returns 0.0
+    when the decode carried no signal, which callers read as "unknown".
+    """
+    logprob = (metrics.get("avg_logprob") or {}).get("mean")
+    if logprob is None:
+        return 0.0
+    no_speech = (metrics.get("no_speech_prob") or {}).get("worst") or 0.0
+    confidence = (1.0 - no_speech) * math.exp(min(logprob, 0.0))
+    return round(max(0.0, min(1.0, confidence)), 4)
+
+
+_HIGHPASS_SOS = None  # built lazily — scipy import is deferred, same as the instance method
+
+
+def _preprocess_audio_float(audio_float: np.ndarray) -> np.ndarray:
+    """High-pass filter + peak-normalize. Module-level so a session-less
+    caller (``WhisperProvider.redecode``) can preprocess identically to the
+    live session path (``WhisperSession._preprocess_audio``), which now just
+    forwards here."""
+    global _HIGHPASS_SOS
+    from scipy import signal
+    if _HIGHPASS_SOS is None:
+        _HIGHPASS_SOS = signal.butter(5, 80, btype='highpass', fs=16000, output='sos')
+
+    audio_float = signal.sosfilt(_HIGHPASS_SOS, audio_float)
+    peak = np.abs(audio_float).max()
+    if peak > 0.01:
+        audio_float = audio_float / peak * 0.95
+    return audio_float
+
+
+def _clear_gpu_memory() -> None:
+    """Clear GPU memory cache to prevent accumulation. Module-level so a
+    session-less caller (``WhisperProvider.redecode``) can clean up the same
+    way the live session path does."""
+    try:
+        if TORCH_AVAILABLE and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception as e:
+        print(f"[WhisperSession] GPU cache clear error: {e}")
 
 
 def _trailing_silence_samples(samples: np.ndarray, rms_threshold: float, frame: int = 512) -> int:
@@ -235,6 +288,8 @@ class WhisperSession(STTSession):
             max_endpointing_delay_ms=self.max_endpointing_delay_ms,
             sample_rate=16000,
         ))
+        # The gate clamps a ceiling shorter than the window up to it.
+        self.max_endpointing_delay_ms = self.gate.config.max_endpointing_delay_ms
 
         # Tracking
         self.last_partial_time = 0
@@ -282,10 +337,6 @@ class WhisperSession(STTSession):
         # free per-utterance detection away, so a pinned session is reported as
         # that fixed language.
         self.language_hint = None
-
-        # Precompute high-pass filter coefficients (80Hz cutoff for noise removal)
-        from scipy import signal
-        self.highpass_sos = signal.butter(5, 80, btype='highpass', fs=16000, output='sos')
 
         # Processing state
         self.chunk_count = 0
@@ -358,25 +409,11 @@ class WhisperSession(STTSession):
 
     def _preprocess_audio(self, audio_float: np.ndarray) -> np.ndarray:
         """Simple preprocessing: high-pass filter + normalize."""
-        from scipy import signal
-
-        # High-pass filter to remove low-frequency noise/hum
-        audio_float = signal.sosfilt(self.highpass_sos, audio_float)
-
-        # Normalize audio to 0.95 peak
-        peak = np.abs(audio_float).max()
-        if peak > 0.01:
-            audio_float = audio_float / peak * 0.95
-
-        return audio_float
+        return _preprocess_audio_float(audio_float)
 
     def _clear_gpu_memory(self) -> None:
         """Clear GPU memory cache to prevent accumulation."""
-        try:
-            if TORCH_AVAILABLE and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception as e:
-            print(f"[WhisperSession] GPU cache clear error: {e}")
+        _clear_gpu_memory()
 
     def _speech_boundary_event(
         self, current_time: float, *, started: bool = False, ended: bool = False,
@@ -448,17 +485,19 @@ class WhisperSession(STTSession):
                 self._reset()
                 return events
 
-        # MAYBE_ENDING timeout check (handles case where audio stream ends during MAYBE_ENDING)
-        if self.state == "MAYBE_ENDING" and self.pending_final_time:
+        # MAYBE_ENDING timeout check (handles case where audio stream ends during
+        # MAYBE_ENDING). Decided by the gate, so the ceiling holds here too (#469).
+        reason = self.gate.hold_expired(current_time)
+        if reason:
             time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
-            if time_in_maybe_ending >= self.continuation_window_ms:
-                total_silence = (current_time - self.silence_start_time) * 1000 if self.silence_start_time else time_in_maybe_ending
-                print(f"[WhisperSession] Continuation window expired ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
-                final_event = self._generate_final(current_time)
-                if final_event:
-                    events.append(final_event)
-                self._reset()
-                return events
+            total_silence = (current_time - self.silence_start_time) * 1000 if self.silence_start_time else time_in_maybe_ending
+            what = "Endpointing ceiling reached" if reason == "ceiling" else "Continuation window expired"
+            print(f"[WhisperSession] {what} ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
+            final_event = self._generate_final(current_time)
+            if final_event:
+                events.append(final_event)
+            self._reset()
+            return events
 
         try:
             # Convert bytes to numpy array (16-bit PCM)
@@ -599,6 +638,11 @@ class WhisperSession(STTSession):
                     self.pre_buffer = array('h')
                     print("[WhisperSession] Speech started")
 
+                elif signal == GateSignal.PAUSE_RESCUED:
+                    pause = self.gate.rescued_pauses[-1]
+                    print(f"[WhisperSession] Pause rescued ({pause['pause_ms']}ms, "
+                          f"{pause['into_window_ms']}ms into the window)")
+
                 elif signal == GateSignal.SPEECH_STARTED:
                     events.append(self._speech_boundary_event(current_time, started=True))
 
@@ -615,7 +659,9 @@ class WhisperSession(STTSession):
                     events.append(self._speech_boundary_event(current_time, ended=True))
 
                 elif signal == GateSignal.FINALIZE:
-                    print("[WhisperSession] Continuation window expired")
+                    print("[WhisperSession] Endpointing ceiling reached"
+                          if self.gate.last_exit_reason == "ceiling"
+                          else "[WhisperSession] Continuation window expired")
                     final_event = self._generate_final(current_time)
                     if final_event:
                         events.append(final_event)
@@ -831,6 +877,8 @@ class WhisperSession(STTSession):
 
     def _generate_final(self, current_time: float) -> Optional[stt_pb2.TranscriptEvent]:
         """Generate final transcript event."""
+        # The whole final step, drains included: it is all time the user waits.
+        final_started = time.time()
         if len(self.speech_buffer) < self.min_speech_samples:
             print(f"[WhisperSession] Audio too short: {len(self.speech_buffer)} < {self.min_speech_samples}")
             return None
@@ -964,11 +1012,14 @@ class WhisperSession(STTSession):
                 is_final=True,
                 transcript_id=self.transcript_id,
                 participant_id=self.participant_id,
-                confidence=0.95,
+                confidence=_transcript_confidence(final_metrics),
                 timestamp_ms=int(current_time * 1000),
                 detected_language=detected_language or "",
                 language_confidence=language_confidence,
                 decode_diagnostics=diagnostics_json,
+                **end_of_speech_fields(
+                    self.gate, current_time, (time.time() - final_started) * 1000
+                ),
             )
 
         except Exception as e:
@@ -1173,7 +1224,10 @@ class WhisperProvider(STTProvider):
         self.vad_threshold = float(os.getenv("VAD_THRESHOLD", "0.5"))
         self.silence_duration_ms = int(os.getenv("VAD_SILENCE_DURATION_MS", "800"))
         self.continuation_window_ms = int(os.getenv("VAD_CONTINUATION_WINDOW_MS", "1000"))
-        self.max_endpointing_delay_ms = int(os.getenv("VAD_MAX_ENDPOINTING_DELAY_MS", "2000"))
+        # Clamped here as well as in the gate, so the banner below is truthful.
+        self.max_endpointing_delay_ms = clamp_endpointing_ceiling(
+            int(os.getenv("VAD_MAX_ENDPOINTING_DELAY_MS", "2000")), self.continuation_window_ms
+        )
         self.min_speech_ms = int(os.getenv("VAD_MIN_SPEECH_MS", "500"))
         self.max_speech_duration_ms = int(os.getenv("VAD_MAX_SPEECH_DURATION_MS", "30000"))
         self.partial_interval_ms = int(os.getenv("PARTIAL_INTERVAL_MS", "1000"))
@@ -1388,6 +1442,51 @@ class WhisperProvider(STTProvider):
     def note_language(self, language: Optional[str]) -> None:
         if language:
             self._last_declared_language = language
+
+    async def redecode(
+        self, audio_data: bytes, language: str, sample_rate: int = 16000
+    ) -> Optional[str]:
+        """Re-decode one utterance's own audio, forced to ``language`` (#57).
+
+        A standalone decode — no ``WhisperSession``, no VAD, no buffer — since
+        the caller already knows this is exactly one utterance's audio and
+        already decided (``LanguageResolver.needs_redecode``) that it needs
+        this. Same preprocessing and decode parameters as the live final path
+        (``WhisperSession._generate_final``), so the result is comparable.
+        """
+        if not self.model_ready or not self.whisper_model:
+            return None
+
+        def _infer() -> str:
+            audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
+            if sample_rate != 16000 and sample_rate > 0 and len(audio_int16) > 0:
+                from scipy import signal
+                num_samples = int(len(audio_int16) * 16000 / sample_rate)
+                audio_int16 = signal.resample(audio_int16, num_samples).astype(np.int16)
+            audio_float = _preprocess_audio_float(audio_int16.astype(np.float32) / 32768.0)
+            segments, _info = self.whisper_model.transcribe(
+                audio_float,
+                language=language,
+                beam_size=self.beam_size,
+                vad_filter=False,
+                word_timestamps=False,
+                condition_on_previous_text=False,
+                initial_prompt=self.initial_prompt,
+                temperature=0.0,
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
+            )
+            return "".join(seg.text for seg in segments).strip()
+
+        try:
+            text = await asyncio.to_thread(_infer)
+            return text or None
+        except Exception as e:
+            print(f"[WhisperProvider] Redecode error: {e}")
+            return None
+        finally:
+            _clear_gpu_memory()
 
     def start_keepalive(self) -> None:
         """Keep the model warm in the background (needs a running event loop)."""

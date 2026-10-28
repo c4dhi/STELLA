@@ -107,6 +107,21 @@ class STTProvider(ABC):
     def note_language(self, language: Optional[str]) -> None:
         """A session declared this language; providers may use it to warm up. No-op by default."""
 
+    async def redecode(
+        self, audio_data: bytes, language: str, sample_rate: int = 16000
+    ) -> Optional[str]:
+        """Re-decode one utterance's own audio, forced to ``language`` (#57).
+
+        Only called for a turn the agent's ``LanguageResolver`` found doubtful
+        (too short, or below its keep-text confidence bar) — never a second
+        call on a confident turn, and the result is never fed back as
+        detection evidence. ``None`` by default: a provider with no language
+        steering (this one) cannot do this, and the caller keeps the original
+        free-decode text rather than losing it. Only ``WhisperProvider``
+        overrides this.
+        """
+        return None
+
     def get_capabilities(self) -> dict:
         """Return provider capabilities.
 
@@ -123,3 +138,19 @@ class STTProvider(ABC):
             "supports_streaming": True,
             "supports_gpu": False,
         }
+
+
+def end_of_speech_fields(gate, now: float, decode_ms: float) -> dict:
+    """The end-of-speech timing a final carries (#92), as TranscriptEvent kwargs.
+
+    Logging only. Read off the provider's turn machine: the silence it waited
+    through, how long the user spoke, and every pause it rescued inside the
+    continuation window. `decode_ms` is the provider's own measurement of the
+    final step. Fields it cannot know are left unset rather than sent as 0.
+    """
+    fields = {"decode_ms": int(round(max(decode_ms, 0.0)))}
+    timing = gate.endpoint_timing(now)
+    if timing:
+        fields.update(timing)
+    fields["rescued_pauses"] = [stt_pb2.RescuedPause(**p) for p in gate.rescued_pauses]
+    return fields

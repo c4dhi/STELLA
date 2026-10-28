@@ -17,12 +17,13 @@ import {
   MetricsSummaryDto,
   PlanCompletionSessionDto,
 } from './dto/agent-metrics.dto.js';
-import { AgentStatus, Prisma } from '@prisma/client';
+import { AgentStatus, Prisma, SessionStatus } from '@prisma/client';
 import { sanitizeAgentConfig } from '../common/utils/sanitize-config.js';
 import { EncryptionService } from '../env-var-templates/encryption.service.js';
 import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service.js';
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
 import { PersonasService } from '../personas/personas.service.js';
+import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -50,6 +51,8 @@ export class AgentsService {
     // Resolves the deploy-time persona snapshot (identity), independent of agent type.
     private readonly personasService: PersonasService,
     private readonly eventEmitter: EventEmitter2,
+    // Platform defaults a system admin sets (TTS playback), applied at every pod creation.
+    private readonly platformSettings: PlatformSettingsService,
     @Optional() private agentServerService?: AgentServerService,
     // See the matching comment in SessionsService: typed `any` here (and
     // assigned to the class field below) so TS's emitDecoratorMetadata
@@ -274,6 +277,7 @@ export class AgentsService {
     if (!session.room) {
       throw new NotFoundException('Session does not have an associated room');
     }
+    this.assertSessionOpen(session);
 
     // Determine agent type. Defaults to stella-v2: an omitted agentType used
     // to land silently on stella-light, which is deprecated — the least
@@ -397,11 +401,13 @@ export class AgentsService {
       // Resolve env vars once here, before touching K8s.
       // Decrypts the template (if any), merges manual overrides on top, and returns the final map.
       // KubernetesService receives only the merged plaintext — no business logic leaks into infrastructure.
-      const { merged: resolvedEnvVars } = await this.envVarTemplatesService.resolveEnvVars(
+      const { merged } = await this.envVarTemplatesService.resolveEnvVars(
         createAgentDto.envVarTemplateId,
         userId,
         createAgentDto.envVars,
       );
+      // The deployment's own playback mode wins; otherwise the platform default.
+      const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, agentId);
 
       // Create K8s pod - agent connects directly to LiveKit via SDK
       const { podName, secretName } = await this.k8s.createAgentPod({
@@ -515,6 +521,10 @@ export class AgentsService {
         createAgentDto.availablePlanIds ?? [],
         userId,
       );
+    } else if (createAgentDto.planId) {
+      agentConfig.plan = this.toSdkPlan(
+        await this.loadOwnPlanTemplate(createAgentDto.planId, userId),
+      );
     }
 
     if (!envVarTemplateId && !agentConfigurationId) return;
@@ -563,28 +573,12 @@ export class AgentsService {
     const activities: Array<Record<string, unknown>> = [];
 
     for (const id of planIds) {
-      const template = await this.prisma.planTemplate.findUnique({
-        where: { id },
-      });
-      if (!template || template.userId !== userId) {
-        throw new BadRequestException(
-          `Plan ${id} is not available to this user`,
-        );
-      }
-
-      const content = (template.content ?? {}) as Record<string, unknown>;
+      const template = await this.loadOwnPlanTemplate(id, userId);
       activities.push({
         id: template.id,
         title: template.name,
         description: template.description ?? '',
-        // Mapped to the canonical SDK plan shape, matching what the deploy modal
-        // builds for plan-following mode so both paths hand the agent one shape.
-        plan: {
-          id: template.id,
-          title: template.name,
-          description: template.description ?? '',
-          ...content,
-        },
+        plan: this.toSdkPlan(template),
       });
     }
 
@@ -594,6 +588,38 @@ export class AgentsService {
       );
     }
     return activities;
+  }
+
+  /** One of the user's plan templates; someone else's answers like a missing one. */
+  private async loadOwnPlanTemplate(planId: string, userId: string) {
+    const template = await this.prisma.planTemplate.findUnique({
+      where: { id: planId },
+    });
+    if (!template || template.userId !== userId) {
+      throw new BadRequestException(
+        `Plan ${planId} is not available to this user`,
+      );
+    }
+    return template;
+  }
+
+  /**
+   * A plan template in the canonical SDK plan shape, matching what the deploy
+   * modal builds for plan-following mode so every path hands the agent one shape.
+   */
+  private toSdkPlan(template: {
+    id: string;
+    name: string;
+    description: string | null;
+    content: Prisma.JsonValue;
+  }): Record<string, unknown> {
+    const content = (template.content ?? {}) as Record<string, unknown>;
+    return {
+      id: template.id,
+      title: template.name,
+      description: template.description ?? '',
+      ...content,
+    };
   }
 
   /**
@@ -992,6 +1018,7 @@ export class AgentsService {
     if (!agent.session.room) {
       throw new Error('Session does not have an associated room');
     }
+    this.assertSessionOpen(agent.session);
 
     this.logger.log(`Restarting agent ${id} (keeping same ID)`);
 
@@ -1093,11 +1120,14 @@ export class AgentsService {
 
     // Re-resolve env vars using the same code path as create() to guarantee the restarted pod
     // gets an identical secret to the original deployment.
-    const { merged: resolvedEnvVars } = await this.envVarTemplatesService.resolveEnvVars(
+    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
       agent.envVarTemplateId ?? undefined,
       projectMembership.userId,
       storedManualVars,
     );
+    // Unlike the rest of the env, the platform playback default is read fresh:
+    // a woken session is a new pipeline, so it takes the current default.
+    const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, id);
 
     // Recreate Kubernetes pod with SAME agent ID
     try {
@@ -1165,6 +1195,18 @@ export class AgentsService {
     // Delegate to centralized delete logic (handles stopping if needed)
     await this.deleteAgent(id);
     return { message: 'Agent deleted successfully' };
+  }
+
+  /**
+   * Agents only start in an active session. A closing or closed one keeps its
+   * transcript, but a pod started there would run with nobody able to join.
+   */
+  private assertSessionOpen(session: { id: string; status: SessionStatus }) {
+    if (session.status !== SessionStatus.ACTIVE) {
+      throw new BadRequestException(
+        `Session ${session.id} is ${session.status.toLowerCase()}: agents can only start in an active session`,
+      );
+    }
   }
 
   async restart(id: string) {
@@ -1252,6 +1294,11 @@ export class AgentsService {
       shadowEarlierMs?: number;
       partialIdentical?: boolean;
     }> = [];
+    // Endpointing (#92): the end-of-speech gap from STT on stt_end, pauses
+    // that nearly ended a turn, and speech right after a final (early cutoff).
+    const endOfSpeech = { turns: 0, silence: [] as number[], decode: [] as number[] };
+    const rescued: Array<{ turnId?: string; pauseMs?: number; intoWindowMs?: number }> = [];
+    const resumed: Array<{ sinceFinalMs?: number; agentSpeaking: boolean }> = [];
 
     for (const msg of messages) {
       const data = this.extractFullMetadata(msg.metadata);
@@ -1316,6 +1363,27 @@ export class AgentsService {
           if (typeof data.elapsed_ms === 'number') {
             ttfrTimings.push(data.elapsed_ms);
           }
+          break;
+        case 'stt_end':
+          endOfSpeech.turns += 1;
+          // Both or neither: the gap is only a sum when both parts are known.
+          if (typeof data.trailing_silence_ms === 'number' && typeof data.decode_ms === 'number') {
+            endOfSpeech.silence.push(data.trailing_silence_ms);
+            endOfSpeech.decode.push(data.decode_ms);
+          }
+          break;
+        case 'pause_rescued':
+          rescued.push({
+            turnId: typeof data.turn_id === 'string' ? data.turn_id : undefined,
+            pauseMs: typeof data.pause_ms === 'number' ? data.pause_ms : undefined,
+            intoWindowMs: typeof data.into_window_ms === 'number' ? data.into_window_ms : undefined,
+          });
+          break;
+        case 'user_resumed_after_final':
+          resumed.push({
+            sinceFinalMs: typeof data.since_final_ms === 'number' ? data.since_final_ms : undefined,
+            agentSpeaking: data.agent_speaking === true,
+          });
           break;
       }
     }
@@ -1400,6 +1468,29 @@ export class AgentsService {
             partial.length > 0 ? Math.round((partial.filter(Boolean).length / partial.length) * 10000) / 10000 : null,
         };
       })() : null,
+
+      endpointing: endOfSpeech.silence.length > 0 || rescued.length > 0 || resumed.length > 0 ? (() => {
+        const mean = (values: Array<number | undefined>) => {
+          const known = values.filter((v): v is number => v !== undefined);
+          return known.length > 0 ? Math.round(known.reduce((s, v) => s + v, 0) / known.length) : null;
+        };
+        const silence = mean(endOfSpeech.silence);
+        const decode = mean(endOfSpeech.decode);
+        return {
+          totalTurns: endOfSpeech.turns,
+          gapTurns: endOfSpeech.silence.length,
+          avgTrailingSilence_ms: silence,
+          avgDecode_ms: decode,
+          avgEndOfSpeechGap_ms: silence !== null && decode !== null ? silence + decode : null,
+          pausesRescued: rescued.length,
+          turnsWithRescuedPause: new Set(rescued.map((r) => r.turnId)).size,
+          avgRescuedPause_ms: mean(rescued.map((r) => r.pauseMs)),
+          avgRescuedIntoWindow_ms: mean(rescued.map((r) => r.intoWindowMs)),
+          resumedAfterFinal: resumed.length,
+          resumedWhileAgentSpeaking: resumed.filter((r) => r.agentSpeaking).length,
+          avgResumedSinceFinal_ms: mean(resumed.map((r) => r.sinceFinalMs)),
+        };
+      })() : null,
     };
   }
 
@@ -1455,6 +1546,7 @@ export class AgentsService {
           bridgeDuration: null,
           ttfr: null,
           sttDecode: null,
+          endpointing: null,
         },
       };
     }

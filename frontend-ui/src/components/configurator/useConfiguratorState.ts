@@ -208,7 +208,7 @@ export const BUILT_IN_EXPERTS: Omit<
     description: 'Detects inaudible, garbled, or nonsensical transcription and triggers clarification',
     alwaysTriggered: false,
     triggerCriteria: 'The message seems garbled, inaudible, or contains transcription artifacts',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.4-mini',
     temperature: 0.1,
     maxTokens: 200,
     systemPrompt: '',
@@ -223,7 +223,7 @@ export const BUILT_IN_EXPERTS: Omit<
     description: 'Flags health and medical safety concerns requiring cautious handling',
     alwaysTriggered: false,
     triggerCriteria: 'Health, medical, or wellness topics are mentioned',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.4-mini',
     temperature: 0.1,
     maxTokens: 200,
     systemPrompt: '',
@@ -238,7 +238,7 @@ export const BUILT_IN_EXPERTS: Omit<
     description: 'Flags legal concerns requiring careful handling and disclaimers',
     alwaysTriggered: false,
     triggerCriteria: 'Legal topics, disputes, contracts, or regulations are mentioned',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.4-mini',
     temperature: 0.1,
     maxTokens: 200,
     systemPrompt: '',
@@ -253,7 +253,7 @@ export const BUILT_IN_EXPERTS: Omit<
     description: 'Thorough background extraction of deliverables, completed tasks, and state transitions',
     alwaysTriggered: false,
     triggerCriteria: '',
-    model: 'gpt-4o',
+    model: 'gpt-5.4-mini',
     temperature: 0.0,
     maxTokens: 800,
     systemPrompt: '',
@@ -268,7 +268,7 @@ export const BUILT_IN_EXPERTS: Omit<
     description: 'Analyzes conversation for deliverable signals and determines if follow-up questions are needed',
     alwaysTriggered: false,
     triggerCriteria: 'Clarification or follow-up questions might be needed for pending deliverables',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.4-mini',
     temperature: 0.2,
     maxTokens: 300,
     systemPrompt: '',
@@ -283,7 +283,7 @@ export const BUILT_IN_EXPERTS: Omit<
     description: 'Monitors conversation flow and detects stuck states where no progress is being made',
     alwaysTriggered: false,
     triggerCriteria: 'The conversation has gone 2 or more turns without collecting a deliverable, or the user seems disengaged or confused about what to do next',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.4-mini',
     temperature: 0.1,
     maxTokens: 300,
     systemPrompt: '',
@@ -337,7 +337,7 @@ function builtInsFromPublished(published: ExpertDefault[]): BuiltInExpertDefault
       description: raw.description ?? '',
       alwaysTriggered: Boolean(raw.always_triggered),
       triggerCriteria: raw.trigger_criteria ?? '',
-      model: raw.model ?? 'gpt-4o-mini',
+      model: raw.model ?? 'gpt-5.4-mini',
       temperature: raw.temperature ?? 0.1,
       maxTokens: raw.max_tokens ?? 200,
       defaultSystemPrompt: raw.system_prompt ?? '',
@@ -448,10 +448,17 @@ export function verdictDirectivesEqual(
     if (
       a[k]?.action !== b[k]?.action ||
       a[k]?.template !== b[k]?.template ||
-      (a[k]?.description ?? '') !== (b[k]?.description ?? '')
+      (a[k]?.description ?? '') !== (b[k]?.description ?? '') ||
+      !templateI18nEqual(a[k]?.template_i18n, b[k]?.template_i18n)
     )
       return false
   }
+  return true
+}
+
+function templateI18nEqual(a?: Record<string, string>, b?: Record<string, string>): boolean {
+  const keys = new Set([...Object.keys(a ?? {}), ...Object.keys(b ?? {})])
+  for (const k of keys) if (a?.[k] !== b?.[k]) return false
   return true
 }
 
@@ -463,7 +470,7 @@ function parseVerdictVocabulary(outputSchema?: Record<string, unknown>): string[
 }
 
 /** Read a stored verdict_directives override blob into the typed map. */
-function readVerdictDirectives(raw: unknown): Record<string, VerdictDirective> {
+export function readVerdictDirectives(raw: unknown): Record<string, VerdictDirective> {
   if (!raw || typeof raw !== 'object') return {}
   const result: Record<string, VerdictDirective> = {}
   for (const [verdict, dir] of Object.entries(raw as Record<string, unknown>)) {
@@ -484,9 +491,20 @@ function readVerdictDirectives(raw: unknown): Record<string, VerdictDirective> {
         template: typeof d.template === 'string' ? d.template : '',
         description: typeof d.description === 'string' ? d.description : '',
       }
+      const i18n = readTemplateI18n(d.template_i18n)
+      if (i18n) result[verdict].template_i18n = i18n
     }
   }
   return result
+}
+
+/** Keep only string translations of a verdict template (#75); none → undefined. */
+function readTemplateI18n(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const entries = Object.entries(raw as Record<string, unknown>).filter(
+    (e): e is [string, string] => typeof e[1] === 'string',
+  )
+  return entries.length ? Object.fromEntries(entries) : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +624,7 @@ export function useConfiguratorState(
         enabled: def.enabled !== undefined ? Boolean(def.enabled) : true,
         alwaysTriggered: Boolean(def.always_triggered),
         triggerCriteria: (def.trigger_criteria as string) ?? '',
-        model: (def.model as string) ?? 'gpt-4o-mini',
+        model: (def.model as string) ?? 'gpt-5.4-mini',
         temperature: def.temperature !== undefined ? Number(def.temperature) : 0.3,
         maxTokens: def.max_tokens !== undefined ? Number(def.max_tokens) : 200,
         systemPrompt: def.system_prompt !== undefined ? (def.system_prompt as string) : undefined,

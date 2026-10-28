@@ -6,6 +6,7 @@ referred to anything the user had said. There is one LLM bridge now, and the
 mode tells it what this turn needs.
 """
 
+import asyncio
 import os
 
 import pytest
@@ -222,6 +223,16 @@ class TestModeDirectives:
         for mode, text in _MODE_DIRECTIVES.items():
             assert "?" not in text, mode
 
+    def test_the_brief_beat_names_no_quoted_examples(self):
+        # #94/#766: BRIEF's directive used to quote four example phrases
+        # ("Okay.", "Right.", "Fair enough.", "Got it."), and in real-model
+        # replay (PR 767) the model converged on them — one phrase alone was
+        # half of all BRIEF beats. Measured before shipping: dropping the
+        # quotes for a principle instead more than tripled BRIEF's distinct-
+        # phrase share. Guards against a future edit re-adding a literal
+        # example here.
+        assert '"' not in _MODE_DIRECTIVES[BRIDGE_MODE_BRIEF]
+
 
 class TestNoAssessmentBeforeDispreferred:
     """A2 acceptance: the bridge can never appraise ahead of a dispreferred answer.
@@ -364,6 +375,16 @@ class TestConfigCarriesTheImprovements:
         assert "VARY HOW YOU OPEN" in prompt
         assert "different construction" in prompt
 
+    def test_yaml_bridge_names_no_quoted_examples_in_the_echo_rule(self):
+        # #94/#766: the "react to the specific thing" rule used to quote
+        # ("Fair enough.", "Ah, okay.") as examples, and real-model replay
+        # (PR 767) showed those get reused the same way BRIEF's own quoted
+        # examples did. Dropped for a principle, same as BRIEF. Guards
+        # against a future edit re-adding a literal example here.
+        prompt = _slot_default("bridge_generator", "system_prompt")
+        line = next(l for l in prompt.splitlines() if "React to the specific thing they said" in l)
+        assert '"' not in line
+
     def test_yaml_bridge_exposes_the_per_turn_mode(self):
         # How long/full this turn's beat should be is per-turn, not baked into
         # the prompt — the mode directive carries it.
@@ -374,6 +395,27 @@ class TestConfigCarriesTheImprovements:
         # They drifted before, so pin them together.
         from stella_v2_agent.pipeline.bridge_generator import BRIDGE_SYSTEM_PROMPT
         assert _slot_default("bridge_generator", "system_prompt").strip() == BRIDGE_SYSTEM_PROMPT.strip()
+
+    def test_activities_on_offer_never_commits_to_a_specific_activity(self):
+        # #87: the bridge used to agree to and name an activity before
+        # companion.decide() had judged whether the title was said precisely
+        # enough — a commitment it could not take back once the system went
+        # on to ask "did you mean X?" instead. The directive must fire only
+        # conditionally (never when the flag is absent) and tell the bridge
+        # to stay generic rather than settle anything.
+        prompt = _slot_default("bridge_generator", "system_prompt")
+        assert "{{#if activitiesOnOffer}}" in prompt
+        rendered_on = render_prompt(prompt, {"activitiesOnOffer": True})
+        rendered_off = render_prompt(prompt, {"activitiesOnOffer": False})
+        # Explicit override of "react to the specific thing they said" --
+        # a live re-run (#87) showed the bridge still acknowledging and
+        # offering to help ("Verstanden, ... Ich kann dir dabei helfen.")
+        # when the directive only forbade agreeing/naming/promising; it had
+        # to also forbid acknowledging or confirming understanding.
+        assert "do not acknowledge it" in rendered_on
+        assert "do not confirm you understood it" in rendered_on
+        assert "do not offer to help with it" in rendered_on
+        assert "do not acknowledge it" not in rendered_off
 
 
 
@@ -540,3 +582,35 @@ class TestGenerateStream:
         gen.bridge_timeout_s = 5.0
         full = await gen.generate(_ORDINARY_TURN, [], language="en")
         assert full == "Right, that makes sense. Thanks for sharing."
+
+
+class TestTheTimeoutNeverReachesTheCaller:
+    """Session 3bde6b95: the bridge arrived right at its time limit, the limit
+    fired while the agent was publishing it, and the agent's whole turn loop
+    was cancelled. It left the room mid-reply without logging anything."""
+
+    @pytest.mark.asyncio
+    async def test_a_caller_still_busy_when_the_limit_passes_is_not_cancelled(self):
+        gen = BridgeGenerator(llm_service=_FakeStreamingLLM("Okay, I hear you. That sounds really draining."))
+        gen.bridge_timeout_s = 0.05
+
+        heard = []
+        async for chunk in gen.generate_stream("I force myself to work out", [], language="en"):
+            heard.append(chunk)
+            # What the agent does with a chunk: publish it, which takes time.
+            await asyncio.sleep(0.2)
+
+        assert heard and heard[0] == "Okay, I hear you."
+
+    @pytest.mark.asyncio
+    async def test_a_model_that_never_answers_is_still_cut_off(self):
+        class _Silent:
+            async def generate(self, messages, config, callback, component_name="unknown"):
+                await asyncio.sleep(30)
+
+        gen = BridgeGenerator(llm_service=_Silent())
+        gen.bridge_timeout_s = 0.05
+
+        started = asyncio.get_running_loop().time()
+        await _drain(gen.generate_stream(_ORDINARY_TURN, [], language="en"))
+        assert asyncio.get_running_loop().time() - started < 2

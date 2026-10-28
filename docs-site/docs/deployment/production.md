@@ -5,7 +5,7 @@ title: "🏭 Production Deployment"
 
 # Production Deployment Guide
 
-This guide walks you through deploying STELLA on a production server with GPU support, Kubernetes (K3s), and LiveKit for real-time voice interactions.
+This guide walks you through deploying STELLA on a production server with GPU support, Kubernetes (K3s), and LiveKit for real-time voice interactions. To update a server that already runs Stella, see [Upgrading Stella](./upgrading.md).
 
 :::warning
 STELLA uses Caddy as its sole reverse proxy. Do **not** install nginx. All TLS termination and routing is handled by Caddy via the [STELLA_livekit](https://github.com/c4dhi/STELLA_livekit) repository.
@@ -17,6 +17,7 @@ STELLA uses Caddy as its sole reverse proxy. Do **not** install nginx. All TLS t
 - NVIDIA drivers and CUDA toolkit installed
 - A domain name with DNS access
 - At least 100GB root disk + an external volume (400GB+ recommended)
+- **Node.js** 20.19+, 22.12+ or 24+ on the host: `./scripts/start-k8s.sh` runs the database migration there with Prisma 7. Check with `node --version`. The GitHub deploy workflows install Node 26 themselves
 
 ## 1. External Volume Setup
 
@@ -208,7 +209,10 @@ This will:
 1. Build all Docker images (backend, frontend, STT, TTS, agents)
 2. Import images into K3s containerd
 3. Apply Kubernetes manifests to the `ai-agents` namespace
-4. Wait for all pods to become ready
+4. Wait for all pods to become ready (the backend gets up to 600 s, since it runs its database migrations first)
+5. Clean up: remove the image generation that has just aged out and any untagged Docker images, and trim the build cache
+
+**Disk use (since 1.5.0).** Each deploy keeps two image generations of each Stella service: the one running and the one before it, for rollback. After a healthy rollout it removes the generation that has just aged out. Base images (postgres, LiveKit, Redis, CUDA) and agent images' `latest` and `cfg-*` tags are never touched. The build cache is trimmed towards 50 GB on every deploy, failed ones included, by removing entries older than a week and then older than a day. If it is still above 50 GB, the deploy prints a warning, as it does when the image disk is 85% full or more. Images from before 1.5.0 are not swept: the backlog shrinks by one generation per deploy.
 
 ### 8.4 Useful Commands
 

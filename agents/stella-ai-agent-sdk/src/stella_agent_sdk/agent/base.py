@@ -9,6 +9,7 @@ import uuid
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional, TYPE_CHECKING
 
 from stella_agent_sdk.emotion.tags import strip_emotion_tags
+from stella_agent_sdk.language import turn_language_record
 from stella_agent_sdk.messages.input import AgentInput
 from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.messages.types import (
@@ -133,6 +134,10 @@ class BaseAgent(ABC):
         self._session_completed: bool = False
         # Current sentence source for analytics ("bridge" or "response")
         self._current_sentence_source: str = "response"
+        # Idle signal: when anything last happened in the conversation, and
+        # whether on_idle has already fired for this quiet stretch.
+        self._last_activity_at: float = time.monotonic()
+        self._idle_fired: bool = False
         # Agent identity (set by run_agent from environment variables)
         self._agent_name: str = "Agent"
         self._agent_id: str = ""
@@ -293,6 +298,58 @@ class BaseAgent(ABC):
         """Whether the audio pipeline is available."""
         return self._audio_pipeline is not None
 
+    def send_turn_language(
+        self,
+        input: AgentInput,
+        *,
+        original_text: str,
+        resolved_language: str,
+        redecoded: bool,
+    ) -> None:
+        """Send this turn's language record in the background, so the publish
+        never sits on the turn's path to its reply (see ``publish_turn_language``)."""
+        if not self.has_audio:
+            return
+        task = asyncio.create_task(self.publish_turn_language(
+            input,
+            original_text=original_text,
+            resolved_language=resolved_language,
+            redecoded=redecoded,
+        ))
+        # Hold a reference until it finishes, or the task can be collected early.
+        pending = self.__dict__.setdefault("_turn_language_tasks", set())
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+    async def publish_turn_language(
+        self,
+        input: AgentInput,
+        *,
+        original_text: str,
+        resolved_language: str,
+        redecoded: bool,
+    ) -> None:
+        """Publish this turn's language record so it is kept with the turn's
+        stored message (#91, ``language.turn_language_record``). Call once per
+        user turn, after the language is resolved. Never raises: losing the
+        record must not cost the turn."""
+        if not self.has_audio:
+            return
+        try:
+            metadata = input.metadata or {}
+            record = turn_language_record(
+                metadata,
+                original_text=original_text,
+                resolved_language=resolved_language,
+                redecoded=redecoded,
+                duration_s=self._audio_pipeline.utterance_speech_seconds(metadata.get("turn_id")),
+                correlation_id=self._audio_pipeline.typed_correlation_id(metadata.get("turn_id")),
+            )
+            if record is not None:
+                await self._audio_pipeline.publish_turn_language(record)
+        except Exception as e:
+            logger.warning(f"[Language] Could not publish the turn language record: {e}")
+
     @property
     def has_history(self) -> bool:
         """Whether the chat history client is available."""
@@ -302,6 +359,7 @@ class BaseAgent(ABC):
         self,
         include_debug: bool = False,
         limit: int = 100,
+        before: Optional[str] = None,
     ) -> List[ChatMessage]:
         """
         Fetch chat history for the current session.
@@ -320,6 +378,8 @@ class BaseAgent(ABC):
                           Default is False (only chat messages: user_text,
                           transcript, agent_text).
             limit: Maximum number of messages to return (default: 100, max: 500).
+            before: Cursor for pagination - ISO timestamp to fetch messages
+                   strictly before. Used to page back into older history.
 
         Returns:
             List of ChatMessage objects in chronological order.
@@ -358,6 +418,7 @@ class BaseAgent(ABC):
         return await self._history_client.get_chat_history(
             include_debug=include_debug,
             limit=limit,
+            before=before,
         )
 
     def set_state(self, state: AgentState) -> None:
@@ -703,6 +764,86 @@ class BaseAgent(ABC):
         return
         yield  # Make this a generator
 
+    #: Seconds of quiet after which ``on_idle`` fires. ``None`` (the default)
+    #: switches the idle signal off. Quiet means: no turn in progress, the
+    #: agent not speaking, and the user neither speaking nor acting on the device.
+    idle_timeout_seconds: Optional[float] = None
+
+    async def on_idle(self, session_id: str, idle_seconds: float) -> None:
+        """Nothing has happened for ``idle_timeout_seconds``.
+
+        Fires once per quiet stretch; the next thing the user says or does arms
+        it again. Runs outside a turn, so to say or send something use
+        ``self.audio.speak`` or ``send_client_command``. Default: do nothing.
+        """
+
+    async def on_client_event(self, session_id: str, event: str, data: Dict[str, Any]) -> None:
+        """The user did something on the device that is neither speech nor text.
+
+        ``event`` and ``data`` are whatever the client sent as ``{"type":
+        "client_event", "data": {"event": ..., ...}}``. The SDK gives them no
+        meaning: which events exist is agreed between an agent and its client.
+        May arrive while a turn is being processed. Default: do nothing.
+        """
+
+    async def send_client_command(self, command: str, **data: Any) -> None:
+        """Send a command to the user's device right now, outside a turn.
+
+        Inside ``process()``, yield ``AgentOutput.client_command`` instead: that
+        one waits until the turn's speech has been heard.
+        """
+        payload = AgentOutput.client_command(
+            self._session_id or "", command, **data
+        ).to_data_payload()
+        payload["data"]["agent_id"] = self._agent_identity().get("agent_id")
+        logger.info(f"[CLIENT COMMAND] {command}")
+        await self.audio._room.publish_data(payload)
+
+    def _note_activity(self) -> None:
+        self._last_activity_at = time.monotonic()
+        self._idle_fired = False
+
+    async def _on_user_speech_started(self) -> None:
+        self._note_activity()
+
+    def start_turn(self, **metadata: Any) -> None:
+        """Open a turn yourself, without the user having said anything.
+
+        ``process()`` is called with empty text and
+        ``input.metadata["agent_initiated"]`` set to ``metadata``; what it
+        yields is published and spoken like any reply. Use it to speak first:
+        on a device event, after a timer, at a point of your own choosing. The
+        turn waits its place behind one that is running, and a message the
+        user sends in the meantime replaces it.
+        """
+        if self.has_audio:
+            self.audio.start_agent_turn(metadata)
+
+    async def _dispatch_client_event(self, event: str, data: Dict[str, Any]) -> None:
+        self._note_activity()
+        try:
+            await self.on_client_event(self._session_id or "", event, data)
+        except Exception as e:
+            logger.error(f"Error in on_client_event({event!r}): {e}")
+
+    async def _idle_watchdog(self) -> None:
+        """Fire ``on_idle`` once per quiet stretch. Ends with the session."""
+        while self.has_audio and not self.audio.is_closing and not self._session_completed:
+            await asyncio.sleep(0.5)
+            timeout = self.idle_timeout_seconds
+            if not timeout or self._idle_fired:
+                continue
+            if self._is_processing or self.audio.is_speaking:
+                self._last_activity_at = time.monotonic()
+                continue
+            idle_for = time.monotonic() - self._last_activity_at
+            if idle_for >= timeout:
+                self._idle_fired = True
+                try:
+                    await self.on_idle(self._session_id or "", idle_for)
+                except Exception as e:
+                    logger.error(f"Error in on_idle: {e}")
+
     async def run_audio_loop(self) -> None:
         """
         Main audio processing loop for direct LiveKit mode.
@@ -755,8 +896,15 @@ class BaseAgent(ABC):
                 "Use run_agent() to start the agent in direct LiveKit mode."
             )
 
+        self.audio.on_client_event(self._dispatch_client_event)
+        self.audio.on_speech_started(self._on_user_speech_started)
+        self._note_activity()
+        idle_watchdog = asyncio.create_task(self._idle_watchdog())
+        idle_watchdog.add_done_callback(lambda t: t.cancelled() or t.exception())
+
         async for event in self.audio.audio_in():
-            if event.is_final and event.text.strip():
+            agent_initiated = getattr(event, "agent_initiated", None)
+            if event.is_final and (event.text.strip() or agent_initiated is not None):
                 # Terminal close (issue #198): once the session is winding down we
                 # stop taking new turns. The closing farewell is spoken out-of-band
                 # by the session-end handler; processing another user turn here would
@@ -784,13 +932,22 @@ class BaseAgent(ABC):
                 # events share a single key for downstream joins. Forward the
                 # independent language detection so the agent's resolver can use
                 # the acoustic signal (falls back to text when absent, RFC §8.3).
+                # ``stt_confidence`` is how far the transcript itself can be
+                # trusted (0..1; 0 means the STT gave no signal, 1.0 is typed
+                # text), so an agent can treat a doubtful short answer as not
+                # heard rather than act on it.
                 input_msg = AgentInput.text_input(
                     self._session_id or "",
                     event.text,
                     turn_id=getattr(event, "transcript_id", None),
                     detected_language=getattr(event, "detected_language", "") or "",
                     language_confidence=getattr(event, "language_confidence", 0.0) or 0.0,
+                    stt_confidence=getattr(event, "confidence", 0.0) or 0.0,
                     is_barge_in=getattr(event, "is_barge_in", False),
+                    # A turn the agent opened itself (start_turn): no text, and
+                    # whatever it passed along. Absent on a user's turn.
+                    **({"agent_initiated": getattr(event, "agent_initiated")}
+                       if getattr(event, "agent_initiated", None) is not None else {}),
                 )
 
                 # Process and stream response
@@ -800,6 +957,10 @@ class BaseAgent(ABC):
                 # can pause or supersede it. Cleared in the finally below.
                 self.audio.begin_turn()
 
+                # Commands for the device are held until this turn's speech
+                # has been heard (see AgentOutput.client_command).
+                client_commands: List[AgentOutput] = []
+                self._note_activity()
                 try:
                     current_transcript_id = None
                     tts_buffer = ""  # Tracks last accumulated text for diffing
@@ -968,6 +1129,9 @@ class BaseAgent(ABC):
                                 self._tp_cursor = 0
                                 self._enqueue_sentence(content)
 
+                        elif output.type == OutputType.CLIENT_COMMAND:
+                            client_commands.append(output)
+
                         else:
                             # All non-text side-channel outputs (DEBUG, STATUS,
                             # ERROR, METADATA, PROGRESS_UPDATE, ANALYTICS) share one
@@ -986,8 +1150,13 @@ class BaseAgent(ABC):
                     # queue was already drained by commit_interrupt(), so this
                     # returns promptly and nothing from the superseded turn plays.
                     await self.audio.flush_speech_queue()
+                    if client_commands and not self.audio.is_turn_aborted:
+                        await self.audio.wait_for_playout_drain()
+                        for command in client_commands:
+                            await self.send_client_command(command.content, **command.metadata)
                     self._sentence_buffer = ""
                     self._is_processing = False
+                    self._note_activity()
                     # Turn fully done (generation halted/finished and TTS flushed):
                     # clear the active/suspend/abort state so the next turn starts
                     # clean and a committed barge-in turn isn't itself aborted.

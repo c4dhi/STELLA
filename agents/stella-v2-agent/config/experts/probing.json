@@ -3,7 +3,7 @@
   "description": "Analyzes conversation for deliverable signals and determines if follow-up questions are needed",
   "priority": 60,
   "enabled": true,
-  "model": "gpt-4o-mini",
+  "model": "gpt-5.4-mini",
   "temperature": 0.2,
   "can_call_functions": false,
   "max_tokens": 300,

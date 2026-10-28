@@ -161,7 +161,8 @@ class Arbitration:
         #    config carries no directive.
         winner_verdict, winner_directive = self._select_directive(sorted_verdicts, expert_configs)
         if winner_directive is not None:
-            resolved = self._resolve_template(winner_directive.template, sm_context, user_input)
+            template_text = self._template_for_language(winner_directive, sm_context)
+            resolved = self._resolve_template(template_text, sm_context, user_input)
             if not resolved.strip() and winner_directive.action != "prepend":
                 # Empty/failed template on a REPLACE action (override / short_circuit,
                 # incl. the seeded noise short_circuit) → locale-aware safe default,
@@ -217,8 +218,10 @@ class Arbitration:
                 if v.verdict in ("high", "critical"):
                     if v.expert_name == "medical":
                         directive.must_avoid.append("specific medical diagnoses or treatment plans")
+                        directive.must_avoid.append("home remedies, exercises, or personal health tips")
                     elif v.expert_name == "legal":
                         directive.must_avoid.append("specific legal advice or interpretations")
+                        directive.must_avoid.append("personal tips on how to handle the legal matter")
 
         # 3. Handle probing agent (follow-up decisions + deliverable signals)
         probing_verdict = self._find_verdict(sorted_verdicts, "probing")
@@ -316,6 +319,22 @@ class Arbitration:
             if vd is not None and vd.action != "inform":
                 return v, vd
         return None, None
+
+    def _template_for_language(
+        self, directive: "VerdictDirective", sm_context: Optional[Dict[str, Any]]
+    ) -> str:
+        """The winning verdict directive's template in the turn's language.
+
+        ``template_i18n`` is an optional ``{language: text}`` map of overrides;
+        an entry for the turn's resolved language wins, otherwise ``template``
+        (today's single string, unchanged) is used — the same fallback shape
+        as ``_GATE_FAILURE_MESSAGES_BY_LANG`` (#705). Kept separate from
+        ``template`` itself (rather than letting it hold a dict) because the
+        Agent Configurator's TypeScript contract and its reader both assume
+        ``template`` is always a plain string."""
+        language = (sm_context or {}).get("language") or ""
+        key = language.split("-")[0].lower()
+        return directive.template_i18n.get(key, directive.template)
 
     def _resolve_template(
         self, template: str, sm_context: Optional[Dict[str, Any]], user_input: str

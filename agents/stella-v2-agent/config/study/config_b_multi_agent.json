@@ -106,11 +106,12 @@
   },
   "thresholds": {},
   "language": {
-    "_description": "Single source of truth for the conversation language (RFC docs/rfcs/2026-06-01_language-handling.md). Auto-detected per turn from the transcript, held with confidence-gated switching.",
+    "_description": "Single source of truth for the conversation language (RFC docs/rfcs/2026-06-01_language-handling.md). Auto-detected per turn from the transcript, held with a decaying confidence score (#57). switch_score=0.6 reproduces the old switch_threshold=0.6/debounce=1 behavior exactly: one confident (>=0.6) off-language vote switches immediately, same as before.",
     "supported": ["de", "en"],
     "default": "en",
     "detect_threshold": 0.4,
-    "switch_threshold": 0.6,
-    "debounce": 1
+    "text_bar": 0.85,
+    "decay": 0.5,
+    "switch_score": 0.6
   }
 }

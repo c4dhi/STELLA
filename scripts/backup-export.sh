@@ -90,14 +90,21 @@ backup_helper_unavailable() {
 # problems (stale/missing node_modules, a production --omit=dev install without
 # ts-node, a future added dependency) up front, with one real check instead of a
 # hardcoded package list.
+# Run the host-side bundle helper. The backend is ESM, so plain `npx ts-node`
+# cannot load it; register ts-node's ESM loader the way package.json does
+# (#730). Run from the project root: the loader resolves from the cwd.
+bundle_helper() {
+    node --import "$SCRIPT_DIR/register-ts-node-esm.mjs" "$SCRIPT_DIR/backup-bundle.ts" "$@"
+}
+
 preflight_backup_helper() {
     local root; root="$(cd "$SCRIPT_DIR/.." && pwd)"
-    # Verify ts-node/typescript resolve first so npx never tries to fetch them.
+    # Verify ts-node/typescript resolve first, for a clear message if they are missing.
     ( cd "$root" && node -e "require.resolve('ts-node'); require.resolve('typescript')" ) >/dev/null 2>&1 \
         || backup_helper_unavailable "$root" "ts-node / typescript are not installed"
     # Load the real helper (the 'check' command does no work, just returns ok).
     local out
-    out="$( cd "$root" && npx --no-install ts-node "$SCRIPT_DIR/backup-bundle.ts" check 2>&1 )" \
+    out="$( cd "$root" && bundle_helper check 2>&1 )" \
         || backup_helper_unavailable "$root" "the backup helper failed to load" "$out"
 }
 require_host_tools
@@ -193,6 +200,7 @@ if [[ -z "$POD" ]]; then
     error "No running backend pod found in namespace '$KUBERNETES_NAMESPACE'. Deploy first."
     exit 1
 fi
+info "Exporting namespace '$KUBERNETES_NAMESPACE'."
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 [[ -z "$OUT" ]] && OUT="$PROJECT_DIR/stella-backup-${STAMP}.zip"
@@ -247,7 +255,7 @@ kubectl exec -n "$KUBERNETES_NAMESPACE" "$POD" -- rm -f "$POD_DATA" 2>/dev/null 
 info "Embedding deployment config${PASSPHRASE:+ and encrypting} ..."
 BACKUP_PASSPHRASE="$PASSPHRASE" \
 STELLA_ALLOW_PLAINTEXT_CONFIG="${ALLOW_PLAINTEXT:+1}" \
-    npx ts-node "$SCRIPT_DIR/backup-bundle.ts" finalize "$LOCAL_DATA" "$ENV_FILE" "$OUT"
+    bundle_helper finalize "$LOCAL_DATA" "$ENV_FILE" "$OUT"
 
 rm -f "$LOCAL_DATA" 2>/dev/null || true
 success "Backup written: $OUT"

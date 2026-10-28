@@ -7,7 +7,8 @@ import type { StageLatency, StageDataPoint, SessionStagePoint } from '../../../l
 // These are handled by SummaryCards instead (safety_routing, state_transition have
 // timing_ms=0 and no meaningful position on the latency timeline).
 // Anchors and non-latency events excluded from the timeline visualization
-const EXCLUDED_STAGES = new Set(['plan_completion', 'safety_routing', 'vad_trigger', 'stt_end'])
+// pause_rescued is a count, not a latency: it is always at 0ms (#92).
+const EXCLUDED_STAGES = new Set(['plan_completion', 'safety_routing', 'vad_trigger', 'stt_end', 'pause_rescued'])
 
 const LANE_COLORS = [
   '#8B5CF6', // purple
@@ -463,6 +464,21 @@ function DrillDownPanel({
   // Outlier threshold: > 2x median
   const outlierThreshold = stage.p50_ms * 2
 
+  // Aggregate mode's per-session list. Computed before the session-mode
+  // return so the hook runs on every render, whichever mode is shown.
+  const sortedSessions = useMemo(() => {
+    const sessions = [...(dataPoints || [])]
+    sessions.sort((a, b) => {
+      if (sortBy === 'timing') {
+        return sortDir === 'desc' ? b.avg_timing_ms - a.avg_timing_ms : a.avg_timing_ms - b.avg_timing_ms
+      }
+      return sortDir === 'asc'
+        ? a.sessionName.localeCompare(b.sessionName)
+        : b.sessionName.localeCompare(a.sessionName)
+    })
+    return sessions
+  }, [dataPoints, sortBy, sortDir])
+
   if (mode === 'session') {
     const points = (sessionPoints || []).map(p => ({
       value: p.timing_ms,
@@ -492,20 +508,6 @@ function DrillDownPanel({
       </div>
     )
   }
-
-  // Aggregate mode: show per-session list
-  const sortedSessions = useMemo(() => {
-    const sessions = [...(dataPoints || [])]
-    sessions.sort((a, b) => {
-      if (sortBy === 'timing') {
-        return sortDir === 'desc' ? b.avg_timing_ms - a.avg_timing_ms : a.avg_timing_ms - b.avg_timing_ms
-      }
-      return sortDir === 'asc'
-        ? a.sessionName.localeCompare(b.sessionName)
-        : b.sessionName.localeCompare(a.sessionName)
-    })
-    return sessions
-  }, [dataPoints, sortBy, sortDir])
 
   const outlierCount = sortedSessions.filter(s => s.avg_timing_ms > outlierThreshold).length
 

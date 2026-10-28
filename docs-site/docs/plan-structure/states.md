@@ -80,15 +80,51 @@ Flexible task processing — agent chooses naturally based on conversation flow.
 - General information gathering
 - Exploratory conversations
 
+### GOAL Mode
+
+A natural conversation towards an objective. The agent is not shown a task list; it sees what is still missing towards the goal and asks for it in its own words.
+
+```json
+{
+  "id": "explore-routine",
+  "title": "Daily Routine",
+  "type": "goal",
+  "tasks": [],
+  "goal": {
+    "objective": "Understand what a normal day looks like for the participant",
+    "success_description": "We know when they get up, what fills the morning, and what they look forward to",
+    "deliverables": [
+      { "key": "morning_routine", "description": "What the participant does in the morning", "required": true }
+    ]
+  },
+  "transitions": [
+    { "target_state_id": "wrap-up", "condition_type": "goal_achieved" }
+  ]
+}
+```
+
+**How a goal step ends (since 1.4.0):**
+- The goal is the state's one task. The agent closes it when the success description is met, or gives it up when the participant declines the subject or asks to move on. The outcome is kept for this state only.
+- Before it closes or gives up the goal, a separate check has to agree, quoting the participant's own words. Small talk, a vague "maybe", or a required answer still marked unconfirmed does not reach a goal.
+- Closing is refused while a required deliverable of the state is missing. If the state's routes read deliverables, one matching route is enough; when none matches, any one of their keys is asked for.
+- A closed goal whose routes match nothing moves on to the next state in plan order. The stuck-state safety net still releases a goal step that makes no progress, and records it as skipped.
+- Insights the agent notices beyond the declared deliverables are kept (up to 25 per session) but don't count as progress.
+- A goal state has no task list. Tasks left over from switching a state from flexible or sequential to goal stay saved, so switching back restores them, but since 1.5.0 they play no part in the goal: not in its progress, the plan view, the agent's guidance or where collected values are stored ([#770](https://github.com/c4dhi/STELLA/issues/770)).
+
+**Best for:**
+- Coaching and reflective conversations
+- Interviews where the conversation should feel open
+- Discovery, where the order of topics doesn't matter
+
 ## Comparison Table
 
-| Aspect | STRICT | LOOSE |
-|--------|--------|-------|
-| Task Order | Sequential | Flexible |
-| User Control | Limited | High |
-| Conversation Feel | Structured | Natural |
-| Skip Tasks | Not allowed | Agent decides |
-| Use Case | Forms, intake | Discovery, support |
+| Aspect | STRICT | LOOSE | GOAL |
+|--------|--------|-------|------|
+| Task Order | Sequential | Flexible | No task list, gaps towards a goal |
+| User Control | Limited | High | High |
+| Conversation Feel | Structured | Natural | Open conversation |
+| Skip Tasks | Not allowed | Agent decides | The goal can be given up, after a check |
+| Use Case | Forms, intake | Discovery, support | Coaching, interviews |
 
 ## State Transitions
 
@@ -110,6 +146,7 @@ The state machine supports the following `condition_type` values:
 | Condition Type | Purpose | Added In |
 |----------------|---------|----------|
 | `all_tasks_complete` | Transition once every task in the current state has been addressed (completed or skipped) | Existing |
+| `goal_achieved` | Transition once a goal state's goal has been closed or given up (the default for `type: "goal"`; ends through the state's own task since 1.4.0) | Existing |
 | `deliverable_exists` | Transition when a deliverable key has been collected | Existing |
 | `deliverable_value` | Transition when a deliverable equals a specific value | Existing |
 | `turn_count_exceeded` | Guardrail transition based on turn count | Ticket 5 |

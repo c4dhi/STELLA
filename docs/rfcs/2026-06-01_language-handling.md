@@ -3,8 +3,9 @@
 - **Ticket:** [#214 — Coherent language handling for STT, TTS, and user selection](https://github.com/c4dhi/STELLA/issues/214)
 - **Branch / PR:** `feature/language-handling-214` · PR #244
 - **Status:** Implemented. One item is a deployment toggle, not code — see [§9](#9-whats-left).
+- **Update (#57, 19 Oct 2026):** §5's switching rule — a fixed `switch_threshold` + consecutive-turn `debounce` — was replaced by a decaying confidence score (`text_bar` / `decay` / `switch_score`). The rest of this RFC (detect-once-propagate-everywhere, the resolution order, STT reporting free detection) is unchanged; see `language.py`'s own docstrings for the current mechanism in detail.
 
-The system automatically detects the spoken language and responds in it — bridge, main response text, and voice all coherent within a turn — and switches language only on a sustained, confident change. Typed input is handled by the same logic via a text classifier.
+The system automatically detects the spoken language and responds in it — bridge, main response text, and voice all coherent within a turn — and switches language only once enough evidence has accumulated for a sustained, confident change. Typed input is handled by the same logic via a text classifier.
 
 ---
 
@@ -39,7 +40,7 @@ One language is resolved **per turn**, before the bridge fires, and every downst
       bridge        LLM response      {{language}} var     TTS (language + voice)
 ```
 
-- **STT reports, the agent decides.** STT emits a genuine per-utterance `detected_language` + `confidence`. The gating policy (thresholds, debounce, clamp to the supported set) lives in the **agent**, as product logic — not in the STT VAD loop.
+- **STT reports, the agent decides.** STT emits a genuine per-utterance `detected_language` + `confidence`. The gating policy (thresholds, the switch score and its decay, clamp to the supported set) lives in the **agent**, as product logic — not in the STT VAD loop.
 - The resolved value is frozen for the turn and fed to the bridge, the response prompt, the `{{language}}` template variable, and the TTS request (language + voice).
 
 ### Decisions
@@ -78,9 +79,9 @@ Whisper transcribes in **auto-detect mode** (`language=None`) and the detection 
 
 `LanguageResolver.resolve(text, signal=…)` takes the acoustic `(language, confidence)` when present (voice) and falls back to the bundled text classifier otherwise (typed input / no signal). Both shapes flow through one gating path:
 
-1. **Confident, supported signal** (`confidence ≥ threshold`) → adopt it.
+1. **Confident, supported signal** (`confidence ≥ detect_threshold`) → adopt it (first confirmation only).
 2. **Hold the lock** — unchanged turn-to-turn by default.
-3. **Confidence-gated switch** — change only on a *different supported* language at `confidence ≥ switch_threshold`, debounced. A stray "ja"/"ok"/number cannot flip it.
+3. **Decaying-score switch** (#57) — a turn too short to carry any signal votes neither way. A long-enough turn that disagrees with the lock votes for a "challenger" language, weighted by its own confidence, with no floor on the confidence itself — a genuine switch spoken at merely moderate confidence still eventually crosses the bar, just over a few more turns. A turn that agrees with the lock, or carries no signal, decays the challenger instead. The lock switches once the challenger's running score (`challenger_score = challenger_score * decay + confidence`) crosses `switch_score`. See `language.py`'s `resolve()` docstring and `needs_redecode()` for the separate, cosmetic bar that decides whether a doubtful turn's own transcript is shown or re-decoded forced into the lock.
 4. **Clamp** — anything outside the supported set keeps the current lock.
 
 **Fallback chain** when a turn has no confident signal:
@@ -89,7 +90,7 @@ Whisper transcribes in **auto-detect mode** (`language=None`) and the detection 
 2. the plan seed (`Plan.language`, if set), else
 3. the global default.
 
-A lock established *provisionally* from the seed/default (turn-1 ambiguity) is not treated as a real detection: the first genuine detection adopts it at the lower `detect_threshold` rather than having to clear `switch_threshold`, so the last *detected* language always wins over a placeholder. Thresholds and debounce are tunable constants in the resolver.
+A lock established *provisionally* from the seed/default (turn-1 ambiguity) is not treated as a real detection: the first genuine detection adopts it at the lower `detect_threshold` rather than having to cross `switch_score`, so the last *detected* language always wins over a placeholder. The three numbers (`text_bar` / `decay` / `switch_score`) are tunable constants in the resolver, set from a replay of measured production confidences (#57) rather than guessed.
 
 ---
 
@@ -188,7 +189,7 @@ The resolved value (`session.language`) is the single source of truth; `{{langua
 
 ## 9. Testing
 
-- **`test_language_resolver.py` — 35 unit tests** (green): detect / lock / hold / confidence-gated switch / debounce / clamp / seed / provisional-vs-confirmed fallback / reset, and the acoustic-signal path (signal-over-text, acoustic switch, out-of-set clamp, low-confidence hold, text fallback).
+- **`test_language_resolver.py`** (green, count has grown with #57): detect / lock / hold / decaying-score switch / clamp / seed / provisional-vs-confirmed fallback / reset, and the acoustic-signal path (signal-over-text, acoustic switch, out-of-set clamp, low-confidence hold, text fallback).
 - **STT proto round-trip** verified (provider event → `from_proto` → `AgentInput`), including backward-compat for events without the new fields.
 - **Not runnable locally** (no GPU / models): the live STT→TTS audio path. Manual checklist on a real deployment — speak German → German answer + voice; mid-session switch → coherent at the next turn; one-word "ja" → no flip. `stt-service`/`tts-service` have no pytest harness yet; adding one is the path to provider-level regression coverage.
 
@@ -200,4 +201,4 @@ The resolved value (`session.language`) is the single source of truth; `{{langua
 
 **Done since:** the explicit force flag, shipped as the deployment pin `STELLA_LANGUAGE` ([§6.1](#61-the-deployment-pin)) and surfaced in the deploy UI's "Voice & Language" step. It pins the ears too (STT), which the original sketch left open — a fixed-language deployment gains nothing from detecting a language it will not use, and pinning is what rescues the short/garbled first turn.
 
-Possible later refinements: empirical tuning of `detect_threshold` / `switch_threshold` / debounce; deliverable normalization across languages (extraction must map e.g. a German answer to the plan's canonical value).
+Possible later refinements: empirical tuning of `detect_threshold` / `text_bar` / `decay` / `switch_score` (the current numbers are from a replay of one measured session, #57, not a broad sweep); deliverable normalization across languages (extraction must map e.g. a German answer to the plan's canonical value).

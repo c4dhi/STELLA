@@ -116,6 +116,20 @@ setup_directories() {
 # Environment File Loading
 # =============================================================================
 
+# --namespace and --port-offset win over the env file. The config wizard writes
+# KUBERNETES_NAMESPACE into .env.local / .env.production, and sourcing it used
+# to replace the flag, so `--namespace X` deployed, stopped and restored into
+# ai-agents (#729). parse_args exports the flag values; the backup scripts run
+# in their own process and inherit them.
+reapply_cli_overrides() {
+    if [[ -n "${STELLA_CLI_NAMESPACE:-}" ]]; then
+        export KUBERNETES_NAMESPACE="$STELLA_CLI_NAMESPACE"
+    fi
+    if [[ -n "${STELLA_CLI_PORT_OFFSET:-}" ]]; then
+        export PORT_OFFSET="$STELLA_CLI_PORT_OFFSET"
+    fi
+}
+
 load_env_file() {
     local env_file="$1"
     local label="$2"
@@ -127,6 +141,7 @@ load_env_file() {
         # Use direct source - more reliable than process substitution
         source "$env_file"
         set +a
+        reapply_cli_overrides
         return 0
     fi
     return 1
@@ -178,6 +193,10 @@ load_environment() {
         configure_temp_dirs "$STELLA_AI_TEMP_DIR"
     elif [[ -n "${STELLA_DATA_ROOT:-}" ]]; then
         configure_temp_dirs "${STELLA_DATA_ROOT}/tmp"
+    else
+        # The PID/log dirs carry the namespace, which the env file may have
+        # just set; setup_directories ran before it was known (#736).
+        configure_temp_dirs "/tmp"
     fi
 
     # Set hardcoded defaults (must come before configure_urls — URLs depend on computed ports)

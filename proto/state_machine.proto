@@ -8,15 +8,13 @@ service StateMachineService {
   // Initialize state machine for a session
   rpc Initialize(InitializeRequest) returns (InitializeResponse);
 
-  // Replace the session's plan, discarding any progress (companion mode #467).
-  // Distinct from Initialize, which RESUMES an existing state so a paused agent
-  // can be restarted without losing progress. Starting an activity is the
-  // opposite intent: a fresh run of a plan the user just picked.
+  // Replace the session's plan, discarding any progress (#467). Distinct from
+  // Initialize, which RESUMES an existing state so a paused agent can be
+  // restarted without losing progress: this is a fresh run from the top.
   rpc LoadPlan(LoadPlanRequest) returns (LoadPlanResponse);
 
-  // Drop the session's plan entirely and return to free-flow companion mode.
-  // Used when the user abandons an activity mid-way, or when a plan reaches its
-  // end and the companion takes the floor back instead of the session ending.
+  // Drop the session's plan entirely, leaving the session with none. For an
+  // agent that keeps talking after a plan is abandoned or reaches its end.
   rpc ClearPlan(ClearPlanRequest) returns (ClearPlanResponse);
 
   // Complete a task by ID
@@ -68,7 +66,7 @@ message InitializeResponse {
 }
 
 // ============================================================================
-// LOAD PLAN / CLEAR PLAN (companion mode)
+// LOAD PLAN / CLEAR PLAN
 // ============================================================================
 
 message LoadPlanRequest {

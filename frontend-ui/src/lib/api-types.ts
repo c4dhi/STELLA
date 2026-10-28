@@ -1424,6 +1424,21 @@ export interface MetricsSummary {
     partialTurns: number
     partialAgreementRate: number | null
   } | null
+  /** End-of-speech gap and endpointing signals (#92); null when no turn reported them. */
+  endpointing: {
+    totalTurns: number
+    gapTurns: number
+    avgTrailingSilence_ms: number | null
+    avgDecode_ms: number | null
+    avgEndOfSpeechGap_ms: number | null
+    pausesRescued: number
+    turnsWithRescuedPause: number
+    avgRescuedPause_ms: number | null
+    avgRescuedIntoWindow_ms: number | null
+    resumedAfterFinal: number
+    resumedWhileAgentSpeaking: number
+    avgResumedSinceFinal_ms: number | null
+  } | null
 }
 
 export interface AgentMetricsResponse {
@@ -1635,6 +1650,8 @@ export interface VerdictDirective {
   template: string
   /** Plain-language explanation of the verdict, handed to the classifying LLM. */
   description?: string
+  /** Per-language overrides of `template`, keyed by language code (e.g. `de`). */
+  template_i18n?: Record<string, string>
 }
 
 /** An agent-declared default expert, as published from config/experts/*.json
@@ -1655,7 +1672,10 @@ export interface ExpertDefault {
   always_triggered?: boolean
   history_limit?: number
   min_confidence?: number
-  verdict_directives?: Record<string, { action?: string; template?: string; description?: string }>
+  verdict_directives?: Record<
+    string,
+    { action?: string; template?: string; description?: string; template_i18n?: Record<string, string> }
+  >
 }
 
 export interface ConfigurableSlot {
@@ -1778,4 +1798,133 @@ export interface MediaTestSession {
   livekitUrl: string
   expiresAt: string
   ttlSeconds: number
+}
+
+// ============================================================================
+// Platform defaults (Settings → Platform Defaults, system admins only)
+// ============================================================================
+
+export type TtsPlaybackMode = 'auto' | 'stream' | 'sentence'
+
+export interface PinnedDeployment {
+  name: string
+  project: string
+  mode: TtsPlaybackMode
+}
+
+export interface PlatformSettings {
+  /** null = never set: the built-in default (auto) applies. */
+  ttsPlayback: TtsPlaybackMode | null
+  updatedAt: string | null
+  updatedBy: string | null
+  /** Deployments that set their own mode and so keep it. */
+  pinnedDeployments: PinnedDeployment[]
+  /** Whether AI clients may connect over MCP. Off unless an admin turns it on. */
+  mcpEnabled: boolean
+  /** How well the voice fits this server under concurrent load (#93); null when it could not be read. */
+  hardwareFit: HardwareFit | null
+}
+
+/** How well the voice fits this server, at a given number of sessions at once (#93). */
+export type FitColour = 'green' | 'yellow' | 'red'
+
+export interface HardwareFitBucket {
+  /** Sessions in conversation at once when these sentences were spoken. */
+  sessions: number
+  sentences: number
+  /** Synthesis time / audio length, 90th percentile. Below 1 is faster than real time. */
+  rtfP90: number | null
+  /** Share of sessions in this group that switched from streaming to sentence by sentence. */
+  switchedShare: number | null
+  /** null: too little data for a colour. */
+  colour: FitColour | null
+  /** 'live' from sessions, or 'load test' where the last capacity measurement fills in. */
+  source: 'live' | 'load test'
+}
+
+export interface HardwareFit {
+  /** The reading at the usual load; null when there is too little data. */
+  colour: FitColour | null
+  usualSessions: number | null
+  /** From the last load test; null when none was recorded. */
+  ttsModel: string | null
+  gpu: string | null
+  windowDays: number
+  /** Highest session count each colour holds for; null = never reached. */
+  greenUpTo: number | null
+  yellowUpTo: number | null
+  /** Lowest session count read as red; null = none seen or estimated. */
+  redFrom: number | null
+  buckets: HardwareFitBucket[]
+  sentencesSeen: number
+  sentencesNeeded: number
+}
+
+// ============================================================================
+// Platform features (any signed-in user)
+// ============================================================================
+
+export interface PlatformFeatures {
+  mcpEnabled: boolean
+}
+
+// ============================================================================
+// MCP access tokens (Settings → MCP Access)
+// ============================================================================
+
+export type AccessTokenScope = 'mcp:read' | 'mcp:write'
+export type AccessTokenAccess = 'read' | 'read_write'
+export type AccessTokenExpiryDays = 7 | 30 | 90 | 365
+
+export interface AccessToken {
+  id: string
+  name: string
+  /** The first characters of the secret, to tell tokens apart. */
+  displayPrefix: string
+  scopes: AccessTokenScope[]
+  expiresAt: string | null
+  lastUsedAt: string | null
+  revokedAt: string | null
+  createdAt: string
+}
+
+export interface CreateAccessTokenRequest {
+  name: string
+  expiresInDays?: AccessTokenExpiryDays
+  access?: AccessTokenAccess
+}
+
+/** A pending MCP sign-in, as the consent page shows it. */
+export interface OAuthAuthorizationRequestView {
+  id: string
+  clientName: string
+  clientUri: string | null
+  logoUri: string | null
+  /** Where the browser goes after Allow / Deny. */
+  redirectHost: string
+  /** registration: the name is self-chosen. metadata_document: it comes from a document on clientIdHost. */
+  verifiedBy: 'registration' | 'metadata_document'
+  clientIdHost: string | null
+  requestedScopes: AccessTokenScope[]
+  expiresAt: string
+}
+
+export interface OAuthRedirect {
+  redirectUrl: string
+}
+
+/** An app connected to the account through MCP sign-in. */
+export interface ConnectedApp {
+  id: string
+  clientName: string
+  clientUri: string | null
+  scopes: AccessTokenScope[]
+  connectedAt: string
+  lastUsedAt: string | null
+}
+
+export interface CreateAccessTokenResponse {
+  /** The secret. Shown once; the server keeps only its hash. */
+  token: string
+  accessToken: AccessToken
 }

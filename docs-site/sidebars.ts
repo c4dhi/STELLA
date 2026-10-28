@@ -51,6 +51,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'agents/overview',
+        'agents/personas',
         {
           type: 'category',
           label: '🧠 stella-v2',
@@ -139,6 +140,7 @@ const sidebars: SidebarsConfig = {
         'deployment/capacity',
         'deployment/agent-validation',
         'deployment/backup-restore',
+        'deployment/upgrading',
       ],
     },
     {
@@ -154,6 +156,16 @@ const sidebars: SidebarsConfig = {
         'integration/livekit-production',
         'integration/frontend',
       ],
+    },
+    {
+      type: 'html',
+      value: '<div class="sidebar-section-spacer"></div>',
+    },
+    {
+      type: 'category',
+      label: '🔌 MCP',
+      collapsed: false,
+      items: ['mcp/index', 'mcp/tools'],
     },
     {
       type: 'html',
