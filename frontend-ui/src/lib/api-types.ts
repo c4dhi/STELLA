@@ -1003,6 +1003,12 @@ export interface EnvVarTemplate {
   description?: string
   variableKeys: string[]  // Only keys, not values (for security)
   agentTypeId: string  // Required: every template is scoped to exactly one agent type
+  /** Values of the agent type's declared non-secret settings (#585). */
+  settings: Record<string, string>
+  /** Declared settings whose stored value does not fit, with the reason. */
+  invalid: Record<string, string>
+  /** Not saved since settings became typed: shown as "check". */
+  needsCheck: boolean
   createdAt: string
   updatedAt: string
 }
