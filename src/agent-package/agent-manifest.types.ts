@@ -2,11 +2,10 @@
  * Type definitions for agent.yaml manifest file
  */
 
-export interface AgentOptionalEnvVar {
-  name: string
-  description: string
-  default?: string
-}
+import type { EnvVarSetting } from './env-var-settings.js'
+
+/** A declared variable; the typed fields are described on `EnvVarSetting`. */
+export type AgentOptionalEnvVar = EnvVarSetting
 
 export interface ConfigSchemaExtensions {
   'x-stella-env-vars'?: string[]
