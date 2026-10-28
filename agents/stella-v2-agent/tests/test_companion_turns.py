@@ -149,6 +149,9 @@ class FakeStateMachine:
 
 
 QUESTION = "Just to check: do you want to stop the Extended Fitness Check-in here?"
+BRIDGE = "Okay."
+# The question replaces the reply, so it follows the bridge already spoken (PR 644).
+ASKED = f"{BRIDGE} {QUESTION}"
 ASK = {"user_intent": "might want to stop", "decision": "ask", "say": QUESTION}
 LEAVE = {"user_intent": "wants to stop now", "decision": "leave", "say": ""}
 STAY = {"user_intent": "wants to carry on", "decision": "stay", "say": ""}
@@ -251,7 +254,7 @@ class Session:
         agent.expert_pool = SimpleNamespace(run=pool_run)
 
         async def bridge(text, history, language=None, variables=None):
-            yield "Okay."
+            yield BRIDGE
 
         agent.bridge_generator = SimpleNamespace(generate_stream=bridge, last_bridge_mode=None)
 
@@ -450,7 +453,7 @@ async def test_a_stop_is_asked_first_and_nothing_ends():
     assert session.agent.companion.pending_exit is True
     # The exit dialogue's question is spoken as written — the reply model,
     # which followed the plan instead, is not asked to write this turn.
-    assert _spoken(outputs) == [QUESTION]
+    assert _spoken(outputs) == [ASKED]
     assert len(session.replies) == replies_before
     assert "activity_end_proposed" in _kinds(outputs)
 
@@ -519,7 +522,7 @@ async def test_an_unclear_answer_is_asked_about_again():
     session = await _companion_in_activity(exits=[ASK, ASK])
     await session.turn("can we stop?")
     outputs = await session.turn("hmm")
-    assert _spoken(outputs) == [QUESTION]
+    assert _spoken(outputs) == [ASKED]
     assert session.agent.companion.pending_exit is True
 
 
@@ -533,7 +536,7 @@ async def test_the_question_is_asked_even_when_the_plan_moved_that_turn():
     session.sm.state = 1
     outputs = await session.turn("I don't know, but can we stop here")
 
-    assert _spoken(outputs) == [QUESTION]
+    assert _spoken(outputs) == [ASKED]
     assert not any("goals" in text.lower() for text in _spoken(outputs))
 
 
