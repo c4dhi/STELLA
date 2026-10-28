@@ -148,7 +148,7 @@ function SettingRow({
           {changed && <Tag tone="primary" isDark={isDark}>{locked ? 'From template' : 'Changed'}</Tag>}
         </div>
         {s.description && (
-          <div className={`text-xs mt-0.5 leading-snug ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>{s.description}</div>
+          <div title={s.description} className={`text-xs mt-0.5 leading-snug line-clamp-2 ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>{s.description}</div>
         )}
         <div className={`text-[11px] mt-1 font-mono ${muted}`}>
           {s.name}

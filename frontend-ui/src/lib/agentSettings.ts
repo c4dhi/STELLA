@@ -164,3 +164,39 @@ export function removedTemplateKeys(
     declared.has(k) ? template.settings?.[k] !== undefined && values[k] === undefined : !custom.has(k),
   )
 }
+
+export interface MigrationNote {
+  key: string
+  /** The stored value, for declared non-secret settings only. */
+  value?: string
+  note: string
+}
+
+/**
+ * What became of each variable a template stored before settings had types:
+ * a setting, a setting whose value no longer fits, a stored secret, or a
+ * custom variable (naming the declared setting it was probably meant to be).
+ */
+export function migrationNotes(
+  template: { variableKeys: string[]; settings?: Record<string, string>; invalid?: Record<string, string> },
+  settings: EnvVarSetting[],
+): MigrationNote[] {
+  const byName = new Map(settings.map((s) => [s.name, s]))
+  const bare = (k: string) => k.replace(/^STELLA_/, '')
+  return template.variableKeys.map((key) => {
+    const setting = byName.get(key)
+    const value = template.settings?.[key]
+    if (setting?.type === 'secret') return { key, note: 'stored key, kept as it is' }
+    if (setting) {
+      const problem = template.invalid?.[key]
+      return { key, value, note: problem ? `setting, but it ${problem}: needs a value` : `the "${setting.label ?? key}" setting` }
+    }
+    const near = settings.find((s) => s.name !== key && (bare(s.name).startsWith(bare(key)) || bare(key).startsWith(bare(s.name))))
+    return {
+      key,
+      note: near
+        ? `not declared (did you mean ${near.name}?): kept as a custom variable`
+        : 'not declared by this agent: kept as a custom variable',
+    }
+  })
+}

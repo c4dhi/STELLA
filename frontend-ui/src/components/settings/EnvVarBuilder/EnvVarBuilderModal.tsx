@@ -4,7 +4,7 @@ import { useThemeStore } from '../../../store/themeStore'
 import { useToastStore } from '../../../store/toastStore'
 import { apiClient } from '../../../services/ApiClient'
 import type { EnvVarTemplate, AgentType } from '../../../lib/api-types'
-import { invalidSettings, removedTemplateKeys, settingsFromSchema, splitVariables } from '../../../lib/agentSettings'
+import { invalidSettings, migrationNotes, removedTemplateKeys, settingsFromSchema, splitVariables } from '../../../lib/agentSettings'
 import { useEnvVarListEditor } from '../../shared/EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from '../../shared/EnvVarListEditor/EnvVarListEditor'
 import AgentSettingsForm from '../../shared/AgentSettings/AgentSettingsForm'
@@ -428,17 +428,25 @@ export default function EnvVarBuilderModal({
                   <label className={`block text-xs font-medium tracking-wider uppercase mb-2 ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
                     Settings
                   </label>
-                  {template && (template.needsCheck || Object.keys(template.invalid ?? {}).length > 0) && (
-                    <div className={`mb-3 p-3 rounded-xl text-xs ${
-                      Object.keys(template.invalid ?? {}).length > 0
-                        ? isDark ? 'bg-red-500/10 border border-red-500/20 text-red-300' : 'bg-red-50 border border-red-200 text-red-700'
-                        : isDark ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300' : 'bg-amber-50 border border-amber-200 text-amber-700'
-                    }`}>
-                      {Object.keys(template.invalid ?? {}).length > 0
-                        ? 'Some values this template stores no longer fit the agent. They are marked below; fix them and save.'
-                        : 'This template was written before settings had types. Check the values below and save to confirm them.'}
+                  {template?.needsCheck ? (
+                    <div className={`mb-3 p-3 rounded-xl text-xs ${isDark ? 'bg-amber-500/10 border border-amber-500/20 text-amber-300' : 'bg-amber-50 border border-amber-200 text-amber-800'}`}>
+                      <div className="font-medium mb-1">
+                        Written before settings had types. What became of its {template.variableKeys.length} variable{template.variableKeys.length === 1 ? '' : 's'}:
+                      </div>
+                      <ul className="space-y-0.5">
+                        {migrationNotes(template, settings).map((n) => (
+                          <li key={n.key}>
+                            <span className="font-mono">{n.value !== undefined ? `${n.key}=${n.value}` : n.key}</span> → {n.note}
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-1.5 opacity-80">Check them and save: saving marks the template checked.</div>
                     </div>
-                  )}
+                  ) : template && Object.keys(template.invalid ?? {}).length > 0 ? (
+                    <div className={`mb-3 p-3 rounded-xl text-xs ${isDark ? 'bg-red-500/10 border border-red-500/20 text-red-300' : 'bg-red-50 border border-red-200 text-red-700'}`}>
+                      Some values this template stores no longer fit the agent. They are marked below; fix them and save.
+                    </div>
+                  ) : null}
                   {agentTypeId ? (
                     <AgentSettingsForm
                       settings={settings}
