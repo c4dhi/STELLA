@@ -7,6 +7,7 @@ import {
   SLUG_REGEX,
   VERSION_REGEX,
 } from '../agent-manifest.types.js'
+import { ENV_VAR_SETTING_TYPES, checkEnvVarValue } from '../env-var-settings.js'
 
 const VALID_CAPABILITIES = ['voice', 'text', 'progress', 'plans', 'experts'] as const
 const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives'] as const
@@ -56,11 +57,58 @@ const jsonSchemaNodeSchema: z.ZodType<Record<string, JsonValue>> = z.lazy(() =>
     .catchall(jsonValueSchema),
 )
 
-const optionalEnvVarSchema = z.object({
-  name: z.string().regex(ENV_VAR_NAME_REGEX, 'must be an uppercase environment variable name'),
-  description: z.string().optional(),
-  default: z.string().optional(),
-})
+// A declared variable as a typed setting (#585): the deploy form and templates
+// render one control per variable from these fields. All but `name` are
+// optional, so a manifest written before #585 still validates as free text.
+const optionalEnvVarSchema = z
+  .object({
+    name: z.string().regex(ENV_VAR_NAME_REGEX, 'must be an uppercase environment variable name'),
+    description: z.string().optional(),
+    default: z.string().optional(),
+    type: z.enum(ENV_VAR_SETTING_TYPES).optional(),
+    label: z.string().optional(),
+    group: z.string().optional(),
+    advanced: z.boolean().optional(),
+    agentDefault: z.string().optional(),
+    unsetLabel: z.string().optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    step: z.number().positive().optional(),
+    unit: z.string().optional(),
+    options: z.array(z.object({ value: z.string(), label: z.string().optional() })).optional(),
+    pattern: z.string().optional(),
+  })
+  .superRefine((setting, ctx) => {
+    const issue = (message: string, path: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: [path] })
+    const type = setting.type ?? 'string'
+    if (type === 'enum' && !setting.options?.length) issue('enum settings must list options', 'options')
+    if (type !== 'enum' && setting.options) issue('only enum settings take options', 'options')
+    const ranged = type === 'number' || type === 'integer'
+    if (!ranged && (setting.min !== undefined || setting.max !== undefined || setting.step !== undefined)) {
+      issue('only number and integer settings take min, max or step', 'min')
+    }
+    if (setting.min !== undefined && setting.max !== undefined && setting.min > setting.max) {
+      issue('min must not be above max', 'min')
+    }
+    if (type === 'secret' && setting.default !== undefined) issue('secret settings take no default', 'default')
+    if (setting.default !== undefined && setting.agentDefault !== undefined) {
+      issue('set default or agentDefault, not both', 'agentDefault')
+    }
+    if (setting.pattern !== undefined) {
+      try {
+        new RegExp(setting.pattern)
+      } catch {
+        issue('pattern is not a valid regular expression', 'pattern')
+        return
+      }
+    }
+    for (const field of ['default', 'agentDefault'] as const) {
+      const value = setting[field]
+      if (value === undefined || type === 'secret') continue
+      const problem = checkEnvVarValue(setting, value)
+      if (problem) issue(`${field} "${value}" ${problem}`, field)
+    }
+  })
 
 const configSchemaSchema = z
   .object({

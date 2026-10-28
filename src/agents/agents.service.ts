@@ -24,6 +24,7 @@ import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.s
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
 import { PersonasService } from '../personas/personas.service.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
+import { invalidEnvVarValues } from '../agent-package/env-var-settings.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -120,6 +121,24 @@ export class AgentsService {
       throw new BadRequestException(
         'stella-v2-agent requires a pipeline configuration (config.pipeline_config).',
       );
+    }
+  }
+
+  private async assertEnvVarSettingsFit(
+    createAgentDto: CreateAgentDto,
+    userId: string,
+    configSchema: Record<string, unknown> | null | undefined,
+  ): Promise<void> {
+    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
+      createAgentDto.envVarTemplateId,
+      userId,
+      createAgentDto.envVars,
+    );
+    const problems = Object.entries(invalidEnvVarValues(configSchema, merged)).map(
+      ([key, reason]) => `${key} ${reason}`,
+    );
+    if (problems.length > 0) {
+      throw new BadRequestException(`Agent settings do not fit: ${problems.join('; ')}`);
     }
   }
 
@@ -324,6 +343,15 @@ export class AgentsService {
     // Validate type-specific config requirements for ALL creation paths.
     // (Previously this only ran for public-project flows in PublicProjectsService.)
     this.validateRuntimeConfigForAgentType(agentType, agentConfig);
+
+    // A declared setting that does not fit its type or range (#585) stops the
+    // deploy here, by name, rather than reaching the pod as a string the agent
+    // then misreads. Template and overrides are checked as the pod would get them.
+    await this.assertEnvVarSettingsFit(
+      createAgentDto,
+      userId,
+      agentTypeRecord?.configSchema as Record<string, unknown> | null | undefined,
+    );
 
     // Encrypt manual env vars now so they are persisted before the async pod creation.
     // This guarantees restart() can recover them even if the pod creation fails.

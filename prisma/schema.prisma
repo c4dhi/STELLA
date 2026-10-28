@@ -473,6 +473,11 @@ model EnvVarTemplate {
   // Agents using this template
   agents AgentInstance[]
 
+  // When the template was last saved through the typed settings form (#585).
+  // Null for templates written before it: the UI asks for them to be checked,
+  // since a key/value pair saved then may not fit its setting's type.
+  checkedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

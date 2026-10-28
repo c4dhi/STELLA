@@ -312,11 +312,13 @@ The user's env var templates, which hold the API keys an agent needs.
 
 **Inputs:** none.
 
-**Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys` and `agentTypeId`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
+**Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys`, `agentTypeId`, `invalid` and `needsCheck`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
+
+`invalid` maps each setting whose stored value does not fit its type or range to the reason, for example `{ "TTS_SPEED": "must be between 0.5 and 2" }`. `agents_deploy` refuses such a template until it is fixed in the app. `needsCheck` is `true` for a template that has not been saved since 1.6.0 made settings typed.
 
 ### `agents_deploy` · `mcp:write`
 
-Start an agent in an active session. Starting takes a while: poll `agents_get` until `status` is `RUNNING`. Refused in a session that is closing or closed.
+Start an agent in an active session. Starting takes a while: poll `agents_get` until `status` is `RUNNING`. Refused in a session that is closing or closed. Also refused, naming each one, when the env var template holds a setting whose value does not fit its type or range.
 
 **Inputs:**
 

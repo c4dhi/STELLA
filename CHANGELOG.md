@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent settings in tabs.** Deploying an agent and editing a template in Settings now show the settings an agent declares as one control each (switch, slider, list, number or text), in tabs by topic, with anything the agent does not declare under "Custom". The deploy starts from the agent's defaults or a template, shows what changed, and can save the result as a new template. A value that does not fit is refused, with the setting and the reason, both on save and on deploy. Templates saved before this release are marked "Migrated · check" until they are saved again (#585)
+- The agents' manifests declare a type, label and tab for every optional setting, list `BARGE_IN_DUCK_GAIN`, and give the right default for `BARGE_IN_MIN_SPEECH_MS` (600 ms) (#548)
+
+### Upgrade notes
+
+- One database migration runs on its own during the deploy (a column marking which templates have been checked). No template data is changed
+
 ---
 
 ## [1.5.0] - 2026-10-28

@@ -340,22 +340,55 @@ When `TTS_ENABLED=false`, the gate still discards finals during processing but a
 
 ### Manifest Declaration
 
-Agents declare these in `agent.yaml` so the frontend deploy modal can display them:
+Agents declare these in `agent.yaml`, each with a type, so the deploy modal and the template editor in Settings can show one control per setting, in tabs:
 
 ```yaml
 configSchema:
   # ...
   x-stella-optional-env-vars:
-    - name: TTS_ENABLED
-      description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
-      default: "true"
-    - name: INTERRUPT_MODE
-      description: "Transcript interrupt behavior: 'none' (turn-based gating) or 'smart' (barge-in)"
-      default: "none"
-    - name: TRANSCRIPT_DEBOUNCE_MS
-      description: "Debounce window (ms) for aggregating rapid successive final transcripts."
-      default: "300"
+    - name: BARGE_IN_ENABLED
+      type: boolean
+      label: Barge-in
+      description: "Let the participant interrupt the agent while it speaks."
+      group: Conversation
+      agentDefault: "true"
+    - name: TTS_SPEED
+      type: number
+      label: Speaking speed
+      group: Voice
+      min: 0.5
+      max: 2
+      step: 0.05
+      agentDefault: "1.0"
+    - name: STELLA_TTS_PLAYBACK
+      type: enum
+      group: Voice
+      advanced: true
+      default: auto
+      options:
+        - { value: auto, label: Automatic }
+        - { value: stream }
+        - { value: sentence }
 ```
+
+| Field | Meaning |
+|-------|---------|
+| `type` | `string` (the default), `secret`, `boolean`, `integer`, `number` or `enum` |
+| `label`, `description` | What the form shows. Without a label the name is shown |
+| `group` | The tab the setting goes in. Without one it goes under "General" |
+| `advanced` | Put it in the last tab, "Advanced", whatever its group |
+| `default` | Injected into the pod when nobody sets the variable |
+| `agentDefault` | Shown as the default but never injected: the agent applies it itself. Use it where an explicit value changes behaviour, such as `BARGE_IN_ENABLED`, which locks the setting once set |
+| `unsetLabel` | What the form says when there is no default, such as "Automatic" |
+| `min`, `max`, `step`, `unit` | For `number` and `integer` only |
+| `options` | For `enum` only, and required there |
+| `pattern` | A regular expression a `string` value has to match |
+
+The manifest validator refuses an enum without options, options or ranges on the wrong type, `min` above `max`, a default on a secret, both `default` and `agentDefault`, a pattern that is not a regular expression, and a default that does not fit its own type. Keys under `x-stella-env-vars` are required and shown as secrets.
+
+Values are checked against the declaration when a template is saved and when an agent is deployed; a value that does not fit is refused with the key and the reason. Variables the agent does not declare are passed through unchecked, under the form's "Custom" tab.
+
+Templates keep their values encrypted, and the declaration is applied when a template is read: the API returns the values of settings declared with a non-secret `type`, so the form can show them. It never returns a secret, an untyped setting (a package from before typed settings may declare a key that way) or a custom value. A template saved before typed settings is marked "Migrated · check" until its values are saved again (a rename alone does not clear it), and one holding a value that no longer fits is marked "Needs a fix".
 
 ---
 
