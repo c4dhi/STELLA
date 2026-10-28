@@ -63,32 +63,113 @@ configSchema:
     - name: INTERRUPT_MODE
       description: "Transcript interrupt behavior: 'none' (turn-based gating, default) or 'smart' (barge-in with re-prompting)"
       default: "none"
+      type: enum
+      label: "Interrupt handling"
+      group: Conversation
+      options:
+        - { value: none, label: "Turn-based" }
+        - { value: smart, label: "Smart (re-prompt)" }
     - name: BARGE_IN_ENABLED
       description: "Operator override for barge-in. This agent supports barge-in by default; set 'false' to force it off, 'true' to force on. Leave unset to follow the agent's declaration."
+      type: boolean
+      label: "Barge-in"
+      group: Conversation
+      agentDefault: "true"
     - name: BARGE_IN_EVAL_TIMEOUT_MS
       description: "Wall-clock timeout (ms) for the Barge-in Evaluator decision; defaults to COMMIT on timeout so a slow classifier never freezes the turn."
       default: "2000"
+      type: integer
+      label: "Barge-in decision timeout"
+      group: Conversation
+      advanced: true
+      unit: ms
+      min: 200
+      max: 10000
+      step: 100
     - name: TTS_ENABLED
       description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
       default: "true"
+      type: boolean
+      label: "Speak replies"
+      group: Voice
     - name: STELLA_LANGUAGE
       description: "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT transcribes as it, the resolver forces every turn to it, and the reply is written in it — so a short or garbled first utterance still gets answered in that language. Empty or 'auto' = detect per turn and fall back to the default language."
+      type: string
+      label: "Conversation language"
+      group: Conversation
+      pattern: '^(auto|[a-z]{2})$'
+      unsetLabel: "Detect per turn"
     - name: TRANSCRIPT_DEBOUNCE_MS
       description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
       default: "300"
+      type: integer
+      label: "Transcript debounce"
+      group: Timing
+      advanced: true
+      unit: ms
+      min: 0
+      max: 2000
+      step: 50
     - name: DISABLE_AEC
       description: "Disable Acoustic Echo Cancellation (AEC) for debugging audio issues"
       default: "false"
+      type: boolean
+      label: "Turn off echo cancellation"
+      group: Voice
+      advanced: true
     - name: STELLA_TTS_PREROLL_MS
       description: "Fix the jitter buffer (ms) of audio held before each sentence plays. Leave unset (recommended): the agent measures how fast the voice is generated on this hardware and picks the head start itself, starting at 200 ms and raising it (up to 3 s) when the voice runs slower than real time or 'Playout starved' / 'bridged Xms' shows up in the agent log, then lowering it slowly when there is slack. Setting a value turns that off. 0 also disables the underrun guard."
+      type: integer
+      label: "Pre-roll"
+      group: Voice
+      advanced: true
+      unit: ms
+      min: 0
+      max: 3000
+      step: 50
+      unsetLabel: "Automatic"
     - name: STELLA_TTS_PLAYBACK
       description: "How synthesized speech is played: 'auto' (default, and what leaving this unset means) starts the session in 'stream' and switches once to 'sentence' if the measured synthesis speed says the provider cannot keep up — never back. 'stream' starts each sentence as it is generated, lowest latency, but can run dry mid-word on a TTS slower than real time (e.g. Qwen3 on a T4). 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did — pin it to skip the auto-switch. Set per deployment, so two deployments can be compared side by side. Only 'stream' or 'sentence' pins a deployment: left at 'auto', it follows the platform default a system admin sets in Settings → Platform Defaults (from the next session). Unknown values fall back to 'auto'."
       default: "auto"
+      type: enum
+      label: "Playback"
+      group: Voice
+      options:
+        - { value: auto, label: "Auto" }
+        - { value: stream, label: "Stream" }
+        - { value: sentence, label: "Whole sentence" }
     - name: TTS_SPEED
       description: "Baseline speaking rate (0.5-2.0, default 1.0). Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker. This agent has no bridge stage, so it does not vary rate per turn."
+      type: number
+      label: "Speaking rate"
+      group: Voice
+      unit: "×"
+      min: 0.5
+      max: 2.0
+      step: 0.05
+      agentDefault: "1.0"
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
+      type: integer
+      label: "Highlight update interval"
+      group: Screen
+      advanced: true
+      unit: ms
+      min: 50
+      max: 1000
+      step: 10
+      agentDefault: "200"
 
+    - name: BARGE_IN_DUCK_GAIN
+      description: "How loud the agent keeps talking, as a fraction of full volume, from the moment the participant starts speaking until it decides whether to stop. 1.0 turns ducking off."
+      type: number
+      label: "Voice level while interrupted"
+      group: Conversation
+      advanced: true
+      min: 0
+      max: 1
+      step: 0.05
+      agentDefault: "0.25"
 defaultConfig: {}
 
 # Pipeline configuration schema for the Agent Configurator.
@@ -181,7 +262,7 @@ pipelineSchema:
 
     - id: barge_in
       label: "Interrupt · Barge-in (reversible)"
-      description: "One of two interrupt types. This one is reversible and local: the user interrupts while the agent talks, the agent pauses, and this evaluator decides COMMIT (act on it, drop the rest of the reply) or RESUME (ignore it, resume from exactly where it paused). Control returns to the conversation either way. Spoken interruptions reach it only after two cheaper filters: the agent ducks its voice on the first sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms); this prompt then judges the FINAL transcript, which is the one question duration cannot answer. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s). (The terminal interrupt is 'Interrupt · Session End' below.) Force barge-in off entirely with BARGE_IN_ENABLED=false."
+      description: "One of two interrupt types. This one is reversible and local: the user interrupts while the agent talks, the agent pauses, and this evaluator decides COMMIT (act on it, drop the rest of the reply) or RESUME (ignore it, resume from exactly where it paused). Control returns to the conversation either way. Spoken interruptions reach it only after two cheaper filters: the agent ducks its voice on the first sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 600ms); this prompt then judges the FINAL transcript, which is the one question duration cannot answer. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s). (The terminal interrupt is 'Interrupt · Session End' below.) Force barge-in off entirely with BARGE_IN_ENABLED=false."
       icon: "✋"
       position: { row: -1, col: 0 }
       slots:

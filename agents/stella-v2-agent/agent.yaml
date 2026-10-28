@@ -63,39 +63,139 @@ configSchema:
     - name: INTERRUPT_MODE
       description: "Transcript interrupt behavior: 'none' (turn-based gating, default) or 'smart' (barge-in with re-prompting)"
       default: "none"
+      type: enum
+      label: "Interrupt handling"
+      group: Conversation
+      options:
+        - { value: none, label: "Turn-based" }
+        - { value: smart, label: "Smart (re-prompt)" }
     - name: BARGE_IN_ENABLED
       description: "Operator override for barge-in. This agent supports barge-in by default; set 'false' to force it off, 'true' to force on. Leave unset to follow the agent's declaration."
+      type: boolean
+      label: "Barge-in"
+      group: Conversation
+      agentDefault: "true"
     - name: TTS_ENABLED
       description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
       default: "true"
+      type: boolean
+      label: "Speak replies"
+      group: Voice
     - name: STELLA_TELEPROMPTER_ENABLED
       description: "Live teleprompter (#241): stream the reply dimmed and light each word as it is spoken. ON BY DEFAULT — set 'false' to disable. Leave unset to keep it on."
+      type: boolean
+      label: "Teleprompter"
+      group: Screen
+      agentDefault: "true"
     - name: TRANSCRIPT_DEBOUNCE_MS
       description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
       default: "300"
+      type: integer
+      label: "Transcript debounce"
+      group: Timing
+      advanced: true
+      unit: ms
+      min: 0
+      max: 2000
+      step: 50
     - name: STELLA_EXPERTS_DIR
       description: "External directory for expert JSON configs (overrides built-in)"
+      type: string
+      label: "Experts directory"
+      group: Timing
+      advanced: true
+      unsetLabel: "Built-in experts"
     - name: EXPERT_TIMEOUT_MS
       description: "Timeout per expert in milliseconds"
       default: "3000"
+      type: integer
+      label: "Expert timeout"
+      group: Timing
+      advanced: true
+      unit: ms
+      min: 500
+      max: 30000
+      step: 100
     - name: STELLA_LANGUAGE
       description: "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT transcribes as it, the resolver forces every turn to it, and the reply is written in it — so a short or garbled first utterance still gets answered in that language. Empty or 'auto' = detect per turn and fall back to the default language."
+      type: string
+      label: "Conversation language"
+      group: Conversation
+      pattern: '^(auto|[a-z]{2})$'
+      unsetLabel: "Detect per turn"
     - name: TTS_LANGUAGE
       description: "Seed language for TTS (ISO 639-1, e.g. 'de'). Empty = follow the per-turn detected language; the agent overrides this each turn."
+      type: string
+      label: "Voice language"
+      group: Voice
+      advanced: true
+      pattern: '^[a-z]{2}$'
+      unsetLabel: "Follow the conversation"
     - name: TTS_VOICE
       description: "Seed TTS voice, overridable per stream. Honored by voice-selecting providers (e.g. Kokoro), ignored by others. Empty = provider default."
+      type: string
+      label: "Voice"
+      group: Voice
+      unsetLabel: "Provider default"
     - name: STELLA_TTS_PREROLL_MS
       description: "Fix the jitter buffer (ms) of audio held before each sentence plays. Leave unset (recommended): the agent measures how fast the voice is generated on this hardware and picks the head start itself, starting at 200 ms and raising it (up to 3 s) when the voice runs slower than real time or 'Playout starved' / 'bridged Xms' shows up in the agent log, then lowering it slowly when there is slack. Setting a value turns that off. 0 also disables the underrun guard."
+      type: integer
+      label: "Pre-roll"
+      group: Voice
+      advanced: true
+      unit: ms
+      min: 0
+      max: 3000
+      step: 50
+      unsetLabel: "Automatic"
     - name: STELLA_TTS_PLAYBACK
       description: "How synthesized speech is played: 'auto' (default, and what leaving this unset means) starts the session in 'stream' and switches once to 'sentence' if the measured synthesis speed says the provider cannot keep up — never back. 'stream' starts each sentence as it is generated, lowest latency, but can run dry mid-word on a TTS slower than real time (e.g. Qwen3 on a T4). 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did — pin it to skip the auto-switch. Set per deployment, so two deployments can be compared side by side. Only 'stream' or 'sentence' pins a deployment: left at 'auto', it follows the platform default a system admin sets in Settings → Platform Defaults (from the next session). Unknown values fall back to 'auto'."
       default: "auto"
+      type: enum
+      label: "Playback"
+      group: Voice
+      options:
+        - { value: auto, label: "Auto" }
+        - { value: stream, label: "Stream" }
+        - { value: sentence, label: "Whole sentence" }
     - name: STELLA_TTS_RATE_VARIATION
       description: "Vary the speaking rate slightly by turn character (a heavier turn is taken a little slower, an opening beat a little brisker). ON BY DEFAULT — set 'false' to synthesize every utterance at exactly one rate. Only providers that implement rate honor it (Qwen3 does, by resampling)."
+      type: boolean
+      label: "Vary rate by turn"
+      group: Voice
+      agentDefault: "true"
     - name: TTS_SPEED
       description: "Baseline speaking rate (0.5-2.0, default 1.0). The agent overrides this per turn when STELLA_TTS_RATE_VARIATION is on. Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker."
+      type: number
+      label: "Speaking rate"
+      group: Voice
+      unit: "×"
+      min: 0.5
+      max: 2.0
+      step: 0.05
+      agentDefault: "1.0"
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
+      type: integer
+      label: "Highlight update interval"
+      group: Screen
+      advanced: true
+      unit: ms
+      min: 50
+      max: 1000
+      step: 10
+      agentDefault: "200"
 
+    - name: BARGE_IN_DUCK_GAIN
+      description: "How loud the agent keeps talking, as a fraction of full volume, from the moment the participant starts speaking until it decides whether to stop. 1.0 turns ducking off."
+      type: number
+      label: "Voice level while interrupted"
+      group: Conversation
+      advanced: true
+      min: 0
+      max: 1
+      step: 0.05
+      agentDefault: "0.25"
 defaultConfig: {}
 
 pipelineSchema:
@@ -335,7 +435,7 @@ pipelineSchema:
             can open inside the natural turn gap.
     - id: barge_in
       label: "Barge-in Evaluator"
-      description: "Decides whether an interruption — spoken or typed — should stop the agent (COMMIT) or be ignored so it keeps talking (RESUME). A spoken one reaches this prompt only after two cheaper filters have run: the agent ducks its own voice the moment it hears sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms). This prompt then judges the FINAL transcript — the one question duration cannot answer, since 'mhm' and 'no, wait' are both short. RESUME resumes playback from exactly where it paused, so a wrong guess here is recoverable. Noise that transcribes to nothing never gets this far. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s) and speech is queued as the next turn instead. Operators can force barge-in off entirely with BARGE_IN_ENABLED=false."
+      description: "Decides whether an interruption — spoken or typed — should stop the agent (COMMIT) or be ignored so it keeps talking (RESUME). A spoken one reaches this prompt only after two cheaper filters have run: the agent ducks its own voice the moment it hears sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 600ms). This prompt then judges the FINAL transcript — the one question duration cannot answer, since 'mhm' and 'no, wait' are both short. RESUME resumes playback from exactly where it paused, so a wrong guess here is recoverable. Noise that transcribes to nothing never gets this far. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s) and speech is queued as the next turn instead. Operators can force barge-in off entirely with BARGE_IN_ENABLED=false."
       icon: "✋"
       # Sits above the main pipeline, horizontally centered (cols 0-3 → 1.5).
       # Barge-in spans the whole turn rather than being a stage in the flow.
