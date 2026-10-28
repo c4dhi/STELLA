@@ -851,6 +851,20 @@ describe('One shape for every tool', () => {
     expect(parse(missing).error.status).toBe(404);
   });
 
+  it('never sends clients to agent_types_list for the pipeline schema (#820)', async () => {
+    const offenders: string[] = [];
+    for (const t of await schemas()) {
+      const texts = [t.description, ...Object.values(t.inputSchema.properties ?? {}).map((s: any) => s.description)];
+      for (const text of texts) {
+        if (!text) continue;
+        if ((/pipeline ?schema|configSchema/i.test(text)) && /agent_types_list/.test(text)) {
+          offenders.push(t.name);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('deploys by agent type id', async () => {
     const { factory, agents, tool } = setup();
     await factory.run(
