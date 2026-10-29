@@ -96,3 +96,17 @@ async def test_a_publish_error_does_not_break_the_warmup():
     result = await r.track(_warmup(0.05))
     assert result["success"]
     assert r.state == "ready"
+
+
+@pytest.mark.asyncio
+async def test_a_fast_success_after_a_failure_clears_the_screens():
+    sent = Sent()
+    r = SttReadiness(sent, announce_after=1)
+    await r.track(_warmup(0, success=False))
+    # The next participant joining is told it failed...
+    assert r.needs_resend()
+    assert r.payload()["data"]["state"] == "failed"
+    # ...and a warmup that then succeeds at once still says so.
+    await r.track(_warmup(0))
+    assert sent.states == ["failed", "ready"]
+    assert not r.needs_resend()

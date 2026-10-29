@@ -43,7 +43,9 @@ class SttReadiness:
         self._announce_after = announce_after
         self._clock = clock
         self.state = "ready"
-        self._announced = False
+        # What the screens were last told. Anything but "ready" must be
+        # followed by the outcome, however fast the next warmup is.
+        self._told = "ready"
         self._started: Optional[float] = None
 
     def payload(self) -> dict:
@@ -61,9 +63,10 @@ class SttReadiness:
 
     def needs_resend(self) -> bool:
         """Whether a participant joining now should be told the state."""
-        return self._announced
+        return self._told != "ready"
 
     async def _send(self) -> None:
+        self._told = self.state
         try:
             await self._publish(self.payload())
         except Exception:
@@ -75,22 +78,19 @@ class SttReadiness:
             # Another join while warming: the first call already reports.
             return await warmup
         self.state = "warming"
-        self._announced = False
         self._started = self._clock()
         task = asyncio.ensure_future(warmup)
         try:
             done, _ = await asyncio.wait({task}, timeout=self._announce_after)
             if not done:
                 logger.info("[STT-STATUS] Warmup still running after %.1fs: telling the screens", self._announce_after)
-                self._announced = True
                 await self._send()
             result = await task
         except Exception as e:
             result = {"success": False, "message": str(e)}
         ok = bool(result.get("success"))
         self.state = "ready" if ok else "failed"
-        if self._announced or not ok:
-            self._announced = True
+        if self._told != "ready" or not ok:
             await self._send()
         if not ok:
             logger.warning("[STT-STATUS] Warmup failed: %s", result.get("message"))
