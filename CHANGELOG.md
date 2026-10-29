@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- When speech recognition is still warming up at the start of a session, after a quiet spell, the participant sees "Getting ready to listen…" (in German or English) and the researcher sees an "STT warming up" chip with a timer and a line on the agent card. After 30 seconds it says it is taking longer than usual; if warming up fails, the participant is asked to tell the study team and the researcher's chip turns red. Nothing shows when the model is already warm (#564)
+
 ---
 
 ## [1.5.0] - 2026-10-28

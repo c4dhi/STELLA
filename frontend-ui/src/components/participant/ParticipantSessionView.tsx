@@ -18,6 +18,7 @@ import TranscriptOverlay from '../face/TranscriptOverlay'
 import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
 import VisualizerRenderer from '../face/VisualizerRenderer'
+import ListeningStatusCard from './ListeningStatusCard'
 import { useSleepMicrophone } from '../face/hooks/useSleepMicrophone'
 import { useSleepEvents } from '../face/hooks/useSleepEvents'
 import { useStore } from '../../store'
@@ -190,10 +191,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const triggerFaceState = useStore(s => s.triggerFaceState)
+  const sttStatus = useStore(s => s.sttStatus)
   // What one session's agent told the face must not carry into the next one
   // opened in the same page load.
   useEffect(() => {
     useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
+    useStore.getState().applySttStatus({ state: 'ready' })
   }, [sessionData.sessionId])
 
   useEffect(() => {
@@ -613,6 +616,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         // A command from the agent to this device (e.g. sleep).
         if (envelope.type === 'agent_command') {
           useStore.getState().applyAgentCommand(envelope.data || {})
+          return
+        }
+
+        // Speech recognition still warming up, or failed to (#564).
+        if (envelope.type === 'stt_status') {
+          useStore.getState().applySttStatus(envelope.data || {})
           return
         }
 
@@ -1341,8 +1350,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         className="absolute inset-0"
         style={{ backgroundColor: currentVisualizer === 'face' ? '#000000' : undefined }}
       >
-      {/* Visualizer */}
-      <div className="absolute inset-0 flex items-center justify-center">
+      {/* Visualizer, dimmed while speech recognition is not ready (#564) */}
+      <div className={`absolute inset-0 flex items-center justify-center transition-opacity duration-500 ${sttStatus ? 'opacity-60' : ''}`}>
         <VisualizerRenderer
           type={currentVisualizer}
           audioLevel={audioLevel}
@@ -1354,6 +1363,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           // surface yet, so say nothing rather than say something false.
         />
       </div>
+
+      <ListeningStatusCard />
 
       {/* Audio Enable Overlay - shown until user clicks to enable audio */}
       <AnimatePresence>

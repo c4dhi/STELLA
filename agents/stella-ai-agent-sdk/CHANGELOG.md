@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The agent tells the room whether speech recognition is ready, in an `stt_status` envelope (`warming` with `elapsed_ms`, then `ready` or `failed`, plus the session's language). It is sent only when the warmup a joining participant triggers takes longer than 1.5 s, and re-sent to anyone who joins mid-warmup. That warmup now waits up to 90 s instead of 30 s before it counts as failed. Older clients ignore the envelope (#564)
+
 ## [0.9.0] - 2026-10-28
 
 Ships with STELLA 1.5.0. What changes for agent authors:
