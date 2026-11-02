@@ -451,6 +451,12 @@ set_defaults() {
     # one leaves its ${PLACEHOLDER} in the rendered YAML, and stt-service parses
     # BARGE_IN_MIN_SPEECH_MS with int(), so it crashloops on the literal.
     export BARGE_IN_MIN_SPEECH_MS="${BARGE_IN_MIN_SPEECH_MS:-600}"
+    export TURN_MODEL="${TURN_MODEL:-off}"
+    export TURN_MODEL_FINISHED_AT="${TURN_MODEL_FINISHED_AT:-0.8}"
+    export TURN_MODEL_UNFINISHED_BELOW="${TURN_MODEL_UNFINISHED_BELOW:-0.3}"
+    export TURN_MODEL_FIRST_CHECK_MS="${TURN_MODEL_FIRST_CHECK_MS:-250}"
+    export TURN_MODEL_RECHECK_MS="${TURN_MODEL_RECHECK_MS:-150}"
+    export TURN_MODEL_MAX_WAIT_MS="${TURN_MODEL_MAX_WAIT_MS:-3000}"
     export STT_DECODE_DIAGNOSTICS="${STT_DECODE_DIAGNOSTICS:-0}"
     export STELLA_MODEL_KEEP_WARM="${STELLA_MODEL_KEEP_WARM:-true}"
     export DISABLE_AEC="${DISABLE_AEC:-false}"

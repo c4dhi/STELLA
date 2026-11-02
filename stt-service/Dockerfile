@@ -124,7 +124,7 @@ COPY proto/ ./proto/
 # Models are stored on PersistentVolume, not in the image.
 # This keeps the image slim (~500MB instead of ~4GB for GPU builds).
 # The init container runs these scripts to populate the PV on first startup.
-COPY download_sherpa_model.py download_whisper_model.py download_silero_vad.py ./
+COPY download_sherpa_model.py download_whisper_model.py download_silero_vad.py download_turn_model.py ./
 
 # Environment defaults for cache directories (mounted from PV at runtime)
 ENV WHISPER_MODEL=large-v3

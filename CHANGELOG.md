@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `TURN_MODEL`: an end-of-turn model can decide when someone has finished speaking, so the agent can answer after a shorter wait. Off by default; with it off nothing changes.
+
 ---
 
 ## [1.5.0] - 2026-10-28

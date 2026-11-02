@@ -11,3 +11,9 @@ torchaudio>=2.11.0
 
 # CTranslate2 - CUDA-optimized inference engine
 ctranslate2==4.8.2
+
+# End-of-turn models (TURN_MODEL, off by default; imported only when switched on).
+# 5.19 is the first transformers voxturn runs on. onnxruntime-gpu is in the Dockerfile.
+transformers>=5.19
+peft>=0.21
+safetensors>=0.8

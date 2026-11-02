@@ -111,6 +111,17 @@ class GateConfig:
     #: utterance early, so it is clamped up to it. None means no ceiling.
     max_endpointing_delay_ms: Optional[float] = None
 
+    #: End-of-turn model scores at or above this end the hold now. None means
+    #: no model: the window alone decides, as it always has.
+    turn_finished_at: Optional[float] = None
+
+    #: Scores at or below this keep the hold open past the window, up to the
+    #: ceiling. Anything between the two leaves the decision to the window.
+    turn_unfinished_below: float = 0.3
+
+    #: How often to ask again while the silence lasts.
+    turn_recheck_ms: float = 150.0
+
     def __post_init__(self) -> None:
         self.max_endpointing_delay_ms = clamp_endpointing_ceiling(
             self.max_endpointing_delay_ms, self.continuation_window_ms
@@ -153,7 +164,7 @@ class SpeechGate:
         self.pending_final_time: Optional[float] = None
         self.voiced_samples = 0
         self.barge_in_signalled = False
-        #: Why the last MAYBE_ENDING ended: "window" or "ceiling".
+        #: Why the last MAYBE_ENDING ended: "model", "window" or "ceiling".
         self.last_exit_reason: Optional[str] = None
         #: The current utterance's rescued pauses (#92), oldest first. Cleared
         #: when the NEXT utterance begins rather than on reset, so a provider
@@ -162,6 +173,10 @@ class SpeechGate:
         #: Silence waited and speech length at the last FINALIZE (#92), kept
         #: for the same reason. See endpoint_timing().
         self._last_endpoint: Optional[Dict[str, int]] = None
+        #: The end-of-turn model's latest score for this hold, None if not asked.
+        #: Kept through reset, like the two above, for the provider's final.
+        self.turn_score: Optional[float] = None
+        self._turn_asked_at: Optional[float] = None
 
     # -- queries ---------------------------------------------------------
 
@@ -203,7 +218,7 @@ class SpeechGate:
         }
 
     def hold_expired(self, now: float) -> Optional[str]:
-        """Whether MAYBE_ENDING is over: "ceiling", "window", or None.
+        """Whether MAYBE_ENDING is over: "ceiling", "model", "window", or None.
 
         The one place the hold's exit is decided; the provider's stream-end
         check asks here too. Both bounds are measured from entry into
@@ -216,9 +231,38 @@ class SpeechGate:
         ceiling = self.config.max_endpointing_delay_ms
         if ceiling is not None and waited >= ceiling:
             return "ceiling"
+        finished_at = self.config.turn_finished_at
+        if finished_at is not None and self.turn_score is not None:
+            if self.turn_score >= finished_at:
+                return "model"
+            if self.turn_score <= self.config.turn_unfinished_below:
+                return None
         if waited >= self.config.continuation_window_ms:
             return "window"
         return None
+
+    # -- the end-of-turn model -------------------------------------------
+    #
+    # The gate never sees the model, only its answer, so it stays pure: the
+    # provider asks turn_check_due(), runs the model wherever it likes and hands
+    # the score back. A model that is slow or broken simply never answers, which
+    # leaves the hold to the window.
+
+    def turn_check_due(self, now: float) -> bool:
+        """Whether the provider should ask the end-of-turn model now."""
+        if self.config.turn_finished_at is None or self.state != SpeechState.MAYBE_ENDING:
+            return False
+        if self._turn_asked_at is None:
+            return True
+        return (now - self._turn_asked_at) * 1000.0 >= self.config.turn_recheck_ms
+
+    def turn_check_started(self, now: float) -> None:
+        self._turn_asked_at = now
+
+    def report_turn_score(self, score: float) -> None:
+        """Record the model's answer. Only meaningful during the hold it was asked in."""
+        if self.state == SpeechState.MAYBE_ENDING:
+            self.turn_score = score
 
     # -- the machine -----------------------------------------------------
 
@@ -251,6 +295,7 @@ class SpeechGate:
             self.barge_in_signalled = False
             self.rescued_pauses = []
             self._last_endpoint = None
+            self.turn_score = None
             signals.append(GateSignal.UTTERANCE_BEGAN)
             signals.append(GateSignal.SPEECH_STARTED)
 
@@ -265,6 +310,8 @@ class SpeechGate:
             })
             self.state = SpeechState.SPEAKING
             self.pending_final_time = None
+            self.turn_score = None
+            self._turn_asked_at = None
             signals.append(GateSignal.PAUSE_RESCUED)
             signals.append(GateSignal.SPEECH_STARTED)
 
@@ -313,3 +360,4 @@ class SpeechGate:
         self.pending_final_time = None
         self.voiced_samples = 0
         self.barge_in_signalled = False
+        self._turn_asked_at = None

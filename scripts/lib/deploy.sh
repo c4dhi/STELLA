@@ -120,6 +120,12 @@ generate_configmap() {
         -e "s|\${VAD_RMS_THRESHOLD}|${VAD_RMS_THRESHOLD:-0.008}|g" \
         -e "s|\${PARTIAL_INTERVAL_MS}|${PARTIAL_INTERVAL_MS:-1000}|g" \
         -e "s|\${BARGE_IN_MIN_SPEECH_MS}|${BARGE_IN_MIN_SPEECH_MS:-600}|g" \
+        -e "s|\${TURN_MODEL}|${TURN_MODEL:-off}|g" \
+        -e "s|\${TURN_MODEL_FINISHED_AT}|${TURN_MODEL_FINISHED_AT:-0.8}|g" \
+        -e "s|\${TURN_MODEL_UNFINISHED_BELOW}|${TURN_MODEL_UNFINISHED_BELOW:-0.3}|g" \
+        -e "s|\${TURN_MODEL_FIRST_CHECK_MS}|${TURN_MODEL_FIRST_CHECK_MS:-250}|g" \
+        -e "s|\${TURN_MODEL_RECHECK_MS}|${TURN_MODEL_RECHECK_MS:-150}|g" \
+        -e "s|\${TURN_MODEL_MAX_WAIT_MS}|${TURN_MODEL_MAX_WAIT_MS:-3000}|g" \
         -e "s|\${STT_DECODE_DIAGNOSTICS}|${STT_DECODE_DIAGNOSTICS:-0}|g" \
         -e "s|\${STELLA_MODEL_KEEP_WARM}|${STELLA_MODEL_KEEP_WARM:-true}|g" \
         -e "s|\${DISABLE_AEC}|${DISABLE_AEC:-false}|g" \
