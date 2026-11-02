@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `stella-jev-agent`: stella-v2 without the bridge. One Jev call decides the experts and barge-in, and the agent asks back when what it heard isn't believable. It sends conversation text to TypeSafe and needs `TYPESAFE_API_KEY`.
 - `TURN_MODEL`: an end-of-turn model can decide when someone has finished speaking, so the agent can answer after a shorter wait. Off by default; with it off nothing changes.
 
 ---

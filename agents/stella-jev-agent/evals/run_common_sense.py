@@ -18,9 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from typesafe_sdk import AsyncTypeSafeClient  # noqa: E402
 
-from common_sense_cases import BARGE_IN as BARGE_CASES, CASES, EMERGENCIES  # noqa: E402
+from common_sense_cases import (  # noqa: E402
+    BARGE_IN as BARGE_CASES, CASES, CONFIRMED_CONCERNS, EMERGENCIES, HAS_ANSWER_CASES,
+)
 from stella_jev_agent.questions import (  # noqa: E402
-    BARGE_IN, COMMON_SENSE, MEDICAL, RECOGNISER_ARTIFACT, RESUME, barge_in_state, not_believable, turn_state,
+    BARGE_IN, COMMON_SENSE, HAS_ANSWER, MEDICAL, RECOGNISER_ARTIFACT, RESUME, barge_in_state, not_believable,
+    turn_state,
 )
 
 
@@ -40,6 +43,7 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", default="dev", choices=["dev", "holdout", "all"])
     parser.add_argument("--threshold", type=float, default=0.45)
+    parser.add_argument("--skip-threshold", type=float, default=0.8)
     parser.add_argument("--out")
     args = parser.parse_args()
 
@@ -95,6 +99,37 @@ async def main():
             records.append({"id": c["id"], "expect": "critical", "choice": answer.choice, "p": answer.probabilities})
             print(f"  {'ok ' if answer.choice == 'critical' else 'BAD'} {c['id']:<18} {answer.choice} p={answer.probabilities['critical']:.2f}")
         print(f"critical: {critical}/{len(emergencies)}")
+
+        gate_cases = chosen(HAS_ANSWER_CASES)
+        answers = await asyncio.gather(*(
+            ask(client, gate, turn_state(c["said"], c["history"], c["task"]), {"has_answer": HAS_ANSWER})
+            for c in gate_cases
+        ))
+        print("\nextraction gate")
+        false_skips = needless_runs = 0
+        for c, (response, ms) in zip(gate_cases, answers):
+            latencies.append(ms)
+            p_no = response.answers["has_answer"].probabilities["no"]
+            skipped = p_no >= args.skip_threshold
+            false_skips += skipped and c["expect"] == "yes"
+            needless_runs += not skipped and c["expect"] == "no"
+            records.append({"id": c["id"], "expect": c["expect"], "p_no": p_no, "skipped": skipped})
+            bad = skipped and c["expect"] == "yes"
+            print(f"  {'BAD' if bad else 'ok '} {c['id']:<18} want {c['expect']:<3} p_no={p_no:.2f} {'skipped' if skipped else 'runs'}")
+        with_answer = sum(c["expect"] == "yes" for c in gate_cases)
+        print(f"answers lost by skipping: {false_skips}/{with_answer}   "
+              f"needless runs: {needless_runs}/{len(gate_cases) - with_answer}")
+
+        concerns = chosen(CONFIRMED_CONCERNS)
+        answers = await asyncio.gather(*(
+            ask(client, gate, turn_state(c["said"], c["history"]), {"medical": MEDICAL}) for c in concerns
+        ))
+        print("\nhealth concern after a plain yes")
+        for c, (response, ms) in zip(concerns, answers):
+            latencies.append(ms)
+            answer = response.answers["medical"]
+            records.append({"id": c["id"], "expect": c["expect"], "choice": answer.choice})
+            print(f"  {'ok ' if answer.choice in ('high', 'critical') else 'BAD'} {c['id']:<18} {answer.choice}")
 
         answers = await asyncio.gather(*(
             ask(client, gate, barge_in_state(c["said"], [], c["interrupted"]), {"barge_in": BARGE_IN})

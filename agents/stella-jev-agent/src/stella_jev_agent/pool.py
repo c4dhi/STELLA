@@ -23,6 +23,10 @@ from stella_jev_agent.questions import (
 logger = logging.getLogger(__name__)
 
 COMMON = "common_sense"
+# These verdicts speak a fixed template instead of the reply, so nothing could ask back.
+OVERRIDING_EXPERTS = {"medical", "legal"}
+# Extraction is where V2 skips a stalled optional task, so it must run on a stalled plan.
+STALLED_AFTER_TURNS = 3
 EXTRACTION = "task_extraction"
 ROUTER = "companion_router"
 
@@ -35,6 +39,15 @@ JEV_EXPERTS = {
 }
 # A language-model expert is skipped when Jev says it has nothing to do.
 GATES = {EXTRACTION: ("has_answer", HAS_ANSWER, "no"), ROUTER: ("activity_intent", ACTIVITY_INTENT, "none")}
+
+
+def is_stalled(sm_context: Dict[str, Any]) -> bool:
+    progress = sm_context.get("progress")
+    return isinstance(progress, dict) and progress.get("turns_without_deliverable", 0) >= STALLED_AFTER_TURNS
+
+
+def overridden(verdicts: List[ExpertVerdict]) -> bool:
+    return any(v.expert_name in OVERRIDING_EXPERTS and v.verdict == "critical" for v in verdicts)
 
 
 def current_task(sm_context: Dict[str, Any]) -> str:
@@ -101,15 +114,14 @@ class JevExpertPool(ExpertPool):
             return self._settle_llm_ask_back(verdicts)
 
         verdicts = self._verdicts(expert_names, result)
-        medical = next((v for v in verdicts if v.expert_name == "medical"), None)
         common = next((v for v in verdicts if v.expert_name == COMMON), None)
         wanted = bool(common and common.verdict == DOESNT_FIT)
-        asking = self._ask_back.decide(wanted and not (medical and medical.verdict == "critical"))
+        asking = self._ask_back.decide(wanted and not overridden(verdicts))
         if common and wanted and not asking:
             common.verdict = SLIGHT_DOUBT
             common.recommendation = RECOMMENDATIONS[COMMON][SLIGHT_DOUBT]
 
-        remaining = [] if asking else self._language_model_experts(expert_names, result)
+        remaining = [] if asking else self._language_model_experts(expert_names, result, sm_context)
         if remaining:
             verdicts += await self._run_experts(
                 remaining, user_input, conversation_history, sm_context, self._timeout_ms / 1000.0
@@ -154,12 +166,16 @@ class JevExpertPool(ExpertPool):
             ))
         return verdicts
 
-    def _language_model_experts(self, expert_names: List[str], result: Any) -> List[str]:
+    def _language_model_experts(
+        self, expert_names: List[str], result: Any, sm_context: Dict[str, Any]
+    ) -> List[str]:
+        # A plain "Ja" to the question asked back is the only place that answer gets saved.
+        always_extract = self._ask_back.answering or is_stalled(sm_context)
         remaining = []
         for name in expert_names:
             if name in JEV_EXPERTS:
                 continue
-            if name in GATES:
+            if name in GATES and not (name == EXTRACTION and always_extract):
                 key, _, nothing_to_do = GATES[name]
                 if result.answers[key].probabilities[nothing_to_do] >= self.skip_threshold:
                     continue
@@ -167,7 +183,6 @@ class JevExpertPool(ExpertPool):
         return remaining
 
     def _settle_llm_ask_back(self, verdicts: List[ExpertVerdict]) -> List[ExpertVerdict]:
-        critical = any(v.expert_name == "medical" and v.verdict == "critical" for v in verdicts)
         wanted = any(v.expert_name == COMMON and v.verdict == DOESNT_FIT for v in verdicts)
-        self._ask_back.decide(wanted and not critical)
+        self._ask_back.decide(wanted and not overridden(verdicts))
         return verdicts

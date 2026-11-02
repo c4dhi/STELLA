@@ -16,7 +16,7 @@ at most once per statement and three times per session. A medical `critical` alw
 If Jev cannot be reached, the experts run on the language model using the prompts in
 `config/experts/`, and barge-in stops for the person.
 
-Needs `TYPESAFE_API_KEY` as well as V2's environment.
+Needs `TYPESAFE_API_KEY` as well as V2's environment. A session will not start without it.
 
 ## Evals
 

@@ -51,6 +51,11 @@ _WORD_RE = re.compile(r"\w+", re.UNICODE)
 # continuation window before the final needs it, so this should never be hit.
 _SHADOW_WAIT_TIMEOUT_S = 2.0
 _EARLY_DECODE_TIMEOUT_S = 10.0
+_HOLD_EXIT_LOG = {
+    "ceiling": "Endpointing ceiling reached",
+    "model": "Turn model ended the turn",
+    "window": "Continuation window expired",
+}
 
 
 def _normalize_for_compare(text: str) -> str:
@@ -508,8 +513,7 @@ class WhisperSession(STTSession):
         if reason:
             time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
             total_silence = (current_time - self.silence_start_time) * 1000 if self.silence_start_time else time_in_maybe_ending
-            what = {"ceiling": "Endpointing ceiling reached", "model": "Turn model ended the turn"}.get(
-                reason, "Continuation window expired")
+            what = _HOLD_EXIT_LOG.get(reason, _HOLD_EXIT_LOG["window"])
             print(f"[WhisperSession] {what} ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
             self._log_turn_end(reason, current_time)
             final_event = self._generate_final(current_time)
@@ -689,9 +693,7 @@ class WhisperSession(STTSession):
                     events.append(self._speech_boundary_event(current_time, ended=True))
 
                 elif signal == GateSignal.FINALIZE:
-                    print("[WhisperSession] Endpointing ceiling reached"
-                          if self.gate.last_exit_reason == "ceiling"
-                          else "[WhisperSession] Continuation window expired")
+                    print(f"[WhisperSession] {_HOLD_EXIT_LOG.get(self.gate.last_exit_reason, _HOLD_EXIT_LOG['window'])}")
                     self._log_turn_end(self.gate.last_exit_reason, current_time)
                     final_event = self._generate_final(current_time)
                     if final_event:

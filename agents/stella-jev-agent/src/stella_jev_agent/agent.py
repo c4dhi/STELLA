@@ -11,7 +11,9 @@ The turn itself is V2's. This agent swaps four stages:
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional
+
+from stella_agent_sdk import AgentOutput
 
 from stella_v2_agent.agent import StellaV2Agent
 
@@ -59,6 +61,10 @@ class StellaJevAgent(StellaV2Agent):
         )
 
     async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
+        # The language-model fallback is for an outage. Without a key it would run
+        # every session on it, with no bridge and no check before saving, and look fine.
+        if not os.environ.get("TYPESAFE_API_KEY"):
+            raise RuntimeError("TYPESAFE_API_KEY is not set, so stella-jev-agent cannot start a session")
         await super().on_session_start(session_id, config)
         # V2 builds a plain pool when the session overrides experts.
         if not isinstance(self.expert_pool, JevExpertPool):
@@ -67,6 +73,13 @@ class StellaJevAgent(StellaV2Agent):
         node = (config.get("pipeline_config") or {}).get("nodes", {}).get("expert_pool")
         if isinstance(node, dict):
             self.expert_pool.apply_config(node)
+
+    async def _say_unprompted(
+        self, session_id: str, instruction: str, standing_in_for_user: str,
+    ) -> AsyncIterator[AgentOutput]:
+        self.ask_back.cancel()
+        async for output in super()._say_unprompted(session_id, instruction, standing_in_for_user):
+            yield output
 
     async def on_session_end(self, session_id: str) -> Dict[str, Any]:
         result = await super().on_session_end(session_id)

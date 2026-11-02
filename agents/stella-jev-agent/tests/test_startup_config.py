@@ -25,13 +25,19 @@ def _config(**extra) -> dict:
 @pytest.fixture
 def agent(monkeypatch: pytest.MonkeyPatch) -> StellaJevAgent:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
     monkeypatch.delenv("STELLA_PLANS_DIR", raising=False)
     monkeypatch.delenv("STELLA_EXPERTS_DIR", raising=False)
     return StellaJevAgent()
 
 
-def test_starts_without_a_jev_key_and_swaps_the_stages(agent: StellaJevAgent) -> None:
+def test_a_session_does_not_start_without_a_jev_key(agent: StellaJevAgent, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TYPESAFE_API_KEY")
+    with pytest.raises(RuntimeError, match="TYPESAFE_API_KEY"):
+        asyncio.run(agent.on_session_start("session-jev", _config()))
+
+
+def test_swaps_the_stages(agent: StellaJevAgent) -> None:
     asyncio.run(agent.on_session_start("session-jev", _config()))
 
     assert agent._agent_type == "stella-jev-agent"

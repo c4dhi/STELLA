@@ -34,8 +34,9 @@ class JevResponseGenerator(ResponseGenerator):
 
     def generate(self, *, directive: ResponseDirective, prepend: str = "", **kwargs: Any):
         if self._ask_back.take():
-            # A medical "critical" never gets here: it overrides the reply, and
-            # the pool does not ask back on such a turn.
+            # A "critical" never gets here: it overrides the reply, and the pool
+            # does not ask back on such a turn. A health or legal note is dropped
+            # on purpose, since this reply only asks what was said and advises nothing.
             directive.routing_directive = ASK_BACK_INSTRUCTION
             directive.primary_action = ""
             directive.ask_followup = False

@@ -27,6 +27,8 @@ FITS_ANSWER = _answer(fits=0.97, slight_doubt=0.02, doesnt_fit=0.01)
 MISFIT_ANSWER = _answer(fits=0.1, slight_doubt=0.1, doesnt_fit=0.8)
 QUIET_MEDICAL = _answer(none=0.97, low=0.01, high=0.01, critical=0.01)
 CRITICAL_MEDICAL = _answer(none=0.01, low=0.01, high=0.08, critical=0.9)
+CRITICAL_LEGAL = _answer(none=0.01, low=0.01, high=0.08, critical=0.9)
+QUIET_LEGAL = _answer(none=0.99, low=0.0, high=0.0, critical=0.01)
 SPEECH = _answer(speech=0.99, artifact=0.01)
 
 
@@ -62,19 +64,19 @@ class Pool(JevExpertPool):
 NAMES = [COMMON, "medical", "legal", "task_extraction", "companion_router"]
 
 
-def _answers(common=FITS_ANSWER, medical=QUIET_MEDICAL, has_answer=0.5, activity=0.99, artifact=SPEECH) -> Dict:
+def _answers(common=FITS_ANSWER, medical=QUIET_MEDICAL, has_answer=0.5, activity=0.99, artifact=SPEECH, legal=QUIET_LEGAL) -> Dict:
     return {
         COMMON: common,
         "recogniser_artifact": artifact,
         "medical": medical,
-        "legal": _answer(none=0.99, low=0.0, high=0.0, critical=0.01),
+        "legal": legal,
         "has_answer": _answer(no=1 - has_answer, yes=has_answer),
         "activity_intent": _answer(none=activity, transition=1 - activity),
     }
 
 
-def _run(pool, names=NAMES):
-    return asyncio.run(pool.run(names, "Neun Liter.", [{"role": "assistant", "content": "Wie viel trinken Sie?"}], {}))
+def _run(pool, names=NAMES, context=None):
+    return asyncio.run(pool.run(names, "Neun Liter.", [{"role": "assistant", "content": "Wie viel trinken Sie?"}], context or {}))
 
 
 def _verdict(verdicts, name):
@@ -115,6 +117,70 @@ def test_an_emergency_is_never_asked_back():
     assert resolved.directive.directive_source == "medical"
 
 
+def test_a_legal_emergency_is_never_asked_back():
+    ask_back = AskBack()
+    pool = Pool(FakeJev(_answers(common=MISFIT_ANSWER, legal=CRITICAL_LEGAL)), ask_back)
+
+    verdicts = _run(pool)
+
+    assert ask_back.now is False
+    resolved = Arbitration(compiler_version="1.0.0").resolve(
+        verdicts, {}, expert_configs=pool._registry.as_map(), user_input="x"
+    )
+    assert resolved.directive.action == "override"
+    assert resolved.directive.directive_source == "legal"
+
+
+def test_a_question_never_spoken_costs_nothing_and_is_not_followed_up():
+    """Another override can take the turn after the pool has decided to ask."""
+    ask_back = AskBack(max_per_session=1)
+    pool = Pool(FakeJev(_answers(common=MISFIT_ANSWER)), ask_back)
+    _run(pool)
+    assert ask_back.now is True  # and the reply stage never runs
+
+    pool._jev.answers = _answers()
+    _run(pool)
+    assert ask_back.now is False
+    assert ask_back.count == 0
+    assert ask_back.take_answer() is False, "nobody asked, so this is not an answer"
+
+    pool._jev.answers = _answers(common=MISFIT_ANSWER)
+    _run(pool)
+    assert ask_back.now is True, "the unspoken question used up the session's only one"
+
+
+def test_a_line_the_agent_opens_itself_is_not_written_as_a_question(monkeypatch: pytest.MonkeyPatch):
+    seen = []
+
+    async def nothing():
+        return
+        yield
+
+    def fake_generate(self, *, directive, prepend="", **kwargs):
+        seen.append(directive.routing_directive)
+        return nothing()
+
+    async def history(limit=20):
+        return []
+
+    from stella_v2_agent.pipeline.response_generator import ResponseGenerator
+    monkeypatch.setattr(ResponseGenerator, "generate", fake_generate)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    from stella_jev_agent import StellaJevAgent
+
+    agent = StellaJevAgent()
+    agent.ask_back.decide(True)  # the turn was taken over before its reply
+    agent._fetch_conversation_history = history
+    agent.sm_client = None
+
+    async def say():
+        return [o async for o in agent._say_unprompted("s", "Sag hallo.", "(nothing)")]
+
+    asyncio.run(say())
+    assert seen == ["Sag hallo."]
+    assert agent.ask_back.count == 0
+
+
 def test_never_asks_twice_in_a_row_and_stops_at_the_session_limit():
     ask_back = AskBack(max_per_session=2)
     pool = Pool(FakeJev(_answers(common=MISFIT_ANSWER)), ask_back)
@@ -122,7 +188,7 @@ def test_never_asks_twice_in_a_row_and_stops_at_the_session_limit():
     asked = []
     for _ in range(6):
         _run(pool)
-        asked.append(ask_back.now)
+        asked.append(ask_back.take())
 
     assert asked == [True, False, True, False, False, False]
     assert ask_back.count == 2
@@ -147,6 +213,29 @@ def test_slow_experts_run_only_when_jev_is_not_sure_they_have_nothing_to_do():
     pool = Pool(FakeJev(_answers(has_answer=0.3, activity=0.5)), AskBack())
     _run(pool)
     assert pool.language_model_calls == [["task_extraction", "companion_router"]]
+
+
+def test_the_answer_to_a_question_is_always_extracted():
+    """A plain "Ja" is nothing to Jev's gate, and the turn before saved nothing."""
+    ask_back = AskBack()
+    pool = Pool(FakeJev(_answers(common=MISFIT_ANSWER)), ask_back)
+    _run(pool)
+    assert pool.language_model_calls == []
+    ask_back.take()
+
+    pool._jev.answers = _answers(has_answer=0.1)
+    _run(pool)
+    assert pool.language_model_calls == [["task_extraction"]]
+
+    _run(pool)
+    assert pool.language_model_calls == [["task_extraction"]], "only that one turn"
+
+
+@pytest.mark.parametrize("turns,runs", [(2, False), (3, True), (6, True)])
+def test_a_stalled_plan_still_reaches_extraction(turns, runs):
+    pool = Pool(FakeJev(_answers(has_answer=0.1)), AskBack())
+    _run(pool, context={"progress": {"turns_without_deliverable": turns}})
+    assert pool.language_model_calls == ([["task_extraction"]] if runs else [])
 
 
 def test_custom_experts_still_run_on_the_language_model():

@@ -23,8 +23,8 @@ class AskBack:
     def __init__(self, max_per_session: int = 3):
         self.max_per_session = max_per_session
         self.count = 0
-        # This turn's reply has to ask back. Taken by the reply stage, so that a
-        # later turn the agent opens itself is not written as a question.
+        # This turn's reply has to ask back. Nothing counts as asked until the
+        # reply stage takes it: an override or a barge-in can end the turn first.
         self.now = False
         self._asked_last_turn = False
         self._answering = False
@@ -33,14 +33,25 @@ class AskBack:
         """Settle this turn. The turn after a question is its answer, so it never asks."""
         allowed = wanted and not self._asked_last_turn and self.count < self.max_per_session
         self._answering = self._asked_last_turn
-        self.now = self._asked_last_turn = allowed
-        if allowed:
-            self.count += 1
+        self._asked_last_turn = False
+        self.now = allowed
         return allowed
 
     def take(self) -> bool:
         now, self.now = self.now, False
+        if now:
+            self.count += 1
+            self._asked_last_turn = True
         return now
+
+    def cancel(self) -> None:
+        """For a line the agent says of its own accord: it neither asks nor follows an answer."""
+        self.now = self._answering = False
+
+    @property
+    def answering(self) -> bool:
+        """Whether this turn answers a question the agent really asked last turn."""
+        return self._answering
 
     def take_answer(self) -> bool:
         """Whether this turn answers the question the agent asked last turn."""

@@ -83,17 +83,11 @@ spec:
           # End-of-turn model (only when TURN_MODEL names one; whisper only)
           # ================================================================
           if [ "$STT_PROVIDER" = "whisper" ] && [ "${TURN_MODEL:-off}" != "off" ]; then
-            TURN_MODEL_VERSION_FILE="/models/turn-model/.version-$TURN_MODEL"
-
-            if [ -f "$TURN_MODEL_VERSION_FILE" ]; then
-              echo "[STT Init] Turn model already downloaded: $TURN_MODEL"
-            else
-              echo "[STT Init] Downloading turn model: $TURN_MODEL..."
-              mkdir -p /models/turn-model
-              HF_HOME=/models/turn-model TURN_MODEL=$TURN_MODEL python download_turn_model.py
-              touch "$TURN_MODEL_VERSION_FILE"
-              echo "[STT Init] Turn model download complete"
-            fi
+            # No version file: the script pins its revisions, so a moved pin is
+            # fetched and an unchanged one comes straight from the cache.
+            echo "[STT Init] Checking turn model: $TURN_MODEL..."
+            mkdir -p /models/turn-model
+            HF_HOME=/models/turn-model TURN_MODEL=$TURN_MODEL python download_turn_model.py
           fi
 
           # ================================================================

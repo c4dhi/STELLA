@@ -123,6 +123,39 @@ EMERGENCIES = [
          [(A, "Was machen Sie gerade?")]),
 ]
 
+# The gate that skips extraction: is there something to save? `expect` is "yes" when
+# skipping would lose an answer, which is the mistake that matters here. Same split rule.
+PLAN_TASK = "Trinken und Essen | Trinkmenge erfragen | Still to collect: Trinkmenge pro Tag"
+HAS_ANSWER_CASES = [
+    case("gate_amount", "dev", "yes", "So etwa anderthalb Liter.", [(A, "Wie viel trinken Sie am Tag?")], PLAN_TASK),
+    case("gate_hedged", "dev", "yes", "Ich glaube, so zwei Gläser, vielleicht auch drei.", [(A, "Wie viel trinken Sie am Tag?")], PLAN_TASK),
+    case("gate_passing", "dev", "yes", "Ach, das Wetter ist schön, ich hab heute schon einen Liter Tee getrunken.", [(A, "Wie geht es Ihnen?")], PLAN_TASK),
+    case("gate_correct", "dev", "yes", "Nein, ich meinte drei Liter, nicht zwei.", [(U, "Zwei Liter."), (A, "Gut, zwei Liter also.")], PLAN_TASK),
+    case("gate_confirm", "dev", "yes", "Ja, genau.", [(U, "Neun Liter."), (A, "Habe ich richtig gehört, neun Liter?")], PLAN_TASK),
+    case("gate_short", "dev", "yes", "Wenig.", [(A, "Wie viel trinken Sie am Tag?")], PLAN_TASK),
+    case("gate_none", "dev", "yes", "Eigentlich trinke ich fast nichts.", [(A, "Wie viel trinken Sie am Tag?")], PLAN_TASK),
+    case("gate_chat_1", "dev", "no", "Heute ist so schönes Wetter bei uns.", [(A, "Wie geht es Ihnen heute?")], PLAN_TASK),
+    case("gate_hello", "dev", "no", "Guten Morgen!", [(A, "Guten Morgen, schön dass Sie da sind.")], PLAN_TASK),
+    case("gate_question", "dev", "no", "Wie meinen Sie das?", [(A, "Wie viel trinken Sie am Tag?")], PLAN_TASK),
+    case("gate_chat_2", "dev", "no", "Meine Tochter war gestern zu Besuch.", [(A, "Was war diese Woche schön?")], PLAN_TASK),
+    case("gate_water", "holdout", "yes", "Meistens Wasser, so eine Flasche.", [(A, "Wie viel trinken Sie am Tag?")], PLAN_TASK),
+    case("gate_coffee", "holdout", "yes", "Zum Frühstück zwei Tassen Kaffee, und dann nicht mehr viel.", [(A, "Was trinken Sie denn so?")], PLAN_TASK),
+    case("gate_correct_2", "holdout", "yes", "Das stimmt nicht, es war mehr.", [(U, "Ein Liter."), (A, "Also ein Liter pro Tag.")], PLAN_TASK),
+    case("gate_confirm_2", "holdout", "yes", "Doch, das stimmt so.", [(U, "Fünf Liter."), (A, "Habe ich das richtig verstanden, fünf Liter?")], PLAN_TASK),
+    case("gate_unknown", "holdout", "yes", "Das weiss ich gar nicht so genau, nicht viel.", [(A, "Wie viel trinken Sie am Tag?")], PLAN_TASK),
+    case("gate_chat_3", "holdout", "no", "Ach, der Garten macht mir gerade viel Freude.", [(A, "Was gibt es Neues?")], PLAN_TASK),
+    case("gate_thanks", "holdout", "no", "Danke, das ist nett von Ihnen.", [(A, "Das haben Sie gut gemacht.")], PLAN_TASK),
+    case("gate_ask", "holdout", "no", "Wer sind Sie eigentlich?", [(A, "Wie geht es Ihnen heute?")], PLAN_TASK),
+]
+
+# A plain "Ja" to a question asked back: does the health concern in it survive?
+CONFIRMED_CONCERNS = [
+    case("confirm_pills", "dev", "high", "Ja.",
+         [(U, "Ich nehme morgens neun Tabletten."), (A, "Habe ich richtig gehört, neun Tabletten am Morgen?")]),
+    case("confirm_fall", "dev", "high", "Ja, genau.",
+         [(U, "Ich bin diese Woche dreimal gestürzt."), (A, "Habe ich das richtig verstanden, dreimal gestürzt?")]),
+]
+
 # Barge-in: `said` arrives while `interrupted` is being spoken.
 BARGE_IN = [
     {"id": "mhm", "said": "Mhm.", "expect": "resume", "interrupted": "Das klingt nach einem schönen Tag, und ich"},
