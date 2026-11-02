@@ -4,8 +4,8 @@
 # arg, so each built image contains only one provider's deps.
 
 # gRPC server
-grpcio==1.84.0
-grpcio-tools==1.84.0
+grpcio==1.85.0
+grpcio-tools==1.85.0
 
 # Shared audio handling (numpy is also pulled in by every provider, pinned
 # here so the floor is consistent across single-provider builds).
