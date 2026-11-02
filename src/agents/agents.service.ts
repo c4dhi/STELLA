@@ -107,18 +107,18 @@ export class AgentsService {
    * Validate that the agent config satisfies requirements for the given agent type.
    * Called on every create() path so no entry point can skip type-specific validation.
    *
-   * Currently enforced: stella-v2-agent requires a pipeline_config object.
+   * Currently enforced: stella-v2-agent and stella-jev-agent require a pipeline_config object.
    */
   private validateRuntimeConfigForAgentType(
     agentTypeSlug: string,
     runtimeConfig: Record<string, unknown>,
   ): void {
-    if (agentTypeSlug !== 'stella-v2-agent') return;
+    if (agentTypeSlug !== 'stella-v2-agent' && agentTypeSlug !== 'stella-jev-agent') return;
 
     const pipelineConfig = runtimeConfig.pipeline_config;
     if (!pipelineConfig || typeof pipelineConfig !== 'object' || Array.isArray(pipelineConfig)) {
       throw new BadRequestException(
-        'stella-v2-agent requires a pipeline configuration (config.pipeline_config).',
+        `${agentTypeSlug} requires a pipeline configuration (config.pipeline_config).`,
       );
     }
   }
@@ -285,7 +285,7 @@ export class AgentsService {
     const agentType = createAgentDto.agentType || 'stella-v2-agent';
 
     // Security: Validate agent type against allowed list
-    const allowedAgentTypes = ['stella-v2-agent', 'stella-light-agent'];
+    const allowedAgentTypes = ['stella-v2-agent', 'stella-light-agent', 'stella-jev-agent'];
     if (!allowedAgentTypes.includes(agentType)) {
       throw new BadRequestException(`Invalid agent type: ${agentType}. Allowed: ${allowedAgentTypes.join(', ')}`);
     }

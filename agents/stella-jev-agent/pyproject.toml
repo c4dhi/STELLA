@@ -1,0 +1,31 @@
+[project]
+name = "stella-jev-agent"
+version = "0.1.0"
+description = "STELLA V2's pipeline with experts and barge-in answered by Jev, no bridge"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "STELLA Team"}
+]
+
+dependencies = [
+    "stella-ai-agent-sdk",
+    "stella-v2-agent",
+    "typesafe-sdk>=0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+stella-jev-agent = "stella_jev_agent.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
