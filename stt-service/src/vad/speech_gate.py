@@ -122,6 +122,10 @@ class GateConfig:
     #: How often to ask again while the silence lasts.
     turn_recheck_ms: float = 150.0
 
+    #: The timers' silence threshold, when a model opens the hold earlier than
+    #: they would. Only a pause that also got past this counts as rescued.
+    rescue_silence_ms: Optional[float] = None
+
     def __post_init__(self) -> None:
         self.max_endpointing_delay_ms = clamp_endpointing_ceiling(
             self.max_endpointing_delay_ms, self.continuation_window_ms
@@ -170,6 +174,8 @@ class SpeechGate:
         #: when the NEXT utterance begins rather than on reset, so a provider
         #: building the final after FINALIZE can still read them.
         self.rescued_pauses: List[Dict[str, int]] = []
+        #: The pause behind the latest PAUSE_RESCUED, counted or not.
+        self.last_pause: Dict[str, int] = {}
         #: Silence waited and speech length at the last FINALIZE (#92), kept
         #: for the same reason. See endpoint_timing().
         self._last_endpoint: Optional[Dict[str, int]] = None
@@ -302,12 +308,23 @@ class SpeechGate:
         elif self.state == SpeechState.MAYBE_ENDING:
             # Same utterance, resumed. The transcript id is deliberately kept —
             # this is one turn with a pause in it, not two turns.
-            self.rescued_pauses.append({
+            threshold = self.config.silence_duration_ms
+            into_window = (now - self.pending_final_time) * 1000.0
+            window = self.config.continuation_window_ms
+            if self.config.rescue_silence_ms is not None:
+                # A model asks from the first short pause, and a breath that
+                # never came near ending the turn has rescued nothing.
+                window += threshold - self.config.rescue_silence_ms
+                threshold = self.config.rescue_silence_ms
+                into_window = pause_ms - threshold
+            self.last_pause = {
                 "pause_ms": int(round(pause_ms)),
-                "into_window_ms": int(round((now - self.pending_final_time) * 1000.0)),
-                "silence_threshold_ms": int(round(self.config.silence_duration_ms)),
-                "continuation_window_ms": int(round(self.config.continuation_window_ms)),
-            })
+                "into_window_ms": int(round(into_window)),
+                "silence_threshold_ms": int(round(threshold)),
+                "continuation_window_ms": int(round(window)),
+            }
+            if into_window >= 0:
+                self.rescued_pauses.append(self.last_pause)
             self.state = SpeechState.SPEAKING
             self.pending_final_time = None
             self.turn_score = None

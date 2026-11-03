@@ -297,6 +297,7 @@ class WhisperSession(STTSession):
             turn_finished_at=config.get('turn_finished_at') if config.get('turn_scorer') else None,
             turn_unfinished_below=config.get('turn_unfinished_below', 0.3),
             turn_recheck_ms=config.get('turn_recheck_ms', 150),
+            rescue_silence_ms=config.get('rescue_silence_ms'),
         ))
         # The gate clamps a ceiling shorter than the window up to it.
         self.max_endpointing_delay_ms = self.gate.config.max_endpointing_delay_ms
@@ -671,7 +672,7 @@ class WhisperSession(STTSession):
                         self.last_model_end_time = None
 
                 elif signal == GateSignal.PAUSE_RESCUED:
-                    pause = self.gate.rescued_pauses[-1]
+                    pause = self.gate.last_pause
                     print(f"[WhisperSession] Pause rescued ({pause['pause_ms']}ms, "
                           f"{pause['into_window_ms']}ms into the window)")
                     # They kept talking, so anything decoded so far is short.
@@ -1497,6 +1498,7 @@ class WhisperProvider(STTProvider):
             'silence_duration_ms': first,
             'continuation_window_ms': self.silence_duration_ms + self.continuation_window_ms - first,
             'max_endpointing_delay_ms': self.turn_max_wait_ms - first,
+            'rescue_silence_ms': self.silence_duration_ms,
         }
 
     async def warmup(self, duration_ms: int = 1000, force: bool = False) -> bool:
