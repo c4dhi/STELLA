@@ -25,6 +25,7 @@ import numpy as np
 from .base import STTProvider, STTSession, end_of_speech_fields
 import stt_pb2
 from vad.speech_gate import GateConfig, GateSignal, SpeechGate, SpeechState, clamp_endpointing_ceiling
+from vad.turn_model import TURN_MODEL_WINDOW_SAMPLES, TurnScorer, load_turn_model
 
 # ── Decode diagnostics (STT_DECODE_DIAGNOSTICS) ──────────────────────────────
 # Logging-only instrumentation for the endpointing/hallucination investigation.
@@ -49,6 +50,12 @@ _WORD_RE = re.compile(r"\w+", re.UNICODE)
 # Bounded so a stuck shadow decode can never hold up a real turn. It is queued a
 # continuation window before the final needs it, so this should never be hit.
 _SHADOW_WAIT_TIMEOUT_S = 2.0
+_EARLY_DECODE_TIMEOUT_S = 10.0
+_HOLD_EXIT_LOG = {
+    "ceiling": "Endpointing ceiling reached",
+    "model": "Turn model ended the turn",
+    "window": "Continuation window expired",
+}
 
 
 def _normalize_for_compare(text: str) -> str:
@@ -287,6 +294,10 @@ class WhisperSession(STTSession):
             barge_in_min_speech_ms=self.barge_in_min_speech_ms,
             max_endpointing_delay_ms=self.max_endpointing_delay_ms,
             sample_rate=16000,
+            turn_finished_at=config.get('turn_finished_at') if config.get('turn_scorer') else None,
+            turn_unfinished_below=config.get('turn_unfinished_below', 0.3),
+            turn_recheck_ms=config.get('turn_recheck_ms', 150),
+            rescue_silence_ms=config.get('rescue_silence_ms'),
         ))
         # The gate clamps a ceiling shorter than the window up to it.
         self.max_endpointing_delay_ms = self.gate.config.max_endpointing_delay_ms
@@ -353,6 +364,18 @@ class WhisperSession(STTSession):
         self.shadow_result: Optional[dict] = None
         self.shadow_submitted_at = 0.0
         self.last_partial_snapshot = ""
+
+        # ── End-of-turn model (TURN_MODEL) ──
+        self.turn_scorer = config.get('turn_scorer')
+        self.pending_turn_future: Optional[Future] = None
+        self.pending_turn_hold = None
+        # When the model last ended a turn, to log how soon the person spoke
+        # again. Survives _reset, which is the whole point.
+        self.last_model_end_time: Optional[float] = None
+        # Decoding starts during the hold, so a turn the model ends early does
+        # not then wait for whisper as well. Same single worker as partials.
+        self.early_decode_future: Optional[Future] = None
+        self.early_decode_valid = False
 
     # -- VAD state, read through from the shared gate --------------------
     #
@@ -491,8 +514,9 @@ class WhisperSession(STTSession):
         if reason:
             time_in_maybe_ending = (current_time - self.pending_final_time) * 1000
             total_silence = (current_time - self.silence_start_time) * 1000 if self.silence_start_time else time_in_maybe_ending
-            what = "Endpointing ceiling reached" if reason == "ceiling" else "Continuation window expired"
+            what = _HOLD_EXIT_LOG.get(reason, _HOLD_EXIT_LOG["window"])
             print(f"[WhisperSession] {what} ({time_in_maybe_ending:.0f}ms in MAYBE_ENDING, {total_silence:.0f}ms total silence)")
+            self._log_turn_end(reason, current_time)
             final_event = self._generate_final(current_time)
             if final_event:
                 events.append(final_event)
@@ -531,6 +555,9 @@ class WhisperSession(STTSession):
 
                 vad_events = self._check_speech_activity(window_float, window_int16, current_time)
                 events.extend(vad_events)
+
+            if self.turn_scorer is not None:
+                events.extend(self._advance_turn_model(current_time))
 
             # Check for completed async partial transcription (non-blocking)
             if self.pending_partial_future is not None and self.pending_partial_future.done():
@@ -637,11 +664,19 @@ class WhisperSession(STTSession):
                     self.speech_buffer = self.pre_buffer[:]
                     self.pre_buffer = array('h')
                     print("[WhisperSession] Speech started")
+                    if self.last_model_end_time is not None:
+                        # A short gap after a model ending is the visible trace
+                        # of a wrong cut-off, and needs no audio or text to log.
+                        gap_ms = (current_time - self.last_model_end_time) * 1000
+                        print(f"[TurnModel] next_speech_after_ms={gap_ms:.0f}")
+                        self.last_model_end_time = None
 
                 elif signal == GateSignal.PAUSE_RESCUED:
-                    pause = self.gate.rescued_pauses[-1]
+                    pause = self.gate.last_pause
                     print(f"[WhisperSession] Pause rescued ({pause['pause_ms']}ms, "
                           f"{pause['into_window_ms']}ms into the window)")
+                    # They kept talking, so anything decoded so far is short.
+                    self.early_decode_valid = False
 
                 elif signal == GateSignal.SPEECH_STARTED:
                     events.append(self._speech_boundary_event(current_time, started=True))
@@ -659,9 +694,8 @@ class WhisperSession(STTSession):
                     events.append(self._speech_boundary_event(current_time, ended=True))
 
                 elif signal == GateSignal.FINALIZE:
-                    print("[WhisperSession] Endpointing ceiling reached"
-                          if self.gate.last_exit_reason == "ceiling"
-                          else "[WhisperSession] Continuation window expired")
+                    print(f"[WhisperSession] {_HOLD_EXIT_LOG.get(self.gate.last_exit_reason, _HOLD_EXIT_LOG['window'])}")
+                    self._log_turn_end(self.gate.last_exit_reason, current_time)
                     final_event = self._generate_final(current_time)
                     if final_event:
                         events.append(final_event)
@@ -686,6 +720,106 @@ class WhisperSession(STTSession):
             print(f"[WhisperSession] VAD error: {e}")
 
         return events
+
+    def _advance_turn_model(self, current_time: float) -> List[stt_pb2.TranscriptEvent]:
+        """Collect the model's answer, end the turn if it says so, ask again if due.
+
+        Runs after the VAD windows of this chunk, so speech that arrived with it
+        has already cancelled the hold and a stale "finished" cannot cut it off.
+        """
+        future = self.pending_turn_future
+        if future is not None and future.done():
+            self.pending_turn_future = None
+            try:
+                # A pause that was rescued and then re-entered is a new hold.
+                if self.pending_turn_hold == self.pending_final_time:
+                    self.gate.report_turn_score(future.result())
+            except Exception as e:
+                print(f"[TurnModel] Scoring failed, leaving this one to the timer: {e}")
+
+        if self.gate.hold_expired(current_time) == "model":
+            self._log_turn_end("model", current_time)
+            final_event = self._generate_final(current_time)
+            self._reset()
+            return [final_event] if final_event else []
+
+        # Below this length _generate_final drops the turn as too short. The
+        # timers only ever pass it because their long silence counts towards it,
+        # so a model ending that early would lose a quick "Ja".
+        if len(self.speech_buffer) < self.min_speech_samples:
+            return []
+
+        self._maybe_start_early_decode()
+
+        if self.pending_turn_future is None and self.gate.turn_check_due(current_time):
+            self.gate.turn_check_started(current_time)
+            self.pending_turn_hold = self.pending_final_time
+            samples = np.array(self.speech_buffer[-TURN_MODEL_WINDOW_SAMPLES:], dtype=np.int16)
+            self.pending_turn_future = self.turn_scorer.submit(samples.astype(np.float32) / 32768.0)
+        return []
+
+    def _log_turn_end(self, reason: Optional[str], current_time: float) -> None:
+        """One line per turn while the model is on: scores and timings, no words."""
+        if self.turn_scorer is None:
+            return
+        score = self.gate.turn_score
+        timing = self.gate.endpoint_timing(current_time) or {}
+        print(f"[TurnModel] end={reason} score={'none' if score is None else f'{score:.3f}'} "
+              f"silence_ms={timing.get('trailing_silence_ms')}")
+        self.last_model_end_time = current_time if reason == "model" else None
+
+    def _maybe_start_early_decode(self) -> None:
+        """Decode the utterance during the hold, once the worker is free."""
+        if self.state != "MAYBE_ENDING" or self.early_decode_valid:
+            return
+        for busy in (self.pending_partial_future, self.pending_shadow_future, self.early_decode_future):
+            if busy is not None and not busy.done():
+                return
+        try:
+            self.early_decode_future = self.transcription_executor.submit(
+                self._early_decode_worker, self.speech_buffer[:]
+            )
+            self.early_decode_valid = True
+        except Exception as e:
+            print(f"[WhisperSession] Early decode submit error: {e}")
+
+    def _early_decode_worker(self, audio_buffer) -> Tuple[list, object, np.ndarray]:
+        audio_samples = np.array(audio_buffer, dtype=np.int16)
+        audio_float = self._preprocess_audio(audio_samples.astype(np.float32) / 32768.0)
+        segments, info = self._transcribe_final(audio_float)
+        return list(segments), info, audio_samples
+
+    def _take_early_decode(self) -> Optional[Tuple[list, object, np.ndarray]]:
+        """The early decode if it still covers the whole utterance, else None.
+
+        Waits for one that is running either way: the final decode runs on this
+        thread, and whisper calls on a session must not overlap.
+        """
+        future, valid = self.early_decode_future, self.early_decode_valid
+        self.early_decode_future, self.early_decode_valid = None, False
+        if future is None:
+            return None
+        try:
+            result = future.result(timeout=_EARLY_DECODE_TIMEOUT_S)
+            return result if valid else None
+        except Exception as e:
+            print(f"[WhisperSession] Early decode unavailable: {e}")
+            return None
+
+    def _transcribe_final(self, audio_float: np.ndarray):
+        return self.whisper_model.transcribe(
+            audio_float,
+            language=self._forced_language(),
+            beam_size=self.config.get('beam_size', 5),
+            vad_filter=False,
+            word_timestamps=False,
+            condition_on_previous_text=False,
+            initial_prompt=self.config.get('initial_prompt'),
+            temperature=0.0,
+            compression_ratio_threshold=2.4,
+            log_prob_threshold=-1.0,
+            no_speech_threshold=0.6,
+        )
 
     def _decode_with_metrics(self, audio_float: np.ndarray) -> Tuple[str, dict]:
         """Decode audio and return its text plus the confidence signals.
@@ -926,30 +1060,23 @@ class WhisperSession(STTSession):
                 )
                 self.speech_buffer = self.speech_buffer[-self.max_speech_buffer_samples:]
 
-            audio_samples = np.array(self.speech_buffer, dtype=np.int16)
-            audio_float = audio_samples.astype(np.float32) / 32768.0
-            audio_duration_sec = len(audio_samples) / 16000
-
-            # Apply preprocessing
-            audio_float = self._preprocess_audio(audio_float)
-
             # Force the agent-resolved / configured / cached language (stability)
             language = self._forced_language()
 
-            # Final transcription
-            segments, info = self.whisper_model.transcribe(
-                audio_float,
-                language=language,
-                beam_size=self.config.get('beam_size', 5),
-                vad_filter=False,
-                word_timestamps=False,
-                condition_on_previous_text=False,
-                initial_prompt=self.config.get('initial_prompt'),
-                temperature=0.0,
-                compression_ratio_threshold=2.4,
-                log_prob_threshold=-1.0,
-                no_speech_threshold=0.6,
-            )
+            early = self._take_early_decode()
+            if early:
+                segment_list, info, audio_samples = early
+            else:
+                audio_samples = np.array(self.speech_buffer, dtype=np.int16)
+                audio_float = audio_samples.astype(np.float32) / 32768.0
+
+                # Apply preprocessing
+                audio_float = self._preprocess_audio(audio_float)
+
+                # Final transcription
+                segments, info = self._transcribe_final(audio_float)
+                segment_list = None
+            audio_duration_sec = len(audio_samples) / 16000
 
             # Per-utterance language signal — taken FREE from the transcription
             # pass (RFC §6 #3), no second model call:
@@ -975,7 +1102,8 @@ class WhisperSession(STTSession):
             # Materialize once: the shipped text is built exactly as before, and
             # the confidence metrics are read off the same segments rather than
             # from a second pass.
-            segment_list = list(segments)
+            if segment_list is None:
+                segment_list = list(segments)
             final_text = ""
             for segment in segment_list:
                 final_text += segment.text + " "
@@ -1159,6 +1287,12 @@ class WhisperSession(STTSession):
         self.shadow_submitted_at = 0.0
         self.last_partial_snapshot = ""
 
+        # A score or early decode still running belongs to the turn that ended.
+        self.pending_turn_future = None
+        self.pending_turn_hold = None
+        self.early_decode_future = None
+        self.early_decode_valid = False
+
         # Reset Silero VAD internal state (critical for accurate detection)
         try:
             if hasattr(self.vad_model, 'reset_states'):
@@ -1228,6 +1362,14 @@ class WhisperProvider(STTProvider):
         self.max_endpointing_delay_ms = clamp_endpointing_ceiling(
             int(os.getenv("VAD_MAX_ENDPOINTING_DELAY_MS", "2000")), self.continuation_window_ms
         )
+        # End-of-turn model: off unless named. See vad/turn_model.py.
+        self.turn_model_name = os.getenv("TURN_MODEL", "off").strip().lower() or "off"
+        self.turn_finished_at = float(os.getenv("TURN_MODEL_FINISHED_AT", "0.8"))
+        self.turn_unfinished_below = float(os.getenv("TURN_MODEL_UNFINISHED_BELOW", "0.3"))
+        self.turn_first_check_ms = int(os.getenv("TURN_MODEL_FIRST_CHECK_MS", "250"))
+        self.turn_recheck_ms = int(os.getenv("TURN_MODEL_RECHECK_MS", "150"))
+        self.turn_max_wait_ms = int(os.getenv("TURN_MODEL_MAX_WAIT_MS", "3000"))
+        self.turn_scorer: Optional[TurnScorer] = None
         self.min_speech_ms = int(os.getenv("VAD_MIN_SPEECH_MS", "500"))
         self.max_speech_duration_ms = int(os.getenv("VAD_MAX_SPEECH_DURATION_MS", "30000"))
         self.partial_interval_ms = int(os.getenv("PARTIAL_INTERVAL_MS", "1000"))
@@ -1314,6 +1456,8 @@ class WhisperProvider(STTProvider):
                 )
             print(f"[WhisperProvider] Silero VAD loaded (ONNX)")
 
+            self._load_turn_model()
+
             self.model_ready = True
             print(f"[WhisperProvider] Initialization complete")
             return True
@@ -1323,6 +1467,39 @@ class WhisperProvider(STTProvider):
             import traceback
             traceback.print_exc()
             return False
+
+    def _load_turn_model(self) -> None:
+        """Load TURN_MODEL. A failure leaves today's timers in charge, not a dead service."""
+        if self.turn_model_name == "off":
+            return
+        try:
+            device = "cuda" if self.device == "cuda" else "cpu"
+            self.turn_scorer = TurnScorer(load_turn_model(self.turn_model_name, device=device))
+            self.turn_scorer.warm_up()
+            print(f"[WhisperProvider] Turn model '{self.turn_model_name}' loaded: finished_at={self.turn_finished_at}, "
+                  f"unfinished_below={self.turn_unfinished_below}, first_check_ms={self.turn_first_check_ms}, "
+                  f"recheck_ms={self.turn_recheck_ms}, max_wait_ms={self.turn_max_wait_ms}")
+        except Exception as e:
+            print(f"[WhisperProvider] TURN MODEL UNAVAILABLE, using the silence timers instead: {e}")
+            import traceback
+            traceback.print_exc()
+            self.turn_scorer = None
+
+    def _gate_timings(self) -> dict:
+        """The hold's timings. With a model, an unsure answer still waits as long as today."""
+        if self.turn_scorer is None:
+            return {
+                'silence_duration_ms': self.silence_duration_ms,
+                'continuation_window_ms': self.continuation_window_ms,
+                'max_endpointing_delay_ms': self.max_endpointing_delay_ms,
+            }
+        first = self.turn_first_check_ms
+        return {
+            'silence_duration_ms': first,
+            'continuation_window_ms': self.silence_duration_ms + self.continuation_window_ms - first,
+            'max_endpointing_delay_ms': self.turn_max_wait_ms - first,
+            'rescue_silence_ms': self.silence_duration_ms,
+        }
 
     async def warmup(self, duration_ms: int = 1000, force: bool = False) -> bool:
         """Warm up the Whisper model by running inference on dummy audio.
@@ -1418,9 +1595,11 @@ class WhisperProvider(STTProvider):
             'beam_size': self.beam_size,
             'initial_prompt': self.initial_prompt,
             'vad_threshold': self.vad_threshold,
-            'silence_duration_ms': self.silence_duration_ms,
-            'continuation_window_ms': self.continuation_window_ms,
-            'max_endpointing_delay_ms': self.max_endpointing_delay_ms,
+            **self._gate_timings(),
+            'turn_scorer': self.turn_scorer,
+            'turn_finished_at': self.turn_finished_at,
+            'turn_unfinished_below': self.turn_unfinished_below,
+            'turn_recheck_ms': self.turn_recheck_ms,
             'min_speech_samples': int(self.min_speech_ms * 16),  # ms to samples @ 16kHz
             'max_speech_duration_ms': self.max_speech_duration_ms,
             'partial_interval_ms': self.partial_interval_ms,

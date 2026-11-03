@@ -352,6 +352,8 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         # transcript. Text has no acoustic signal, so it goes straight there.
         if getattr(agent, "supports_barge_in", False):
             audio_pipeline.enable_barge_in()
+        if getattr(agent, "take_back_window_ms", 0):
+            audio_pipeline.enable_take_back(agent.take_back_window_ms)
             if audio_pipeline.barge_in_enabled:
                 audio_pipeline.set_barge_in_decider(
                     lambda transcript: agent.on_barge_in(session_id, transcript)

@@ -65,6 +65,12 @@ export class AgentImageService {
       contextPath: '.',
       tag: 'latest',
     }],
+    ['stella-jev-agent', {
+      imageName: 'stella-jev-agent',
+      dockerfilePath: 'agents/stella-jev-agent/Dockerfile',
+      contextPath: '.',
+      tag: 'latest',
+    }],
   ]);
 
   // Track images currently being built to avoid duplicate builds

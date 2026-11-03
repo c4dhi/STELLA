@@ -281,3 +281,25 @@ def test_the_committed_stubs_know_the_new_fields():
     event.rescued_pauses.add(pause_ms=700, into_window_ms=200,
                              silence_threshold_ms=500, continuation_window_ms=600)
     assert stt_pb2.TranscriptEvent.FromString(event.SerializeToString()) == event
+
+
+def test_with_a_model_only_a_pause_the_timers_would_have_held_counts_as_rescued():
+    gate = SpeechGate(GateConfig(
+        silence_duration_ms=250, continuation_window_ms=2350,
+        max_endpointing_delay_ms=2750, turn_finished_at=0.8, rescue_silence_ms=2000,
+    ))
+    gate.observe(voiced=True, samples=1600, now=0.0)
+    gate.observe(voiced=False, samples=1600, now=0.1)
+    gate.observe(voiced=False, samples=1600, now=0.4)
+    signals = gate.observe(voiced=True, samples=1600, now=0.6)
+    assert GateSignal.PAUSE_RESCUED in signals, "the provider still has to drop its early decode"
+    assert gate.rescued_pauses == []
+    assert gate.last_pause["pause_ms"] == 500
+
+    gate.observe(voiced=False, samples=1600, now=1.0)
+    gate.observe(voiced=False, samples=1600, now=1.3)
+    gate.observe(voiced=True, samples=1600, now=3.5)
+    assert gate.rescued_pauses == [{
+        "pause_ms": 2500, "into_window_ms": 500,
+        "silence_threshold_ms": 2000, "continuation_window_ms": 600,
+    }]

@@ -108,3 +108,6 @@ stella-backup-*.zip.enc
 
 # Compiled output of the prisma seed script (npm run db:seed)
 .seed-dist/
+
+# Voice recordings for the end-of-turn model tests. Personal data: stay on this machine.
+stt-service/evals/turn_recordings/

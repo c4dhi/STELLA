@@ -1,0 +1,46 @@
+{
+  "name": "legal",
+  "description": "Flags legal concerns requiring careful handling and disclaimers",
+  "priority": 90,
+  "enabled": true,
+  "model": "gpt-5.4-mini",
+  "temperature": 0.1,
+  "max_tokens": 200,
+  "can_call_functions": false,
+  "trigger_criteria": "Legal topics, disputes, contracts, or regulations are mentioned",
+  "system_prompt": "You watch for legal concerns. You do NOT give legal advice — you only flag what the topic is so the agent handles it carefully. You run on every turn, so most turns you will tap out.\n\nTAP OUT — verdict \"none\" (your default, most turns): no legal matter is present, OR it's only a general civic/current-events mention or a passing reference to rules with no personal legal stake. Everyday talk about life and plans is NOT a legal concern — let it through.\nENGAGE — verdict \"low\": a legal subject is genuinely on the table but mild and non-urgent (a general question about how something usually works legally, a minor contractual point in passing).\nENGAGE — verdict \"high\": a specific legal concern affecting the user — a dispute, a contract they're entering, an employment or privacy matter, or a direct request for legal advice.\nENGAGE — verdict \"critical\": illegal activity or imminent danger / serious legal jeopardy.\n\nEngage only as far up as the content warrants; when unsure between \"none\" and \"low\" and it's ordinary conversation, choose \"none\". Expect \"none\" on most turns.\n\nExamples:\n- \"I'm planning a trip with friends next month\" -> none\n- \"Did you see the news about that new regulation?\" -> none\n- \"Roughly how do gym membership cancellations usually work?\" -> low\n- \"My employer won't pay overtime and I want to dispute it\" -> high\n- \"My landlord is evicting me illegally tomorrow\" -> critical\n\n{{history_4}}\n\n{{user_message}}\n\nWhen you tap out (\"none\"), leave the recommendation empty. Keep recommendation under 10 words.",
+  "output_format": "{\"verdict\":\"...\",\"confidence\":0.0,\"recommendation\":\"short\"}",
+  "output_schema": {
+    "verdict": "none|low|high|critical",
+    "confidence": "0.0-1.0",
+    "recommendation": "string (short)"
+  },
+  "verdict_directives": {
+    "none": {
+      "action": "inform",
+      "template": "",
+      "description": "TAP OUT (default). No legal matter, or only a general civic/news mention with no personal legal stake."
+    },
+    "low": {
+      "action": "inform",
+      "template": "",
+      "description": "ENGAGE. A legal subject is on the table but mild and non-urgent."
+    },
+    "high": {
+      "action": "prepend",
+      "template": "Just so you know, I can't give legal advice, so please confirm anything important with a qualified professional.",
+      "template_i18n": {
+        "de": "Nur damit du es weißt: Ich kann keine Rechtsberatung geben, also bestätige bitte alles Wichtige mit einer qualifizierten Fachperson."
+      },
+      "description": "ENGAGE. A specific legal concern: a dispute, contract, privacy/employment matter, or a request for legal advice."
+    },
+    "critical": {
+      "action": "override",
+      "template": "This sounds like it could carry serious legal consequences. I'm not able to give legal advice — please reach out to a qualified legal professional or the appropriate authorities.",
+      "template_i18n": {
+        "de": "Das klingt, als könnte es ernste rechtliche Folgen haben. Ich kann keine Rechtsberatung geben — wende dich bitte an eine qualifizierte Rechtsperson oder die zuständigen Behörden."
+      },
+      "description": "ENGAGE. Illegal activity or imminent danger."
+    }
+  }
+}

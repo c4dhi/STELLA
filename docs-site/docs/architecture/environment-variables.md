@@ -156,6 +156,12 @@ The STT service reads these from the platform configuration. It decides when the
 |----------|----------|---------|-------------|
 | `BARGE_IN_MIN_SPEECH_MS` | No | `600` | Voiced audio (ms) before the user's speech counts as an interruption instead of a backchannel like "mhm". Below it the agent keeps talking; above it the agent stops and listens. Lower yields sooner but lets "mhm" cut it off |
 | `STELLA_MODEL_KEEP_WARM` | No | `true` | Keeps the speech-recognition and voice models warm in the background so the first sentence after an idle spell is not slow. Set to `false` to turn it off. Asked in the setup wizard |
+| `TURN_MODEL` | No | `off` | End-of-turn model for the Whisper provider: `off`, `smart_turn`, or `voxturn` (needs a GPU; CC BY-NC, non-commercial use only). When on, the model can end a turn after a short silence, and an unsure answer waits as long as the silence timers. |
+| `TURN_MODEL_FINISHED_AT` | No | `0.8` | Model score at or above which the turn ends. |
+| `TURN_MODEL_UNFINISHED_BELOW` | No | `0.3` | Model score at or below which the agent keeps waiting, up to `TURN_MODEL_MAX_WAIT_MS`. |
+| `TURN_MODEL_FIRST_CHECK_MS` | No | `250` | Silence (ms) before the first check. |
+| `TURN_MODEL_RECHECK_MS` | No | `150` | Time (ms) between checks while the silence lasts. |
+| `TURN_MODEL_MAX_WAIT_MS` | No | `3000` | Longest silence wait (ms) when the model says the person has not finished. |
 | `STT_DECODE_DIAGNOSTICS` | No | `0` | `1` logs per-turn decode metrics and fills the STT cards in the session metrics modal. Costs extra GPU work per turn, so leave it at `0` in normal use |
 
 </details>

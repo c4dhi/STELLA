@@ -121,6 +121,12 @@ get_var_metadata() {
         VAD_RMS_THRESHOLD)     echo "stt|text|optional|0.008|0.01|Energy gate for background noise filtering||" ;;
         PARTIAL_INTERVAL_MS)   echo "stt|text|optional|1000|500|Partial transcript interval (ms)||" ;;
         BARGE_IN_MIN_SPEECH_MS) echo "stt|text|optional|600|400|Voiced audio before an utterance interrupts the agent (ms)||" ;;
+        TURN_MODEL) echo "stt|text|optional|off|off|End-of-turn model: off, smart_turn or voxturn||" ;;
+        TURN_MODEL_FINISHED_AT) echo "stt|text|optional|0.8|0.8|Model score that ends the turn||" ;;
+        TURN_MODEL_UNFINISHED_BELOW) echo "stt|text|optional|0.3|0.3|Model score that keeps waiting||" ;;
+        TURN_MODEL_FIRST_CHECK_MS) echo "stt|text|optional|250|250|Silence before the first model check (ms)||" ;;
+        TURN_MODEL_RECHECK_MS) echo "stt|text|optional|150|150|Time between model checks (ms)||" ;;
+        TURN_MODEL_MAX_WAIT_MS) echo "stt|text|optional|3000|3000|Longest silence wait while the model says unfinished (ms)||" ;;
         STT_DECODE_DIAGNOSTICS) echo "stt|text|optional|0|0|Extra GPU decodes for STT metrics: 0 or 1||" ;;
 
         # --- TTS ---
@@ -197,6 +203,12 @@ ALL_VARIABLES=(
     "VAD_RMS_THRESHOLD"
     "PARTIAL_INTERVAL_MS"
     "BARGE_IN_MIN_SPEECH_MS"
+    "TURN_MODEL"
+    "TURN_MODEL_FINISHED_AT"
+    "TURN_MODEL_UNFINISHED_BELOW"
+    "TURN_MODEL_FIRST_CHECK_MS"
+    "TURN_MODEL_RECHECK_MS"
+    "TURN_MODEL_MAX_WAIT_MS"
     "STT_DECODE_DIAGNOSTICS"
     "TTS_PROVIDER"
     "ELEVENLABS_VOICE_ID"

@@ -370,7 +370,9 @@ _DEFAULT_MS_PER_CHAR = 70.0
 #: Speech starting this soon after a final is the early-cutoff signal (#92):
 #: the turn was ended while the user still had more to say. Logged as
 #: `user_resumed_after_final`; nothing acts on it.
-RESUMED_AFTER_FINAL_WINDOW_MS = 3000
+RESUMED_AFTER_FINAL_WINDOW_MS = 6000
+# Longest wait for a reply's first sound before its turn is saved anyway.
+TURN_FINAL_TIMEOUT_S = 15.0
 
 
 def _now() -> float:
@@ -652,6 +654,20 @@ class AudioPipeline:
         # The last spoken turn's id and when its final landed, until the user
         # next starts speaking: the early-cutoff signal (#92).
         self._last_turn_final: Optional[Tuple[Optional[str], float]] = None
+        # Take-back: the user carries on after a final, before any of the reply
+        # was heard. 0 is off; an agent turns it on (enable_take_back).
+        self._take_back_window_ms = 0
+        # What was said so far this turn and when it ended, while it can still
+        # be taken back.
+        self._take_back_from: Optional[Tuple[List[str], float]] = None
+        # The utterance the held turn waits for, with what it would join.
+        self._take_back_tid: Optional[str] = None
+        self._take_back_parts: List[str] = []
+        self._take_back_held_at = 0.0
+        self._audible_this_turn = False
+        # Set once the reply is heard or dropped, so the turn can no longer be
+        # taken back and what it says can be saved.
+        self._reply_settled = asyncio.Event()
         # A typed turn's frontend correlation_id, by the transcript id the SDK
         # gave it: the stored message is the frontend's envelope, which only
         # that id identifies (#91).
@@ -1176,7 +1192,10 @@ class AudioPipeline:
             # them for the length of a decode first. Yield now; their final
             # commits it through the barge-in path above.
             utt = self._utterance
-            if (
+            if self._take_back_tid is not None:
+                # The reply got this far before the hold reached it. Still unheard.
+                self.suspend_speech()
+            elif (
                 self._barge_in_available()
                 and self._barge_in_committed_tid is None
                 and utt is not None
@@ -1448,6 +1467,7 @@ class AudioPipeline:
                 self._end_utterance_capture()
             self._note_speech_span(event)
             self._note_resumed_after_final(event)
+            self._hold_for_take_back(event)
 
             # A voice barge-in was committed for this utterance: its final IS
             # the interrupting turn. Handled before the gate check because
@@ -1468,6 +1488,7 @@ class AudioPipeline:
                     self._barge_in_active = False
                     self.unduck_speech()
                     self.resume_speech()
+                    self._give_back_held_turn("no_final")
                 elif event.is_final:
                     self._barge_in_committed_tid = None
                     # Published inside _resolve_voice_barge_in, once the verdict
@@ -1476,7 +1497,7 @@ class AudioPipeline:
                     # would put the utterance in the transcript twice.
                     await self._resolve_voice_barge_in(event)
                     continue
-                elif self.is_suspended:
+                elif self.is_suspended or self._take_back_tid is not None:
                     # Still hearing from the utterance we yielded to. The user
                     # is talking, which is not a stall — but the watchdog was
                     # armed at the suspend, so its budget was being spent on
@@ -1704,6 +1725,7 @@ class AudioPipeline:
                         self._emit_analytics_event("pause_rescued", 0.0, **pause)
                     )
                 self._last_turn_final = (self._turn_id, _now())
+                self._take_back_from = ([event.text.strip()], _now())
                 if self._turn_stt_start_ts > 0:
                     vad_elapsed = (self._turn_stt_start_ts - self._turn_stt_end_ts) * 1000  # negative
                     asyncio.create_task(self._emit_analytics_event("vad_trigger", vad_elapsed))
@@ -1786,7 +1808,7 @@ class AudioPipeline:
             # said. Ending the agent's turn over that is the worse error, so
             # take it back: playback resumes exactly where it paused.
             logger.info("[BARGE-IN] False interruption (no transcript) — resuming")
-            self._release_voice_barge_in(committed=False)
+            self._release_voice_barge_in(committed=False, why="noise")
             return
 
         self._barge_in_resolving = True
@@ -1805,7 +1827,7 @@ class AudioPipeline:
                 transcript=text,
                 channel="voice",
             )
-            self._release_voice_barge_in(committed=False)
+            self._release_voice_barge_in(committed=False, why="backchannel")
             return
 
         logger.info(f"[BARGE-IN] COMMIT — interrupting for '{text[:40]}'")
@@ -1818,9 +1840,96 @@ class AudioPipeline:
             channel="voice",
         )
         self._release_voice_barge_in(committed=True)
-        self._deliver_barge_in_turn(text)
+        if self._take_back_tid == event.transcript_id:
+            self._join_held_turn(text)
+        else:
+            self._deliver_barge_in_turn(text)
 
-    def _release_voice_barge_in(self, *, committed: bool) -> None:
+    def _hold_for_take_back(self, event: TranscriptEvent) -> None:
+        """The user started again and none of the reply was heard: hold the reply.
+
+        No duration threshold, unlike an interruption: nothing is audible, so
+        pausing costs nothing until the final, which decides as a barge-in does.
+        Once any of the reply was heard this does not apply, and the ordinary
+        barge-in handles it.
+        """
+        source = self._take_back_from
+        if (
+            source is None
+            or not event.speech_started
+            or not self._take_back_window_ms
+            or not self._turn_active
+            or self._audible_this_turn
+            or self._barge_in_committed_tid is not None
+            or not self._barge_in_available()
+        ):
+            return
+        parts, ended_at = source
+        since_ms = (_now() - ended_at) * 1000
+        if since_ms > self._take_back_window_ms:
+            return
+        logger.info(f"[TAKE-BACK] Speech {since_ms:.0f}ms after the final — holding the reply")
+        self._take_back_tid = event.transcript_id
+        self._take_back_parts = parts
+        self._take_back_held_at = _now()
+        self._barge_in_committed_tid = event.transcript_id
+        self._barge_in_active = True
+        self.suspend_speech()
+        self.request_turn_suspend()
+        self._arm_suspend_watchdog()
+        asyncio.create_task(self._emit_analytics_event(
+            "take_back_held", since_ms, since_final_ms=round(since_ms),
+        ))
+
+    async def wait_until_turn_is_final(self, timeout_s: float = TURN_FINAL_TIMEOUT_S) -> bool:
+        """Wait until the reply is heard, so nothing can take this turn back.
+
+        False if it was taken back after all. The timeout is for speech that
+        never starts: saving then beats losing what was said, and it is logged.
+        A hold does not use it up, since a person is talking through that.
+        """
+        if not self._take_back_window_ms or not self._tts_enabled:
+            return not self.is_turn_aborted
+        waited = 0.0
+        while not self._reply_settled.is_set() and not self.is_turn_aborted:
+            try:
+                await asyncio.wait_for(self._reply_settled.wait(), 0.25)
+            except asyncio.TimeoutError:
+                waited += 0.0 if self._take_back_tid is not None else 0.25
+                if waited >= timeout_s:
+                    logger.warning(f"[TAKE-BACK] No speech after {timeout_s:.0f}s — saving anyway")
+                    await self._emit_analytics_event("take_back_no_speech", waited * 1000)
+                    break
+        return not self.is_turn_aborted
+
+    def _note_take_back_done(self, outcome: str) -> None:
+        held_ms = round((_now() - self._take_back_held_at) * 1000)
+        logger.info(f"[TAKE-BACK] {outcome} after holding {held_ms}ms")
+        asyncio.create_task(self._emit_analytics_event(
+            "take_back_done", held_ms, outcome=outcome, held_ms=held_ms,
+            parts=len(self._take_back_parts),
+        ))
+        self._take_back_tid = None
+
+    def _give_back_held_turn(self, why: str) -> None:
+        """Nothing to join after all, so the held reply carries on."""
+        if self._take_back_tid is None:
+            return
+        self.request_turn_resume()
+        self._note_take_back_done(why)
+
+    def _join_held_turn(self, text: str) -> None:
+        """Drop the unheard reply and answer everything said so far as one turn."""
+        parts = self._take_back_parts + [text]
+        self.request_turn_abort()
+        self._deliver_barge_in_turn(
+            " ".join(parts), is_barge_in=False, taken_back=self._take_back_parts,
+        )
+        self._note_take_back_done("joined")
+        # The joined turn can be taken back in its turn.
+        self._take_back_from = (parts, _now())
+
+    def _release_voice_barge_in(self, *, committed: bool, why: str = "") -> None:
         """End a voice barge-in: take the floor for the user, or hand it back.
 
         ``committed=False`` also records the false interruption that feeds the
@@ -1831,9 +1940,13 @@ class AudioPipeline:
         if committed:
             self.commit_interrupt()
             return
-        self._note_false_interruption()
+        # Holding a reply nobody heard is no interruption, so it stays out of the
+        # storm guard.
+        if self._take_back_tid is None:
+            self._note_false_interruption()
         self.unduck_speech()
         self.resume_speech()
+        self._give_back_held_turn(why)
 
     async def _decide_barge_in(self, transcript: str) -> BargeInDecision:
         """Ask the agent's Barge-in Evaluator whether ``transcript`` is worth
@@ -2540,6 +2653,8 @@ class AudioPipeline:
                     self._emit_first_byte(source)
 
                     self._audio_active = True
+                    self._audible_this_turn = True
+                    self._reply_settled.set()
                     await self._room.publish_audio(chunk.audio_data)
 
                 # Success - exit retry loop
@@ -2708,6 +2823,7 @@ class AudioPipeline:
         left OPEN (the user's turn is being processed). After this the speech
         worker observes the stop and exits."""
         logger.info("[BARGE-IN] Committing interruption — discarding remaining speech")
+        self._reply_settled.set()
         self._disarm_suspend_watchdog()
         self.unduck_speech()
         # Teleprompter: freeze the highlight at the playhead before discarding.
@@ -2751,6 +2867,8 @@ class AudioPipeline:
         """Mark the start of a turn the run loop is about to consume. Resets the
         suspend/abort state so a stale flag from a prior turn can't leak in."""
         self._turn_active = True
+        self._audible_this_turn = False
+        self._reply_settled.clear()
         self._turn_suspended = False
         self._turn_abort.clear()
         self._turn_release.set()
@@ -2819,6 +2937,12 @@ class AudioPipeline:
             return
         self._barge_in_enabled = True
         logger.info("[BARGE-IN] Enabled from agent declaration")
+
+    def enable_take_back(self, window_ms: int) -> None:
+        """Hold an unheard reply when the user carries on within `window_ms` of
+        their final, and answer what they said as one turn. 0 turns it off."""
+        self._take_back_window_ms = window_ms
+        logger.info(f"[TAKE-BACK] Window: {window_ms}ms")
 
     def enable_teleprompter(self) -> None:
         """Enable the teleprompter because the agent declares it supports it.
@@ -2973,7 +3097,7 @@ class AudioPipeline:
         except asyncio.CancelledError:
             return
         # Resolved (resumed/committed) while we slept — nothing to do.
-        if self._play_allowed.is_set():
+        if self._play_allowed.is_set() and self._take_back_tid is None:
             return
         logger.warning(
             f"[BARGE-IN] Suspension watchdog fired after "
@@ -2989,6 +3113,7 @@ class AudioPipeline:
         self._barge_in_committed_tid = None
         self.unduck_speech()
         self.resume_speech()
+        self._give_back_held_turn("no_final")
         await self._emit_barge_in_debug(
             "▶️ Barge-in never resolved (no final transcript) — auto-resumed",
             decision="resume",
@@ -3263,6 +3388,7 @@ class AudioPipeline:
         transcript: str,
         speaker: Optional[str] = None,
         is_barge_in: bool = True,
+        taken_back: Optional[List[str]] = None,
     ) -> None:
         """Deliver a committed interruption as the next user turn, out-of-band.
 
@@ -3286,6 +3412,7 @@ class AudioPipeline:
             timestamp_ms=int(time.time() * 1000),
             speech_started=False,
             is_barge_in=is_barge_in,
+            taken_back=taken_back,
         )
 
     # ─────────────────────────────────────────────────────────────────────
@@ -3941,6 +4068,8 @@ class AudioPipeline:
 
                 # The agent is now audibly talking — a barge-in may start.
                 self._audio_active = True
+                self._audible_this_turn = True
+                self._reply_settled.set()
                 if self._duck_expired():
                     logger.info(
                         f"[BARGE-IN] Duck expired after {self._duck_timeout_s:.1f}s with no "
