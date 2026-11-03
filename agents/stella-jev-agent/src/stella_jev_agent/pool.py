@@ -185,10 +185,7 @@ class JevExpertPool(ExpertPool):
         run_llm = lambda names: self._run_experts(
             names, user_input, conversation_history, sm_context, self._timeout_ms / 1000.0
         )
-        # Only the state machine knows where a plan goes on a state with no forecast
-        # (a goal, a compound condition), or what a stalled plan skips.
-        reply_needs_it = bool(state_id) and (branches is None or is_stalled(sm_context))
-        extraction = EXTRACTION in remaining and not reply_needs_it
+        extraction = EXTRACTION in remaining
         if extraction:
             remaining.remove(EXTRACTION)
         if remaining:

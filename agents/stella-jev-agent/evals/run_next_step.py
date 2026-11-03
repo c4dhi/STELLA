@@ -4,8 +4,7 @@
 Forecast: Jev is real, the answers are labelled by hand. A wrong move means the reply
 opened a step the plan did not take, a missed move means it stayed on a step that is done.
 Stopwatch (--timed): whole turns with real Jev and language models, and a stand-in state
-machine, once starting the reply straight away and once waiting for extraction first.
-The stand-in never moves, so only the first path's replies say anything about the plan.
+machine.
 
 Needs TYPESAFE_API_KEY, and OPENAI_API_KEY for --timed. Sends only the hand-written text
 in this folder and the plan passed in.
@@ -161,7 +160,7 @@ def report(name, rows):
         print(f"  {kind} x{n} [{state}] {said!r} truth={truth} forecast={reached}")
 
 
-async def one_turn(case, plan, wait_for_extraction):
+async def one_turn(case, plan):
     agent_dir = ROOT / "stella-jev-agent"
     with patch("stella_v2_agent.agent.StateMachineClient", FakeStateMachine):
         agent = StellaJevAgent(experts_dir=str(agent_dir / "config" / "experts"))
@@ -182,27 +181,23 @@ async def one_turn(case, plan, wait_for_extraction):
     started = time.monotonic()
     first = None
     text = ""
-    route = pool_module.route if not wait_for_extraction else (lambda *_: None)
-    with patch.object(pool_module, "route", route):
-        async for output in agent.process(AgentInput(session_id="eval", type=InputType.TEXT, text=case["said"])):
-            if output.type.value == "text_chunk":
-                first = first if first is not None else (time.monotonic() - started) * 1000
-                text = output.content
+    async for output in agent.process(AgentInput(session_id="eval", type=InputType.TEXT, text=case["said"])):
+        if output.type.value == "text_chunk":
+            first = first if first is not None else (time.monotonic() - started) * 1000
+            text = output.content
     return {"said": case["said"], "first_word_ms": round(first or 0), "reply": text,
             "forecast": title_of(plan, agent.expert_pool.forecast.next_state) if agent.expert_pool.forecast.next_state else None}
 
 
 async def stopwatch(plan, repeat):
-    rows = {True: [], False: []}
+    rows = []
     for _ in range(repeat):
         for case in TIMED:
-            for waiting in (False, True):
-                row = await one_turn(case, plan, waiting)
-                rows[waiting].append(row)
-                print(f"[{'wait' if waiting else 'now '}] {row['first_word_ms']:>5} ms | {row['said'][:36]!r} -> {row['forecast']} | ...{row['reply'][-130:]!r}")
-    for waiting, label in ((False, "reply starts at once"), (True, "reply waits for extraction")):
-        values = sorted(r["first_word_ms"] for r in rows[waiting] if r["first_word_ms"])
-        print(f"{label:<28} n={len(values)} median {statistics.median(values):.0f} ms  worst {values[-1]} ms")
+            row = await one_turn(case, plan)
+            rows.append(row)
+            print(f"{row['first_word_ms']:>5} ms | {row['said'][:36]!r} -> {row['forecast']} | ...{row['reply'][-130:]!r}")
+    values = sorted(r["first_word_ms"] for r in rows if r["first_word_ms"])
+    print(f"first word: n={len(values)} median {statistics.median(values):.0f} ms  worst {values[-1]} ms")
     return rows
 
 

@@ -4,6 +4,8 @@ The reply no longer waits for task_extraction, so it cannot learn from the state
 machine where this answer leads. It reads that from the plan instead, and Jev picks
 when the way depends on the answer. The state machine still makes the real move once
 extraction has saved the value, and the next turn reads the state it landed in.
+Where the plan cannot tell (a goal, a compound condition), the reply stays on this
+step with the answer marked as collected, and the next turn sees any move.
 """
 
 from dataclasses import dataclass, field
@@ -143,13 +145,15 @@ def finishes(task: Dict[str, Any]) -> bool:
 
 
 def predict(
-    branches: List[Branch],
+    branches: Optional[List[Branch]],
     tasks: List[Dict[str, Any]],
     picked: Dict[str, Any],
     way: str = OTHERWISE,
     required_task_ids: Optional[Set[str]] = None,
 ) -> Optional[str]:
-    """Where this answer takes the plan, or None if it stays in this state."""
+    """Where this answer takes the plan, or None if it stays or only the state machine can tell."""
+    if branches is None:
+        return None
     keys = set(open_required_keys(picked))
     if has_choice(branches) and way != OTHERWISE:
         branch = branches[int(way.split("_")[1])]

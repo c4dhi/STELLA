@@ -368,11 +368,12 @@ def _agent_with(monkeypatch, stages, last_jev):
         last_jev=last_jev, settle_extraction=nothing, start_held_extraction=lambda: None
     )
     agent._extraction_events = []
+    agent._audio_pipeline = None
     return agent
 
 
 async def _analytics(agent):
-    return [o.metadata async for o in agent.process(SimpleNamespace(session_id="s"))]
+    return [o.metadata async for o in agent.process(SimpleNamespace(session_id="s", metadata={}))]
 
 
 V2_TURN = [("expert_pool_start", 50.0), ("bridge_start", 51.0), ("bridge_done", 52.0), ("expert_pool_done", 300.0)]

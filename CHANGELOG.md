@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `stella-jev-agent`: stella-v2 without the bridge. One Jev call decides the experts and barge-in, and the agent asks back when what it heard isn't believable. It sends conversation text to TypeSafe and needs `TYPESAFE_API_KEY`.
 - `stella-jev-agent`: the reply no longer waits for task extraction. Jev picks the answered task and the way the plan goes, the reply counts that answer as confirmed and moves on, and extraction saves it in the background for the next turn.
+- `stella-jev-agent`: take-back. If someone carries on speaking after their turn was closed and before any of the reply was heard, the reply is dropped and the agent answers the joined-up words. Nothing from a dropped reply is saved. Set by `take_back_window_ms` on the new Turn Taking node, 0 turns it off.
 - `TURN_MODEL`: an end-of-turn model can decide when someone has finished speaking, so the agent can answer after a shorter wait. Off by default; with it off nothing changes.
 
 ---

@@ -13,7 +13,7 @@ import logging
 import os
 from contextlib import aclosing
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from stella_agent_sdk import AgentOutput
 
@@ -35,6 +35,9 @@ _NO_BRIDGE_STAGES = {"bridge_start", "bridge_ready", "bridge_done"}
 
 
 class StellaJevAgent(StellaV2Agent):
+    # Until a session's turn_taking settings say otherwise.
+    take_back_window_ms = 6000
+
     def __init__(
         self,
         llm_config_path: Optional[str] = None,
@@ -80,7 +83,11 @@ class StellaJevAgent(StellaV2Agent):
         if not isinstance(self.expert_pool, JevExpertPool):
             self.expert_pool = self._jev_pool()
             self.expert_pool.set_compiler_version(self._compiler_version)
-        node = (config.get("pipeline_config") or {}).get("nodes", {}).get("expert_pool")
+        nodes = (config.get("pipeline_config") or {}).get("nodes", {})
+        turn_taking = nodes.get("turn_taking") or {}
+        if "take_back_window_ms" in turn_taking and self.has_audio:
+            self.audio.enable_take_back(int(turn_taking["take_back_window_ms"]))
+        node = nodes.get("expert_pool")
         if isinstance(node, dict):
             self.expert_pool.apply_config(node)
 
@@ -88,6 +95,10 @@ class StellaJevAgent(StellaV2Agent):
         pool_start_ms = 0.0
         turn_id = None
         await self.expert_pool.settle_extraction()
+        self._taken_back = (input.metadata or {}).get("taken_back") or []
+        if self._taken_back:
+            # That reply was never heard, so neither was the step it moved to.
+            self._last_state_id = getattr(self, "_state_before_forecast", self._last_state_id)
         async with aclosing(super().process(input)) as outputs:
             async for output in outputs:
                 stage = output.metadata.get("stage") if output.type.value == "analytics" else None
@@ -96,15 +107,23 @@ class StellaJevAgent(StellaV2Agent):
                 if stage == "expert_pool_start":
                     pool_start_ms = output.metadata["elapsed_ms"]
                     turn_id = output.metadata["turn_id"]
-                if stage == "arbitration_done":
-                    self.expert_pool.start_held_extraction()
-                    self._extraction_started_ms = output.metadata["elapsed_ms"]
                 yield output
                 if stage == "expert_pool_done":
                     yield self._jev_event(input.session_id, output.metadata["turn_id"], pool_start_ms)
         for stage, fields in self._extraction_events:
             yield AgentOutput.analytics_event(input.session_id, stage, turn_id, **fields)
         self._extraction_events = []
+
+    async def _fetch_conversation_history(self, limit: int = 20) -> List[Dict[str, str]]:
+        history = await super()._fetch_conversation_history(limit=limit)
+        taken_back = getattr(self, "_taken_back", None)
+        if not taken_back:
+            return history
+        # This turn's text already holds those words, and the reply after them went unheard.
+        for i in range(len(history) - 1, -1, -1):
+            if history[i]["role"] == "user" and history[i]["content"].strip() == taken_back[0]:
+                return history[:i]
+        return history
 
     async def _resolve_response_context(self, sm_context: Dict[str, Any], *args: Any, **kwargs: Any) -> Dict[str, Any]:
         forecast = self.expert_pool.forecast
@@ -113,6 +132,7 @@ class StellaJevAgent(StellaV2Agent):
             predicted = context_after(sm_context, self._plan_config, target, forecast.keys)
             if predicted:
                 # Or the next turn would ease into this state a second time.
+                self._state_before_forecast = self._last_state_id
                 self._last_state_id = target
                 return predicted
         if not target and forecast.done_task and self._plan_config:
@@ -126,6 +146,12 @@ class StellaJevAgent(StellaV2Agent):
         # V2's bookkeeping needs the outcome, and the reply has already been written by
         # now. Everything after it (deliverables, progress, the farewell) stays as it was.
         forecast = self.expert_pool.forecast
+        if self.has_audio and not await self.audio.wait_until_turn_is_final():
+            # Taken back: the joined turn saves it all, once, when it is heard.
+            logger.info("Turn taken back, so nothing from it is saved")
+            return
+        self.expert_pool.start_held_extraction()
+        self._extraction_started_ms = self._elapsed_ms()
         late = await self.expert_pool.finish_extraction()
         self._record_extraction(late, forecast)
         async for output in super()._process_post_response(session_id, list(expert_verdicts) + late):

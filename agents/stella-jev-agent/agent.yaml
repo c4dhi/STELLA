@@ -101,6 +101,20 @@ defaultConfig: {}
 
 pipelineSchema:
   nodes:
+    - id: turn_taking
+      label: "Turn Taking"
+      description: "Decides what counts as one turn, before the experts see it."
+      icon: "🎙️"
+      position: { row: 0, col: 0 }
+      slots:
+        - id: take_back_window_ms
+          label: "Take-back Window (ms)"
+          type: number
+          min: 0
+          max: 15000
+          step: 500
+          default: 6000
+          description: "If the person carries on within this time and has heard none of the reply, the reply is dropped and everything they said is answered as one turn. 0 turns it off."
     - id: expert_pool
       label: "Expert Pool"
       description: "One Jev call answers the experts that only decide. Language models run afterwards, only where text or values must be written."
@@ -455,6 +469,9 @@ pipelineSchema:
           default: 0.4
 
   edges:
+    - source: turn_taking
+      target: expert_pool
+      label: "User turn"
     - source: expert_pool
       target: arbitration
       label: "ExpertVerdict[]"

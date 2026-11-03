@@ -247,20 +247,6 @@ def test_an_unsure_branch_pick_keeps_the_keys_but_does_not_move():
     assert pool.forecast.next_state is None
 
 
-def test_a_plan_with_no_forecast_runs_extraction_before_the_reply_as_v2_does():
-    plan = _plan({"id": "a", "transitions": [{"target_state_id": "b", "condition_type": "compound"}]}, {"id": "b"})
-    pool = Pool(QUIET, plan)
-    verdicts = asyncio.run(pool.run(NAMES, "x", [], {"state": {"id": "a"}, "full_plan": FULL_PLAN}))
-    assert "task_extraction" in [v.expert_name for v in verdicts]
-
-
-def test_a_stalled_plan_runs_extraction_before_the_reply_as_v2_does():
-    context = {**CONTEXT, "progress": {"turns_without_deliverable": 3}}
-    pool = Pool(QUIET, LINEAR)
-    verdicts = asyncio.run(pool.run(NAMES, "x", [], context))
-    assert "task_extraction" in [v.expert_name for v in verdicts]
-
-
 def test_an_activity_starting_this_turn_runs_extraction_before_the_plan_is_swapped():
     pool = Pool(QUIET, None)
 
@@ -329,21 +315,23 @@ def _agent(monkeypatch, forecast, late, plan=LINEAR):
     )
     agent._extraction_events = []
     agent._plan_config = plan
+    agent._audio_pipeline = None
+    agent._elapsed_ms = lambda: 200.0
     return agent, order
 
 
 async def _stages(agent):
-    return [o.metadata for o in [o async for o in agent.process(SimpleNamespace(session_id="s"))]]
+    return [o.metadata for o in [o async for o in agent.process(SimpleNamespace(session_id="s", metadata={}))]]
 
 
-def test_extraction_starts_after_arbitration_and_its_result_reaches_v2s_bookkeeping(monkeypatch):
+def test_extraction_starts_after_the_reply_and_its_result_reaches_v2s_bookkeeping(monkeypatch):
     verdict = ExpertVerdict(expert_name="task_extraction", verdict="x", priority=1, latency_ms=1100.0,
                             raw_output={"transitioned": True, "new_state_id": "b"})
     agent, order = _agent(monkeypatch, SimpleNamespace(next_state="b", keys=["name"]), [verdict])
     events = asyncio.run(_stages(agent))
-    assert order == ["settle", "extraction", "reply", "finish", ("post", ["task_extraction"])]
+    assert order == ["settle", "reply", "extraction", "finish", ("post", ["task_extraction"])]
     done = next(e for e in events if e["stage"] == "extraction_done")
-    assert done["elapsed_ms"] == 1300.0
+    assert done["latency_ms"] == 1100.0
     assert done["turn_id"] == "t"
     assert "next_step_miss" not in [e["stage"] for e in events]
 
@@ -459,3 +447,62 @@ def test_a_confirmed_value_stays_known_across_a_change_of_state():
                "deliverables": [{"key": "name", "description": "Their name", "status": "pending"}]}
     after = context_after(context, LINEAR, "b", ["name"])
     assert {"key": "name", "description": "Their name", "status": "confirmed"} in after["deliverables"]
+
+
+class FakeAudio:
+    def __init__(self, final):
+        self.final = final
+
+    async def wait_until_turn_is_final(self):
+        return self.final
+
+
+def test_a_taken_back_turn_writes_nothing(monkeypatch):
+    agent, order = _agent(monkeypatch, SimpleNamespace(next_state="b", keys=["name"]), [])
+    agent._audio_pipeline = FakeAudio(False)
+    asyncio.run(_stages(agent))
+    assert "extraction" not in order and "finish" not in order
+    assert not [o for o in order if isinstance(o, tuple)], "and V2's bookkeeping does not run either"
+
+
+def test_extraction_waits_until_the_turn_is_final(monkeypatch):
+    agent, order = _agent(monkeypatch, SimpleNamespace(next_state="b", keys=["name"]), [])
+    agent._audio_pipeline = FakeAudio(True)
+    asyncio.run(_stages(agent))
+    assert order.index("reply") < order.index("extraction")
+
+
+def test_a_taken_back_turn_loses_its_fragment_and_unheard_reply_from_history():
+    agent = StellaJevAgent.__new__(StellaJevAgent)
+    agent._taken_back = ["Ja."]
+    history = [
+        {"role": "assistant", "content": "Wie war Ihre Woche?"},
+        {"role": "user", "content": "Ja."},
+        {"role": "assistant", "content": "Schön!"},
+        {"role": "user", "content": "Letzte Woche war Allerheiligen."},
+    ]
+
+    async def v2_history(self, limit=20):
+        return history
+
+    original = StellaV2Agent._fetch_conversation_history
+    StellaV2Agent._fetch_conversation_history = v2_history
+    try:
+        assert asyncio.run(agent._fetch_conversation_history()) == history[:1]
+    finally:
+        StellaV2Agent._fetch_conversation_history = original
+
+
+def test_where_the_plan_cannot_tell_the_reply_gets_the_answer_as_collected():
+    plan = _plan({"id": "a", "transitions": [{"target_state_id": "b", "condition_type": "compound"}]}, {"id": "b"})
+    pool = Pool({**QUIET, ANSWERED_TASK: _answer(task_0=0.95, nothing=0.05)}, plan)
+    asyncio.run(pool.run(NAMES, "Anna", [], {"state": {"id": "a"}, "full_plan": FULL_PLAN}))
+    assert pool.calls == [], "extraction waits for the reply here too"
+    assert pool._held is not None
+    assert pool.forecast.keys == ["name"] and pool.forecast.next_state is None
+
+
+def test_a_stalled_plan_also_extracts_after_the_reply():
+    pool = Pool(QUIET, LINEAR)
+    asyncio.run(pool.run(NAMES, "x", [], {**CONTEXT, "progress": {"turns_without_deliverable": 3}}))
+    assert pool.calls == [] and pool._held is not None

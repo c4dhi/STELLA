@@ -944,6 +944,7 @@ class BaseAgent(ABC):
                     language_confidence=getattr(event, "language_confidence", 0.0) or 0.0,
                     stt_confidence=getattr(event, "confidence", 0.0) or 0.0,
                     is_barge_in=getattr(event, "is_barge_in", False),
+                    **({"taken_back": event.taken_back} if getattr(event, "taken_back", None) else {}),
                     # A turn the agent opened itself (start_turn): no text, and
                     # whatever it passed along. Absent on a user's turn.
                     **({"agent_initiated": getattr(event, "agent_initiated")}

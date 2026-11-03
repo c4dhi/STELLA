@@ -18,6 +18,20 @@ If Jev cannot be reached, the experts run on the language model using the prompt
 
 Needs `TYPESAFE_API_KEY` as well as V2's environment. A session will not start without it.
 
+## Take-back
+
+If someone starts speaking again within `take_back_window_ms` of their last words (Turn Taking
+node, default 6000, 0 is off) and none of the reply has been heard, the reply is held. Jev then
+decides as for a barge-in: carry on, and the agent answers the joined-up words, or a stray noise
+or "mhm", and the held reply plays. Once any of the reply was heard, it is an ordinary barge-in.
+
+Values are saved only once the reply is first heard, so a dropped reply saves nothing. The reply
+gets the answer as `confirmed` in its own copy of the state instead. The one exception is a turn
+where the router starts or ends an activity, which extracts before swapping the plan.
+
+Analytics: `take_back_held`, `take_back_done`, `take_back_no_speech`, `user_resumed_after_final`.
+Timings and outcomes only, no words.
+
 ## Evals
 
 `evals/` uses only the hand-written text in `common_sense_cases.py`:
@@ -32,4 +46,4 @@ Tune on `dev` and keep `holdout` for a final check.
 
 `run_next_step.py` scores which task Jev picks and where it says the plan goes, on `next_step_cases.py`
 (the German Focus Group plan, passed with `--plan`, and a plan with value branches). `--timed` also times the
-first word with and without waiting for extraction.
+first word.
