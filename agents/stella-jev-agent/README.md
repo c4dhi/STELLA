@@ -29,3 +29,7 @@ python evals/run_turns.py --agent v2            # the same turns on V2
 ```
 
 Tune on `dev` and keep `holdout` for a final check.
+
+`run_next_step.py` scores which task Jev picks and where it says the plan goes, on `next_step_cases.py`
+(the German Focus Group plan, passed with `--plan`, and a plan with value branches). `--timed` also times the
+first word with and without waiting for extraction.

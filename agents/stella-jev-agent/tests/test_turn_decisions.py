@@ -5,15 +5,19 @@ from types import SimpleNamespace
 from typing import Dict
 
 import pytest
+from typesafe_sdk import AsyncTypeSafeClient
+from stella_agent_sdk import AgentOutput
 from stella_agent_sdk.messages.types import BargeInDecision
+from stella_v2_agent.agent import StellaV2Agent
 from stella_v2_agent.experts.registry import ExpertRegistry
 from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
-from stella_jev_agent.agent import _OWN_EXPERTS_DIR, COMMON
+from stella_jev_agent.agent import _OWN_EXPERTS_DIR, COMMON, StellaJevAgent
 from stella_jev_agent.ask_back import AFTER_ASK_BACK_INSTRUCTION, ASK_BACK_INSTRUCTION, AskBack
 from stella_jev_agent.jev import JevUnavailable
+from stella_jev_agent.jev import JevClient
 from stella_jev_agent.pool import JevExpertPool, current_task
 from stella_jev_agent.questions import DOESNT_FIT, SLIGHT_DOUBT
 from stella_jev_agent.stages import JevBargeInEvaluator, JevResponseGenerator, NoBridge
@@ -76,7 +80,13 @@ def _answers(common=FITS_ANSWER, medical=QUIET_MEDICAL, has_answer=0.5, activity
 
 
 def _run(pool, names=NAMES, context=None):
-    return asyncio.run(pool.run(names, "Neun Liter.", [{"role": "assistant", "content": "Wie viel trinken Sie?"}], context or {}))
+    """One turn with its extraction, wherever in the turn that now runs."""
+    async def turn():
+        verdicts = await pool.run(names, "said", [], context or {})
+        pool.start_held_extraction()
+        return verdicts + await pool.finish_extraction()
+
+    return asyncio.run(turn())
 
 
 def _verdict(verdicts, name):
@@ -212,7 +222,7 @@ def test_slow_experts_run_only_when_jev_is_not_sure_they_have_nothing_to_do():
 
     pool = Pool(FakeJev(_answers(has_answer=0.3, activity=0.5)), AskBack())
     _run(pool)
-    assert pool.language_model_calls == [["task_extraction", "companion_router"]]
+    assert pool.language_model_calls == [["companion_router"], ["task_extraction"]]
 
 
 def test_the_answer_to_a_question_is_always_extracted():
@@ -342,3 +352,71 @@ def test_empty_barge_in_is_noise():
     jev = FakeJev()
     assert asyncio.run(JevBargeInEvaluator(None, jev).evaluate("  ")) is BargeInDecision.RESUME
     assert jev.asked == []
+
+
+def _agent_with(monkeypatch, stages, last_jev):
+    async def v2_turn(self, _input):
+        for stage, elapsed in stages:
+            yield AgentOutput.analytics_event("s", stage, "t", elapsed)
+
+    monkeypatch.setattr(StellaV2Agent, "process", v2_turn)
+    async def nothing():
+        return None
+
+    agent = StellaJevAgent.__new__(StellaJevAgent)
+    agent.expert_pool = SimpleNamespace(
+        last_jev=last_jev, settle_extraction=nothing, start_held_extraction=lambda: None
+    )
+    agent._extraction_events = []
+    return agent
+
+
+async def _analytics(agent):
+    return [o.metadata async for o in agent.process(SimpleNamespace(session_id="s"))]
+
+
+V2_TURN = [("expert_pool_start", 50.0), ("bridge_start", 51.0), ("bridge_done", 52.0), ("expert_pool_done", 300.0)]
+
+
+def test_analytics_chart_no_bridge_and_say_when_jev_decided(monkeypatch: pytest.MonkeyPatch):
+    agent = _agent_with(monkeypatch, V2_TURN, {"answered": True, "latency_ms": 170.0})
+    events = asyncio.run(_analytics(agent))
+    assert [e["stage"] for e in events] == ["expert_pool_start", "expert_pool_done", "jev_done"]
+    assert events[-1]["elapsed_ms"] == 220.0
+    assert events[-1]["turn_id"] == "t"
+
+
+def test_analytics_show_a_turn_that_fell_back(monkeypatch: pytest.MonkeyPatch):
+    agent = _agent_with(monkeypatch, V2_TURN, {"answered": False, "latency_ms": 113.0, "reason": "TypeSafeAuthenticationError"})
+    event = asyncio.run(_analytics(agent))[-1]
+    assert event["stage"] == "jev_failed"
+    assert event["reason"] == "TypeSafeAuthenticationError"
+    assert event["elapsed_ms"] == 163.0
+
+
+def test_language_model_experts_are_timed_from_the_start_of_the_pool():
+    pool = Pool(FakeJev(_answers(has_answer=0.9, activity=0.5)), AskBack())
+
+    async def timed(expert_names, *args, **kwargs):
+        return [ExpertVerdict(expert_name=n, verdict="none", priority=1, latency_ms=500.0) for n in expert_names]
+
+    pool._run_experts = timed
+    verdicts = _run(pool)
+    assert _verdict(verdicts, "companion_router").latency_ms == 600.0
+    assert _verdict(verdicts, "medical").latency_ms == 100.0
+    assert _verdict(verdicts, "task_extraction").latency_ms == 500.0, "held back, so timed from arbitration"
+    assert pool.last_jev["answered"] is True
+
+
+def test_the_jev_client_can_be_closed_at_the_end_of_a_session():
+    class Client:
+        closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    client, jev = Client(), JevClient()
+    jev._client = client
+    asyncio.run(jev.close())
+    assert client.closed and jev._client is None
+    assert hasattr(AsyncTypeSafeClient, "aclose"), "the real client has it too"

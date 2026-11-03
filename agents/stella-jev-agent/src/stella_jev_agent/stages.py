@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 from stella_agent_sdk.agent import BargeInEvaluator
 from stella_agent_sdk.messages.types import BargeInDecision
@@ -25,14 +25,27 @@ class NoBridge(BridgeGenerator):
         yield
 
 
+TASK_ANSWERED_INSTRUCTION = (
+    "The user just answered the last question and that answer counts as confirmed; what "
+    "they said is in the conversation. Don't get hung up on it or probe it further: "
+    "acknowledge it naturally and focus on the current task."
+)
+
+
 class JevResponseGenerator(ResponseGenerator):
     """Writes the reply as V2 does, except on a turn that asks back."""
 
-    def __init__(self, llm_service: Any, ask_back: AskBack):
+    def __init__(self, llm_service: Any, ask_back: AskBack, forecast: Callable[[], Any] = lambda: None):
         super().__init__(llm_service)
         self._ask_back = ask_back
+        self._forecast = forecast
 
     def generate(self, *, directive: ResponseDirective, prepend: str = "", **kwargs: Any):
+        forecast = self._forecast()
+        sm_context = kwargs.get("sm_context")
+        if forecast and forecast.keys and sm_context is not None:
+            # Nothing is saved yet, so V2's before-and-after comparison finds nothing.
+            sm_context["_collected_keys"] = list(sm_context.get("_collected_keys", [])) + forecast.keys
         if self._ask_back.take():
             # A "critical" never gets here: it overrides the reply, and the pool
             # does not ask back on such a turn. A health or legal note is dropped
@@ -46,6 +59,11 @@ class JevResponseGenerator(ResponseGenerator):
         elif self._ask_back.take_answer():
             directive.routing_directive = "\n".join(
                 filter(None, [directive.routing_directive, AFTER_ASK_BACK_INSTRUCTION])
+            )
+        elif forecast and forecast.done_task and not forecast.next_state:
+            # V2's own line for this looks at the current task, which has moved on.
+            directive.routing_directive = "\n".join(
+                filter(None, [directive.routing_directive, TASK_ANSWERED_INSTRUCTION])
             )
         return super().generate(directive=directive, prepend=prepend, **kwargs)
 
