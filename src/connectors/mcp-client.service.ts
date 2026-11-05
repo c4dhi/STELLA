@@ -7,7 +7,14 @@ import {
   StreamableHTTPError,
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import { Agent } from 'undici';
 import { assertPublicHost } from './connector-url.util.js';
+import {
+  createGuardedAgent,
+  createGuardedFetch,
+  FetchLike,
+  isBlockedHostError,
+} from './connector-fetch.util.js';
 
 /** What a connection needs. The credential is plaintext here and nowhere past this service. */
 export interface McpTarget {
@@ -44,7 +51,10 @@ export type ConnectorErrorCode =
   | 'tool_not_found'
   | 'invalid_arguments';
 
-const RETRYABLE: ReadonlySet<ConnectorErrorCode> = new Set(['unreachable', 'timeout']);
+const RETRYABLE: ReadonlySet<ConnectorErrorCode> = new Set([
+  'unreachable',
+  'timeout',
+]);
 
 /** A failure talking to the outside server, with whether trying again can help. */
 export class ConnectorCallError extends Error {
@@ -89,6 +99,9 @@ export class McpClientService implements OnModuleDestroy {
   readonly listTimeoutMs: number;
   readonly callTimeoutMs: number;
   private readonly allowPrivateHosts: boolean;
+  /** Connections whose sockets re-check the resolved address; unset when private hosts are allowed. */
+  private readonly agent?: Agent;
+  private readonly fetch?: FetchLike;
 
   constructor(config: ConfigService) {
     const num = (key: string, fallback: number) => {
@@ -100,6 +113,10 @@ export class McpClientService implements OnModuleDestroy {
     this.callTimeoutMs = num('CONNECTORS_CALL_TIMEOUT_MS', 60_000);
     this.allowPrivateHosts =
       config.get<string>('CONNECTORS_ALLOW_PRIVATE_HOSTS') === 'true';
+    if (!this.allowPrivateHosts) {
+      this.agent = createGuardedAgent();
+      this.fetch = createGuardedFetch(this.agent);
+    }
     this.sweeper = setInterval(() => this.closeIdle(), 60_000);
     this.sweeper.unref?.();
   }
@@ -107,10 +124,13 @@ export class McpClientService implements OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     clearInterval(this.sweeper);
     await Promise.all([...this.connections.keys()].map((id) => this.evict(id)));
+    await this.agent?.close().catch(() => undefined);
   }
 
   /** initialize + tools/list on a fresh connection; used by "Test connection". */
-  async probe(target: McpTarget): Promise<{ serverInfo: McpServerInfo; tools: McpToolInfo[] }> {
+  async probe(
+    target: McpTarget,
+  ): Promise<{ serverInfo: McpServerInfo; tools: McpToolInfo[] }> {
     await this.evict(target.connectorId);
     const conn = await this.connection(target);
     const tools = await this.listTools(target);
@@ -123,9 +143,12 @@ export class McpClientService implements OnModuleDestroy {
       let cursor: string | undefined;
       // A server may page tools/list; ten pages is far beyond any real server.
       for (let page = 0; page < 10; page++) {
-        const res = await conn.client.listTools(cursor ? { cursor } : undefined, {
-          timeout: this.listTimeoutMs,
-        });
+        const res = await conn.client.listTools(
+          cursor ? { cursor } : undefined,
+          {
+            timeout: this.listTimeoutMs,
+          },
+        );
         for (const t of res.tools) {
           tools.push({
             name: t.name,
@@ -146,9 +169,13 @@ export class McpClientService implements OnModuleDestroy {
     args: Record<string, unknown>,
   ): Promise<McpCallResult> {
     return this.withConnection(target, async (conn) => {
-      const res = await conn.client.callTool({ name: tool, arguments: args }, undefined, {
-        timeout: this.callTimeoutMs,
-      });
+      const res = await conn.client.callTool(
+        { name: tool, arguments: args },
+        undefined,
+        {
+          timeout: this.callTimeoutMs,
+        },
+      );
       return {
         isError: res.isError === true,
         structuredContent: res.structuredContent,
@@ -177,7 +204,10 @@ export class McpClientService implements OnModuleDestroy {
       const mapped = this.classify(error);
       // A broken transport is not reused; the next call reconnects. The call
       // itself is NOT retried here: tools/call may have side effects.
-      if (mapped.code !== 'tool_not_found' && mapped.code !== 'invalid_arguments') {
+      if (
+        mapped.code !== 'tool_not_found' &&
+        mapped.code !== 'invalid_arguments'
+      ) {
         await this.evict(target.connectorId);
       }
       throw mapped;
@@ -200,12 +230,17 @@ export class McpClientService implements OnModuleDestroy {
     const inFlight = this.pending.get(pendingKey);
     if (inFlight) return inFlight;
 
-    const opening = this.open(target, key).finally(() => this.pending.delete(pendingKey));
+    const opening = this.open(target, key).finally(() =>
+      this.pending.delete(pendingKey),
+    );
     this.pending.set(pendingKey, opening);
     return opening;
   }
 
-  private async open(target: McpTarget, key: string): Promise<CachedConnection> {
+  private async open(
+    target: McpTarget,
+    key: string,
+  ): Promise<CachedConnection> {
     try {
       await assertPublicHost(target.url, this.allowPrivateHosts);
     } catch (error) {
@@ -213,9 +248,11 @@ export class McpClientService implements OnModuleDestroy {
     }
 
     const headers: Record<string, string> = {};
-    if (target.bearerToken) headers.Authorization = `Bearer ${target.bearerToken}`;
+    if (target.bearerToken)
+      headers.Authorization = `Bearer ${target.bearerToken}`;
     const transport = new StreamableHTTPClientTransport(new URL(target.url), {
       requestInit: { headers, redirect: 'error' },
+      ...(this.fetch ? { fetch: this.fetch } : {}),
       // Agents' calls are request/response; no resumable GET stream needed.
       reconnectionOptions: {
         maxReconnectionDelay: 1000,
@@ -251,7 +288,9 @@ export class McpClientService implements OnModuleDestroy {
     try {
       await conn.client.close();
     } catch (error) {
-      this.logger.debug(`Closing MCP connection failed: ${(error as Error).message}`);
+      this.logger.debug(
+        `Closing MCP connection failed: ${(error as Error).message}`,
+      );
     }
   }
 
@@ -266,12 +305,20 @@ export class McpClientService implements OnModuleDestroy {
   classify(error: unknown): ConnectorCallError {
     if (error instanceof ConnectorCallError) return error;
     const message = (error as Error)?.message ?? String(error);
+    const blocked = isBlockedHostError(error);
+    if (blocked) return new ConnectorCallError('blocked_host', blocked.message);
 
     if (error instanceof McpError) {
       if (error.code === ErrorCode.RequestTimeout)
-        return new ConnectorCallError('timeout', 'The connector did not answer in time');
+        return new ConnectorCallError(
+          'timeout',
+          'The connector did not answer in time',
+        );
       if (error.code === ErrorCode.ConnectionClosed)
-        return new ConnectorCallError('unreachable', 'The connection to the connector closed');
+        return new ConnectorCallError(
+          'unreachable',
+          'The connection to the connector closed',
+        );
       if (error.code === ErrorCode.InvalidParams) {
         return /unknown tool|not found/i.test(message)
           ? new ConnectorCallError('tool_not_found', message)
@@ -290,23 +337,45 @@ export class McpClientService implements OnModuleDestroy {
           `The server refused the credential (HTTP ${status})`,
         );
       if (status === 404)
-        return new ConnectorCallError('protocol', 'No MCP endpoint at this URL (HTTP 404)');
+        return new ConnectorCallError(
+          'protocol',
+          'No MCP endpoint at this URL (HTTP 404)',
+        );
       if (status >= 500 || status === 429)
-        return new ConnectorCallError('unreachable', `The server is having trouble (HTTP ${status})`);
+        return new ConnectorCallError(
+          'unreachable',
+          `The server is having trouble (HTTP ${status})`,
+        );
       return new ConnectorCallError('protocol', message);
     }
 
-    if (/redirect/i.test(message) || /unexpected redirect/i.test(String((error as any)?.cause)))
+    if (
+      /redirect/i.test(message) ||
+      /unexpected redirect/i.test(String((error as any)?.cause))
+    )
       return new ConnectorCallError(
         'redirect',
         'The server answered with a redirect. Check the URL (no trailing slash, https).',
       );
     if (/HTTP 40[13]|unauthori[sz]ed|forbidden/i.test(message))
-      return new ConnectorCallError('unauthorized', 'The server refused the credential');
+      return new ConnectorCallError(
+        'unauthorized',
+        'The server refused the credential',
+      );
     if (/timed? ?out|ETIMEDOUT|AbortError/i.test(message))
-      return new ConnectorCallError('timeout', 'The connector did not answer in time');
-    if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|socket|network/i.test(message))
-      return new ConnectorCallError('unreachable', `Could not reach the server: ${message}`);
+      return new ConnectorCallError(
+        'timeout',
+        'The connector did not answer in time',
+      );
+    if (
+      /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|socket|network/i.test(
+        message,
+      )
+    )
+      return new ConnectorCallError(
+        'unreachable',
+        `Could not reach the server: ${message}`,
+      );
     return new ConnectorCallError('protocol', message);
   }
 }

@@ -18,6 +18,11 @@ import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
+import { ConnectorsTools } from './tools/connectors.tools.js';
+import {
+  CreateConnectorDto,
+  UpdateConnectorDto,
+} from '../connectors/dto/connector.dto.js';
 import { CreatePersonaDto } from '../personas/dto/create-persona.dto.js';
 import { CreateAgentDto } from '../agents/dto/create-agent.dto.js';
 import { CreateSessionDto } from '../sessions/dto/create-session.dto.js';
@@ -265,6 +270,27 @@ function setup() {
       },
     ]),
   };
+  const connectorRow = {
+    id: 'c1',
+    name: 'ELIAS',
+    handle: 'elias',
+    kind: 'mcp',
+    url: 'https://elias.example/mcp',
+    authType: 'bearer',
+    hasCredential: true,
+    status: 'untested',
+    sharedWith: [],
+  };
+  const connectors = {
+    list: jest.fn(async () => [connectorRow]),
+    listAvailable: jest.fn(async () => [{ ...connectorRow, owned: true }]),
+    get: jest.fn(async () => connectorRow),
+    create: jest.fn(async () => connectorRow),
+    update: jest.fn(async () => connectorRow),
+    test: jest.fn(async () => ({ ok: true, connector: connectorRow })),
+    setShares: jest.fn(async () => connectorRow),
+    remove: jest.fn(),
+  };
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
@@ -294,6 +320,7 @@ function setup() {
       agentImages as any,
       access,
     ),
+    new ConnectorsTools(connectors as any),
   ];
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
@@ -306,6 +333,7 @@ function setup() {
     sessions,
     agents,
     invitations,
+    connectors,
     audit,
     tool,
   };
@@ -732,7 +760,10 @@ describe('One shape for every tool', () => {
     const offenders: string[] = [];
     let ids = 0;
     for (const t of await schemas()) {
-      const properties = (t.inputSchema.properties ?? {}) as Record<string, any>;
+      const properties = (t.inputSchema.properties ?? {}) as Record<
+        string,
+        any
+      >;
       for (const [key, schema] of Object.entries(properties)) {
         if (key === 'id') offenders.push(`${t.name}: bare id`);
         if (!key.endsWith('Id')) continue;
@@ -750,22 +781,37 @@ describe('One shape for every tool', () => {
     const updates = (await schemas()).filter((t) => t.name.endsWith('_update'));
     expect(updates.map((t) => t.name).sort()).toEqual([
       'agent_configurations_update',
+      'connectors_update',
       'personas_update',
       'plan_templates_update',
       'sessions_update',
     ]);
     for (const t of updates) {
       const keys = Object.keys(t.inputSchema.properties ?? {});
-      expect({ tool: t.name, changes: keys.includes('changes'), ids: keys.filter((k) => k.endsWith('Id')).length })
-        .toEqual({ tool: t.name, changes: false, ids: 1 });
+      expect({
+        tool: t.name,
+        changes: keys.includes('changes'),
+        ids: keys.filter((k) => k.endsWith('Id')).length,
+      }).toEqual({ tool: t.name, changes: false, ids: 1 });
     }
   });
 
   it('returns the resulting object from writes that end something', async () => {
     const { factory, tool } = setup();
-    const stopped: any = await factory.run(tool('agents_stop'), { agentId: 'a1' }, READ_WRITE);
-    expect(stopped.structuredContent).toMatchObject({ id: 'a1', sessionId: 's1' });
-    const closed: any = await factory.run(tool('sessions_close'), { sessionId: 's1' }, READ_WRITE);
+    const stopped: any = await factory.run(
+      tool('agents_stop'),
+      { agentId: 'a1' },
+      READ_WRITE,
+    );
+    expect(stopped.structuredContent).toMatchObject({
+      id: 'a1',
+      sessionId: 's1',
+    });
+    const closed: any = await factory.run(
+      tool('sessions_close'),
+      { sessionId: 's1' },
+      READ_WRITE,
+    );
     expect(closed.structuredContent).toMatchObject({ id: 's1', agents: [] });
     const revoked: any = await factory.run(
       tool('session_invitations_revoke'),
@@ -782,7 +828,8 @@ describe('One shape for every tool', () => {
   it('lists summaries, never prompts, plan content, overrides or join tokens', async () => {
     const { factory, tool } = setup();
     const list = async (name: string) =>
-      ((await factory.run(tool(name), {}, READ)) as any).structuredContent.items[0];
+      ((await factory.run(tool(name), {}, READ)) as any).structuredContent
+        .items[0];
 
     const persona = await list('personas_list');
     expect(persona).toMatchObject({ id: 'pe1', name: 'Grace', language: 'de' });
@@ -791,7 +838,8 @@ describe('One shape for every tool', () => {
 
     const plan = await list('plan_templates_list');
     expect(plan).toMatchObject({ id: 'pl1', name: 'Walk' });
-    for (const field of ['content', 'userId']) expect(plan[field]).toBeUndefined();
+    for (const field of ['content', 'userId'])
+      expect(plan[field]).toBeUndefined();
 
     const configuration = await list('agent_configurations_list');
     expect(configuration).toMatchObject({ id: 'c1', agentTypeId: 'at1' });
@@ -799,7 +847,11 @@ describe('One shape for every tool', () => {
       expect(configuration[field]).toBeUndefined();
 
     const project = await list('projects_list');
-    expect(project).toMatchObject({ id: 'p1', name: 'Testing', totalSessions: 2 });
+    expect(project).toMatchObject({
+      id: 'p1',
+      name: 'Testing',
+      totalSessions: 2,
+    });
     for (const field of ['publicToken', 'publicEnabled', 'ownerId'])
       expect(project[field]).toBeUndefined();
   });
@@ -807,17 +859,29 @@ describe('One shape for every tool', () => {
   it('answers creates and updates with exactly what _get shows', async () => {
     const { factory, tool } = setup();
     const run = async (name: string, args: Record<string, unknown>) =>
-      ((await factory.run(tool(name), args, READ_WRITE)) as any).structuredContent;
+      ((await factory.run(tool(name), args, READ_WRITE)) as any)
+        .structuredContent;
     const cases = [
       ['personas', 'personaId', { name: 'Ada', systemPrompt: 'You are Ada.' }],
       ['plan_templates', 'planId', { name: 'Walk', content: { states: [] } }],
-      ['agent_configurations', 'agentConfigurationId', { name: 'D', agentTypeId: 'at1', configuration: {} }],
+      [
+        'agent_configurations',
+        'agentConfigurationId',
+        { name: 'D', agentTypeId: 'at1', configuration: {} },
+      ],
     ] as const;
     for (const [things, idKey, fields] of cases) {
       const created = await run(`${things}_create`, fields);
-      expect(created).toEqual(await run(`${things}_get`, { [idKey]: created.id }));
-      const updated = await run(`${things}_update`, { [idKey]: created.id, name: 'New' });
-      expect(updated).toEqual(await run(`${things}_get`, { [idKey]: created.id }));
+      expect(created).toEqual(
+        await run(`${things}_get`, { [idKey]: created.id }),
+      );
+      const updated = await run(`${things}_update`, {
+        [idKey]: created.id,
+        name: 'New',
+      });
+      expect(updated).toEqual(
+        await run(`${things}_get`, { [idKey]: created.id }),
+      );
       expect(updated.from).toBe(things === 'personas' ? undefined : 'findOne');
     }
   });
@@ -845,9 +909,17 @@ describe('One shape for every tool', () => {
       expect.objectContaining({ id: 'at1', slug: 'stella-v2-agent' }),
     ]);
     expect(listed.structuredContent.items[0].configSchema).toBeUndefined();
-    const one: any = await factory.run(tool('agent_types_get'), { agentTypeId: 'at1' }, READ);
+    const one: any = await factory.run(
+      tool('agent_types_get'),
+      { agentTypeId: 'at1' },
+      READ,
+    );
     expect(one.structuredContent.configSchema).toEqual({ type: 'object' });
-    const missing: any = await factory.run(tool('agent_types_get'), { agentTypeId: 'nope' }, READ);
+    const missing: any = await factory.run(
+      tool('agent_types_get'),
+      { agentTypeId: 'nope' },
+      READ,
+    );
     expect(parse(missing).error.status).toBe(404);
   });
 
@@ -858,7 +930,9 @@ describe('One shape for every tool', () => {
       { sessionId: 's1', name: 'Grace', agentTypeId: 'at1' },
       READ_WRITE,
     );
-    expect((agents.create.mock.calls[0] as any[])[1].agentType).toBe('stella-v2-agent');
+    expect((agents.create.mock.calls[0] as any[])[1].agentType).toBe(
+      'stella-v2-agent',
+    );
     const unknown: any = await factory.run(
       tool('agents_deploy'),
       { sessionId: 's1', name: 'Grace', agentTypeId: 'nope' },
@@ -1014,5 +1088,136 @@ describe('McpOriginGuard', () => {
         ctx('http://localhost:5173'),
       ),
     ).toBe(true);
+  });
+});
+
+describe('MCP connector tools', () => {
+  it('lists and tests with read/write, and offers no delete', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining(['connectors_list', 'connectors_get']),
+    );
+    for (const write of [
+      'connectors_create',
+      'connectors_update',
+      'connectors_test',
+      'connector_shares_set',
+    ]) {
+      expect(read).not.toContain(write);
+      expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
+    }
+    expect(
+      factory
+        .toolNamesFor(READ_WRITE)
+        .some((n) => n.startsWith('connector') && n.includes('delete')),
+    ).toBe(false);
+  });
+
+  it('creates through the REST DTO and keeps the token out of the audit log', async () => {
+    const { factory, connectors, audit, tool } = setup();
+    const result: any = await factory.run(
+      tool('connectors_create'),
+      {
+        name: 'ELIAS',
+        handle: 'elias',
+        url: 'https://elias.example/mcp',
+        token: 'elias_secret',
+      },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const [userId, dto] = connectors.create.mock.calls[0] as any[];
+    expect(userId).toBe('u1');
+    expect(dto).toBeInstanceOf(CreateConnectorDto);
+    expect(dto.token).toBe('elias_secret');
+    expect(JSON.stringify(result)).not.toContain('elias_secret');
+    const entry = (audit.record.mock.calls[0] as any[])[0];
+    expect(JSON.stringify(summarizeToolArgs(entry.args))).not.toContain(
+      'elias_secret',
+    );
+  });
+
+  it('rejects input the REST DTO would reject', async () => {
+    const { factory, connectors, tool } = setup();
+    const bad: any = await factory.run(
+      tool('connectors_create'),
+      { name: 'X', handle: 'Bad Handle', url: 'https://x.example/mcp' },
+      READ_WRITE,
+    );
+    expect(parse(bad).error.status).toBe(400);
+    expect(connectors.create).not.toHaveBeenCalled();
+  });
+
+  it('updates only the given fields, shares, tests, and lists per project', async () => {
+    const { factory, connectors, tool } = setup();
+    await factory.run(
+      tool('connectors_update'),
+      { connectorId: 'c1', name: 'New' },
+      READ_WRITE,
+    );
+    const [id, userId, dto] = connectors.update.mock.calls[0] as any[];
+    expect([id, userId]).toEqual(['c1', 'u1']);
+    expect(dto).toBeInstanceOf(UpdateConnectorDto);
+    expect(dto.token).toBeUndefined();
+
+    await factory.run(
+      tool('connector_shares_set'),
+      {
+        connectorId: 'c1',
+        projectIds: ['7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11'],
+      },
+      READ_WRITE,
+    );
+    expect(connectors.setShares).toHaveBeenCalledWith('c1', 'u1', [
+      '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11',
+    ]);
+    const badShare: any = await factory.run(
+      tool('connector_shares_set'),
+      { connectorId: 'c1', projectIds: ['p1'] },
+      READ_WRITE,
+    );
+    expect(parse(badShare).error.status).toBe(400);
+
+    const tested: any = await factory.run(
+      tool('connectors_test'),
+      { connectorId: 'c1' },
+      READ_WRITE,
+    );
+    expect(tested.structuredContent.ok).toBe(true);
+
+    const available: any = await factory.run(
+      tool('connectors_list'),
+      { projectId: 'p1' },
+      READ,
+    );
+    expect(connectors.listAvailable).toHaveBeenCalledWith('u1', 'p1');
+    expect(available.structuredContent.items[0].owned).toBe(true);
+  });
+
+  it('passes connector bindings to agents_deploy', async () => {
+    const { factory, agents, tool } = setup();
+    const result: any = await factory.run(
+      tool('agents_deploy'),
+      {
+        sessionId: 's1',
+        name: 'ELIAS interviewer',
+        connectorBindings: [
+          {
+            connectorId: '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11',
+            slot: 'elias',
+          },
+        ],
+      },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const dto = (agents.create.mock.calls[0] as any[])[1];
+    expect(dto.connectorBindings).toEqual([
+      expect.objectContaining({
+        connectorId: '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11',
+        slot: 'elias',
+      }),
+    ]);
   });
 });

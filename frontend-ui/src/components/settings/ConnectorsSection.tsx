@@ -311,6 +311,10 @@ export default function ConnectorsSection() {
                           Members of these projects can let their agents use this connector. They never see your
                           token and can’t change the connector. Unsharing stops their agents at once.
                         </p>
+                        <p className={`text-caption mb-2 ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>
+                          Any member’s agent, including one they uploaded themselves, can then call any of this
+                          server’s tools with your token, and the audit log will show you as the user.
+                        </p>
                         {projects && projects.length === 0 && (
                           <p className={`text-caption ${faint}`}>You’re not in any project yet.</p>
                         )}

@@ -63,12 +63,12 @@ Which tools need which scope:
 
 | Scope | Tools |
 |---|---|
-| `mcp:read` (18) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `agents_get`, `agent_logs_get` |
-| `mcp:write` (14) | `personas_create`, `personas_update`, `plan_templates_create`, `plan_templates_update`, `agent_configurations_create`, `agent_configurations_update`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop` |
+| `mcp:read` (20) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `agents_get`, `agent_logs_get`, `connectors_list`, `connectors_get` |
+| `mcp:write` (18) | `personas_create`, `personas_update`, `plan_templates_create`, `plan_templates_update`, `agent_configurations_create`, `agent_configurations_update`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
 
 ## The tools
 
-There are 32 tools. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
+There are 38 tools. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
 
 - Ids are named after what they point to (`projectId`, `sessionId`, `agentId`, `invitationId`, `personaId`, `planId`, `agentConfigurationId`, `agentTypeId`, `envVarTemplateId`). The name is the same in every tool.
 - `…_list` returns `{ items }` with a summary of each, and `…_get` returns one in full.
@@ -87,7 +87,8 @@ A typical run looks like this:
 
 ## Limits
 
-- Nothing can be **deleted** over MCP. There are no delete tools.
+- Nothing can be **deleted** over MCP. There are no delete tools. Connectors are deleted in Settings → Connectors; over MCP, `connector_shares_set` with `[]` stops other members' agents from using one.
+- **Connector tokens:** `connectors_create` and `connectors_update` take a connector's token, so it passes through the assistant's chat. No tool returns it, and the audit log records it as `[redacted]`.
 - An assistant only reaches projects its user is a member of, and only personas, plans, configurations and env var templates its user owns. System-default personas can be read but not changed.
 - **Closed sessions:** agents are refused in a session that is closing or closed. `agents_deploy` and `agents_restart` fail there, and a closed session can't be reopened over MCP.
 - A session has at most one open invitation link. Revoke it before making a new one.

@@ -849,6 +849,8 @@ export class AgentsService {
       data: {
         status: AgentStatus.STOPPED,
         stoppedAt: new Date(),
+        // The pod is gone; its connector token must not outlive it.
+        connectorTokenHash: null,
         // Clear K8s resource names since they're deleted
         podName: null,
         secretName: null,
@@ -989,7 +991,7 @@ export class AgentsService {
           await this.cleanupK8sResources(agent).catch(() => {});
           await this.prisma.agentInstance.update({
             where: { id: agent.id },
-            data: { status: AgentStatus.STOPPED, stoppedAt: new Date() },
+            data: { status: AgentStatus.STOPPED, stoppedAt: new Date(), connectorTokenHash: null },
           }).catch(e => this.logger.error(`Failed to force-stop agent ${agent.id}: ${e.message}`));
           throw error;
         }

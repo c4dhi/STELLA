@@ -28,7 +28,7 @@ const INSTRUCTIONS = [
   'Read before you write: fetch an existing item to see its exact structure before creating or updating one.',
   'Every tool works the same way.',
   'Ids are named after what they point to (projectId, sessionId, agentId, invitationId, personaId, planId,',
-  'agentConfigurationId, agentTypeId, envVarTemplateId), with the same name in every tool.',
+  'agentConfigurationId, agentTypeId, envVarTemplateId, connectorId), with the same name in every tool.',
   '<things>_list returns { items } with a summary of each; <things>_get returns one in full.',
   '<things>_update takes the id and only the fields to change.',
   'Every write returns the resulting object as the matching _get shows it, so there is no need to fetch it again.',

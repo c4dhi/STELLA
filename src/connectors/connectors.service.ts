@@ -37,7 +37,8 @@ import {
 } from './dto/connector.dto.js';
 
 /** A connector as the API returns it: everything except the credential. */
-export interface ConnectorResponse {
+// A type alias, not an interface, so it can be returned as an MCP tool result.
+export type ConnectorResponse = {
   id: string;
   name: string;
   handle: string;
@@ -54,13 +55,14 @@ export interface ConnectorResponse {
   sharedWith: { projectId: string; projectName: string }[];
   createdAt: Date;
   updatedAt: Date;
-}
+};
 
 /**
  * A connector the user may bind in one project: their own, or one its owner
  * shared with that project. No credential, and nothing to edit for non-owners.
  */
-export interface AvailableConnectorResponse {
+// A type alias, not an interface, so it can be returned as an MCP tool result.
+export type AvailableConnectorResponse = {
   id: string;
   name: string;
   handle: string;
@@ -71,7 +73,7 @@ export interface AvailableConnectorResponse {
   /** True for the user's own connector; false when shared with the project. */
   owned: boolean;
   ownerName: string | null;
-}
+};
 
 type ConnectorWithShares = Connector & {
   shares?: { projectId: string; project: { name: string } }[];
@@ -84,12 +86,13 @@ const WITH_SHARES = {
   },
 };
 
-export interface ConnectorTestResponse {
+// A type alias, not an interface, so it can be returned as an MCP tool result.
+export type ConnectorTestResponse = {
   ok: boolean;
   errorCode?: string;
   error?: string;
   connector: ConnectorResponse;
-}
+};
 
 const AUTH_TO_DB: Record<ConnectorAuthTypeInput, ConnectorAuthType> = {
   bearer: ConnectorAuthType.BEARER,
@@ -110,7 +113,10 @@ export function toConnectorResponse(c: ConnectorWithShares): ConnectorResponse {
     lastCheckedAt: c.lastCheckedAt,
     tools: (c.toolsSnapshot as unknown as McpToolInfo[] | null) ?? null,
     serverInfo: (c.serverInfo as McpServerInfo | null) ?? null,
-    sharedWith: (c.shares ?? []).map((s) => ({ projectId: s.projectId, projectName: s.project.name })),
+    sharedWith: (c.shares ?? []).map((s) => ({
+      projectId: s.projectId,
+      projectName: s.project.name,
+    })),
     createdAt: c.createdAt,
     updatedAt: c.updatedAt,
   };
@@ -141,7 +147,10 @@ export class ConnectorsService {
    * What the user may bind when deploying in `projectId`: their own connectors
    * plus those shared with the project. For the deploy wizard.
    */
-  async listAvailable(userId: string, projectId: string): Promise<AvailableConnectorResponse[]> {
+  async listAvailable(
+    userId: string,
+    projectId: string,
+  ): Promise<AvailableConnectorResponse[]> {
     await this.assertMember(userId, projectId);
     const rows = await this.prisma.connector.findMany({
       where: { OR: [{ userId }, { shares: { some: { projectId } } }] },
@@ -166,7 +175,11 @@ export class ConnectorsService {
    * only projects the owner belongs to. Unsharing takes effect on the next
    * call of any agent that bound it (the gateway re-checks every call).
    */
-  async setShares(id: string, userId: string, projectIds: string[]): Promise<ConnectorResponse> {
+  async setShares(
+    id: string,
+    userId: string,
+    projectIds: string[],
+  ): Promise<ConnectorResponse> {
     await this.owned(id, userId);
     const wanted = [...new Set(projectIds)];
     if (wanted.length > 0) {
@@ -177,7 +190,9 @@ export class ConnectorsService {
       const member = new Set(memberships.map((m) => m.projectId));
       const notMember = wanted.filter((p) => !member.has(p));
       if (notMember.length > 0) {
-        throw new ForbiddenException('You can only share a connector with projects you belong to');
+        throw new ForbiddenException(
+          'You can only share a connector with projects you belong to',
+        );
       }
     }
     await this.prisma.$transaction([
@@ -189,18 +204,27 @@ export class ConnectorsService {
         skipDuplicates: true,
       }),
     ]);
-    const row = await this.prisma.connector.findUniqueOrThrow({ where: { id }, include: WITH_SHARES });
+    const row = await this.prisma.connector.findUniqueOrThrow({
+      where: { id },
+      include: WITH_SHARES,
+    });
     return toConnectorResponse(row);
   }
 
   async get(id: string, userId: string): Promise<ConnectorResponse> {
     await this.owned(id, userId);
     return toConnectorResponse(
-      await this.prisma.connector.findUniqueOrThrow({ where: { id }, include: WITH_SHARES }),
+      await this.prisma.connector.findUniqueOrThrow({
+        where: { id },
+        include: WITH_SHARES,
+      }),
     );
   }
 
-  async create(userId: string, dto: CreateConnectorDto): Promise<ConnectorResponse> {
+  async create(
+    userId: string,
+    dto: CreateConnectorDto,
+  ): Promise<ConnectorResponse> {
     const url = this.cleanUrl(dto.url);
     const authType = dto.authType ?? 'bearer';
     if (authType === 'bearer' && !dto.token?.trim()) {
@@ -243,7 +267,8 @@ export class ConnectorsService {
       }
     }
     const authType =
-      dto.authType ?? (existing.authType === ConnectorAuthType.NONE ? 'none' : 'bearer');
+      dto.authType ??
+      (existing.authType === ConnectorAuthType.NONE ? 'none' : 'bearer');
     if (dto.authType !== undefined) {
       data.authType = AUTH_TO_DB[dto.authType];
       reachChanged = true;
@@ -262,7 +287,11 @@ export class ConnectorsService {
     }
 
     try {
-      const row = await this.prisma.connector.update({ where: { id }, data, include: WITH_SHARES });
+      const row = await this.prisma.connector.update({
+        where: { id },
+        data,
+        include: WITH_SHARES,
+      });
       if (reachChanged) await this.mcp.evict(id);
       return toConnectorResponse(row);
     } catch (error) {
@@ -282,7 +311,9 @@ export class ConnectorsService {
     const connector = await this.owned(id, userId);
     const started = Date.now();
     try {
-      const { serverInfo, tools } = await this.mcp.probe(this.target(connector));
+      const { serverInfo, tools } = await this.mcp.probe(
+        this.target(connector),
+      );
       await this.audit.record({
         connectorId: id,
         userId,
@@ -363,10 +394,19 @@ export class ConnectorsService {
   }
 
   /** Connection details with the decrypted credential. Never leaves the backend. */
-  target(connector: Pick<Connector, 'id' | 'url' | 'authType' | 'credentialEncrypted'>): McpTarget {
+  target(
+    connector: Pick<
+      Connector,
+      'id' | 'url' | 'authType' | 'credentialEncrypted'
+    >,
+  ): McpTarget {
     let bearerToken: string | null = null;
-    if (connector.authType === ConnectorAuthType.BEARER && connector.credentialEncrypted) {
-      bearerToken = this.encryption.decrypt(connector.credentialEncrypted).token ?? null;
+    if (
+      connector.authType === ConnectorAuthType.BEARER &&
+      connector.credentialEncrypted
+    ) {
+      bearerToken =
+        this.encryption.decrypt(connector.credentialEncrypted).token ?? null;
     }
     return { connectorId: connector.id, url: connector.url, bearerToken };
   }
@@ -381,7 +421,9 @@ export class ConnectorsService {
 
   /** Only the owner sees, edits, tests, shares or deletes a connector here. */
   private async owned(id: string, userId: string): Promise<Connector> {
-    const row = await this.prisma.connector.findFirst({ where: { id, userId } });
+    const row = await this.prisma.connector.findFirst({
+      where: { id, userId },
+    });
     if (!row) throw new NotFoundException('Connector not found');
     return row;
   }
@@ -403,7 +445,9 @@ export class ConnectorsService {
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2002'
     ) {
-      return new ConflictException(`You already have a connector with handle "${handle}"`);
+      return new ConflictException(
+        `You already have a connector with handle "${handle}"`,
+      );
     }
     return error;
   }

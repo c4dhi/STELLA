@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Connector } from '@prisma/client';
+import { AgentStatus, Connector, SessionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ConnectorAuditService } from './connector-audit.service.js';
 import { ConnectorBinding, readBindings } from './connector-bindings.util.js';
@@ -11,6 +11,11 @@ import {
   McpClientService,
   McpToolInfo,
 } from './mcp-client.service.js';
+
+const LIVE_STATUSES: ReadonlySet<AgentStatus> = new Set([
+  AgentStatus.STARTING,
+  AgentStatus.RUNNING,
+]);
 
 export type GatewayErrorCode =
   | ConnectorCallError['code']
@@ -65,7 +70,10 @@ export class ConnectorGatewayService {
 
   async authenticate(agentId: string, token: string): Promise<AgentContext> {
     if (!agentId || !token) {
-      throw new GatewayError('unauthenticated', 'Missing agent id or connector token');
+      throw new GatewayError(
+        'unauthenticated',
+        'Missing agent id or connector token',
+      );
     }
     const instance = await this.prisma.agentInstance.findUnique({
       where: { id: agentId },
@@ -75,11 +83,30 @@ export class ConnectorGatewayService {
         deployedByUserId: true,
         connectorBindings: true,
         connectorTokenHash: true,
-        session: { select: { projectId: true } },
+        status: true,
+        session: { select: { projectId: true, status: true } },
       },
     });
-    if (!instance || !agentConnectorTokenMatches(token, instance.connectorTokenHash)) {
-      throw new GatewayError('unauthenticated', 'This agent is not allowed to use connectors');
+    if (
+      !instance ||
+      !agentConnectorTokenMatches(token, instance.connectorTokenHash)
+    ) {
+      throw new GatewayError(
+        'unauthenticated',
+        'This agent is not allowed to use connectors',
+      );
+    }
+    // A token copied out of a pod must not outlive it. Stopping (which is also
+    // how auto-pause ends a pod) clears the hash; this check covers the other
+    // ways an agent ends, and closed sessions. Wake issues a new token.
+    if (
+      !LIVE_STATUSES.has(instance.status) ||
+      instance.session.status !== SessionStatus.ACTIVE
+    ) {
+      throw new GatewayError(
+        'unauthenticated',
+        'This agent is no longer running',
+      );
     }
     return {
       agentId: instance.id,
@@ -93,7 +120,10 @@ export class ConnectorGatewayService {
   async listConnectors(ctx: AgentContext): Promise<BoundConnectorInfo[]> {
     if (ctx.bindings.length === 0) return [];
     const rows = await this.prisma.connector.findMany({
-      where: { id: { in: ctx.bindings.map((b) => b.connectorId) }, ...this.accessFilter(ctx) },
+      where: {
+        id: { in: ctx.bindings.map((b) => b.connectorId) },
+        ...this.accessFilter(ctx),
+      },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
     return ctx.bindings.flatMap((b) => {
@@ -113,8 +143,13 @@ export class ConnectorGatewayService {
 
   async listTools(ctx: AgentContext, handle: string): Promise<McpToolInfo[]> {
     const connector = await this.bound(ctx, handle);
-    return this.audited(ctx, connector, 'tools/list', undefined, undefined, () =>
-      this.mcp.listTools(this.connectors.target(connector)),
+    return this.audited(
+      ctx,
+      connector,
+      'tools/list',
+      undefined,
+      undefined,
+      () => this.mcp.listTools(this.connectors.target(connector)),
     );
   }
 
@@ -124,17 +159,24 @@ export class ConnectorGatewayService {
     tool: string,
     argumentsJson: string,
   ): Promise<McpCallResult> {
-    if (!tool) throw new GatewayError('invalid_arguments', 'No tool name given');
+    if (!tool)
+      throw new GatewayError('invalid_arguments', 'No tool name given');
     let args: Record<string, unknown> = {};
     if (argumentsJson && argumentsJson.trim()) {
       let parsed: unknown;
       try {
         parsed = JSON.parse(argumentsJson);
       } catch {
-        throw new GatewayError('invalid_arguments', 'arguments_json is not valid JSON');
+        throw new GatewayError(
+          'invalid_arguments',
+          'arguments_json is not valid JSON',
+        );
       }
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new GatewayError('invalid_arguments', 'arguments_json must be a JSON object');
+        throw new GatewayError(
+          'invalid_arguments',
+          'arguments_json must be a JSON object',
+        );
       }
       args = parsed as Record<string, unknown>;
     }
@@ -148,18 +190,28 @@ export class ConnectorGatewayService {
     const binding = ctx.bindings.find((b) => b.handle === handle);
     if (!binding) {
       const known = ctx.bindings.map((b) => b.handle).join(', ') || 'none';
-      throw new GatewayError('not_bound', `No connector "${handle}" is bound to this agent (bound: ${known})`);
+      throw new GatewayError(
+        'not_bound',
+        `No connector "${handle}" is bound to this agent (bound: ${known})`,
+      );
     }
     const connector = await this.prisma.connector.findUnique({
       where: { id: binding.connectorId },
-      include: { shares: { where: { projectId: ctx.projectId }, select: { id: true } } },
+      include: {
+        shares: { where: { projectId: ctx.projectId }, select: { id: true } },
+      },
     });
     if (!connector) {
-      throw new GatewayError('not_bound', `The connector bound as "${handle}" was deleted by its owner`);
+      throw new GatewayError(
+        'not_bound',
+        `The connector bound as "${handle}" was deleted by its owner`,
+      );
     }
     // Re-checked on every call: a connector stops working the moment its owner
     // unshares it from this project, not at the next deploy.
-    const own = ctx.deployedByUserId !== null && connector.userId === ctx.deployedByUserId;
+    const own =
+      ctx.deployedByUserId !== null &&
+      connector.userId === ctx.deployedByUserId;
     if (!own && connector.shares.length === 0) {
       throw new GatewayError(
         'not_bound',
@@ -197,7 +249,8 @@ export class ConnectorGatewayService {
     };
     try {
       const result = await run();
-      const isError = operation === 'tools/call' && (result as McpCallResult).isError;
+      const isError =
+        operation === 'tools/call' && (result as McpCallResult).isError;
       await this.audit.record({
         ...base,
         success: !isError,
