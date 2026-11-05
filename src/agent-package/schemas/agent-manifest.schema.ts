@@ -33,9 +33,25 @@ const EXPERTS_CAPABILITY = 'experts'
 const EXPERT_CONFIG_PROPERTY_KEYS = ['experts', 'expert_overrides', 'experts_dir', 'custom_experts'] as const
 const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives'] as const
 
+/**
+ * The regex engine for uploaded schemas: it refuses every pattern. Ajv asks it
+ * for each `pattern`, `patternProperties` and `propertyNames` pattern it
+ * compiles, by whatever path the schema reaches them ($ref to any location,
+ * draft-7 `dependencies`, unknown keys). A pattern would run on the event loop,
+ * where a backtracking one freezes the server (ReDoS), so no pattern compiles.
+ * findRegexKeywords only names the usual places for a clearer error.
+ */
+class RegexNotAllowed extends Error {}
+const refuseRegExp = Object.assign(
+  (source: string): never => {
+    throw new RegexNotAllowed(source)
+  },
+  { code: 'new RegExp' },
+)
+
 // Ajv checks that configSchema is a valid JSON Schema and defaultConfig fits it.
 // Cast to `any` keeps this compatible with mixed Ajv major versions in local dependency trees.
-const ajv = new Ajv({ allErrors: true, validateSchema: true, strict: false } as any)
+const ajv = new Ajv({ allErrors: true, validateSchema: true, strict: false, code: { regExp: refuseRegExp } } as any)
 
 const jsonPrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()])
 type JsonPrimitive = z.infer<typeof jsonPrimitiveSchema>
@@ -530,9 +546,10 @@ export function parseAgentManifest(raw: unknown): ManifestSchemaParseResult {
     // Without defaults this still compiles the schema, so one Ajv cannot use
     // (an unresolved $ref) is refused here and not on the first deploy.
     const configErrors = validateAgainstSchema(withoutRequired(manifest.configSchema), manifest.defaultConfig ?? {})
-    const relevant = manifest.defaultConfig ? configErrors : configErrors.filter((e) => e.startsWith('schema cannot be used'))
+    const schemaProblem = (e: string) => e.startsWith('schema cannot be used') || e.startsWith('regular expressions are not allowed')
+    const relevant = manifest.defaultConfig ? configErrors : configErrors.filter(schemaProblem)
     if (relevant.length > 0) {
-      const label = relevant[0].startsWith('schema cannot be used') ? 'configSchema' : 'defaultConfig'
+      const label = schemaProblem(relevant[0]) ? 'configSchema' : 'defaultConfig'
       return { valid: false, errors: relevant.map((e) => `${label}: ${e}`), warnings }
     }
   }
@@ -570,7 +587,13 @@ function formatIssue(issue: z.core.$ZodIssue): string {
 }
 
 function validateJsonSchemaObject(schema: unknown): string[] {
-  const valid = (ajv as any).validateSchema(schema as object)
+  let valid: boolean
+  try {
+    valid = (ajv as any).validateSchema(schema as object)
+  } catch (error) {
+    // An unknown $schema (say draft 2020-12) throws instead of reporting.
+    return [`schema cannot be used: ${(error as Error).message}`]
+  }
   const errors = ((ajv as any).errors ?? []) as unknown[]
   if (valid || errors.length === 0) return []
   return errors.map(formatAjvError)
@@ -589,6 +612,9 @@ export function validateAgainstSchema(schema: object, value: unknown): string[] 
     validate = (ajv as any).compile(schema)
   } catch (error) {
     ;(ajv as any).removeSchema(schema)
+    if (error instanceof RegexNotAllowed) {
+      return [`regular expressions are not allowed (found ${JSON.stringify(error.message)}): ${NO_REGEX_ADVICE}`]
+    }
     return [`schema cannot be used: ${(error as Error).message}`]
   }
   const valid = validate(value)
@@ -637,9 +663,11 @@ export function findRegexKeywords(schema: unknown, at = ''): string[] {
   return found
 }
 
+const NO_REGEX_ADVICE = 'STELLA checks settings on its server and accepts no regular expressions. Use enum, minLength or maxLength instead'
+
 function regexKeywordError(pointer: string): string {
   const keyword = pointer.split('/').pop()
-  return `${keyword} is not allowed (at ${pointer || '/'}): STELLA checks settings on its server and accepts no regular expressions. Use enum, minLength or maxLength instead`
+  return `${keyword} is not allowed (at ${pointer || '/'}): ${NO_REGEX_ADVICE}`
 }
 
 /** A copy of a JSON Schema with every `required` list removed, at any depth. */

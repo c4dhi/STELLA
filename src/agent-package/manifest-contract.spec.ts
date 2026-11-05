@@ -12,6 +12,7 @@ import {
   manifestJsonSchema,
   parseAgentManifest,
   parseAgentManifestYaml,
+  validateAgainstSchema,
 } from './schemas/agent-manifest.schema.js'
 import * as clamping from '../kubernetes/utils/resource-clamping.util.js'
 
@@ -185,6 +186,28 @@ describe('manifest 2.0 rules', () => {
     expect(result.errors.join('\n')).toContain('patternProperties is not allowed (at /$defs/tag/patternProperties)')
     // A setting that is merely named "pattern" is fine.
     expect(parseAgentManifest({ ...base, configSchema: { type: 'object', properties: { pattern: { type: 'string' } } } }).errors).toEqual([])
+  })
+
+  it.each([
+    // The three bypasses from review: each took over 300 ms and doubled with each character.
+    ['$ref to a custom root key', { type: 'object', properties: { s: { $ref: '#/x-defs/evil' } }, 'x-defs': { evil: { type: 'string', pattern: '^(a+)+$' } } }],
+    ['draft-7 dependencies', { type: 'object', dependencies: { s: { properties: { s: { type: 'string', pattern: '^(a+)+$' } } } } }],
+    ['$ref into an unknown key', { type: 'object', properties: { t: { foo: { type: 'string', pattern: '^(a+)+$' } }, s: { $ref: '#/properties/t/foo' } } }],
+    ['propertyNames', { type: 'object', propertyNames: { pattern: '^(a+)+$' } }],
+  ])('refuses a regular expression reached through %s, without running it', (_, configSchema) => {
+    for (const extra of [{ defaultConfig: { s: 'a'.repeat(40) + '!' } }, {}]) {
+      const started = Date.now()
+      const result = parseAgentManifest({ ...base, configSchema, ...extra })
+      expect(Date.now() - started).toBeLessThan(200)
+      expect(result.errors.join('\n')).toMatch(/^configSchema: (regular expressions are not allowed|pattern is not allowed)/)
+    }
+    // The deploy path refuses it too, for a row stored before this check.
+    expect(validateAgainstSchema(configSchema, { s: 'a'.repeat(40) + '!' }).join('\n')).toMatch(/not allowed/)
+  })
+
+  it('reports a $schema Ajv does not know as an error, not a crash', () => {
+    const configSchema = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object' }
+    expect(parseAgentManifest({ ...base, configSchema }).errors.join('\n')).toMatch(/^configSchema: schema cannot be used/)
   })
 
   it('reports a configSchema Ajv cannot compile as an error, not a crash', () => {
