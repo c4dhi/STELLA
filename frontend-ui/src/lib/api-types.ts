@@ -1886,6 +1886,95 @@ export type AccessTokenScope = 'mcp:read' | 'mcp:write'
 export type AccessTokenAccess = 'read' | 'read_write'
 export type AccessTokenExpiryDays = 7 | 30 | 90 | 365
 
+// ============================================================================
+// Connectors: outside MCP servers the user's agents may call (STELLA as client)
+// ============================================================================
+
+export type ConnectorAuthType = 'bearer' | 'none'
+export type ConnectorStatus = 'untested' | 'ok' | 'error'
+
+export interface ConnectorTool {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
+/** A connector as the API returns it. The credential is never included. */
+export interface Connector {
+  id: string
+  name: string
+  handle: string
+  kind: 'mcp'
+  url: string
+  authType: ConnectorAuthType
+  hasCredential: boolean
+  status: ConnectorStatus
+  lastError: string | null
+  lastCheckedAt: string | null
+  tools: ConnectorTool[] | null
+  serverInfo: { name?: string; version?: string; protocolVersion?: string } | null
+  /** Projects whose members may bind this connector when they deploy there. */
+  sharedWith: { projectId: string; projectName: string }[]
+  createdAt: string
+  updatedAt: string
+}
+
+/** A connector the user may bind in one project: their own, or shared with it. */
+export interface AvailableConnector {
+  id: string
+  name: string
+  handle: string
+  kind: 'mcp'
+  url: string
+  status: ConnectorStatus
+  tools: ConnectorTool[] | null
+  owned: boolean
+  ownerName: string | null
+}
+
+/** A connector slot an agent declares in configSchema['x-stella-connectors']. */
+export interface ConnectorSlot {
+  slot: string
+  kind: 'mcp'
+  required: boolean
+  label: string
+  description?: string
+  requiredTools: string[]
+}
+
+/** The connector slots an agent type declares. Malformed entries are ignored. */
+export function parseConnectorSlots(configSchema: Record<string, unknown> | null | undefined): ConnectorSlot[] {
+  const raw = configSchema?.['x-stella-connectors']
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object' && typeof s.slot === 'string' && typeof s.label === 'string')
+    .map(s => ({
+      slot: s.slot as string,
+      kind: 'mcp' as const,
+      required: s.required === true,
+      label: s.label as string,
+      description: typeof s.description === 'string' ? s.description : undefined,
+      requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools.filter((t): t is string => typeof t === 'string') : [],
+    }))
+}
+
+export interface CreateConnectorRequest {
+  name: string
+  handle: string
+  url: string
+  authType?: ConnectorAuthType
+  token?: string
+}
+
+export type UpdateConnectorRequest = Partial<CreateConnectorRequest>
+
+export interface ConnectorTestResult {
+  ok: boolean
+  errorCode?: string
+  error?: string
+  connector: Connector
+}
+
 export interface AccessToken {
   id: string
   name: string

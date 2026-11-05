@@ -1,0 +1,207 @@
+{
+  "$defs": {
+    "ActivityConfig": {
+      "additionalProperties": true,
+      "description": "One plan a companion may offer (``mode == 'companion'``).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "plan": {
+          "additionalProperties": true,
+          "description": "The plan, in the same shape as SessionConfig.plan",
+          "title": "Plan",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "plan"
+      ],
+      "title": "ActivityConfig",
+      "type": "object"
+    },
+    "PersonaConfig": {
+      "additionalProperties": true,
+      "description": "Who the agent is: the Persona snapshot resolved at deploy time.\n\nBy value, never by reference: editing a Persona reaches the next deployment,\nnever a running session.",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Id"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Icon"
+        },
+        "system_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Prompt"
+        },
+        "voice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Voice"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "ISO 639-1 code, e.g. 'de'",
+          "title": "Language"
+        },
+        "variables": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Values for {{persona.<key>}} placeholders in prompts and plan text",
+          "title": "Variables",
+          "type": "object"
+        },
+        "is_system_default": {
+          "default": false,
+          "description": "True when nobody chose a persona and the platform default was used",
+          "title": "Is System Default",
+          "type": "boolean"
+        }
+      },
+      "title": "PersonaConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "AGENT_CONFIG as stella-ai-agent-sdk reads it. The properties are the platform keys (PLATFORM_CONFIG_KEYS in src/agents/deploy-request.ts); every other key is a user setting described by the agent's configSchema. Generated from stella_agent_sdk.session_config.SessionConfig; do not edit by hand.",
+  "properties": {
+    "persona": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PersonaConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The deployed Persona; absent for deployments made before personas"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "plan",
+            "companion"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "'companion' converses and offers available_plans; absent or 'plan' follows `plan`",
+      "title": "Mode"
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The plan to follow (plan mode). A string is a plan id the agent resolves itself",
+      "title": "Plan"
+    },
+    "available_plans": {
+      "description": "Companion mode: the activities it may offer",
+      "items": {
+        "$ref": "#/$defs/ActivityConfig"
+      },
+      "title": "Available Plans",
+      "type": "array"
+    },
+    "pipeline_config": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The Agent Configurator's saved configuration, snapshotted (features.configurator)",
+      "title": "Pipeline Config"
+    }
+  },
+  "title": "AgentSessionConfig",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stella.c4dhi.org/schemas/agent-session-config.schema.json"
+}

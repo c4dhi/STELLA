@@ -57,8 +57,7 @@ Environment Variables (set by session-management-server):
     TTS_SERVICE_ADDRESS: External TTS service address (gRPC)
 """
 
-from importlib.metadata import PackageNotFoundError, version
-
+from stella_agent_sdk._version import SDK_VERSION
 from stella_agent_sdk.messages.types import (
     InputType,
     OutputType,
@@ -73,6 +72,20 @@ from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.agent.base import BaseAgent
 from stella_agent_sdk.run import run_agent_from_env
 from stella_agent_sdk.services.history_client import HistoryClient, HistoryClientError
+from stella_agent_sdk.services.connectors_client import (
+    ConnectorError,
+    ConnectorInfo,
+    ConnectorsClient,
+    ConnectorTool,
+)
+from stella_agent_sdk.session_config import (
+    ActivityConfig,
+    PersonaConfig,
+    SessionConfig,
+)
+from stella_agent_sdk.participants import NON_HUMAN_PREFIXES, is_human_participant
+from stella_agent_sdk.plan.runtime import PlanRuntime
+from stella_agent_sdk.platform_env import PLATFORM_ENV, PlatformEnvVar
 from stella_agent_sdk.progress import (
     ExecutionMode,
     ItemStatus,
@@ -105,12 +118,27 @@ from stella_agent_sdk.tools import (
     ToolExecutor,
 )
 
-try:
-    __version__ = version("stella-ai-agent-sdk")
-except PackageNotFoundError:
-    __version__ = "0.0.0+unknown"
+__version__ = SDK_VERSION
 
 __all__ = [
+    "__version__",
+    # Session config (AGENT_CONFIG, typed)
+    "SessionConfig",
+    "PersonaConfig",
+    "ActivityConfig",
+    # Participants
+    "NON_HUMAN_PREFIXES",
+    "is_human_participant",
+    # Plan runtime (state machine + its tools)
+    "PlanRuntime",
+    # SDK-owned environment variables
+    "PLATFORM_ENV",
+    "PlatformEnvVar",
+    # Connectors (outside MCP servers via the backend)
+    "ConnectorError",
+    "ConnectorInfo",
+    "ConnectorsClient",
+    "ConnectorTool",
     # Message types
     "InputType",
     "OutputType",

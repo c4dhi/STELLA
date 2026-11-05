@@ -100,6 +100,8 @@ export interface RegisterAgentRequest {
   agentType: string;
   agentVersion: string;
   capabilities?: Record<string, string>;
+  // stella-ai-agent-sdk version the agent runs; empty from SDKs before 0.10.
+  sdkVersion?: string;
 }
 
 // Registration response

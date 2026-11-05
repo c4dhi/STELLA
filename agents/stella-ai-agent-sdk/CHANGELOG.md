@@ -11,6 +11,19 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Releases as 0.10.0 (`pyproject.toml` is already bumped). The platform contract: an agent declares itself in `agent.yaml`, uses the SDK, and needs no STELLA-side code or knowledge of STELLA internals.
+
+### Added
+
+- **Identity from the platform.** `BaseAgent` registers under `AGENT_TYPE` (the slug STELLA deployed and waits for) and `AGENT_VERSION`, falling back to the class name and `1.0.0` outside STELLA. Agents should stop setting `_agent_type`/`_agent_version`: a type that does not match the slug fails registration with "No pending session"
+- **`SessionConfig`**: `AGENT_CONFIG`, typed, as `self.session` (with `self.persona` and `self.plan`). The platform keys are typed: `persona`, `mode`, `plan`, `available_plans` and `pipeline_config`, mirroring `PLATFORM_CONFIG_KEYS` in the backend's `src/agents/deploy-request.ts`, which owns the list (a test checks the two agree). Every other key is a user setting from `configSchema`, with `defaultConfig` already merged in: `self.session.config`. A malformed platform key is logged as a warning and ignored. `on_session_start` still gets the plain dict. JSON Schema for the backend: `contracts/agent-session-config.schema.json`
+- **`self.plan_runtime`** (opt-in): one session's `StateMachineClient` from `STATE_MACHINE_ADDRESS` (default `session-management-server:50051`, override with `self.state_machine_address`), the plan loaded into it, and a `ToolRegistry` with the state machine tools. Nothing connects until `await self.plan_runtime.start(plan)`; `run_agent_from_env` closes it at teardown. stella-v2 and stella-light use it
+- **Public room APIs** for agents that drive their own loop: `await self.wait_for_participant(timeout=None)` (first person in the room; `human_participants()`, `is_human_participant()`, `NON_HUMAN_PREFIXES`), `await self.publish_progress(progress)` (also re-sent to late joiners), `await self.complete_session(reason)` (completion overlay, stops the loop) and `record_message_processed()`. On `AudioPipeline`: `publish_data()` and `participant_identities()`
+- **SDK-owned env vars** declared once in `stella_agent_sdk.platform_env` (name, description, default, group): `INTERRUPT_MODE`, `TRANSCRIPT_DEBOUNCE_MS`, `BARGE_IN_*`, `STELLA_LANGUAGE`, `TTS_*`, `STELLA_TTS_*`, `STELLA_TELEPROMPTER_ENABLED`, `STELLA_EMOTION_TAGS_ENABLED`. Exported as `contracts/sdk-platform-env.json` for the backend and UI to merge with what a manifest declares. Agents can drop them from `agent.yaml` once the backend merges this list
+- **SDK version reporting.** `RegisterAgentRequest.sdk_version` (proto field 4) carries the installed `stella-ai-agent-sdk` version (`self.sdk_version`, also in `get_health_status()`), so STELLA can refuse SDKs older than it supports
+- `python -m stella_agent_sdk.contracts` regenerates both contract files; a test fails when they are stale or when the SDK reads a tuning env var that is not declared
+- `self.connectors` on `BaseAgent`: call outside MCP servers the user bound to the deployment ("connectors") through STELLA's backend, which keeps the credentials. `await self.connectors.list()`, `list_tools(handle)` and `call_tool(handle, tool, args)`. `call_tool` returns the tool's structured content (or its parsed text). Failures raise `ConnectorError`, whose `code` says what went wrong and whose `retryable` says whether trying again can help. `run_agent` wires it from `STELLA_CONNECTOR_TOKEN`; without connectors, `list()` is `[]`. New gRPC contract `proto/connectors.proto` (`ConnectorService`). See docs: Agent SDK → Connectors
+
 ## [0.9.0] - 2026-10-28
 
 Ships with STELLA 1.5.0. What changes for agent authors:

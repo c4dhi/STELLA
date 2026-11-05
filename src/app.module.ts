@@ -37,6 +37,7 @@ import { BackupModule } from './backup/backup.module.js';
 import { AccessTokensModule } from './access-tokens/access-tokens.module.js';
 import { McpModule } from './mcp/mcp.module.js';
 import { McpOAuthModule } from './mcp-oauth/mcp-oauth.module.js';
+import { ConnectorsModule } from './connectors/connectors.module.js';
 
 const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.local';
 
@@ -79,6 +80,7 @@ const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : 
     AccessTokensModule,
     McpModule,
     McpOAuthModule,
+    ConnectorsModule,
   ],
   controllers: [AppController],
   providers: [
