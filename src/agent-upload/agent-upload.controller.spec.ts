@@ -29,6 +29,14 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
       create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'new', ...data })),
       delete: jest.fn().mockResolvedValue({}),
     },
+    agentInstance: {
+      count: jest.fn().mockResolvedValue(0),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    project: { count: jest.fn().mockResolvedValue(0) },
+    envVarTemplate: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    agentConfiguration: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    $transaction: jest.fn().mockImplementation((ops: unknown) => Promise.all(ops as Promise<unknown>[])),
   }
   const pkg = {
     validatePackage: jest.fn().mockResolvedValue({ valid: true, manifest: m, errors: [], warnings: [] }),
@@ -75,7 +83,7 @@ describe('AgentUploadController identity and ownership', () => {
     expect(prisma.agentType.findMany.mock.calls[0][0].where).toEqual({ isBuiltIn: false, userId: 'u1' })
   })
 
-  const upload = { id: 'a1', slug: 'my-agent', isBuiltIn: false, packagePath: 'p', userId: 'owner' }
+  const upload = { id: 'a1', slug: 'my-agent', name: 'My agent', isBuiltIn: false, packagePath: 'p', userId: 'owner' }
 
   it.each([
     ['the owner', user('owner'), true],
@@ -99,6 +107,36 @@ describe('AgentUploadController identity and ownership', () => {
     if (allowed) await expect(run).resolves.toEqual({ success: true })
     else await expect(run).rejects.toThrow(ForbiddenException)
     expect(prisma.agentType.delete).toHaveBeenCalledTimes(allowed ? 1 : 0)
+  })
+
+  it('delete takes the type\'s templates and configurations with it, and the package last', async () => {
+    const { controller, prisma, storage } = makeUpload(upload)
+    const order: string[] = []
+    prisma.$transaction.mockImplementation(async (ops: unknown) => {
+      order.push('db')
+      return Promise.all(ops as Promise<unknown>[])
+    })
+    storage.delete.mockImplementation(async () => {
+      order.push('package')
+    })
+    await controller.deleteAgent('a1', user('owner') as any)
+    expect(prisma.envVarTemplate.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
+    expect(prisma.agentConfiguration.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
+    expect(prisma.agentInstance.updateMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' }, data: { agentTypeId: null } })
+    expect(order).toEqual(['db', 'package'])
+  })
+
+  it('delete refuses a type with a running agent or a public project, and keeps its package', async () => {
+    const running = makeUpload(upload)
+    running.prisma.agentInstance.count.mockResolvedValue(1)
+    await expect(running.controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('still has 1 running agent')
+    expect(running.prisma.agentType.delete).not.toHaveBeenCalled()
+    expect(running.storage.delete).not.toHaveBeenCalled()
+
+    const shared = makeUpload(upload)
+    shared.prisma.project.count.mockResolvedValue(2)
+    await expect(shared.controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('2 public projects use My agent')
+    expect(shared.storage.delete).not.toHaveBeenCalled()
   })
 
   it('treats an upload stored without an owner as admin-only', async () => {

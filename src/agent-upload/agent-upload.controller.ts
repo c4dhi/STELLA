@@ -337,13 +337,38 @@ export class AgentUploadController {
 
     assertOwnsAgent(agentType, req)
 
-    // Delete stored package
+    // Refuse while it is in use, rather than failing on a foreign key (a 500).
+    const [running, publicProjects] = await Promise.all([
+      this.prisma.agentInstance.count({
+        where: { agentTypeId: id, status: { in: ['STARTING', 'RUNNING'] } },
+      }),
+      this.prisma.project.count({ where: { publicAgentTypeId: id } }),
+    ])
+    if (running > 0) {
+      throw new BadRequestException(
+        `${agentType.name} still has ${running} running agent${running === 1 ? '' : 's'}. Stop ${running === 1 ? 'it' : 'them'}, then delete it`,
+      )
+    }
+    if (publicProjects > 0) {
+      throw new BadRequestException(
+        `${publicProjects} public project${publicProjects === 1 ? ' uses' : 's use'} ${agentType.name}. Pick another agent there, then delete it`,
+      )
+    }
+
+    // Env-var templates and configurations are scoped to this one type, so
+    // they go with it. Stopped agents keep their record (and transcript) and
+    // only lose the link; build logs cascade.
+    await this.prisma.$transaction([
+      this.prisma.envVarTemplate.deleteMany({ where: { agentTypeId: id } }),
+      this.prisma.agentConfiguration.deleteMany({ where: { agentTypeId: id } }),
+      this.prisma.agentInstance.updateMany({ where: { agentTypeId: id }, data: { agentTypeId: null } }),
+      this.prisma.agentType.delete({ where: { id } }),
+    ])
+
+    // The package last: if the row could not be deleted, it is still there.
     if (agentType.packagePath) {
       await this.storageService.delete(agentType.packagePath)
     }
-
-    // Delete from database (cascades to build logs)
-    await this.prisma.agentType.delete({ where: { id } })
 
     this.logger.log(`Deleted agent type: ${agentType.slug}`)
 
