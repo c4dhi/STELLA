@@ -79,7 +79,8 @@ function upgradeFromV1(raw: Record<string, unknown>): NormalizeResult {
 
   const hasPlans = capabilities.includes('plans')
   const hasCompanion = capabilities.includes('companion')
-  const features: Record<string, unknown> = { persona: true, configurator }
+  const features: Record<string, unknown> = { persona: true }
+  if (configurator) features.configurator = { required: false }
   if (hasPlans || requiresPlan) {
     // 1.0 refused requires-plan without the plans capability; keep that error by
     // leaving capabilities as declared, so the 2.0 rule reports it.

@@ -38,7 +38,9 @@ features:
   plans:
     required: true
     modes: [plan, companion]
-  configurator: true
+  # Every deployment runs a Configurator configuration (config.pipeline_config).
+  configurator:
+    required: true
 
 env:
   required:

@@ -40,7 +40,10 @@ describe('built-in agents on manifest 2.0', () => {
     const v2 = parse(read(path.join(ROOT, 'agents', slug, 'agent.yaml')))
     expect(v2.warnings).toEqual([])
     expect(v1.warnings.join('\n')).toContain('Manifest version 1.0 is deprecated')
-    expect(v1.manifest).toEqual(v2.manifest)
+    // 1.0 could not say a configuration is required (STELLA hard-coded it for
+    // stella-v2); that is the one thing the 2.0 file adds.
+    const v2Features = { ...v2.manifest!.features, configurator: { required: false } }
+    expect(v1.manifest).toEqual({ ...v2.manifest, features: v2Features })
   })
 
   it.each(BUILTIN)('%s: the configSchema column stays what readers of 1.0 flags expect', (slug) => {
@@ -91,7 +94,7 @@ describe('one set of defaults', () => {
 
   it('an agent that declares nothing gets the defaults', () => {
     const { manifest } = parseAgentManifest(base)
-    expect(manifest!.features).toEqual({ persona: true, configurator: false })
+    expect(manifest!.features).toEqual({ persona: true })
     expect(manifest!.env).toEqual({ required: [], optional: [] })
     const row = manifestToAgentTypeData(manifest!, null)
     expect([row.resourceMemory, row.resourceCpu]).toEqual([RESOURCE_DEFAULTS.memory.limit, RESOURCE_DEFAULTS.cpu.limit])
@@ -125,6 +128,17 @@ describe('manifest 2.0 rules', () => {
 
   it('needs a pipelineSchema for the configurator', () => {
     expect(errors({ features: { configurator: true } })).toContain('features.configurator needs a pipelineSchema')
+  })
+
+  it('reads configurator: true as an optional configuration', () => {
+    const pipelineSchema = { nodes: [], edges: [], thresholds: [] }
+    const on = parseAgentManifest({ ...base, pipelineSchema, features: { configurator: true } })
+    const required = parseAgentManifest({ ...base, pipelineSchema, features: { configurator: { required: true } } })
+    const off = parseAgentManifest({ ...base, features: { configurator: false } })
+    expect([on.errors, required.errors, off.errors]).toEqual([[], [], []])
+    expect(on.manifest!.features.configurator).toEqual({ required: false })
+    expect(required.manifest!.features.configurator).toEqual({ required: true })
+    expect(off.manifest!.features.configurator).toBeUndefined()
   })
 
   it('refuses a request above its limit, and limits above the maximum', () => {

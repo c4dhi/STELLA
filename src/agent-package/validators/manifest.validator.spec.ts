@@ -71,7 +71,7 @@ sdk:
     expect(result.valid).toBe(true)
     expect(result.errors).toEqual([])
     // 1.0 flags land in their 2.0 blocks; the injected plan is not a user setting.
-    expect(result.manifest?.features).toEqual({ persona: true, configurator: true, plans: { required: true, modes: ['plan'] } })
+    expect(result.manifest?.features).toEqual({ persona: true, configurator: { required: false }, plans: { required: true, modes: ['plan'] } })
     expect(result.manifest?.env).toEqual({
       required: ['OPENAI_API_KEY'],
       optional: [{ name: 'INTERRUPT_MODE', description: 'Optional override', default: 'none' }],
@@ -453,7 +453,7 @@ configSchema:
 `)
 
     expect(result.valid).toBe(true)
-    expect(result.manifest?.features.configurator).toBe(false)
+    expect(result.manifest?.features.configurator).toBeUndefined()
     expect(result.warnings.join('\n')).toContain('has no effect without a pipelineSchema')
   })
 

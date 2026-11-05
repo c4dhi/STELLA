@@ -79,8 +79,15 @@ const featuresSchema = z
       })
       .strict()
       .optional(),
-    /** Deployments pick an AgentConfiguration built in the Configurator from pipelineSchema. */
-    configurator: z.boolean().default(false),
+    /**
+     * Deployments pick an AgentConfiguration built in the Configurator from
+     * pipelineSchema, which the agent receives as config.pipeline_config.
+     * `required`: every deployment needs one. `true` is short for `{ required: false }`.
+     */
+    configurator: z
+      .union([z.boolean(), z.object({ required: z.boolean().default(false) }).strict()])
+      .transform((value) => (value === true ? { required: false } : value || undefined))
+      .optional(),
   })
   .strict()
 
@@ -381,7 +388,7 @@ export const agentManifestSchema = z
       })
       .strict(),
     capabilities: z.array(z.enum(CAPABILITIES)).default([]),
-    features: featuresSchema.default({ persona: true, configurator: false }),
+    features: featuresSchema.default({ persona: true }),
     env: envSchema.default({ required: [], optional: [] }),
     connectors: connectorsSchema.default([]),
     image: z

@@ -46,7 +46,7 @@ describe('stella-light-agent manifest', () => {
   });
 
   it('marks the config schema as configurator-enabled', () => {
-    expect(result.manifest?.features.configurator).toBe(true);
+    expect(result.manifest?.features.configurator).toEqual({ required: false });
   });
 
   it('declares a runtime-variable palette and a prompt-compiler version', () => {

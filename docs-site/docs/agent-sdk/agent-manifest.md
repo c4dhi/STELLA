@@ -38,7 +38,8 @@ features:
   # plans:                           # only for agents that run plans
   #   required: true                 # every deployment needs a plan
   #   modes: [plan, companion]       # how a session may run them
-  configurator: false                # deployments pick a Configurator configuration
+  # configurator:                    # deployments pick a Configurator configuration
+  #   required: true                 # every deployment needs one (`true` = optional)
 
 env:
   required:                          # deploy is refused without these
@@ -88,7 +89,7 @@ sdk:
 | `version` | The manifest format. Write `"2.0"`. |
 | `metadata` | Name, slug, version, description, icon, tags, author. `deprecated` and `deprecationNote` keep an agent deployable but demote it in the gallery. |
 | `capabilities` | What the agent can do. They decide which of its experts it publishes (see below). Unknown values are refused. |
-| `features` | Which platform features STELLA wires up for the agent. `persona` (default `true`), `plans` (`required`, `modes`) and `configurator` (default `false`). |
+| `features` | Which platform features STELLA wires up for the agent. `persona` (default `true`), `plans` (`required`, `modes`) and `configurator` (`required`; `true` is short for an optional configuration). Leave a block out to turn the feature off. |
 | `env` | Environment variables the deploying user provides: `required` names, and `optional` entries with a `description` and a `default`. |
 | `connectors` | Outside MCP servers (Connectors) the agent reaches through the SDK by slot name. Users can always offer extra ones on top. |
 | `image` | `dockerfile` (default `Dockerfile`). Uploaded agents are always built by STELLA from it. |
@@ -123,7 +124,7 @@ Manifests with `version: "1.0"` still work. STELLA upgrades them on read, and up
 |---|---|
 | `configSchema.x-stella-env-vars` | `env.required` |
 | `configSchema.x-stella-optional-env-vars` | `env.optional` |
-| `configSchema.x-stella-supports-configurator` | `features.configurator`. This is ignored, with a warning, when there is no `pipelineSchema`. |
+| `configSchema.x-stella-supports-configurator` | `features.configurator: true` (optional). This is ignored, with a warning, when there is no `pipelineSchema`. |
 | `configSchema.x-stella-connectors` | `connectors` |
 | a `configSchema` property with `x-stella-requires-plan` | `features.plans.required: true`. The property itself is dropped, since STELLA injects the plan. |
 | capability `plans` / `companion` | `features.plans` / its `companion` mode |

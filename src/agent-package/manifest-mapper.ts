@@ -70,7 +70,7 @@ export function toLegacyConfigSchema(manifest: AgentManifest): Record<string, un
     properties,
     'x-stella-env-vars': manifest.env.required,
     'x-stella-optional-env-vars': manifest.env.optional,
-    'x-stella-supports-configurator': manifest.features.configurator,
+    'x-stella-supports-configurator': !!manifest.features.configurator,
     'x-stella-connectors': manifest.connectors,
   }
 }

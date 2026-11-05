@@ -86,10 +86,6 @@
       }
     },
     "features": {
-      "default": {
-        "persona": true,
-        "configurator": false
-      },
       "type": "object",
       "properties": {
         "persona": {
@@ -121,8 +117,21 @@
           "additionalProperties": false
         },
         "configurator": {
-          "default": false,
-          "type": "boolean"
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "required": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         }
       },
       "additionalProperties": false
