@@ -92,6 +92,7 @@ jobs:
             src/agents/agent-requirements.spec.ts \
             src/agent-package/sdk-support.spec.ts \
             src/agents/deploy-request.spec.ts \
+            src/agents/refused-restart.spec.ts \
             src/agents/no-agent-slugs.spec.ts \
             src/agents/plan-resolution.spec.ts \
             src/agent-type/deprecation.spec.ts \

@@ -934,37 +934,6 @@ export class AgentsService {
 
     this.logger.log(`Restarting agent ${id} (keeping same ID)`);
 
-    // Delete Kubernetes resources (pod + secret) without updating DB status
-    try {
-      if (agent.podName) {
-        await this.k8s.deletePod(agent.podName);
-      }
-      if (agent.secretName) {
-        await this.k8s.deleteSecret(agent.secretName);
-      }
-    } catch (error) {
-      this.logger.error(`K8s cleanup failed for agent ${id}: ${error.message}`);
-    }
-
-    // Update agent status to STARTING and clear old pod references
-    // Clearing podName is critical: syncAgentStatus() would otherwise query K8s
-    // for the deleted pod, get null back, and overwrite STARTING → STOPPED
-    await this.prisma.agentInstance.update({
-      where: { id },
-      data: {
-        status: AgentStatus.STARTING,
-        stoppedAt: null,
-        podName: null,
-        secretName: null,
-        configMapName: null,
-      },
-    });
-
-    // Emit SSE event so frontend updates in real-time
-    if (this.sessionsService) {
-      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agentTypeOrDefault(agent.agentType));
-    }
-
     // Get environment variables
     const livekitApiKey = this.configService.get<string>('LIVEKIT_API_KEY');
     const livekitApiSecret = this.configService.get<string>('LIVEKIT_API_SECRET');
@@ -995,18 +964,7 @@ export class AgentsService {
       );
     }
 
-    // Register pending session so gRPC agent registration can match
     const agentType = agentTypeOrDefault(agent.agentType);
-    if (this.agentServerService) {
-      const config: Record<string, string> = {
-        sessionId: agent.sessionId,
-        roomName: agent.session.room.livekitRoomName,
-        projectId: agent.session.projectId,
-      };
-      this.agentServerService.registerPendingSession(agent.sessionId, agentType, config);
-      this.logger.log(`Registered pending session ${agent.sessionId} for restarted agent type: ${agentType}`);
-    }
-
     // Look up AgentType from DB for per-agent resource limits
     const agentTypeRecord = await this.prisma.agentType.findUnique({
       where: { slug: agentType },
@@ -1054,6 +1012,51 @@ export class AgentsService {
     // The same check as a new deploy: a template that lost a required key, or
     // an agent type whose manifest now asks for more, fails here with a 400.
     assertDeployRequest(agentType, requirements, agentConfig, merged);
+
+    // Only now take the running agent down: every check above refuses without
+    // touching it, so a refused restart leaves the pod as it was.
+    // Delete Kubernetes resources (pod + secret) without updating DB status
+    try {
+      if (agent.podName) {
+        await this.k8s.deletePod(agent.podName);
+      }
+      if (agent.secretName) {
+        await this.k8s.deleteSecret(agent.secretName);
+      }
+    } catch (error) {
+      this.logger.error(`K8s cleanup failed for agent ${id}: ${error.message}`);
+    }
+
+    // Update agent status to STARTING and clear old pod references
+    // Clearing podName is critical: syncAgentStatus() would otherwise query K8s
+    // for the deleted pod, get null back, and overwrite STARTING → STOPPED
+    await this.prisma.agentInstance.update({
+      where: { id },
+      data: {
+        status: AgentStatus.STARTING,
+        stoppedAt: null,
+        podName: null,
+        secretName: null,
+        configMapName: null,
+      },
+    });
+
+    // Emit SSE event so frontend updates in real-time
+    if (this.sessionsService) {
+      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agentTypeOrDefault(agent.agentType));
+    }
+
+    // Register pending session so gRPC agent registration can match
+    if (this.agentServerService) {
+      const config: Record<string, string> = {
+        sessionId: agent.sessionId,
+        roomName: agent.session.room.livekitRoomName,
+        projectId: agent.session.projectId,
+      };
+      this.agentServerService.registerPendingSession(agent.sessionId, agentType, config);
+      this.logger.log(`Registered pending session ${agent.sessionId} for restarted agent type: ${agentType}`);
+    }
+
     // Unlike the rest of the env, the platform playback default is read fresh:
     // a woken session is a new pipeline, so it takes the current default.
     const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, id);
