@@ -168,9 +168,15 @@ spec:
         # Workspace path for agent image building (agents are in stella-backend/agents/)
         - name: AGENT_WORKSPACE_ROOT
           value: "/workspace/stella-backend"
+        # Uploaded agent packages, on a volume so builds still find them
+        # after the pod is replaced (k8s/02-agent-packages-pvc.yaml)
+        - name: AGENT_STORAGE_PATH
+          value: "/data/agent-packages"
         # Server starts directly (migrations handled by init container)
         command: ["node", "dist/src/main"]
         volumeMounts:
+        - name: agent-packages
+          mountPath: /data/agent-packages
         # Mount Docker socket for building images
         - name: docker-sock
           mountPath: /var/run/docker.sock
@@ -220,6 +226,9 @@ spec:
           periodSeconds: 5
           failureThreshold: 12
       volumes:
+      - name: agent-packages
+        persistentVolumeClaim:
+          claimName: agent-packages-pvc
       # Docker socket from host (for building images)
       - name: docker-sock
         hostPath:
