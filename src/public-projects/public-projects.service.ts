@@ -43,6 +43,7 @@ interface PublicAgentConfig {
   personaId?: string;
   envVarTemplateId?: string;
   envVars?: Record<string, string>;
+  connectorBindings?: Array<{ connectorId: string; slot?: string; handle?: string }>;
 }
 
 @Injectable()
@@ -231,6 +232,7 @@ export class PublicProjectsService {
         personaId: agentConfig?.personaId,
         envVarTemplateId: agentConfig?.envVarTemplateId,
         envVars: agentConfig?.envVars,
+        connectorBindings: agentConfig?.connectorBindings,
       },
       ownerId,
     );
@@ -297,6 +299,9 @@ export class PublicProjectsService {
       personaId: agentConfig?.personaId || null,
       envVarTemplateId: agentConfig?.envVarTemplateId || null,
       envVars: agentConfig?.envVars || {},
+      connectorBindings: agentConfig?.connectorBindings ?? [],
+      // Wake recreates it as this member: public agents run as the owner.
+      deployedByUserId: ownerId,
     };
 
     // Create session with on_demand mode - agent will be spawned when human joins
@@ -423,6 +428,7 @@ export class PublicProjectsService {
             personaId: agentConfig?.personaId,
             envVarTemplateId: agentConfig?.envVarTemplateId,
             envVars: agentConfig?.envVars,
+            connectorBindings: agentConfig?.connectorBindings,
           },
           ownerId,
         );

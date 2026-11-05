@@ -29,7 +29,7 @@ import { AgentConfigurationsService } from '../agent-configurations/agent-config
 import { PersonasService } from '../personas/personas.service.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
 import { ConnectorsService } from '../connectors/connectors.service.js';
-import { readBindings } from '../connectors/connector-bindings.util.js';
+import { readBindings, type BindingRequest } from '../connectors/connector-bindings.util.js';
 import { CONNECTOR_TOKEN_ENV, issueAgentConnectorToken } from '../connectors/agent-connector-token.util.js';
 
 /**
@@ -1155,6 +1155,28 @@ export class AgentsService {
     // Delegate to centralized delete logic (handles stopping if needed)
     await this.deleteAgent(id);
     return { message: 'Agent deleted successfully' };
+  }
+
+  /**
+   * Check connector bindings for an agent type without deploying it: the same
+   * rules as create() (each connector the user's own or shared with the
+   * project, the declared slots, required slots bound). Used when a public
+   * project's setup is saved, so a bad binding fails there and not when a
+   * visitor joins.
+   */
+  async checkConnectorBindings(
+    agentTypeId: string,
+    userId: string,
+    projectId: string,
+    requests: BindingRequest[] | undefined,
+  ) {
+    const row = await this.prisma.agentType.findUnique({
+      where: { id: agentTypeId },
+      select: AGENT_TYPE_MANIFEST_SELECT,
+    });
+    if (!row) throw new NotFoundException(`Agent type with ID ${agentTypeId} not found`);
+    const requirements = resolveAgentRequirements(manifestOfAgentType(row));
+    return this.connectorsService.resolveBindingsForDeploy(userId, projectId, requests, requirements.connectors);
   }
 
   /**

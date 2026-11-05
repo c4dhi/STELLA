@@ -10,8 +10,11 @@ import {
   Min,
   Max,
   MaxLength,
+  IsArray,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ConnectorBindingDto } from '../../agents/dto/create-agent.dto.js';
 
 /**
  * Agent configuration for public projects
@@ -38,6 +41,16 @@ export class PublicAgentConfigDto {
   @IsObject()
   pipelineConfig?: Record<string, unknown>;
 
+  /** A saved Agent Configuration, resolved by id at spawn. */
+  @IsOptional()
+  @IsUUID()
+  agentConfigurationId?: string;
+
+  /** The persona picked in the setup; absent = the system default. */
+  @IsOptional()
+  @IsUUID()
+  personaId?: string;
+
   @IsOptional()
   @IsUUID()
   envVarTemplateId?: string;
@@ -45,6 +58,18 @@ export class PublicAgentConfigDto {
   @IsOptional()
   @IsObject()
   envVars?: Record<string, string>;
+
+  /**
+   * Connectors every public session's agent may call, as on a normal deploy.
+   * Public agents are deployed as the project owner, so each must be the
+   * owner's own or shared with the project. Checked when saved and on deploy.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => ConnectorBindingDto)
+  connectorBindings?: ConnectorBindingDto[];
 }
 
 /**

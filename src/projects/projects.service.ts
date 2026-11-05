@@ -322,6 +322,23 @@ export class ProjectsService {
       if (dto.maxSessionDurationSeconds !== undefined) {
         updateData.publicMaxSessionDurationSeconds = dto.maxSessionDurationSeconds;
       }
+      // Public agents are deployed as the owner: check the connectors now, so
+      // a binding the owner cannot use fails here and not when a visitor joins.
+      const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
+      if (dto.agentConfig !== undefined && agentTypeId) {
+        const owner = await this.prisma.projectMembership.findFirst({
+          where: { projectId: id, role: 'OWNER' },
+          select: { userId: true },
+        });
+        if (owner) {
+          await this.agentsService.checkConnectorBindings(
+            agentTypeId,
+            owner.userId,
+            id,
+            dto.agentConfig.connectorBindings,
+          );
+        }
+      }
     } else {
       // When making private, optionally clear public config
       // Keep the publicToken so it can be re-enabled without losing the link
