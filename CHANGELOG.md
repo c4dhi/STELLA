@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP: `platform_settings_get` and `platform_settings_update`** for system admins. An assistant can read the platform switches and turn "Review uploaded agents" on or off. Nobody else sees the two tools, and a call by name answers 403. The MCP switch and the TTS playback default stay UI-only.
+
 ### Fixed
 
 - **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time. Now an uploaded agent deploys once a system admin approves it, and its pod runs the build's own start command. A rejected agent never deploys, including on restart or wake after auto-pause.

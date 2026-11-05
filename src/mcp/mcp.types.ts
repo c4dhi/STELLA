@@ -34,6 +34,11 @@ export interface McpToolDefinition<
   title: string;
   description: string;
   scope: PatScope;
+  /**
+   * Only for system admins: not listed to anyone else, and refused (403) if
+   * called by name. The same rule as SystemAdminGuard on the REST side.
+   */
+  systemAdminOnly?: boolean;
   input: Shape;
   annotations: ToolAnnotations;
   // A JSON object: MCP structuredContent must be an object, so lists are wrapped.

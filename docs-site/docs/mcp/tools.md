@@ -374,3 +374,25 @@ Stop an agent and remove its pod. The agent and its messages stay, and `agents_r
 **Inputs:** `agentId`.
 
 **Returns:** the stopped agent, as `agents_get` shows it. Its `healthState` may still read `ready` ([#807](https://github.com/c4dhi/STELLA/issues/807)).
+
+## Platform settings (system admins)
+
+The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets `403` calling them by name.
+
+### `platform_settings_get` · `mcp:read`
+
+**Inputs:** none.
+
+**Returns:** `agentReviewRequired`, `mcpEnabled`, `ttsPlayback` (`null` when no default is set).
+
+### `platform_settings_update` · `mcp:write`
+
+Turn **Review uploaded agents** on or off. While it is on (the default), no uploaded agent deploys until a system admin approves it, and unreviewed agents stop coming back on restart or wake. While it is off, a user can deploy their own upload as soon as it is built. The MCP switch and the TTS playback default can only be changed in the UI.
+
+**Inputs:**
+
+| Name | Type | |
+|---|---|---|
+| `agentReviewRequired` | boolean | Required |
+
+**Returns:** the settings, as `platform_settings_get` shows them.

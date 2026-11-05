@@ -12,6 +12,7 @@ on:
       - 'src/agent-build/**'
       - 'src/agent-image/**'
       - 'src/platform-settings/**'
+      - 'src/mcp/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/agent-validation-unit-tests.yml'
@@ -26,6 +27,7 @@ on:
       - 'src/agent-build/**'
       - 'src/agent-image/**'
       - 'src/platform-settings/**'
+      - 'src/mcp/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/agent-validation-unit-tests.yml'
@@ -68,4 +70,5 @@ jobs:
             src/agent-build/agent-build.safety.spec.ts \
             src/agent-image/agent-image.service.spec.ts \
             src/platform-settings/agent-review.spec.ts \
-            src/platform-settings/platform-settings.spec.ts
+            src/platform-settings/platform-settings.spec.ts \
+            src/mcp/mcp.spec.ts

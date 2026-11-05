@@ -25,6 +25,7 @@ import { AgentsTools } from './tools/agents.tools.js';
 import { CatalogTools } from './tools/catalog.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
+import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 
 // Adding a domain: write a *.tools.ts provider and list it here.
@@ -35,6 +36,7 @@ const TOOL_PROVIDERS = [
   AgentConfigurationsTools,
   SessionsTools,
   AgentsTools,
+  PlatformSettingsTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */

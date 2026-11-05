@@ -18,6 +18,7 @@ import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
+import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { CreatePersonaDto } from '../personas/dto/create-persona.dto.js';
 import { CreateAgentDto } from '../agents/dto/create-agent.dto.js';
 import { CreateSessionDto } from '../sessions/dto/create-session.dto.js';
@@ -42,6 +43,19 @@ const READ_WRITE: McpAuthContext = {
 };
 
 function setup() {
+  const settingsView = (agentReviewRequired: boolean) => ({
+    ttsPlayback: null,
+    updatedAt: null,
+    updatedBy: null,
+    pinnedDeployments: [{ agentId: 'other-project-agent' }],
+    mcpEnabled: true,
+    agentReviewRequired,
+    hardwareFit: {},
+  });
+  const platformSettings = {
+    getView: jest.fn(async () => settingsView(true)),
+    setAgentReviewRequired: jest.fn(async (raw: boolean, _userId: string) => settingsView(raw)),
+  };
   const personas = {
     findAllForUser: jest.fn(async () => [
       {
@@ -294,12 +308,14 @@ function setup() {
       agentImages as any,
       access,
     ),
+    new PlatformSettingsTools(platformSettings as any),
   ];
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
     (factory as any).tools.find((t: any) => t.name === name);
   return {
     factory,
+    platformSettings,
     personas,
     plans,
     configurations,
@@ -718,6 +734,55 @@ describe('MCP session and agent tools', () => {
         agentTypeId: 'at1',
       },
     ]);
+  });
+});
+
+describe('MCP platform settings tools (system admins only)', () => {
+  const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
+  const ADMIN_READ: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read'] };
+  const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
+  const SETTINGS_TOOLS = ['platform_settings_get', 'platform_settings_update'];
+
+  it('lists them only to a system admin, each with its scope', async () => {
+    const { factory } = setup();
+    expect(factory.toolNamesFor(READ_WRITE)).toEqual(expect.not.arrayContaining(['platform_settings_get']));
+    expect(factory.toolNamesFor(READ_WRITE)).toEqual(expect.not.arrayContaining(['platform_settings_update']));
+    expect(factory.toolNamesFor(ADMIN_READ)).toContain('platform_settings_get');
+    expect(factory.toolNamesFor(ADMIN_READ)).not.toContain('platform_settings_update');
+    expect(factory.toolNamesFor(ADMIN_RW)).toEqual(expect.arrayContaining(SETTINGS_TOOLS));
+    const listed = (await (await connect(factory, READ_WRITE)).listTools()).tools.map((t) => t.name);
+    expect(listed.filter((n) => SETTINGS_TOOLS.includes(n))).toEqual([]);
+  });
+
+  it('refuses a non-admin who calls them by name, and records it', async () => {
+    const { factory, tool, platformSettings, audit } = setup();
+    for (const name of SETTINGS_TOOLS) {
+      const result: any = await factory.run(tool(name), { agentReviewRequired: false }, READ_WRITE);
+      expect(result.isError).toBe(true);
+      expect(parse(result).error.status).toBe(403);
+    }
+    expect(platformSettings.getView).not.toHaveBeenCalled();
+    expect(platformSettings.setAgentReviewRequired).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'platform_settings_update', success: false, errorCode: 'not_system_admin' }),
+    );
+  });
+
+  it('reads the switches without the cross-project deployment list', async () => {
+    const { factory, tool } = setup();
+    const result: any = await factory.run(tool('platform_settings_get'), {}, ADMIN_READ);
+    expect(result.structuredContent).toEqual({ agentReviewRequired: true, mcpEnabled: true, ttsPlayback: null });
+  });
+
+  it('turns review off as the admin and returns what _get shows', async () => {
+    const { factory, tool, platformSettings } = setup();
+    const result: any = await factory.run(
+      tool('platform_settings_update'),
+      { agentReviewRequired: false },
+      ADMIN_RW,
+    );
+    expect(platformSettings.setAgentReviewRequired).toHaveBeenCalledWith(false, 'admin-1');
+    expect(result.structuredContent).toEqual({ agentReviewRequired: false, mcpEnabled: true, ttsPlayback: null });
   });
 });
 
