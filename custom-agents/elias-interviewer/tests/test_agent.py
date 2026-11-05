@@ -11,8 +11,14 @@ CONFIG = {"elias": {"project_id": "p1"}}
 Q1, Q2, Q3 = (q["question"] for q in GUIDE["questions"])
 
 
+class _TestAgent(EliasInterviewerAgent):
+    # The SDK exposes `connectors` as a read-only property; a plain class
+    # attribute here lets each test hand in its own fake.
+    connectors = None
+
+
 def make_agent(connectors, audio, sm=None, checker=None):
-    agent = EliasInterviewerAgent(checker=checker or ScriptedChecker(), sm_client=sm or FakeStateMachine())
+    agent = _TestAgent(checker=checker or ScriptedChecker(), sm_client=sm or FakeStateMachine())
     agent.connectors = connectors
     agent._audio_pipeline = audio
     agent._participant_poll_s = 0.01
@@ -111,7 +117,7 @@ async def test_missing_project_id_and_missing_connectors_are_startup_errors():
     await agent.on_session_start("s", {"elias": {}})
     assert "project id" in agent._startup_error
 
-    agent = EliasInterviewerAgent(checker=ScriptedChecker(), sm_client=FakeStateMachine())
+    agent = _TestAgent(checker=ScriptedChecker(), sm_client=FakeStateMachine())  # SDK without connectors
     await agent.on_session_start("s", CONFIG)
     assert "connectors" in agent._startup_error
 
