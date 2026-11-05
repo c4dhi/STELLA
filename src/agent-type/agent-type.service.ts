@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentType, AgentValidationStatus } from '@prisma/client'
-import { manifestOfAgentType, resolveAgentRequirements, type AgentRequirements } from '../agents/agent-requirements.js'
+import { requirementsForListing, type AgentRequirements } from '../agents/agent-requirements.js'
 
 export interface AgentTypeInfo {
   id: string
@@ -87,11 +87,8 @@ export class AgentTypeService {
 
   /** One unreadable row must not take the whole gallery down; deploying it still fails with the reason. */
   private requirementsOf(type: AgentType): AgentRequirements | null {
-    try {
-      return resolveAgentRequirements(manifestOfAgentType(type))
-    } catch (error) {
-      this.logger.warn(`Agent type ${type.slug}: ${(error as Error).message}`)
-      return null
-    }
+    const { requirements, error } = requirementsForListing(type)
+    if (error) this.logger.warn(`Agent type ${type.slug}: ${error}`)
+    return requirements
   }
 }

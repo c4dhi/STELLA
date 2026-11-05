@@ -114,6 +114,21 @@ export function manifestOfAgentType(row: AgentTypeManifestSource): AgentManifest
   return result.manifest
 }
 
+/**
+ * Requirements for a listing: an unreadable row gives null and the reason, so
+ * one bad upload cannot take a whole list down. Deploying it still fails with
+ * that reason.
+ */
+export function requirementsForListing(
+  row: AgentTypeManifestSource,
+): { requirements: AgentRequirements | null; error: string | null } {
+  try {
+    return { requirements: resolveAgentRequirements(manifestOfAgentType(row)), error: null }
+  } catch (error) {
+    return { requirements: null, error: (error as Error).message }
+  }
+}
+
 function legacyManifest(row: AgentTypeManifestSource): Record<string, unknown> {
   const resources: Record<string, unknown> = {}
   if (row.resourceMemory) resources.memory = { limit: row.resourceMemory }

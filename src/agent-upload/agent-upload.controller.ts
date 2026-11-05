@@ -27,6 +27,7 @@ import { DEFAULT_DOCKERFILE } from '../agent-package/manifest-defaults.js'
 import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js'
 
 import type { AuthUser } from '../auth/auth-user.loader.js'
+import { requirementsForListing } from '../agents/agent-requirements.js'
 
 interface AuthenticatedRequest extends Request {
   user?: AuthUser
@@ -191,6 +192,11 @@ export class AgentUploadController {
       validationStatus: agent.validationStatus,
       capabilities: agent.capabilities,
       defaultConfig: agent.defaultConfig,
+      configSchema: agent.configSchema,
+      pipelineSchema: agent.pipelineSchema,
+      // What deploying it needs, as GET /agent-types gives it, so a deploy
+      // dialog can ask for its settings and connectors from this list too.
+      requirements: requirementsForListing(agent).requirements,
       createdAt: agent.createdAt,
       built: !!agent.imageUrl,
       sdkVersion: agent.sdkVersion,

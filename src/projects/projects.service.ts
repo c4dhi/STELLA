@@ -322,8 +322,8 @@ export class ProjectsService {
       if (dto.maxSessionDurationSeconds !== undefined) {
         updateData.publicMaxSessionDurationSeconds = dto.maxSessionDurationSeconds;
       }
-      // Public agents are deployed as the owner: check the connectors now, so
-      // a binding the owner cannot use fails here and not when a visitor joins.
+      // Public agents are deployed as the owner: check now that the owner may
+      // deploy this type with these connectors, so a setup that cannot run fails here, not when a visitor joins.
       const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
       if (dto.agentConfig !== undefined && agentTypeId) {
         const owner = await this.prisma.projectMembership.findFirst({
@@ -331,7 +331,7 @@ export class ProjectsService {
           select: { userId: true },
         });
         if (owner) {
-          await this.agentsService.checkConnectorBindings(
+          await this.agentsService.checkDeployable(
             agentTypeId,
             owner.userId,
             id,

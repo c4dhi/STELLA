@@ -50,7 +50,7 @@ describe('public project setup', () => {
       projectMembership: { findFirst: jest.fn(async () => ({ userId: 'owner-1' })) },
     };
     const agents: any = {
-      checkConnectorBindings: jest.fn(async () => {
+      checkDeployable: jest.fn(async () => {
         throw new BadRequestException('This agent needs a connector for: ELIAS');
       }),
     };
@@ -58,7 +58,7 @@ describe('public project setup', () => {
     await expect(
       service.updatePublicConfig('proj', { isPublic: true, agentConfig: { name: 'ELIAS' } } as UpdatePublicConfigDto),
     ).rejects.toThrow('needs a connector for: ELIAS');
-    expect(agents.checkConnectorBindings).toHaveBeenCalledWith('type-1', 'owner-1', 'proj', undefined);
+    expect(agents.checkDeployable).toHaveBeenCalledWith('type-1', 'owner-1', 'proj', undefined);
     expect(prisma.project.update).not.toHaveBeenCalled();
   });
 });

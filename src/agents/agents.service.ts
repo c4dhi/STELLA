@@ -1158,13 +1158,14 @@ export class AgentsService {
   }
 
   /**
-   * Check connector bindings for an agent type without deploying it: the same
-   * rules as create() (each connector the user's own or shared with the
-   * project, the declared slots, required slots bound). Used when a public
-   * project's setup is saved, so a bad binding fails there and not when a
-   * visitor joins.
+   * Check, without deploying, that `userId` could deploy this agent type with
+   * these connectors: the same rules as create() for who may deploy an
+   * unreviewed or unbuilt upload, and for connector bindings (each the user's
+   * own or shared with the project, declared slots, required slots bound).
+   * Used when a public project's setup is saved, so a setup that cannot run
+   * fails there and not when a visitor joins.
    */
-  async checkConnectorBindings(
+  async checkDeployable(
     agentTypeId: string,
     userId: string,
     projectId: string,
@@ -1172,9 +1173,20 @@ export class AgentsService {
   ) {
     const row = await this.prisma.agentType.findUnique({
       where: { id: agentTypeId },
-      select: AGENT_TYPE_MANIFEST_SELECT,
+      select: {
+        ...AGENT_TYPE_MANIFEST_SELECT,
+        isBuiltIn: true,
+        validationStatus: true,
+        imageUrl: true,
+        sdkVersion: true,
+        userId: true,
+      },
     });
     if (!row) throw new NotFoundException(`Agent type with ID ${agentTypeId} not found`);
+    assertDeployableAgentType(row.slug, row, {
+      reviewRequired: await this.platformSettings.isAgentReviewRequired(),
+      deployerId: userId,
+    });
     const requirements = resolveAgentRequirements(manifestOfAgentType(row));
     return this.connectorsService.resolveBindingsForDeploy(userId, projectId, requests, requirements.connectors);
   }
