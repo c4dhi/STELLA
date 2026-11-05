@@ -7,6 +7,11 @@ on:
       - 'src/agent-package/**'
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
+      - 'src/agents/deployable-agent-type.*'
+      - 'src/agent-upload/**'
+      - 'src/agent-build/**'
+      - 'src/agent-image/**'
+      - 'src/platform-settings/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/agent-validation-unit-tests.yml'
@@ -16,6 +21,11 @@ on:
       - 'src/agent-package/**'
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
+      - 'src/agents/deployable-agent-type.*'
+      - 'src/agent-upload/**'
+      - 'src/agent-build/**'
+      - 'src/agent-image/**'
+      - 'src/platform-settings/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/agent-validation-unit-tests.yml'
@@ -46,4 +56,11 @@ jobs:
             src/agent-package/validators/manifest.validator.spec.ts \
             src/kubernetes/utils/agent-config-injection.util.spec.ts \
             src/common/utils/sanitize-config.spec.ts \
-            src/kubernetes/utils/resource-clamping.util.spec.ts
+            src/kubernetes/utils/resource-clamping.util.spec.ts \
+            src/agents/deployable-agent-type.spec.ts \
+            src/agent-upload/agent-upload.controller.spec.ts \
+            src/agent-upload/agent-admin.guard.spec.ts \
+            src/agent-build/agent-build.safety.spec.ts \
+            src/agent-image/agent-image.service.spec.ts \
+            src/platform-settings/agent-review.spec.ts \
+            src/platform-settings/platform-settings.spec.ts
