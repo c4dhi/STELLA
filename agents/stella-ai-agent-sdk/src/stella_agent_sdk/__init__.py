@@ -73,6 +73,12 @@ from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.agent.base import BaseAgent
 from stella_agent_sdk.run import run_agent_from_env
 from stella_agent_sdk.services.history_client import HistoryClient, HistoryClientError
+from stella_agent_sdk.services.connectors_client import (
+    ConnectorError,
+    ConnectorInfo,
+    ConnectorsClient,
+    ConnectorTool,
+)
 from stella_agent_sdk.progress import (
     ExecutionMode,
     ItemStatus,
@@ -111,6 +117,11 @@ except PackageNotFoundError:
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    # Connectors (outside MCP servers via the backend)
+    "ConnectorError",
+    "ConnectorInfo",
+    "ConnectorsClient",
+    "ConnectorTool",
     # Message types
     "InputType",
     "OutputType",

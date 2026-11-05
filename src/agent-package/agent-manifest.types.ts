@@ -68,6 +68,16 @@ export interface AgentManifest {
     version?: string
   }
 
+  // Outside MCP servers the agent needs (Connectors). Extra ones are always allowed.
+  'x-stella-connectors'?: Array<{
+    slot: string
+    kind: 'mcp'
+    required?: boolean
+    label: string
+    description?: string
+    requiredTools?: string[]
+  }>
+
   sdk?: {
     minVersion?: string     // Minimum stella-ai-agent-sdk version
   }

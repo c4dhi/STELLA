@@ -218,6 +218,9 @@ function mapManifestToDbFields(manifest: AgentManifest): Prisma.AgentTypeCreateI
     pipelineSchema: manifest.pipelineSchema ? (manifest.pipelineSchema as Prisma.InputJsonValue) : Prisma.DbNull,
     pipelineSchemaHash: hashPipelineSchema((manifest.pipelineSchema as Record<string, unknown>) ?? null),
     runtimeVariables: manifest.runtimeVariables ? (manifest.runtimeVariables as Prisma.InputJsonValue) : Prisma.DbNull,
+    connectorSlots: manifest['x-stella-connectors']?.length
+      ? (manifest['x-stella-connectors'] as Prisma.InputJsonValue)
+      : Prisma.DbNull,
     compilerVersion: manifest.promptCompiler?.version || null,
     sdkMinVersion: manifest.sdk?.minVersion || null,
     deprecated: manifest.metadata.deprecated === true,
@@ -299,6 +302,7 @@ async function verifySeedRoundTrip(agents: BuiltinAgentInfo[]): Promise<void> {
         configSchema: true,
         defaultConfig: true,
         pipelineSchema: true,
+        connectorSlots: true,
         sdkMinVersion: true,
       },
     })
@@ -370,6 +374,7 @@ async function verifySeedRoundTrip(agents: BuiltinAgentInfo[]): Promise<void> {
       ['configSchema', expected.configSchema, actual.configSchema],
       ['defaultConfig', expected.defaultConfig, actual.defaultConfig],
       ['pipelineSchema', expected.pipelineSchema, actual.pipelineSchema],
+      ['connectorSlots', expected.connectorSlots, actual.connectorSlots],
     ]
 
     for (const [field, expectedValue, actualValue] of jsonChecks) {
@@ -567,6 +572,7 @@ async function main() {
         pipelineSchema: dbFields.pipelineSchema,
         pipelineSchemaHash: dbFields.pipelineSchemaHash,
         runtimeVariables: dbFields.runtimeVariables,
+        connectorSlots: dbFields.connectorSlots,
         expertDefaults,
         compilerVersion: dbFields.compilerVersion,
         sdkMinVersion: dbFields.sdkMinVersion,

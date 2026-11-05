@@ -12,6 +12,7 @@ from stella_agent_sdk.emotion.tags import strip_emotion_tags
 from stella_agent_sdk.language import turn_language_record
 from stella_agent_sdk.messages.input import AgentInput
 from stella_agent_sdk.messages.output import AgentOutput
+from stella_agent_sdk.services.connectors_client import ConnectorsClient
 from stella_agent_sdk.messages.types import (
     AgentState,
     BargeInDecision,
@@ -145,6 +146,9 @@ class BaseAgent(ABC):
         # In-flight long-running ("deferred") tool calls, keyed by name (#198/#303).
         # Drained when the session ends so a slow tool can't speak after lockdown.
         self._pending_tools: Dict[str, "asyncio.Task[Any]"] = {}
+        # Connectors: outside MCP servers reached through STELLA's backend (set
+        # by run_agent). Until then, an empty client: list() is [], calls raise.
+        self._connectors: Optional[ConnectorsClient] = None
 
     def defer_tool(self, name: str, coro: Awaitable[Any]) -> "asyncio.Task[Any]":
         """Register a long-running tool call so it can be reconciled if the session
@@ -240,6 +244,19 @@ class BaseAgent(ABC):
     def agent_id(self) -> str:
         """The deployed agent ID (from AGENT_ID env var)."""
         return self._agent_id
+
+    @property
+    def connectors(self) -> ConnectorsClient:
+        """The outside MCP servers ("connectors") bound to this deployment.
+
+        ``await self.connectors.list()``, ``list_tools(handle)`` and
+        ``call_tool(handle, tool, args)``. Calls go through STELLA's backend,
+        which holds the credentials; failures raise ``ConnectorError``. On a
+        deployment without connectors, ``list()`` returns ``[]``.
+        """
+        if self._connectors is None:
+            self._connectors = ConnectorsClient(agent_id=self._agent_id, token=None, address=None)
+        return self._connectors
 
     @property
     def uptime_seconds(self) -> int:

@@ -71,6 +71,10 @@ import type {
   PlatformSettings,
   PlatformFeatures,
   AccessToken,
+  Connector,
+  ConnectorTestResult,
+  CreateConnectorRequest,
+  UpdateConnectorRequest,
   CreateAccessTokenRequest,
   AccessTokenAccess,
   CreateAccessTokenResponse,
@@ -1793,6 +1797,34 @@ class SessionManagementClient {
 
   async revokeAccessToken(id: string): Promise<AccessToken> {
     return this.delete<AccessToken>(`/me/access-tokens/${id}`)
+  }
+
+  // ============================================================================
+  // Connectors (outside MCP servers your agents may call; STELLA as client)
+  // ============================================================================
+
+  async listConnectors(): Promise<Connector[]> {
+    return this.get<Connector[]>('/me/connectors')
+  }
+
+  async createConnector(data: CreateConnectorRequest): Promise<Connector> {
+    return this.post<Connector>('/me/connectors', data)
+  }
+
+  async updateConnector(id: string, data: UpdateConnectorRequest): Promise<Connector> {
+    return this.request<Connector>(`/me/connectors/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteConnector(id: string): Promise<{ deleted: true }> {
+    return this.delete<{ deleted: true }>(`/me/connectors/${id}`)
+  }
+
+  /** MCP initialize + tools/list against the server; stores the tool list. */
+  async testConnector(id: string): Promise<ConnectorTestResult> {
+    return this.post<ConnectorTestResult>(`/me/connectors/${id}/test`)
   }
 
   // ============================================================================

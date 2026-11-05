@@ -24,6 +24,10 @@ import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.s
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
 import { PersonasService } from '../personas/personas.service.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
+import { ConnectorsService } from '../connectors/connectors.service.js';
+import type { ConnectorSlot } from '../connectors/connector-bindings.util.js';
+import { readBindings } from '../connectors/connector-bindings.util.js';
+import { CONNECTOR_TOKEN_ENV, issueAgentConnectorToken } from '../connectors/agent-connector-token.util.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -53,6 +57,8 @@ export class AgentsService {
     private readonly eventEmitter: EventEmitter2,
     // Platform defaults a system admin sets (TTS playback), applied at every pod creation.
     private readonly platformSettings: PlatformSettingsService,
+    // Validates connector bindings at deploy time (the user must own them).
+    private readonly connectorsService: ConnectorsService,
     @Optional() private agentServerService?: AgentServerService,
     // See the matching comment in SessionsService: typed `any` here (and
     // assigned to the class field below) so TS's emitDecoratorMetadata
@@ -303,6 +309,7 @@ export class AgentsService {
         defaultConfig: true,
         pipelineSchema: true,
         configSchema: true,
+        connectorSlots: true,
       },
     });
 
@@ -325,6 +332,14 @@ export class AgentsService {
     // (Previously this only ran for public-project flows in PublicProjectsService.)
     this.validateRuntimeConfigForAgentType(agentType, agentConfig);
 
+    // Connectors this deployment may call: the agent's declared slots plus any
+    // extras the user offers. All must be the deploying user's own.
+    const connectorBindings = await this.connectorsService.resolveBindingsForDeploy(
+      userId,
+      createAgentDto.connectorBindings,
+      (agentTypeRecord?.connectorSlots as unknown as ConnectorSlot[] | null) ?? null,
+    );
+
     // Encrypt manual env vars now so they are persisted before the async pod creation.
     // This guarantees restart() can recover them even if the pod creation fails.
     const manualEnvVarsEncrypted = this.encryptManualEnvVarsForStorage(createAgentDto.envVars);
@@ -341,6 +356,10 @@ export class AgentsService {
         envVarTemplateId: createAgentDto.envVarTemplateId || null,  // Store for restarts
         // Keep encrypted manual env vars for restart path parity with template-based deployments.
         manualEnvVarsEncrypted,
+        // Kept for restart and auto-pause/wake, like envVarTemplateId.
+        connectorBindings: connectorBindings.length
+          ? (connectorBindings as unknown as Prisma.InputJsonValue)
+          : Prisma.DbNull,
         status: AgentStatus.STARTING,
         healthState: 'initializing',
       },
@@ -407,7 +426,10 @@ export class AgentsService {
         createAgentDto.envVars,
       );
       // The deployment's own playback mode wins; otherwise the platform default.
-      const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, agentId);
+      const resolvedEnvVars = await this.withConnectorToken(
+        agentId,
+        await this.platformSettings.applyToPodEnv(merged, agentId),
+      );
 
       // Create K8s pod - agent connects directly to LiveKit via SDK
       const { podName, secretName } = await this.k8s.createAgentPod({
@@ -1127,7 +1149,11 @@ export class AgentsService {
     );
     // Unlike the rest of the env, the platform playback default is read fresh:
     // a woken session is a new pipeline, so it takes the current default.
-    const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, id);
+    // A restarted (or woken) pod gets a new connector token; the old one stops working.
+    const resolvedEnvVars = await this.withConnectorToken(
+      id,
+      await this.platformSettings.applyToPodEnv(merged, id),
+    );
 
     // Recreate Kubernetes pod with SAME agent ID
     try {
@@ -1195,6 +1221,37 @@ export class AgentsService {
     // Delegate to centralized delete logic (handles stopping if needed)
     await this.deleteAgent(id);
     return { message: 'Agent deleted successfully' };
+  }
+
+  /**
+   * Issue a fresh connector token for a pod about to be (re)created, when the
+   * instance has connector bindings. Only its hash is stored; the plaintext goes
+   * into the pod's Secret as STELLA_CONNECTOR_TOKEN and is what the SDK sends on
+   * ConnectorService calls. Without bindings the pod gets no token and any stale
+   * hash is cleared.
+   */
+  private async withConnectorToken(
+    agentId: string,
+    envVars: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const instance = await this.prisma.agentInstance.findUnique({
+      where: { id: agentId },
+      select: { connectorBindings: true },
+    });
+    if (readBindings(instance?.connectorBindings).length === 0) {
+      await this.prisma.agentInstance.update({
+        where: { id: agentId },
+        data: { connectorTokenHash: null },
+      });
+      const { [CONNECTOR_TOKEN_ENV]: _dropped, ...rest } = envVars;
+      return rest;
+    }
+    const { token, hash } = issueAgentConnectorToken();
+    await this.prisma.agentInstance.update({
+      where: { id: agentId },
+      data: { connectorTokenHash: hash },
+    });
+    return { ...envVars, [CONNECTOR_TOKEN_ENV]: token };
   }
 
   /**

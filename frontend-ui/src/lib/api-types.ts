@@ -1876,6 +1876,54 @@ export type AccessTokenScope = 'mcp:read' | 'mcp:write'
 export type AccessTokenAccess = 'read' | 'read_write'
 export type AccessTokenExpiryDays = 7 | 30 | 90 | 365
 
+// ============================================================================
+// Connectors: outside MCP servers the user's agents may call (STELLA as client)
+// ============================================================================
+
+export type ConnectorAuthType = 'bearer' | 'none'
+export type ConnectorStatus = 'untested' | 'ok' | 'error'
+
+export interface ConnectorTool {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
+/** A connector as the API returns it. The credential is never included. */
+export interface Connector {
+  id: string
+  name: string
+  handle: string
+  kind: 'mcp'
+  url: string
+  authType: ConnectorAuthType
+  hasCredential: boolean
+  status: ConnectorStatus
+  lastError: string | null
+  lastCheckedAt: string | null
+  tools: ConnectorTool[] | null
+  serverInfo: { name?: string; version?: string; protocolVersion?: string } | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateConnectorRequest {
+  name: string
+  handle: string
+  url: string
+  authType?: ConnectorAuthType
+  token?: string
+}
+
+export type UpdateConnectorRequest = Partial<CreateConnectorRequest>
+
+export interface ConnectorTestResult {
+  ok: boolean
+  errorCode?: string
+  error?: string
+  connector: Connector
+}
+
 export interface AccessToken {
   id: string
   name: string

@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `self.connectors` on `BaseAgent`: call outside MCP servers the user bound to the deployment ("connectors") through STELLA's backend, which keeps the credentials. `await self.connectors.list()`, `list_tools(handle)` and `call_tool(handle, tool, args)`. `call_tool` returns the tool's structured content (or its parsed text). Failures raise `ConnectorError`, whose `code` says what went wrong and whose `retryable` says whether trying again can help. `run_agent` wires it from `STELLA_CONNECTOR_TOKEN`; without connectors, `list()` is `[]`. New gRPC contract `proto/connectors.proto` (`ConnectorService`). See docs: Agent SDK → Connectors
+
 ## [0.9.0] - 2026-10-28
 
 Ships with STELLA 1.5.0. What changes for agent authors:

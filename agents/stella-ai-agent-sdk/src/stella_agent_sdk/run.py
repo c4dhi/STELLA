@@ -52,6 +52,7 @@ from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient
 from stella_agent_sdk.services.tts_client import TTSClient
 from stella_agent_sdk.services.history_client import HistoryClient
+from stella_agent_sdk.services.connectors_client import ConnectorsClient
 from stella_agent_sdk.services.agent_server_client import AgentServerClient
 from stella_agent_sdk.messages.types import OutputType
 
@@ -279,6 +280,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
     tts_client: Optional[TTSClient] = None
     audio_pipeline: Optional[AudioPipeline] = None
     history_client: Optional[HistoryClient] = None
+    connectors_client: Optional[ConnectorsClient] = None
     agent_server_client: Optional[AgentServerClient] = None
     shutdown_event = asyncio.Event()
 
@@ -404,6 +406,14 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         agent._history_client = history_client
         logger.info(f"Chat history client initialized for session {session_id}")
         logger.info(f"History client base_url: {session_server_url}")
+
+        # 7b. Connectors client (outside MCP servers via the backend). The pod
+        # carries only its own STELLA_CONNECTOR_TOKEN, never a connector's
+        # credential. Without bindings there is no token and the client is inert.
+        connectors_client = ConnectorsClient.from_env(agent_id)
+        agent._connectors = connectors_client
+        if connectors_client.configured:
+            logger.info("Connectors client initialized")
 
         # 8. Start audio pipeline
         await audio_pipeline.start()
@@ -701,6 +711,14 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
         # Clear agent's history client reference
         agent._history_client = None
+
+        # Close the connectors channel
+        if connectors_client:
+            try:
+                await connectors_client.close()
+            except Exception as e:
+                logger.error(f"Error closing connectors client: {e}")
+        agent._connectors = None
 
         # Disconnect from LiveKit
         if room_manager:

@@ -10,6 +10,7 @@ import { AgentConfigurationsModule } from '../agent-configurations/agent-configu
 import { PersonasModule } from '../personas/personas.module.js';
 import { PlatformSettingsModule } from '../platform-settings/platform-settings.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { ConnectorsModule } from '../connectors/connectors.module.js';
 
 /**
  * AgentsModule - Manages agent lifecycle.
@@ -33,6 +34,8 @@ import { AuthModule } from '../auth/auth.module.js';
     PlatformSettingsModule,
     // Membership checks on session and agent routes.
     AuthModule,
+    // Connector binding validation at deploy time.
+    ConnectorsModule,
     forwardRef(() => AgentServerModule),
     forwardRef(() => SessionsModule),
   ],
