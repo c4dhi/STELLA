@@ -100,10 +100,17 @@ export default function DeployAgentModal({
     () => settingFields(requirements?.configSchema, requirements?.defaultConfig ?? {}),
     [requirements],
   )
+  const initialSettings = useMemo(
+    () => initialSettingValues(settingsFields, requirements?.configSchema, requirements?.defaultConfig ?? {}),
+    [settingsFields, requirements],
+  )
   const [settingValues, setSettingValues] = useState<SettingValues>({})
   useEffect(() => {
-    setSettingValues(initialSettingValues(settingsFields, requirements?.configSchema, requirements?.defaultConfig ?? {}))
-  }, [settingsFields, requirements])
+    setSettingValues(initialSettings)
+  }, [initialSettings])
+  // The step is shown only when the agent needs something from the user. Its
+  // optional settings keep their defaults otherwise.
+  const hasRequiredSettings = settingsFields.some((f) => f.required)
 
   const connectorSlots = useMemo(() => requirements?.connectors ?? [], [requirements])
   const [availableConnectors, setAvailableConnectors] = useState<AvailableConnector[]>([])
@@ -112,6 +119,7 @@ export default function DeployAgentModal({
   const [slotChoices, setSlotChoices] = useState<SlotChoices>({})
   useEffect(() => {
     setSlotChoices({})
+    setConnectorsError(null)
     if (connectorSlots.length === 0) return
     if (!projectId) {
       setConnectorsError('this session has no project')
@@ -119,7 +127,6 @@ export default function DeployAgentModal({
     }
     let cancelled = false
     setConnectorsLoading(true)
-    setConnectorsError(null)
     apiClient.listAvailableConnectors(projectId)
       .then((list) => {
         if (cancelled) return
@@ -174,7 +181,7 @@ export default function DeployAgentModal({
     if (agentRequirements.requiresPlan) {
       steps.push(mode === 'companion' ? 'activities' : 'plan')
     }
-    if (settingsFields.length > 0) {
+    if (hasRequiredSettings) {
       steps.push('settings')
     }
     if (connectorSlots.length > 0) {
@@ -186,7 +193,7 @@ export default function DeployAgentModal({
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
     return steps
-  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode, settingsFields.length, connectorSlots.length])
+  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode, hasRequiredSettings, connectorSlots.length])
 
   // Reset state when modal opens
   useEffect(() => {
@@ -405,8 +412,8 @@ export default function DeployAgentModal({
 
     // The agent's own settings. The server merges them over its defaultConfig
     // and checks them against its configSchema.
-    if (settingsFields.length > 0) {
-      config = { ...settingsFromValues(settingsFields, settingValues), ...config }
+    if (hasRequiredSettings) {
+      config = { ...settingsFromValues(settingsFields, settingValues, initialSettings), ...config }
     }
 
     // A selected pipeline configuration is applied server-side by ID (see below):

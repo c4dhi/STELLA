@@ -127,14 +127,22 @@ function typed(field: SettingField, raw: string | boolean): unknown {
 }
 
 /**
- * The settings object to send: every filled-in field, nested by its path. Empty
- * text fields are left out, so the agent's default applies to them.
+ * The settings object to send, nested by path. A required field is sent once
+ * filled in. An optional field is sent only when the user changed it from
+ * `initial`, so an untouched one keeps the agent's own default (and an untouched
+ * boolean never creates the object around it). Emptied text fields are left
+ * out too, so the default applies to them.
  */
-export function settingsFromValues(fields: SettingField[], values: SettingValues): Record<string, unknown> {
+export function settingsFromValues(
+  fields: SettingField[],
+  values: SettingValues,
+  initial: SettingValues = {},
+): Record<string, unknown> {
   const settings: Record<string, unknown> = {}
   for (const field of fields) {
     const raw = values[field.path]
     if (raw === undefined || (field.kind !== 'boolean' && !String(raw).trim())) continue
+    if (!field.required && raw === initial[field.path]) continue
     const path = field.path.split('.')
     let node = settings
     for (const key of path.slice(0, -1)) {

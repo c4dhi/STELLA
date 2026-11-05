@@ -50,20 +50,39 @@ describe('settings form from configSchema', () => {
     expect(missingSettings(fields, { ...values, 'elias.project_id': ' 954c ' })).toEqual([])
   })
 
-  it('builds the nested settings object with typed values and leaves blanks to the defaults', () => {
+  it('builds the nested settings object with typed values, sending only what the user changed', () => {
     const fields = settingFields(schema, defaults)
+    const initial = initialSettingValues(fields, schema, defaults)
     const values = {
-      ...initialSettingValues(fields, schema, defaults),
+      ...initial,
       'elias.project_id': ' 954c1a87 ',
       'elias.max_attempts': '2',
       'llm.model': '',
       tone: 'warm',
     }
-    expect(settingsFromValues(fields, values)).toEqual({
-      elias: { project_id: '954c1a87', connector: 'elias', max_attempts: 2 },
+    expect(settingsFromValues(fields, values, initial)).toEqual({
+      elias: { project_id: '954c1a87', max_attempts: 2 },
       tone: 'warm',
-      verbose: false,
     })
+  })
+
+  it('sends nothing for untouched optional fields, so a schema default is not pinned', () => {
+    const fields = settingFields(schema, defaults)
+    const initial = initialSettingValues(fields, schema, defaults)
+    expect(settingsFromValues(fields, { ...initial, 'elias.project_id': 'p' }, initial)).toEqual({ elias: { project_id: 'p' } })
+    expect(settingsFromValues(fields, { ...initial, 'elias.project_id': 'p', verbose: true }, initial)).toMatchObject({ verbose: true })
+  })
+
+  it('does not create an optional object for an untouched boolean inside it', () => {
+    const nested = {
+      type: 'object',
+      properties: {
+        advanced: { type: 'object', required: ['key'], properties: { key: { type: 'string' }, verbose: { type: 'boolean' } } },
+      },
+    }
+    const fields = settingFields(nested, {})
+    const initial = initialSettingValues(fields, nested, {})
+    expect(settingsFromValues(fields, initial, initial)).toEqual({})
   })
 
   it('has no fields without a schema', () => {
