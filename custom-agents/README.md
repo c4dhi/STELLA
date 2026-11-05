@@ -16,12 +16,9 @@ Agents in this folder are **not** built into STELLA. They are ready-made package
 
 2. In STELLA, open **Deploy Agent**, go to **My Agents** and upload the zip. STELLA checks the package (manifest, Dockerfile, allowed base image) and tells you what to fix if it is turned away.
 3. **Build** it from My Agents.
-4. Deploy it into a session like any other agent. You can deploy your own upload as soon as it is built.
+4. Wait for a system admin to approve it, then deploy it into a session like any other agent.
 
-Two things depend on review:
-
-- **Other users** can deploy your upload only after a system admin approves it.
-- If a system admin has turned on **Review uploaded agents** (Settings → Platform Defaults), nothing you upload deploys until an admin approves it.
+Review is on by default (Settings → Platform Defaults → **Review uploaded agents**), so nothing you upload deploys until an admin approves it. If an admin turns review off, you can deploy your own upload as soon as it is built, but other users still need an admin's approval.
 
 There is no review screen yet; an admin approves with `POST /admin/agent-types/<id>/approve`.
 
