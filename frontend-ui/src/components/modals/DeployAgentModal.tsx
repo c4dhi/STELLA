@@ -23,14 +23,21 @@ import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import { useEnvVarListEditor } from '../shared/EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
+import SettingsStep from '../shared/SettingsStep'
+import ConnectorsStep from '../shared/ConnectorsStep'
+import type { AvailableConnector } from '../../lib/api-types'
+import { initialSettingValues, missingSettings, settingFields, settingsFromValues, type SettingValues } from '../../lib/settingsForm'
+import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
 
 interface DeployAgentModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[]) => Promise<void>
+  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[], connectorBindings?: { connectorId: string; slot: string }[]) => Promise<void>
+  /** The session's project: which shared connectors the user may bind here. */
+  projectId?: string
 }
 
-type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'voice' | 'plan' | 'envvars'
+type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'settings' | 'connectors' | 'voice' | 'plan' | 'envvars'
 type GalleryTab = 'builtin' | 'myagents'
 type EnvVarsView = 'select' | 'edit'  // select=choose template, edit=manual entry
 
@@ -38,6 +45,7 @@ export default function DeployAgentModal({
   isOpen,
   onClose,
   onSubmit,
+  projectId,
 }: DeployAgentModalProps) {
   const [step, setStep] = useState<Step>('gallery')
   const [galleryTab, setGalleryTab] = useState<GalleryTab>('builtin')
@@ -85,6 +93,44 @@ export default function DeployAgentModal({
     return parseAgentRequirements(selectedType.configSchema)
   }, [selectedType])
 
+  // The agent's own settings and connector slots, as the server resolved them
+  // from its agent.yaml.
+  const requirements = selectedType?.requirements
+  const settingsFields = useMemo(
+    () => settingFields(requirements?.configSchema, requirements?.defaultConfig ?? {}),
+    [requirements],
+  )
+  const [settingValues, setSettingValues] = useState<SettingValues>({})
+  useEffect(() => {
+    setSettingValues(initialSettingValues(settingsFields, requirements?.configSchema, requirements?.defaultConfig ?? {}))
+  }, [settingsFields, requirements])
+
+  const connectorSlots = useMemo(() => requirements?.connectors ?? [], [requirements])
+  const [availableConnectors, setAvailableConnectors] = useState<AvailableConnector[]>([])
+  const [connectorsLoading, setConnectorsLoading] = useState(false)
+  const [connectorsError, setConnectorsError] = useState<string | null>(null)
+  const [slotChoices, setSlotChoices] = useState<SlotChoices>({})
+  useEffect(() => {
+    setSlotChoices({})
+    if (connectorSlots.length === 0) return
+    if (!projectId) {
+      setConnectorsError('this session has no project')
+      return
+    }
+    let cancelled = false
+    setConnectorsLoading(true)
+    setConnectorsError(null)
+    apiClient.listAvailableConnectors(projectId)
+      .then((list) => {
+        if (cancelled) return
+        setAvailableConnectors(list)
+        setSlotChoices(initialSlotChoices(connectorSlots, list))
+      })
+      .catch((err) => !cancelled && setConnectorsError(err instanceof Error ? err.message : String(err)))
+      .finally(() => !cancelled && setConnectorsLoading(false))
+    return () => { cancelled = true }
+  }, [connectorSlots, projectId])
+
   // Shared env-var editor (manual entry). Required keys must be filled; values are
   // mirrored back into `envVars` so canContinue + handleSubmit keep working.
   const envVarEditor = useEnvVarListEditor({ allowEmptyValues: false })
@@ -128,13 +174,19 @@ export default function DeployAgentModal({
     if (agentRequirements.requiresPlan) {
       steps.push(mode === 'companion' ? 'activities' : 'plan')
     }
+    if (settingsFields.length > 0) {
+      steps.push('settings')
+    }
+    if (connectorSlots.length > 0) {
+      steps.push('connectors')
+    }
     if (supportsVoiceSelection) {
       steps.push('voice')
     }
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
     return steps
-  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode])
+  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode, settingsFields.length, connectorSlots.length])
 
   // Reset state when modal opens
   useEffect(() => {
@@ -296,6 +348,13 @@ export default function DeployAgentModal({
         return !!selectedConfiguration
       case 'plan':
         return !!selectedPlan
+      case 'settings':
+        return missingSettings(settingsFields, settingValues).length === 0
+      case 'connectors':
+        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0 && connectorSlots.every((slot) => {
+          const chosen = availableConnectors.find((c) => c.id === slotChoices[slot.slot])
+          return !chosen || !missingTools(slot, chosen)?.length
+        })
       case 'envvars':
         // In select view: can always continue (template selection is optional)
         if (envVarsView === 'select') {
@@ -341,6 +400,12 @@ export default function DeployAgentModal({
       }
     }
 
+    // The agent's own settings. The server merges them over its defaultConfig
+    // and checks them against its configSchema.
+    if (settingsFields.length > 0) {
+      config = { ...settingsFromValues(settingsFields, settingValues), ...config }
+    }
+
     // A selected pipeline configuration is applied server-side by ID (see below):
     // the backend verifies its type/version and resolves the effective config, so
     // we intentionally do NOT inline pipeline_config here.
@@ -380,6 +445,7 @@ export default function DeployAgentModal({
         selectedPersona?.id,
         mode,
         mode === 'companion' ? activityPlanIds : undefined,
+        connectorSlots.length > 0 ? bindingsFromChoices(connectorSlots, slotChoices) : undefined,
       )
       onClose()
     } catch (err) {
@@ -402,6 +468,8 @@ export default function DeployAgentModal({
       case 'upload': return 'Upload Agent'
       case 'configure': return 'Customize Agent'
       case 'configuration': return 'Pipeline Configuration'
+      case 'settings': return 'Settings'
+      case 'connectors': return 'Connectors'
       case 'voice': return 'Voice & Language'
       case 'persona': return 'Choose a Persona'
       case 'mode': return 'How should it run?'
@@ -417,6 +485,8 @@ export default function DeployAgentModal({
       case 'upload': return 'Upload a custom agent package (.zip)'
       case 'configure': return `Set a name and icon for your ${selectedType?.name || 'agent'}`
       case 'configuration': return `Customize the pipeline configuration for ${selectedType?.name || 'the agent'}`
+      case 'settings': return `What ${selectedType?.name || 'the agent'} needs to run`
+      case 'connectors': return `Which of your connectors ${selectedType?.name || 'the agent'} may use`
       case 'voice': return `Choose the voice and language for ${selectedType?.name || 'the agent'}`
       case 'persona': return 'Who the agent is — its character and voice, independent of the plan'
       case 'mode': return 'Follow one plan from the start, or talk freely and run activities on request'
@@ -765,6 +835,40 @@ export default function DeployAgentModal({
                       onSelectConfiguration={setSelectedConfiguration}
                     />
                   )}
+                </motion.div>
+              ) : step === 'settings' ? (
+                <motion.div
+                  key="settings"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <SettingsStep
+                    agentName={selectedType?.name ?? 'This agent'}
+                    fields={settingsFields}
+                    values={settingValues}
+                    onChange={(path, value) => setSettingValues((prev) => ({ ...prev, [path]: value }))}
+                  />
+                </motion.div>
+              ) : step === 'connectors' ? (
+                <motion.div
+                  key="connectors"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <ConnectorsStep
+                    slots={connectorSlots}
+                    available={availableConnectors}
+                    loading={connectorsLoading}
+                    loadError={connectorsError}
+                    choices={slotChoices}
+                    onChoose={(slot, connectorId) => setSlotChoices((prev) => ({ ...prev, [slot]: connectorId }))}
+                  />
                 </motion.div>
               ) : step === 'voice' ? (
                 <motion.div

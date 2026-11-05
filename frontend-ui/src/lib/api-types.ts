@@ -260,6 +260,25 @@ export interface CreateAgentDto {
   availablePlanIds?: string[]
   envVarTemplateId?: string // environment variable template to use
   envVars?: Record<string, string> // additional env vars to merge with template (overrides template values)
+  // The user's connectors offered to this deployment: one per declared slot the
+  // agent needs (slot set), or extras the agent did not declare (slot omitted).
+  connectorBindings?: { connectorId: string; slot?: string }[]
+}
+
+/**
+ * What an agent needs to deploy, resolved on the server from its agent.yaml
+ * (GET /agent-types). The wizard reads this, never the manifest itself.
+ */
+export interface DeployRequirements {
+  persona: boolean
+  plans: { required: boolean; modes: ('plan' | 'companion')[] } | null
+  configurator: { required: boolean } | null
+  env: { required: string[]; optional: { name: string; description?: string; default?: string }[] }
+  connectors: ConnectorSlot[]
+  /** The settings a user may give the agent (JSON Schema), or null for none. */
+  configSchema: Record<string, unknown> | null
+  defaultConfig: Record<string, unknown>
+  sdkMinVersion: string | null
 }
 
 export interface AgentType {
@@ -276,6 +295,8 @@ export interface AgentType {
   deprecationNote?: string | null
   capabilities: string[]
   defaultConfig: Record<string, unknown>  // Default config for this agent type
+  /** Resolved from agent.yaml by the server. Absent from older servers. */
+  requirements?: DeployRequirements
   validationStatus?: AgentValidationStatus
   configSchema?: Record<string, unknown>  // JSON Schema for config options
   pipelineSchema?: PipelineSchema | null  // Pipeline topology + configurable slots

@@ -648,11 +648,11 @@ export default function SessionView() {
   }
 
   // Deploy agent
-  const handleDeployAgent = async (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[]) => {
+  const handleDeployAgent = async (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[], connectorBindings?: { connectorId: string; slot: string }[]) => {
     if (!sessionId) return
 
     try {
-      await apiClient.createAgent(sessionId, { name, icon, config, agentType, envVarTemplateId, envVars, agentConfigurationId, personaId, mode, availablePlanIds })
+      await apiClient.createAgent(sessionId, { name, icon, config, agentType, envVarTemplateId, envVars, agentConfigurationId, personaId, mode, availablePlanIds, connectorBindings })
       addToast({ message: 'Agent deployed successfully', type: 'success' })
 
       // Refresh session to get updated agents list
@@ -866,6 +866,7 @@ export default function SessionView() {
         isOpen={isDeployModalOpen}
         onClose={() => setIsDeployModalOpen(false)}
         onSubmit={handleDeployAgent}
+        projectId={session?.projectId}
       />
 
       <ConfirmDialog
