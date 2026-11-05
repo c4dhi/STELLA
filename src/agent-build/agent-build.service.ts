@@ -2,12 +2,38 @@ import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentPackageService } from '../agent-package/agent-package.service.js'
-import { exec, ExecException } from 'child_process'
+import { execFile, ExecFileException } from 'child_process'
 import { promisify } from 'util'
 import * as fs from 'fs/promises'
+import * as os from 'os'
 import * as path from 'path'
+import { SLUG_REGEX, VERSION_REGEX } from '../agent-package/agent-manifest.types.js'
 
-const execAsync = promisify(exec)
+// execFile, never exec: every argument goes to the program as-is, with no shell
+// in between, so nothing from an uploaded package can run a command on the host.
+const execFileAsync = promisify(execFile)
+
+/** `<slug>:<version>`, after checking both against the manifest patterns. */
+export function buildImageName(slug: string, version: string): string {
+  if (!SLUG_REGEX.test(slug)) throw new Error(`Invalid agent slug for an image name: ${JSON.stringify(slug)}`)
+  if (!VERSION_REGEX.test(version)) throw new Error(`Invalid agent version for an image tag: ${JSON.stringify(version)}`)
+  return `${slug}:${version}`
+}
+
+/**
+ * Resolves the manifest's `image.dockerfile` inside the extracted package. It must
+ * be a plain relative path (letters, digits, `.`, `_`, `-`, `/`) that stays inside
+ * the package; anything else is refused rather than cleaned up.
+ */
+export function resolveDockerfilePath(extractedPath: string, dockerfile: string): string {
+  const bad = () => new Error(`image.dockerfile must be a plain relative path inside the package: ${JSON.stringify(dockerfile)}`)
+  if (!/^[A-Za-z0-9._/-]+$/.test(dockerfile) || dockerfile.startsWith('/') || dockerfile.startsWith('-')) throw bad()
+  if (dockerfile.split('/').some((part) => part === '..')) throw bad()
+  const root = path.resolve(extractedPath)
+  const resolved = path.resolve(root, dockerfile)
+  if (!resolved.startsWith(root + path.sep)) throw bad()
+  return resolved
+}
 
 export interface BuildResult {
   success: boolean
@@ -98,7 +124,7 @@ export class AgentBuildService {
     agentType: { id: string; slug: string; packagePath: string | null; version: string },
     buildLogId: string,
   ): Promise<BuildResult> {
-    const imageName = `${agentType.slug}:${agentType.version}`
+    const imageName = buildImageName(agentType.slug, agentType.version)
     let extractedPath: string | null = null
 
     try {
@@ -188,7 +214,7 @@ export class AgentBuildService {
     const manifest = await this.agentPackageService.parseManifest(storagePath)
     const dockerfileName = manifest?.image?.dockerfile || 'Dockerfile'
 
-    const dockerfilePath = path.join(extractedPath, dockerfileName)
+    const dockerfilePath = resolveDockerfilePath(extractedPath, dockerfileName)
 
     try {
       await fs.access(dockerfilePath)
@@ -206,18 +232,18 @@ export class AgentBuildService {
     contextPath: string,
     dockerfilePath: string,
   ): Promise<string> {
-    const buildCmd = `docker build -t ${imageName} -f ${dockerfilePath} ${contextPath}`
-    this.logger.debug(`Executing: ${buildCmd}`)
+    const args = ['build', '-t', imageName, '-f', dockerfilePath, contextPath]
+    this.logger.debug(`Executing: docker ${args.join(' ')}`)
 
     try {
-      const { stdout, stderr } = await execAsync(buildCmd, {
+      const { stdout, stderr } = await execFileAsync('docker', args, {
         timeout: 600000, // 10 minute timeout
         maxBuffer: 50 * 1024 * 1024, // 50MB buffer
       })
 
       return stdout + '\n' + stderr
     } catch (error) {
-      const execError = error as ExecException & { stdout?: string; stderr?: string }
+      const execError = error as ExecFileException & { stdout?: string; stderr?: string }
       const output = (execError.stdout || '') + '\n' + (execError.stderr || '')
       throw new Error(`Docker build failed: ${execError.message}\n${output}`)
     }
@@ -229,27 +255,31 @@ export class AgentBuildService {
   private async importToK3s(imageName: string): Promise<void> {
     this.logger.log(`Importing ${imageName} to K3s...`)
 
-    const tarPath = `/tmp/${imageName.replace(':', '-').replace('/', '-')}.tar`
+    const tarDir = await fs.mkdtemp(path.join(os.tmpdir(), 'stella-agent-image-'))
+    const tarPath = path.join(tarDir, 'image.tar')
 
     try {
       // Export from Docker
-      await execAsync(`docker save ${imageName} -o ${tarPath}`, { timeout: 120000 })
+      await execFileAsync('docker', ['save', imageName, '-o', tarPath], { timeout: 120000 })
 
       // Import to K3s
       try {
-        await execAsync(`k3s ctr images import ${tarPath}`, { timeout: 120000 })
+        await execFileAsync('k3s', ['ctr', 'images', 'import', tarPath], { timeout: 120000 })
       } catch (k3sErr) {
         this.logger.warn(`k3s ctr import failed (${(k3sErr as Error).message?.trim()}), falling back to ctr binary`)
-        await execAsync(`ctr --address /run/k3s/containerd/containerd.sock -n k8s.io images import ${tarPath}`, { timeout: 120000 })
+        await execFileAsync(
+          'ctr',
+          ['--address', '/run/k3s/containerd/containerd.sock', '-n', 'k8s.io', 'images', 'import', tarPath],
+          { timeout: 120000 },
+        )
       }
-
-      // Cleanup
-      await execAsync(`rm -f ${tarPath}`)
 
       this.logger.log(`Successfully imported ${imageName} to K3s`)
     } catch (error) {
       this.logger.error(`Failed to import to K3s: ${error.message}`)
       throw error
+    } finally {
+      await fs.rm(tarDir, { recursive: true, force: true }).catch(() => undefined)
     }
   }
 

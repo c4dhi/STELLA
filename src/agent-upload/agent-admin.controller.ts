@@ -16,7 +16,7 @@ import { AgentValidationStatus } from '@prisma/client'
 import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js'
 
 interface AuthenticatedRequest extends Request {
-  user?: { id: string; email: string }
+  user?: { userId: string; email: string }
 }
 
 interface ApproveDto {
@@ -158,7 +158,7 @@ export class AgentAdminController {
       throw new BadRequestException('Agent is already approved')
     }
 
-    const adminId = req.user?.id
+    const adminId = req.user?.userId
 
     // Update status to approved
     const updated = await this.prisma.agentType.update({
@@ -214,7 +214,7 @@ export class AgentAdminController {
       throw new BadRequestException('Agent is already rejected')
     }
 
-    const adminId = req.user?.id
+    const adminId = req.user?.userId
 
     // Update status to rejected
     const updated = await this.prisma.agentType.update({

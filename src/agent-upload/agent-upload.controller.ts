@@ -8,6 +8,8 @@ import {
   UploadedFile,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
+  UnauthorizedException,
   Sse,
   Logger,
   Req,
@@ -16,14 +18,33 @@ import { FileInterceptor } from '@nestjs/platform-express'
 import { Observable, interval, map, takeWhile, concat, of } from 'rxjs'
 import { Request } from 'express'
 import { AgentPackageService } from '../agent-package/agent-package.service.js'
-import { AgentBuildService, BuildStatus } from '../agent-build/agent-build.service.js'
+import { AgentBuildService, BuildStatus, resolveDockerfilePath } from '../agent-build/agent-build.service.js'
 import { StorageService } from '../storage/storage.service.js'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentValidationStatus, Prisma } from '@prisma/client'
 import { hashPipelineSchema } from '../agent-configurations/configuration-compat.util.js'
 
+import type { AuthUser } from '../auth/auth-user.loader.js'
+
 interface AuthenticatedRequest extends Request {
-  user?: { id: string; email: string }
+  user?: AuthUser
+}
+
+/** The signed-in user's id. The global JwtAuthGuard sets `req.user`; refuse if it is missing. */
+export function requireUserId(req: AuthenticatedRequest): string {
+  const userId = req.user?.userId
+  if (!userId) throw new UnauthorizedException('Sign in to manage your agents')
+  return userId
+}
+
+/**
+ * Only the uploader (or a system admin) may build or delete an upload. An upload
+ * without an owner (stored before the owner was recorded) is admin-only.
+ */
+export function assertOwnsAgent(agentType: { userId: string | null }, req: AuthenticatedRequest): void {
+  const userId = requireUserId(req)
+  if (req.user?.isSystemAdmin) return
+  if (agentType.userId !== userId) throw new ForbiddenException('You do not own this agent')
 }
 
 @Controller('agent-types')
@@ -51,6 +72,8 @@ export class AgentUploadController {
     @UploadedFile() file: Express.Multer.File,
     @Req() req: AuthenticatedRequest,
   ) {
+    const userId = requireUserId(req)
+
     if (!file) {
       throw new BadRequestException('No file uploaded')
     }
@@ -75,6 +98,22 @@ export class AgentUploadController {
 
     const manifest = validation.manifest!
 
+    // An upload deploys the image STELLA builds from its Dockerfile, never one the
+    // manifest points at: a prebuilt image would skip the build (and its base-image
+    // check) and count as "built" straight away.
+    if (manifest.image.imageUrl) {
+      throw new BadRequestException(
+        'image.imageUrl is not allowed in an uploaded agent; remove it and STELLA builds the image from your Dockerfile',
+      )
+    }
+
+    // Refuse a Dockerfile path the build would refuse, so the uploader hears it now.
+    try {
+      resolveDockerfilePath('/package', manifest.image.dockerfile || 'Dockerfile')
+    } catch (err) {
+      throw new BadRequestException((err as Error).message)
+    }
+
     // Check for existing agent with same slug
     const existing = await this.prisma.agentType.findUnique({
       where: { slug: manifest.metadata.slug },
@@ -91,9 +130,6 @@ export class AgentUploadController {
       file.buffer,
       file.originalname,
     )
-
-    // Get user ID from request (if authenticated)
-    const userId = req.user?.id
 
     // Publish the agent's declared default experts (config/experts/*.json) so the
     // Configurator's Expert Module renders them. Null for non-expert agents.
@@ -116,7 +152,8 @@ export class AgentUploadController {
         packageSize: storageInfo.size,
         packageHash: storageInfo.hash,
         dockerfilePath: manifest.image.dockerfile || 'Dockerfile',
-        imageUrl: manifest.image.imageUrl,
+        // Set only by a successful build (AgentBuildService).
+        imageUrl: null,
         validationStatus: AgentValidationStatus.PENDING,
         configSchema: manifest.configSchema as Prisma.InputJsonValue,
         capabilities: manifest.capabilities as Prisma.InputJsonValue,
@@ -165,13 +202,10 @@ export class AgentUploadController {
    */
   @Get('my-agents')
   async getMyAgents(@Req() req: AuthenticatedRequest) {
-    const userId = req.user?.id
+    const userId = requireUserId(req)
 
     const agents = await this.prisma.agentType.findMany({
-      where: {
-        isBuiltIn: false,
-        ...(userId ? { userId } : {}),
-      },
+      where: { isBuiltIn: false, userId },
       orderBy: { createdAt: 'desc' },
       include: {
         buildLogs: {
@@ -224,11 +258,7 @@ export class AgentUploadController {
       throw new BadRequestException('Agent has no uploaded package')
     }
 
-    // Check ownership (if user is authenticated)
-    const userId = req.user?.id
-    if (userId && agentType.userId && agentType.userId !== userId) {
-      throw new BadRequestException('You do not own this agent')
-    }
+    assertOwnsAgent(agentType, req)
 
     // Start build
     const result = await this.agentBuildService.startBuild(id)
@@ -329,11 +359,7 @@ export class AgentUploadController {
       throw new BadRequestException('Cannot delete built-in agents')
     }
 
-    // Check ownership
-    const userId = req.user?.id
-    if (userId && agentType.userId && agentType.userId !== userId) {
-      throw new BadRequestException('You do not own this agent')
-    }
+    assertOwnsAgent(agentType, req)
 
     // Delete stored package
     if (agentType.packagePath) {

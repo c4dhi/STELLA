@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Approving or rejecting an uploaded agent (`/admin/agent-types`) now needs a system admin. Before, any signed-in user could approve their own upload.
+- Uploads now record who uploaded them. Before, every upload was stored without an owner, so My Agents listed everyone's uploads and anyone could build or delete any upload. Now only the uploader (or a system admin) can build or delete an upload, and My Agents shows only your own. Uploads stored before this fix have no owner and only a system admin can manage them.
+- An uploaded agent can't point at a prebuilt image (`image.imageUrl`) any more; STELLA builds it from the package's Dockerfile. Before, such an upload counted as built straight away and skipped the base-image check.
+- Building an uploaded agent no longer runs its Dockerfile path, name or version through a shell. The Dockerfile must be a plain relative path inside the package.
 
 ---
 

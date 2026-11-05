@@ -15,12 +15,12 @@ describe('AgentAdminController access', () => {
     ({ switchToHttp: () => ({ getRequest: () => ({ user }) }) }) as unknown as ExecutionContext
 
   it('turns away a regular user approving their own upload', () => {
-    expect(() => new SystemAdminGuard().canActivate(ctx({ id: 'u1', isSystemAdmin: false }))).toThrow(
+    expect(() => new SystemAdminGuard().canActivate(ctx({ userId: 'u1', isSystemAdmin: false }))).toThrow(
       ForbiddenException,
     )
   })
 
   it('lets a system admin through', () => {
-    expect(new SystemAdminGuard().canActivate(ctx({ id: 'a1', isSystemAdmin: true }))).toBe(true)
+    expect(new SystemAdminGuard().canActivate(ctx({ userId: 'a1', isSystemAdmin: true }))).toBe(true)
   })
 })
