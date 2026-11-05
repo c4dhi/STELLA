@@ -8,6 +8,7 @@ import {
   clampMemoryLimit,
   DEFAULT_CPU_LIMIT,
   DEFAULT_MEMORY_LIMIT,
+  resolveResourceRequests,
 } from './utils/resource-clamping.util.js';
 
 export interface AgentPodConfig {
@@ -216,12 +217,10 @@ export class KubernetesService {
               nodeEnv: process.env.NODE_ENV || 'local',
             }),
             resources: {
-              requests: {
-                memory: '512Mi',
-                cpu: '250m',
-                // Note: Agents do NOT need GPU - they communicate with STT/TTS services via gRPC
-                // The STT and TTS services have GPU access via runtimeClassName: nvidia
-              },
+              // Never above the limits, or Kubernetes refuses the pod.
+              // Note: Agents do NOT need GPU - they communicate with STT/TTS services via gRPC
+              // The STT and TTS services have GPU access via runtimeClassName: nvidia
+              requests: resolveResourceRequests(cpuLimit, memoryLimit),
               limits: {
                 memory: memoryLimit,
                 cpu: cpuLimit,

@@ -68,3 +68,27 @@ export function clampCpuLimit(value: string | undefined): { value: string; reaso
 export function clampMemoryLimit(value: string | undefined): { value: string; reason: 'missing' | 'invalid' | 'exceeds_max' | 'ok' } {
   return clampResourceLimit(value, DEFAULT_MEMORY_LIMIT, MAX_MEMORY_BYTES, parseMemoryBytes)
 }
+
+export const DEFAULT_CPU_REQUEST = '250m'
+export const DEFAULT_MEMORY_REQUEST = '512Mi'
+
+/**
+ * Pod resource requests for an agent. Kubernetes refuses a pod whose request is
+ * above its limit, so an agent that declares a limit below the default request
+ * (say 256Mi) is given its limit as the request instead of failing to start.
+ * Pass the clamped limits, which always parse.
+ */
+export function resolveResourceRequests(
+  cpuLimit: string,
+  memoryLimit: string,
+): { cpu: string; memory: string } {
+  const cpuLimitMillicores = parseCpuMillicores(cpuLimit)
+  const memoryLimitBytes = parseMemoryBytes(memoryLimit)
+  const defaultCpu = parseCpuMillicores(DEFAULT_CPU_REQUEST)!
+  const defaultMemory = parseMemoryBytes(DEFAULT_MEMORY_REQUEST)!
+
+  return {
+    cpu: cpuLimitMillicores !== null && cpuLimitMillicores < defaultCpu ? cpuLimit : DEFAULT_CPU_REQUEST,
+    memory: memoryLimitBytes !== null && memoryLimitBytes < defaultMemory ? memoryLimit : DEFAULT_MEMORY_REQUEST,
+  }
+}

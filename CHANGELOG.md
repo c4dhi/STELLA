@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An agent whose manifest sets a memory or CPU limit below 512Mi / 250m now starts. Pod requests were fixed at those values, so Kubernetes refused the pod (request above limit) and the agent went FAILED without a pod. Requests are now lowered to the limit when the limit is smaller.
+
 ---
 
 ## [1.5.0] - 2026-10-28
