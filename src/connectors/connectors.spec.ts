@@ -703,7 +703,7 @@ describe('ConnectorsService', () => {
     expect(bindings).toEqual([
       { handle: 'elias', connectorId: 'c1', slot: 'elias' },
     ]);
-    const where = (prisma.connector.findMany.mock.calls[0][0] as any).where;
+    const where = ((prisma.connector.findMany as any).mock.calls[0][0] as any).where;
     expect(where.OR).toEqual([
       { userId: 'member-2' },
       { shares: { some: { projectId: 'p1' } } },
