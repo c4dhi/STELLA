@@ -10,6 +10,11 @@ Lifecycle:
 - ``run_audio_loop``: wait for a participant. Then either say the error line
   and end, or run the interview (see interview.py) and write every turn to
   ELIAS as it happens.
+
+Only public SDK APIs (stella-ai-agent-sdk 0.10): ``self.session`` for the
+settings, ``self.plan_runtime`` for the state machine, ``wait_for_participant``,
+``publish_progress`` and ``complete_session``. The agent registers under the
+``AGENT_TYPE``/``AGENT_VERSION`` the platform injects.
 - ``on_session_ending`` (the session is really ending, e.g. time cap):
   finalise the ELIAS transcript.
 - ``on_session_end`` (teardown, also on auto-pause): flush pending writes only.
@@ -19,9 +24,7 @@ Lifecycle:
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -52,9 +55,6 @@ DEFAULT_MESSAGES = {
     "error": "I'm sorry, I can't start the interview right now. Please try again later.",
 }
 
-NON_HUMAN_PREFIXES = ("agent-", "message-recorder", "system-")
-
-
 class StartupError(Exception):
     """Why the interview cannot run. ``spoken`` is what the participant hears."""
 
@@ -71,10 +71,8 @@ class EliasInterviewerAgent(BaseAgent):
         sm_client: Any = None,
     ) -> None:
         super().__init__()
-        self._agent_type = AGENT_NAME
-        self._agent_version = "0.1.0"
         self._checker = checker
-        self._sm_address = state_machine_address or os.environ.get("STATE_MACHINE_ADDRESS")
+        self.state_machine_address = state_machine_address  # None: STATE_MACHINE_ADDRESS
         self._sm = sm_client
         self._messages = dict(DEFAULT_MESSAGES)
         self._startup_error: Optional[str] = None
@@ -96,13 +94,14 @@ class EliasInterviewerAgent(BaseAgent):
         await super().on_session_start(session_id, config)
         self._session_started_at = datetime.now(timezone.utc).isoformat()
         try:
-            await self._prepare(session_id, config or {})
+            await self._prepare(session_id, self.session.config)
         except Exception as e:  # never raise out of startup, see module docstring
             self._startup_error = str(e) or e.__class__.__name__
             self.record_error(self._startup_error)
             logger.error("[STARTUP] interview cannot run: %s", self._startup_error)
 
     async def _prepare(self, session_id: str, config: Dict[str, Any]) -> None:
+        """``config`` is the user's settings (configSchema in agent.yaml)."""
         elias_cfg = config.get("elias") or {}
         self._messages.update({k: v for k, v in (config.get("messages") or {}).items() if isinstance(v, str)})
         project_id = str(elias_cfg.get("project_id") or "").strip()
@@ -144,17 +143,14 @@ class EliasInterviewerAgent(BaseAgent):
         """Progress and stored answers are a mirror, not the source of truth for
         ELIAS; without a state machine the interview still runs."""
         if self._sm is None:
-            if not self._sm_address:
+            runtime = self.plan_runtime
+            if not runtime.configured:
                 logger.warning("[STARTUP] no STATE_MACHINE_ADDRESS, running without progress tracking")
                 return False
-            from stella_agent_sdk.services.state_machine_client import StateMachineClient
-
-            self._sm = StateMachineClient(session_id=session_id, address=self._sm_address)
             try:
-                await self._sm.connect()
+                self._sm = await runtime.connect()
             except Exception as e:
                 logger.warning("[STARTUP] state machine unavailable (%s), running without it", e)
-                self._sm = None
                 return False
         return True
 
@@ -178,7 +174,7 @@ class EliasInterviewerAgent(BaseAgent):
         return None
 
     async def run_audio_loop(self) -> None:
-        participant = await self._wait_for_participant()
+        participant = await self.wait_for_participant(poll_interval=self._participant_poll_s)
 
         if self._startup_error or self._interview is None:
             await self._say(self._messages["error"], record=False)
@@ -187,7 +183,7 @@ class EliasInterviewerAgent(BaseAgent):
 
         if not self._transcript_id:
             try:
-                self._transcript_id = await self._elias.start_interview(participant, self._session_id or "")
+                self._transcript_id = await self._elias.start_interview(participant, self.session_id or "")
             except EliasUnavailable as e:
                 self._startup_error = f"Could not start the ELIAS interview: {e}"
                 self.record_error(self._startup_error)
@@ -212,7 +208,7 @@ class EliasInterviewerAgent(BaseAgent):
 
     async def _handle_reply(self, text: str) -> None:
         iv = self._interview
-        self._messages_processed += 1
+        self.record_message_processed()
         self._recorder.record("participant", text)
         iv.add_reply(text)
         q = iv.current
@@ -291,13 +287,7 @@ class EliasInterviewerAgent(BaseAgent):
 
     async def _finish_session(self, reason: str) -> None:
         self._finished = True
-        try:
-            await self.audio.wait_for_playout_drain()
-            await self.audio._room.publish_data({"type": "session_completed", "data": {"reason": reason}})
-            await asyncio.sleep(self._completion_delay_s)
-        except Exception:
-            logger.exception("[SESSION] could not publish completion")
-        self._session_completed = True
+        await self.complete_session(reason, delay_s=self._completion_delay_s)
 
     # ── helpers ──────────────────────────────────────────────────────────
 
@@ -307,14 +297,6 @@ class EliasInterviewerAgent(BaseAgent):
         await self.audio.speak_line(text)
         if record and self._recorder is not None:
             self._recorder.record("interviewer", text)
-
-    async def _wait_for_participant(self) -> str:
-        while True:
-            room = getattr(getattr(self.audio, "_room", None), "room", None)
-            for identity in list(getattr(room, "remote_participants", {}) or {}):
-                if not identity.startswith(NON_HUMAN_PREFIXES):
-                    return identity
-            await asyncio.sleep(self._participant_poll_s)
 
     async def _set_deliverable(self, key: str, value: str, reasoning: str) -> None:
         if self._sm is None:
@@ -345,7 +327,7 @@ class EliasInterviewerAgent(BaseAgent):
                 return None
             progress = progress_from_full_state(full_state, plan=self._plan, session_started_at=self._session_started_at)
             return AgentOutput.progress_update(
-                self._session_id or "", progress, update_trigger=trigger, agent_name=AGENT_NAME, agent_icon=AGENT_ICON
+                self.session_id or "", progress, update_trigger=trigger, agent_name=AGENT_NAME, agent_icon=AGENT_ICON
             )
         except Exception as e:
             logger.warning("[STATE] progress unavailable: %s", e)
@@ -355,10 +337,7 @@ class EliasInterviewerAgent(BaseAgent):
         output = await self._progress_output(trigger)
         if output is None:
             return
-        payload = output.to_data_payload(self._agent_identity())
-        if payload is not None:
-            self._last_progress_payload = payload
-            try:
-                await self.audio._room.publish_data(payload)
-            except Exception as e:
-                logger.warning("[STATE] could not publish progress: %s", e)
+        try:
+            await self.publish_progress(output)
+        except Exception as e:
+            logger.warning("[STATE] could not publish progress: %s", e)

@@ -55,15 +55,6 @@ class Event:
     is_final: bool = True
 
 
-class FakeRoom:
-    def __init__(self, identities: List[str]) -> None:
-        self.room = type("R", (), {"remote_participants": {i: object() for i in identities}})()
-        self.published: List[Dict[str, Any]] = []
-
-    async def publish_data(self, payload: Dict[str, Any]) -> None:
-        self.published.append(payload)
-
-
 class FakeAudio:
     """Feeds scripted replies; each reply is released only after the agent has
     spoken since the previous one, like a participant who waits for the question."""
@@ -71,9 +62,16 @@ class FakeAudio:
     def __init__(self, replies: List[str], identities: Optional[List[str]] = None) -> None:
         self.replies = list(replies)
         self.spoken: List[str] = []
-        self._room = FakeRoom(identities if identities is not None else ["agent-x", "participant-42"])
+        self.identities = identities if identities is not None else ["agent-x", "participant-42"]
+        self.published: List[Dict[str, Any]] = []
         self.is_closing = False
         self._spoke = asyncio.Event()
+
+    def participant_identities(self) -> List[str]:
+        return list(self.identities)
+
+    async def publish_data(self, payload: Dict[str, Any]) -> None:
+        self.published.append(payload)
 
     async def speak_line(self, text: str) -> None:
         self.spoken.append(text)

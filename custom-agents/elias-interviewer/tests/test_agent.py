@@ -61,7 +61,7 @@ async def test_asks_every_question_verbatim_and_writes_each_turn_to_elias():
     assert sm.deliverables[TRANSCRIPT_ID_KEY] == "t-new"
     assert sm.completed == ["q1", "q2", "q3"]
     assert summary["finished"] is True and summary["turns_failed"] == 0
-    assert any(p.get("type") == "session_completed" for p in audio._room.published)
+    assert any(p.get("type") == "session_completed" for p in audio.published)
 
 
 @pytest.mark.asyncio
@@ -182,3 +182,11 @@ async def test_failed_elias_writes_do_not_stop_the_interview():
     summary = await run(make_agent(conn, audio))
     assert audio.spoken[-1] == DEFAULT_MESSAGES["closing"]
     assert summary["turns_failed"] == 8
+
+
+def test_registers_under_the_type_the_platform_injects(monkeypatch):
+    # The platform waits for the slug it deployed; the agent never hardcodes it.
+    monkeypatch.setenv("AGENT_TYPE", "elias-interviewer")
+    monkeypatch.setenv("AGENT_VERSION", "0.1.0")
+    agent = _TestAgent(checker=ScriptedChecker(), sm_client=FakeStateMachine())
+    assert (agent.agent_type, agent.agent_version) == ("elias-interviewer", "0.1.0")
