@@ -19,6 +19,7 @@ import {
 } from './dto/agent-metrics.dto.js';
 import { AgentStatus, Prisma, SessionStatus } from '@prisma/client';
 import { sanitizeAgentConfig } from '../common/utils/sanitize-config.js';
+import { assertDeployableAgentType } from './deployable-agent-type.util.js';
 import { EncryptionService } from '../env-var-templates/encryption.service.js';
 import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service.js';
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
@@ -284,12 +285,6 @@ export class AgentsService {
     // maintained agent was the one you got by not choosing.
     const agentType = createAgentDto.agentType || 'stella-v2-agent';
 
-    // Security: Validate agent type against allowed list
-    const allowedAgentTypes = ['stella-v2-agent', 'stella-light-agent'];
-    if (!allowedAgentTypes.includes(agentType)) {
-      throw new BadRequestException(`Invalid agent type: ${agentType}. Allowed: ${allowedAgentTypes.join(', ')}`);
-    }
-
     // Look up AgentType from DB for per-agent resource limits, type scoping and
     // pipeline-config resolution.
     const agentTypeRecord = await this.prisma.agentType.findUnique({
@@ -303,8 +298,14 @@ export class AgentsService {
         defaultConfig: true,
         pipelineSchema: true,
         configSchema: true,
+        isBuiltIn: true,
+        validationStatus: true,
+        imageUrl: true,
       },
     });
+
+    // Security: only approved types deploy (uploaded ones also need a built image).
+    assertDeployableAgentType(agentType, agentTypeRecord);
 
     // Security: Sanitize agent name (max 255 chars, no control characters)
     const sanitizedName = createAgentDto.name
@@ -647,6 +648,13 @@ export class AgentsService {
     // to land silently on stella-light, which is deprecated — the least
     // maintained agent was the one you got by not choosing.
     const agentType = createAgentDto.agentType || 'stella-v2-agent';
+    assertDeployableAgentType(
+      agentType,
+      await this.prisma.agentType.findUnique({
+        where: { slug: agentType },
+        select: { isBuiltIn: true, validationStatus: true, imageUrl: true },
+      }),
+    );
     // Encrypt manual env vars so standalone agents have the same restart behavior as regular agents.
     const manualEnvVarsEncrypted = this.encryptManualEnvVarsForStorage(createAgentDto.envVars);
 

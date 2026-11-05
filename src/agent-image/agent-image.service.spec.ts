@@ -268,3 +268,71 @@ describe('AgentImageService.pruneOldConfigImages', () => {
     expect(removedImages()).toContain('stella-v2-agent:cfg-444444444444');
   });
 });
+
+describe('AgentImageService.resolveAgentImage', () => {
+  const originalK8sEnv = process.env.KUBERNETES_SERVICE_HOST;
+
+  function makeService(record: Record<string, unknown> | null): InstanceType<typeof AgentImageService> {
+    const configService = new ConfigService();
+    jest.spyOn(configService, 'get').mockImplementation((_key: string, defaultValue?: unknown) => defaultValue);
+    const agentTypeService = {
+      findBySlug: jest.fn(async () => record),
+    } as unknown as AgentTypeService;
+    return new AgentImageService(configService, agentTypeService);
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    delete process.env.KUBERNETES_SERVICE_HOST;
+    // No Docker socket: built-ins resolve to their pre-built :latest without building.
+    execSync.mockImplementation(() => {
+      throw new Error('no docker');
+    });
+  });
+
+  afterEach(() => {
+    if (originalK8sEnv === undefined) {
+      delete process.env.KUBERNETES_SERVICE_HOST;
+    } else {
+      process.env.KUBERNETES_SERVICE_HOST = originalK8sEnv;
+    }
+  });
+
+  it('keeps the python -m entry point for built-ins', async () => {
+    const svc = makeService(null);
+    await expect(svc.resolveAgentImage('stella-v2-agent')).resolves.toEqual({
+      image: 'stella-v2-agent:latest',
+      command: ['python', '-m', 'stella_v2_agent'],
+    });
+  });
+
+  it('runs an approved uploaded agent from its built image with the image CMD', async () => {
+    const svc = makeService({
+      isBuiltIn: false,
+      validationStatus: 'APPROVED',
+      imageUrl: 'elias-interviewer:1.0.0',
+    });
+    await expect(svc.resolveAgentImage('elias-interviewer')).resolves.toEqual({
+      image: 'elias-interviewer:1.0.0',
+    });
+  });
+
+  it('refuses an uploaded agent that is no longer approved (restart / wake path)', async () => {
+    const svc = makeService({
+      isBuiltIn: false,
+      validationStatus: 'REJECTED',
+      imageUrl: 'elias-interviewer:1.0.0',
+    });
+    await expect(svc.resolveAgentImage('elias-interviewer')).rejects.toThrow(/not approved/);
+  });
+
+  it('refuses an uploaded agent with no build', async () => {
+    const svc = makeService({ isBuiltIn: false, validationStatus: 'APPROVED', imageUrl: null });
+    await expect(svc.resolveAgentImage('elias-interviewer')).rejects.toThrow(/no built image/);
+  });
+
+  it('refuses an unknown slug', async () => {
+    const svc = makeService(null);
+    await expect(svc.resolveAgentImage('nope')).rejects.toThrow(/Unknown agent type/);
+  });
+});

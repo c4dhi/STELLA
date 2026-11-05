@@ -145,8 +145,9 @@ export class KubernetesService {
 
     // Ensure agent image exists (builds on-demand if needed)
     this.logger.log(`Ensuring agent image exists for type: ${agentType}`);
-    const agentImage = await this.agentImageService.ensureImageExists(agentType, config.forceRebuild);
-    this.logger.log(`Using agent image: ${agentImage}`);
+    const { image: agentImage, command: agentCommand } =
+      await this.agentImageService.resolveAgentImage(agentType, config.forceRebuild);
+    this.logger.log(`Using agent image: ${agentImage}${agentCommand ? '' : ' (image CMD)'}`);
 
     // Create Secret first
     await this.createSecret(secretName, config);
@@ -192,9 +193,9 @@ export class KubernetesService {
                 drop: ['ALL'],
               },
             },
-            // Run agent module (config from environment variables)
-            // stella-light-agent -> stella_light_agent, stella-v2-agent -> stella_v2_agent
-            command: ['python', '-m', agentType.replace(/-/g, '_')],
+            // Built-ins run `python -m <slug_underscored>`; uploaded agents run
+            // their image's own CMD (command omitted). See resolveAgentImage.
+            ...(agentCommand ? { command: agentCommand } : {}),
             envFrom: [
               {
                 secretRef: {

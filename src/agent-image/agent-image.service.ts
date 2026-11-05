@@ -183,6 +183,46 @@ export class AgentImageService {
   }
 
   /**
+   * The image a pod for this agent type runs, and the command to start it.
+   *
+   * - **Built-in types** (in the repo registry) are built on demand from
+   *   `agents/<slug>/`. They start with `python -m <slug_underscored>`, as before.
+   * - **Uploaded types** run the image their build stored in
+   *   `AgentType.imageUrl`. `command` is undefined so the image's own CMD
+   *   runs: an uploaded package owns its entry point and need not follow the
+   *   built-in module-naming convention.
+   *
+   * Approval is checked here again, not only at deploy, because restarts and
+   * auto-pause wakes also create pods. An agent rejected after it was first
+   * deployed must not come back.
+   */
+  async resolveAgentImage(
+    agentType: string,
+    forceRebuild = false,
+  ): Promise<{ image: string; command?: string[] }> {
+    if (this.agentRegistry.has(agentType)) {
+      const image = await this.ensureImageExists(agentType, forceRebuild);
+      return { image, command: ['python', '-m', agentType.replace(/-/g, '_')] };
+    }
+
+    const record = await this.agentTypeService.findBySlug(agentType);
+    if (!record) {
+      throw new Error(`Unknown agent type: ${agentType}`);
+    }
+    if (record.validationStatus !== 'APPROVED') {
+      throw new Error(`Agent type ${agentType} is not approved (status: ${record.validationStatus})`);
+    }
+    if (record.isBuiltIn) {
+      // A seeded built-in missing from the registry above is a code bug, not user error.
+      throw new Error(`Built-in agent type ${agentType} has no image registry entry`);
+    }
+    if (!record.imageUrl) {
+      throw new Error(`Agent type ${agentType} has no built image yet`);
+    }
+    return { image: record.imageUrl };
+  }
+
+  /**
    * Get all registered agent types with metadata from database.
    * Throws error if database is not seeded - no fallback to prevent silent failures.
    */

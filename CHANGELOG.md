@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time, even after an admin had approved it and it had been built. Now any approved agent type deploys. An uploaded one also needs a finished build, and its pod runs the build's own start command. A restart or a wake after auto-pause checks approval again, so an agent that was rejected after its first deploy does not come back.
+
 ---
 
 ## [1.5.0] - 2026-10-28
