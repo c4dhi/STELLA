@@ -563,6 +563,7 @@ export default function DeployAgentModal({
             transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             className={`
               backdrop-blur-xl rounded-[20px] w-full max-w-2xl overflow-hidden
+              flex flex-col max-h-[calc(100dvh-2rem)]
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
@@ -571,7 +572,7 @@ export default function DeployAgentModal({
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className={`px-6 pt-6 pb-4 border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+            <div className={`shrink-0 px-6 pt-6 pb-4 border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
               <div className="relative">
                 <button
                   onClick={handleClose}
@@ -623,7 +624,8 @@ export default function DeployAgentModal({
               </div>
             </div>
 
-            {/* Content */}
+            {/* Content: the only part that scrolls, so the footer stays on screen */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
             <AnimatePresence mode="wait">
               {step === 'gallery' ? (
                 <motion.div
@@ -1244,9 +1246,10 @@ export default function DeployAgentModal({
                 </motion.div>
               ) : null}
             </AnimatePresence>
+            </div>
 
             {/* Footer */}
-            <div className={`px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+            <div className={`shrink-0 px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
               <div className="flex gap-3">
                 {step === 'gallery' ? (
                   <>

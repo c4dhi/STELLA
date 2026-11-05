@@ -638,6 +638,7 @@ export default function ProjectModal({
             layout
             className={`
               backdrop-blur-xl rounded-[20px] w-full ${modalSizeClass} overflow-hidden
+              flex flex-col max-h-[calc(100dvh-2rem)]
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
@@ -647,7 +648,7 @@ export default function ProjectModal({
           >
             {/* Header */}
             {step !== 'complete' && (
-              <div className={`px-6 pt-6 pb-4 ${isPublicWizard ? `border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
+              <div className={`shrink-0 px-6 pt-6 pb-4 ${isPublicWizard ? `border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
                 <div className="relative">
                   <button
                     onClick={handleClose}
@@ -702,7 +703,8 @@ export default function ProjectModal({
               </div>
             )}
 
-            {/* Content */}
+            {/* Content: the only part that scrolls, so the footer stays on screen */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
             <AnimatePresence mode="wait">
               {/* Basic Step */}
               {step === 'basic' && (
@@ -1390,10 +1392,11 @@ export default function ProjectModal({
                 </motion.div>
               )}
             </AnimatePresence>
+            </div>
 
             {/* Error message */}
             {error && step !== 'configure' && (
-              <div className={`mx-6 mb-4 p-3 rounded-xl text-sm ${
+              <div className={`shrink-0 mx-6 mb-4 p-3 rounded-xl text-sm ${
                 isDark
                   ? 'bg-red-500/10 border border-red-500/20 text-red-400'
                   : 'bg-red-50 border border-red-200 text-red-700'
@@ -1404,7 +1407,7 @@ export default function ProjectModal({
 
             {/* Footer Actions */}
             {step !== 'complete' && (
-              <div className={`px-6 py-4 flex gap-3 ${isPublicWizard || isEditMode ? `border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
+              <div className={`shrink-0 px-6 py-4 flex gap-3 ${isPublicWizard || isEditMode ? `border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
                 {isPublicWizard && (
                   <button
                     onClick={handleBack}
