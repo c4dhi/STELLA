@@ -1142,6 +1142,8 @@ export interface PublicAgentConfig {
   personaId?: string
   envVarTemplateId?: string
   envVars?: Record<string, string>
+  /** Connectors every public session's agent may call; the owner's own. */
+  connectorBindings?: { connectorId: string; slot?: string }[]
 }
 
 /**

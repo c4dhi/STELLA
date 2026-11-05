@@ -33,6 +33,8 @@ interface EnvVarsSelectionStepProps {
   // template list is filtered server-side. Fail fast at the boundary if missing.
   agentTypeId: string
   requiredEnvVars: string[]
+  /** Env vars the agent reads when set; offered as rows that may stay empty. */
+  optionalEnvVars?: string[]
   selectedEnvVarTemplate: EnvVarTemplate | null
   onSelectEnvVarTemplate: (template: EnvVarTemplate | null) => void
   envVars: Record<string, string>
@@ -44,6 +46,7 @@ interface EnvVarsSelectionStepProps {
 export default function EnvVarsSelectionStep({
   agentTypeId,
   requiredEnvVars,
+  optionalEnvVars = [],
   selectedEnvVarTemplate,
   onSelectEnvVarTemplate,
   envVars,
@@ -79,7 +82,8 @@ export default function EnvVarsSelectionStep({
         const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
         const templateKeySet = new Set(templateKeys)
         const requiredToFill = requiredEnvVars.filter((key) => !templateKeySet.has(key))
-        editor.reset({ requiredKeys: requiredToFill, templateKeys, initial: envVars })
+        const optionalToOffer = optionalEnvVars.filter((key) => !templateKeySet.has(key))
+        editor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: envVars })
       }
     }
   }, [])
@@ -105,7 +109,8 @@ export default function EnvVarsSelectionStep({
     const templateKeys = template?.variableKeys ?? []
     const templateKeySet = new Set(templateKeys)
     const requiredToFill = requiredEnvVars.filter((key) => !templateKeySet.has(key))
-    editor.reset({ requiredKeys: requiredToFill, templateKeys, initial: {} })
+    const optionalToOffer = optionalEnvVars.filter((key) => !templateKeySet.has(key))
+    editor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: {} })
     onEnvVarsViewChange('edit')
   }
 
