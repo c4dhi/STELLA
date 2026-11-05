@@ -272,7 +272,10 @@ export default function DeployAgentModal({
   }
 
   const handleSelectCustomAgent = (agent: CustomAgentType) => {
-    setSelectedType(agent as AgentType)
+    // "My Agents" lists the user's uploads from their own endpoint, without what
+    // deploying them takes. The gallery entry of the same type carries the
+    // server-resolved requirements (settings, connectors), so deploy from that.
+    setSelectedType(agentTypes.find((t) => t.id === agent.id) ?? (agent as AgentType))
   }
 
   const handleUploadComplete = (_result: AgentUploadResponse) => {
