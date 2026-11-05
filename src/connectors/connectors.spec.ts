@@ -1101,8 +1101,8 @@ configSchema:
       label: Optional notes
 `);
     expect(result.errors).toEqual([]);
-    const slots = result.manifest?.configSchema?.['x-stella-connectors'];
-    expect(connectorSlotsOf(result.manifest?.configSchema)).toEqual(slots);
+    // Manifest 1.0's configSchema flag becomes the 2.0 `connectors` block.
+    const slots = result.manifest?.connectors;
     expect(slots).toEqual([
       {
         slot: 'interview',
@@ -1137,13 +1137,13 @@ configSchema:
       `${base}\nconfigSchema:\n  x-stella-connectors:\n${indented}\n`,
     );
     expect(result.valid).toBe(false);
-    expect(result.errors.join('\n')).toMatch(/x-stella-connectors/);
+    expect(result.errors.join('\n')).toMatch(/^connectors\./m);
   });
 
   it('is optional', () => {
     const result = parseAgentManifestYaml(base);
     expect(result.valid).toBe(true);
-    expect(connectorSlotsOf(result.manifest?.configSchema)).toEqual([]);
+    expect(result.manifest?.connectors ?? []).toEqual([]);
   });
 
   it('is not read at the top level of agent.yaml', () => {
