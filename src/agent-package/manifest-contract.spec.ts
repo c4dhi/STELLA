@@ -155,6 +155,15 @@ describe('manifest 2.0 rules', () => {
     ).toContain('defaultConfig: must be string at /project_id')
   })
 
+  it('does not ask defaultConfig for settings the user must give', () => {
+    const configSchema = {
+      type: 'object',
+      required: ['elias'],
+      properties: { elias: { type: 'object', required: ['project_id'], properties: { project_id: { type: 'string' } } } },
+    }
+    expect(parseAgentManifest({ ...base, configSchema, defaultConfig: { elias: {} } }).errors).toEqual([])
+  })
+
   it('refuses a name that is both a required and an optional env var', () => {
     expect(errors({ env: { required: ['A_KEY'], optional: [{ name: 'A_KEY' }] } })).toContain('A_KEY is both required and optional')
   })

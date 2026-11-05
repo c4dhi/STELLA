@@ -518,7 +518,9 @@ export function parseAgentManifest(raw: unknown): ManifestSchemaParseResult {
       return { valid: false, errors: schemaErrors.map((e) => `configSchema: ${e}`), warnings }
     }
     if (manifest.defaultConfig) {
-      const configErrors = validateAgainstSchema(manifest.configSchema, manifest.defaultConfig)
+      // Defaults fill in settings; a setting the user must give (e.g. a project id)
+      // has none, so `required` does not apply to them. Types and ranges do.
+      const configErrors = validateAgainstSchema(withoutRequired(manifest.configSchema), manifest.defaultConfig)
       if (configErrors.length > 0) {
         return { valid: false, errors: configErrors.map((e) => `defaultConfig: ${e}`), warnings }
       }
@@ -577,6 +579,18 @@ function formatAjvError(error: unknown): string {
   const path = issue.instancePath || issue.dataPath || ''
   const at = path ? ` at ${path}` : ''
   return `${issue.message || 'invalid JSON Schema'}${at}`
+}
+
+/** A copy of a JSON Schema with every `required` list removed, at any depth. */
+function withoutRequired(node: unknown): any {
+  if (Array.isArray(node)) return node.map(withoutRequired)
+  if (!node || typeof node !== 'object') return node
+  const copy: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'required' && Array.isArray(value)) continue
+    copy[key] = withoutRequired(value)
+  }
+  return copy
 }
 
 /** Every `x-stella-*` key anywhere inside a JSON Schema document. */
