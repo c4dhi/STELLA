@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time. Now a user can upload, build and deploy their own agent without waiting for anyone, and its pod runs the build's own start command. Other users can deploy an upload only once an admin approves it, and a rejected agent never deploys, including on restart or wake after auto-pause.
-- **Admin switch: "Review uploaded agents"** in Settings → Platform Defaults. It is off by default. When on, no upload deploys until a system admin approves it, and unreviewed agents also stop coming back on restart or wake.
+- **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time. Now an uploaded agent deploys once a system admin approves it, and its pod runs the build's own start command. A rejected agent never deploys, including on restart or wake after auto-pause.
+- **Admin switch: "Review uploaded agents"** in Settings → Platform Defaults. **It is on by default**, because an agent pod still receives the platform's LiveKit key (which can join any session) and building an upload runs its Dockerfile on the server. A system admin can turn it off; then a user can deploy their own upload as soon as it is built, and other users still need an admin's approval.
 
 ### Security
 

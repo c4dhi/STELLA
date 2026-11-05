@@ -32,8 +32,8 @@ function makeService(stored: string | null, findError?: Error) {
 }
 
 describe('agent review switch', () => {
-  it('is off when never set, so users run their own uploads without waiting', async () => {
-    await expect(makeService(null).service.isAgentReviewRequired()).resolves.toBe(false);
+  it('is on when never set: uploaded pods still get the platform LiveKit secret', async () => {
+    await expect(makeService(null).service.isAgentReviewRequired()).resolves.toBe(true);
   });
 
   it('is on when the read fails: unreviewed code does not run when the setting is unknown', async () => {
@@ -42,9 +42,10 @@ describe('agent review switch', () => {
     ).resolves.toBe(true);
   });
 
-  it('is on only for a stored "true"', async () => {
+  it('is off only for a stored "false"', async () => {
+    await expect(makeService('false').service.isAgentReviewRequired()).resolves.toBe(false);
     await expect(makeService('true').service.isAgentReviewRequired()).resolves.toBe(true);
-    await expect(makeService('yes').service.isAgentReviewRequired()).resolves.toBe(false);
+    await expect(makeService('no').service.isAgentReviewRequired()).resolves.toBe(true);
   });
 
   it('caches reads, and a write clears the cache', async () => {

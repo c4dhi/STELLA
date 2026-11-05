@@ -347,13 +347,14 @@ export default function PlatformSettingsSection() {
               Review uploaded agents
             </h3>
             <p className={`text-body-sm ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
-              When on, an agent a user uploads cannot be deployed until a system admin approves it. Uploaded agents run their own code on this server.
+              When on, an agent a user uploads cannot be deployed until a system admin approves it. Uploaded agents run their own code on this server:
+              building one runs its Dockerfile here, and a running agent holds the platform's LiveKit key, which can join any session. That is why review is on by default.
               When off, users can deploy their own uploads as soon as they are built. Other users can use an upload only after an admin approves it. A rejected agent never deploys.
             </p>
           </div>
           <button
             role="switch"
-            aria-checked={settings?.agentReviewRequired ?? false}
+            aria-checked={settings?.agentReviewRequired ?? true}
             aria-label="Review uploaded agents"
             onClick={() => void toggleAgentReview()}
             disabled={!settings || savingReview}
