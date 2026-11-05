@@ -107,12 +107,17 @@ def parse_tool_result(structured_json: str, content_json: str) -> Any:
     """What ``call_tool`` returns: structuredContent when the server sent it;
     otherwise the text content, parsed as JSON when it is JSON. Non-text content
     (images, resources) comes back as the raw list of content blocks."""
-    if structured_json and structured_json != "null":
-        return json.loads(structured_json)
     content = json.loads(content_json) if content_json else []
     texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
-    if texts and len(texts) == len(content):
-        text = "\n".join(texts)
+    text = "\n".join(texts) if texts and len(texts) == len(content) else None
+    if structured_json and structured_json != "null":
+        structured = json.loads(structured_json)
+        # A tool that returns a string gets wrapped by its server (FastMCP and
+        # others) as {"result": "<the same text>"}. That wrapper is not the tool's
+        # data, so read it like unstructured text. A real object is left alone.
+        if not (text is not None and structured == {"result": text}):
+            return structured
+    if text is not None:
         try:
             return json.loads(text)
         except ValueError:

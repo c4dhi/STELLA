@@ -234,3 +234,18 @@ async def test_base_agent_exposes_connectors_even_before_run_agent():
     assert await agent.connectors.list() == []
     with pytest.raises(ConnectorError):
         await agent.connectors.call_tool("interview", "start_interview")
+
+
+def test_string_result_wrapped_by_the_server_is_read_as_text():
+    # FastMCP wraps a tool that returns a str as {"result": "<text>"} and also
+    # sends that text as content; ELIAS does this for every tool.
+    text = '{"questions": [{"question": "Q1", "order": 1}]}'
+    structured = json.dumps({"result": text})
+    content = json.dumps([{"type": "text", "text": text}])
+    assert parse_tool_result(structured, content) == {"questions": [{"question": "Q1", "order": 1}]}
+
+
+def test_real_object_with_a_result_key_is_kept():
+    structured = json.dumps({"result": "ok"})
+    content = json.dumps([{"type": "text", "text": "done"}])
+    assert parse_tool_result(structured, content) == {"result": "ok"}
