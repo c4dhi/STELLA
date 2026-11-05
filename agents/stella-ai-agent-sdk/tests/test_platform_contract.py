@@ -11,6 +11,7 @@ import pytest
 
 from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent, SessionConfig
 from stella_agent_sdk.participants import is_human_participant
+from stella_agent_sdk.session_config import PLATFORM_KEYS
 from stella_agent_sdk.plan.runtime import DEFAULT_STATE_MACHINE_ADDRESS, PlanRuntime
 from stella_agent_sdk.contracts import render
 from stella_agent_sdk.platform_env import PLATFORM_ENV_NAMES
@@ -80,25 +81,32 @@ def test_session_config_types_platform_keys_and_collects_user_settings():
     assert cfg.plan_dict == PLAN and cfg.mode is None and not cfg.is_companion
     assert cfg.pipeline_config == {"nodes": {}}
     assert cfg.config == {"elias": {"project_id": "x"}, "model": "gpt-5.4-mini"}
-    # unknown top-level keys stay reachable as extras, for older agents
-    assert cfg.extras["model"] == "gpt-5.4-mini"
 
 
-def test_session_config_takes_an_explicit_config_block_as_is():
-    cfg = SessionConfig.parse({"config": {"a": 1}, "legacy": True})
-    assert cfg.config == {"a": 1}
-    assert cfg.extras == {"legacy": True}
+def test_any_non_platform_key_is_a_user_setting_even_one_named_config():
+    cfg = SessionConfig.parse({"config": {"a": 1}, "connectors": ["x"], "plan_id": "p"})
+    assert cfg.config == {"config": {"a": 1}, "connectors": ["x"], "plan_id": "p"}
+
+
+def test_platform_keys_mirror_the_backend():
+    # The backend owns the list (src/agents/deploy-request.ts); the SDK mirrors it.
+    assert PLATFORM_KEYS == ("persona", "mode", "plan", "available_plans", "pipeline_config")
+    assert set(SessionConfig.model_fields) == set(PLATFORM_KEYS)
+    owner = SDK_ROOT.parents[1] / "src" / "agents" / "deploy-request.ts"
+    if not owner.exists():
+        pytest.skip("deploy-request.ts is not on this branch yet")
+    m = re.search(r"PLATFORM_CONFIG_KEYS\s*=\s*\[([^\]]*)\]", owner.read_text())
+    assert m, "PLATFORM_CONFIG_KEYS not found in deploy-request.ts"
+    assert tuple(re.findall(r"'([a-z_]+)'", m.group(1))) == PLATFORM_KEYS
 
 
 def test_session_config_companion_mode_and_activities():
     cfg = SessionConfig.parse({
         "mode": "companion",
         "available_plans": [{"id": "a1", "title": "Walk", "plan": PLAN}],
-        "connectors": [{"handle": "elias", "slot": "elias"}],
     })
     assert cfg.is_companion
     assert cfg.available_plans[0].plan == PLAN
-    assert cfg.connectors[0].handle == "elias"
     assert cfg.plan_dict is None
 
 

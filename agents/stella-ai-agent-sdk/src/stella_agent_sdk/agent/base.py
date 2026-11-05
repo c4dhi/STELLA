@@ -261,8 +261,9 @@ class BaseAgent(ABC):
     @property
     def session(self) -> SessionConfig:
         """This session's ``AGENT_CONFIG``, typed: ``persona``, ``mode``,
-        ``plan``, ``available_plans``, ``pipeline_config``, ``config`` (the
-        user's settings from configSchema) and ``connectors``."""
+        ``plan``, ``available_plans`` and ``pipeline_config`` (the platform
+        keys), and ``config``: every other key, the user's settings from
+        configSchema."""
         return self._session_config
 
     @property

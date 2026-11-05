@@ -32,47 +32,6 @@
       "title": "ActivityConfig",
       "type": "object"
     },
-    "ConnectorBinding": {
-      "additionalProperties": true,
-      "description": "A connector (outside MCP server) bound to this deployment.",
-      "properties": {
-        "handle": {
-          "description": "What the agent passes to connectors.call_tool()",
-          "title": "Handle",
-          "type": "string"
-        },
-        "slot": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The agent.yaml slot it fills, if any",
-          "title": "Slot"
-        },
-        "name": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Name"
-        }
-      },
-      "required": [
-        "handle"
-      ],
-      "title": "ConnectorBinding",
-      "type": "object"
-    },
     "PersonaConfig": {
       "additionalProperties": true,
       "description": "Who the agent is: the Persona snapshot resolved at deploy time.\n\nBy value, never by reference: editing a Persona reaches the next deployment,\nnever a running session.",
@@ -170,7 +129,7 @@
     }
   },
   "additionalProperties": true,
-  "description": "AGENT_CONFIG as stella-ai-agent-sdk reads it. Generated from stella_agent_sdk.session_config.SessionConfig; do not edit by hand.",
+  "description": "AGENT_CONFIG as stella-ai-agent-sdk reads it. The properties are the platform keys (PLATFORM_CONFIG_KEYS in src/agents/deploy-request.ts); every other key is a user setting described by the agent's configSchema. Generated from stella_agent_sdk.session_config.SessionConfig; do not edit by hand.",
   "properties": {
     "persona": {
       "anyOf": [
@@ -237,22 +196,8 @@
         }
       ],
       "default": null,
-      "description": "The Agent Configurator's saved configuration, snapshotted",
+      "description": "The Agent Configurator's saved configuration, snapshotted (features.configurator)",
       "title": "Pipeline Config"
-    },
-    "config": {
-      "additionalProperties": true,
-      "description": "The user's settings for this agent, as described by configSchema in agent.yaml. When the backend sends no `config` key, every non-platform top-level key is a setting",
-      "title": "Config",
-      "type": "object"
-    },
-    "connectors": {
-      "description": "Connectors bound to this deployment",
-      "items": {
-        "$ref": "#/$defs/ConnectorBinding"
-      },
-      "title": "Connectors",
-      "type": "array"
     }
   },
   "title": "AgentSessionConfig",

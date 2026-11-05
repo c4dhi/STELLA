@@ -80,7 +80,6 @@ from stella_agent_sdk.services.connectors_client import (
 )
 from stella_agent_sdk.session_config import (
     ActivityConfig,
-    ConnectorBinding,
     PersonaConfig,
     SessionConfig,
 )
@@ -127,7 +126,6 @@ __all__ = [
     "SessionConfig",
     "PersonaConfig",
     "ActivityConfig",
-    "ConnectorBinding",
     # Participants
     "NON_HUMAN_PREFIXES",
     "is_human_participant",

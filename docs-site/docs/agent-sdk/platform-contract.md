@@ -15,7 +15,7 @@ The SDK also reports its own version (`self.sdk_version`) when it registers, so 
 
 ## Session config
 
-`self.session` is `AGENT_CONFIG`, typed (`SessionConfig`):
+`self.session` is `AGENT_CONFIG`, typed (`SessionConfig`). The first five fields are the platform keys STELLA sets (`PLATFORM_CONFIG_KEYS` in `src/agents/deploy-request.ts`). Every other key is one of the user's settings:
 
 | Field | What it is |
 |-------|------------|
@@ -24,8 +24,9 @@ The SDK also reports its own version (`self.sdk_version`) when it registers, so 
 | `plan` | The plan to follow, also as `self.plan` (inline plans only) |
 | `available_plans` | Companion mode: the activities it may offer |
 | `pipeline_config` | The Agent Configurator's saved configuration |
-| `config` | **The user's settings**, as described by `configSchema` in `agent.yaml` |
-| `connectors` | Connectors bound to the deployment |
+| `config` | **The user's settings**: every key that isn't a platform key, as described by `configSchema` in `agent.yaml`, with `defaultConfig` already merged in |
+
+Connectors aren't part of `AGENT_CONFIG`; list them with `await self.connectors.list()`.
 
 ```python
 async def on_session_start(self, session_id, config):
@@ -34,7 +35,7 @@ async def on_session_start(self, session_id, config):
     greeting_name = self.persona.name if self.persona else "there"
 ```
 
-`on_session_start` still receives the plain dict. Parsing is lenient: a platform key that doesn't fit is logged and ignored, so one bad value never stops the agent from starting. The JSON Schema is in `agents/stella-ai-agent-sdk/contracts/agent-session-config.schema.json`.
+`on_session_start` still receives the plain dict. A platform key that doesn't fit is logged as a warning and ignored, so one bad value never stops the agent from starting. The JSON Schema is in `agents/stella-ai-agent-sdk/contracts/agent-session-config.schema.json`.
 
 ## Plans: `self.plan_runtime`
 

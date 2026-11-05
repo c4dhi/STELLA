@@ -1,15 +1,17 @@
 """The session config STELLA hands an agent (``AGENT_CONFIG``), typed.
 
 The backend writes one JSON object per deployment into the pod's
-``AGENT_CONFIG`` env var. Some keys belong to the platform (the persona, the
-plan, the mode, the Configurator's pipeline, the connectors); everything else
-is the user's settings for this agent, as described by the agent's
-``configSchema`` in ``agent.yaml``.
+``AGENT_CONFIG`` env var. Five keys belong to the platform (``PLATFORM_KEYS``,
+a mirror of ``PLATFORM_CONFIG_KEYS`` in the backend's
+``src/agents/deploy-request.ts``, which owns the list). Every other key is a
+user setting, described by the agent's ``configSchema`` in ``agent.yaml``, with
+``defaultConfig`` already deep-merged in by the backend.
 
-``SessionConfig`` is that object with the platform keys typed and the user's
-settings under ``config``. It is lenient by design: a malformed platform key is
-logged and dropped, never fatal, because an agent that cannot start cannot tell
-the participant anything either.
+``SessionConfig`` types the platform keys and exposes the user settings as
+``config``. A malformed platform key is logged as a warning and ignored rather
+than fatal, because an agent that cannot start cannot tell the participant
+anything either. Connectors are not part of AGENT_CONFIG; the agent lists them
+with ``self.connectors.list()``.
 
 The JSON Schema the backend types its builder against is generated from this
 model: ``contracts/agent-session-config.schema.json`` (see
@@ -24,22 +26,14 @@ import logging
 import os
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 logger = logging.getLogger(__name__)
 
-#: Keys the platform owns. Everything else at the top level of AGENT_CONFIG is
-#: a user setting and is collected into ``SessionConfig.config``.
-PLATFORM_KEYS = frozenset({
-    "persona",
-    "mode",
-    "plan",
-    "plan_id",
-    "available_plans",
-    "pipeline_config",
-    "connectors",
-    "config",
-})
+#: Keys the platform owns; everything else in AGENT_CONFIG is a user setting.
+#: Mirrors PLATFORM_CONFIG_KEYS in src/agents/deploy-request.ts (the owner).
+#: tests/test_platform_contract.py fails when the two differ.
+PLATFORM_KEYS = ("persona", "mode", "plan", "available_plans", "pipeline_config")
 
 
 class PersonaConfig(BaseModel):
@@ -78,18 +72,12 @@ class ActivityConfig(BaseModel):
     plan: Dict[str, Any] = Field(description="The plan, in the same shape as SessionConfig.plan")
 
 
-class ConnectorBinding(BaseModel):
-    """A connector (outside MCP server) bound to this deployment."""
-
-    model_config = ConfigDict(extra="allow")
-
-    handle: str = Field(description="What the agent passes to connectors.call_tool()")
-    slot: Optional[str] = Field(default=None, description="The agent.yaml slot it fills, if any")
-    name: Optional[str] = None
-
-
 class SessionConfig(BaseModel):
-    """``AGENT_CONFIG``, typed. See the module docstring."""
+    """``AGENT_CONFIG``, typed. See the module docstring.
+
+    The typed fields are exactly the platform keys; any other key is a user
+    setting (pydantic extra), read through ``config``.
+    """
 
     model_config = ConfigDict(extra="allow", title="AgentSessionConfig")
 
@@ -108,29 +96,9 @@ class SessionConfig(BaseModel):
         default_factory=list, description="Companion mode: the activities it may offer"
     )
     pipeline_config: Optional[Dict[str, Any]] = Field(
-        default=None, description="The Agent Configurator's saved configuration, snapshotted"
+        default=None,
+        description="The Agent Configurator's saved configuration, snapshotted (features.configurator)",
     )
-    config: Dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "The user's settings for this agent, as described by configSchema in agent.yaml. "
-            "When the backend sends no `config` key, every non-platform top-level key is a setting"
-        ),
-    )
-    connectors: List[ConnectorBinding] = Field(
-        default_factory=list, description="Connectors bound to this deployment"
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _collect_user_settings(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        if isinstance(data.get("config"), dict):
-            return data
-        data = dict(data)
-        data["config"] = {k: v for k, v in data.items() if k not in PLATFORM_KEYS}
-        return data
 
     # ── reading ──────────────────────────────────────────────────────────
 
@@ -144,7 +112,7 @@ class SessionConfig(BaseModel):
                 return cls.model_validate(data)
             except ValidationError as e:
                 bad = {err["loc"][0] for err in e.errors() if err.get("loc")}
-                bad &= set(data) & PLATFORM_KEYS
+                bad &= set(data) & set(PLATFORM_KEYS)
                 if not bad:
                     break
                 for key in bad:
@@ -177,8 +145,9 @@ class SessionConfig(BaseModel):
         return self.plan if isinstance(self.plan, dict) else None
 
     @property
-    def extras(self) -> Dict[str, Any]:
-        """Top-level keys that are neither platform keys nor typed fields."""
+    def config(self) -> Dict[str, Any]:
+        """The user's settings: every key that is not a platform key, as
+        described by configSchema (defaultConfig already merged in)."""
         return dict(self.model_extra or {})
 
     @classmethod
@@ -188,7 +157,9 @@ class SessionConfig(BaseModel):
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
         schema["$id"] = "https://stella.c4dhi.org/schemas/agent-session-config.schema.json"
         schema["description"] = (
-            "AGENT_CONFIG as stella-ai-agent-sdk reads it. Generated from "
+            "AGENT_CONFIG as stella-ai-agent-sdk reads it. The properties are the platform keys "
+            "(PLATFORM_CONFIG_KEYS in src/agents/deploy-request.ts); every other key is a user "
+            "setting described by the agent's configSchema. Generated from "
             "stella_agent_sdk.session_config.SessionConfig; do not edit by hand."
         )
         return schema
