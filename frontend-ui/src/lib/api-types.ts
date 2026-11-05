@@ -1821,6 +1821,8 @@ export interface PlatformSettings {
   pinnedDeployments: PinnedDeployment[]
   /** Whether AI clients may connect over MCP. Off unless an admin turns it on. */
   mcpEnabled: boolean
+  /** Whether uploaded agents wait for an admin's approval before they can deploy. Off by default. */
+  agentReviewRequired: boolean
   /** How well the voice fits this server under concurrent load (#93); null when it could not be read. */
   hardwareFit: HardwareFit | null
 }
@@ -1866,6 +1868,8 @@ export interface HardwareFit {
 
 export interface PlatformFeatures {
   mcpEnabled: boolean
+  /** Uploaded agents wait for an admin's approval before they can deploy. */
+  agentReviewRequired: boolean
 }
 
 // ============================================================================

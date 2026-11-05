@@ -5,6 +5,7 @@ import { useToastStore } from '../../store/toastStore'
 import { AgentBuildStatus } from './AgentBuildStatus'
 import ConfirmDialog from '../modals/ConfirmDialog'
 import type { CustomAgentType, AgentValidationStatus } from '../../lib/api-types'
+import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
 
 interface MyAgentsSectionProps {
   onSelectAgent?: (agent: CustomAgentType) => void
@@ -60,6 +61,17 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSecti
     }
   }, [agentToDelete, addToast])
 
+  // Mirrors the backend rule (assertDeployableAgentType): these are the
+  // user's own uploads, so an unreviewed one is theirs to deploy while review
+  // is off. A rejected one never deploys.
+  const agentReviewRequired = useFeatureFlagsStore(state => state.agentReviewRequired)
+  const loadFeatures = useFeatureFlagsStore(state => state.load)
+  useEffect(() => {
+    void loadFeatures()
+  }, [loadFeatures])
+  const canDeploy = (agent: CustomAgentType) =>
+    agent.validationStatus === 'APPROVED' || (agent.validationStatus === 'PENDING' && !agentReviewRequired)
+
   const getStatusBadge = (status: AgentValidationStatus | undefined) => {
     switch (status) {
       case 'APPROVED':
@@ -70,6 +82,15 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSecti
           </span>
         )
       case 'PENDING':
+        // With review off nothing is waiting: the upload is simply not reviewed.
+        if (!agentReviewRequired) {
+          return (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+              <Package className="w-3 h-3" />
+              Not reviewed
+            </span>
+          )
+        }
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
             <Clock className="w-3 h-3" />
@@ -167,14 +188,14 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSecti
           className={`
             border rounded-lg overflow-hidden transition-all
             ${expandedAgent === agent.id ? 'ring-2 ring-blue-500' : 'hover:border-gray-400'}
-            ${agent.validationStatus === 'APPROVED' ? 'cursor-pointer' : ''}
+            ${canDeploy(agent) ? 'cursor-pointer' : ''}
           `}
         >
           {/* Agent header */}
           <div
             className="p-4 flex items-start justify-between bg-white"
             onClick={() => {
-              if (agent.validationStatus === 'APPROVED') {
+              if (canDeploy(agent)) {
                 onSelectAgent?.(agent)
               } else {
                 setExpandedAgent(expandedAgent === agent.id ? null : agent.id)

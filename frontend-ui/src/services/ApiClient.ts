@@ -1769,6 +1769,17 @@ class SessionManagementClient {
     })
   }
 
+  /**
+   * Whether uploaded agents need an admin's approval before they deploy. Off:
+   * a user deploys their own upload as soon as it is built.
+   */
+  async setAgentReviewRequired(agentReviewRequired: boolean): Promise<PlatformSettings> {
+    return this.request<PlatformSettings>('/admin/platform-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ agentReviewRequired }),
+    })
+  }
+
   // ============================================================================
   // Platform features API
   // ============================================================================

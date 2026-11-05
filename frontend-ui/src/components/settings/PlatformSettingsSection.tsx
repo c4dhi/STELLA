@@ -58,6 +58,8 @@ export default function PlatformSettingsSection() {
   const [showPinned, setShowPinned] = useState(false)
   const [savingMcp, setSavingMcp] = useState(false)
   const setMcpFeature = useFeatureFlagsStore(state => state.setMcpEnabled)
+  const [savingReview, setSavingReview] = useState(false)
+  const setReviewFeature = useFeatureFlagsStore(state => state.setAgentReviewRequired)
 
   const apply = (next: PlatformSettings) => {
     setSettings(next)
@@ -101,6 +103,27 @@ export default function PlatformSettingsSection() {
       addToast({ message: err instanceof Error ? err.message : 'Could not save', type: 'error' })
     } finally {
       setSavingMcp(false)
+    }
+  }
+
+  const toggleAgentReview = async () => {
+    if (!settings) return
+    const next = !settings.agentReviewRequired
+    setSavingReview(true)
+    try {
+      const updated = await apiClient.setAgentReviewRequired(next)
+      setSettings(updated)
+      setReviewFeature(updated.agentReviewRequired)
+      addToast({
+        message: next
+          ? 'Review is on. New uploads wait for an admin, and unreviewed agents stop deploying, including on restart or wake.'
+          : 'Review is off. Users can deploy their own uploads as soon as they are built.',
+        type: 'success',
+      })
+    } catch (err) {
+      addToast({ message: err instanceof Error ? err.message : 'Could not save', type: 'error' })
+    } finally {
+      setSavingReview(false)
     }
   }
 
@@ -306,6 +329,41 @@ export default function PlatformSettingsSection() {
             <span
               className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
                 settings?.mcpEnabled ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
+        </div>
+      </motion.div>
+
+      <motion.div
+        className={`mt-6 p-6 rounded-2xl ${
+          isDark ? 'bg-surface-dark-secondary' : 'bg-white border border-neutral-200/60'
+        }`}
+        variants={itemVariants}
+      >
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <h3 className={`text-heading-sm font-semibold mb-2 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+              Review uploaded agents
+            </h3>
+            <p className={`text-body-sm ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
+              When on, an agent a user uploads cannot be deployed until a system admin approves it. Uploaded agents run their own code on this server.
+              When off, users can deploy their own uploads as soon as they are built. Other users can use an upload only after an admin approves it. A rejected agent never deploys.
+            </p>
+          </div>
+          <button
+            role="switch"
+            aria-checked={settings?.agentReviewRequired ?? false}
+            aria-label="Review uploaded agents"
+            onClick={() => void toggleAgentReview()}
+            disabled={!settings || savingReview}
+            className={`relative flex-shrink-0 w-11 h-6 rounded-full transition-colors duration-200 ${
+              settings?.agentReviewRequired ? 'bg-primary-500' : isDark ? 'bg-neutral-600' : 'bg-neutral-300'
+            } ${!settings || savingReview ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
+                settings?.agentReviewRequired ? 'translate-x-5' : ''
               }`}
             />
           </button>

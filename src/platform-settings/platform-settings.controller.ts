@@ -20,21 +20,24 @@ export class PlatformSettingsController {
 
   /**
    * PUT /admin/platform-settings
-   * { ttsPlayback?: 'auto' | 'stream' | 'sentence' | null, mcpEnabled?: boolean }
+   * { ttsPlayback?: 'auto' | 'stream' | 'sentence' | null, mcpEnabled?: boolean, agentReviewRequired?: boolean }
    * Only the keys present are changed.
    */
   @Put()
   async update(
     @CurrentUser() user: { userId: string },
-    @Body() body: { ttsPlayback?: unknown; mcpEnabled?: unknown },
+    @Body() body: { ttsPlayback?: unknown; mcpEnabled?: unknown; agentReviewRequired?: unknown },
   ): Promise<PlatformSettingsView> {
     const has = (key: string) => body != null && Object.prototype.hasOwnProperty.call(body, key);
-    if (!has('ttsPlayback') && !has('mcpEnabled')) {
-      throw new BadRequestException('Send ttsPlayback, mcpEnabled, or both');
+    if (!has('ttsPlayback') && !has('mcpEnabled') && !has('agentReviewRequired')) {
+      throw new BadRequestException('Send at least one of ttsPlayback, mcpEnabled, agentReviewRequired');
     }
     let view: PlatformSettingsView | undefined;
     if (has('ttsPlayback')) view = await this.platformSettings.setTtsPlayback(body.ttsPlayback, user.userId);
     if (has('mcpEnabled')) view = await this.platformSettings.setMcpEnabled(body.mcpEnabled, user.userId);
+    if (has('agentReviewRequired')) {
+      view = await this.platformSettings.setAgentReviewRequired(body.agentReviewRequired, user.userId);
+    }
     return view!;
   }
 }

@@ -301,11 +301,16 @@ export class AgentsService {
         isBuiltIn: true,
         validationStatus: true,
         imageUrl: true,
+        userId: true,
       },
     });
 
-    // Security: only approved types deploy (uploaded ones also need a built image).
-    assertDeployableAgentType(agentType, agentTypeRecord);
+    // Security: see assertDeployableAgentType. Reviewed types deploy for anyone;
+    // an unreviewed upload only for its uploader, and only while review is off.
+    assertDeployableAgentType(agentType, agentTypeRecord, {
+      reviewRequired: await this.platformSettings.isAgentReviewRequired(),
+      deployerId: userId,
+    });
 
     // Security: Sanitize agent name (max 255 chars, no control characters)
     const sanitizedName = createAgentDto.name
@@ -648,12 +653,14 @@ export class AgentsService {
     // to land silently on stella-light, which is deprecated — the least
     // maintained agent was the one you got by not choosing.
     const agentType = createAgentDto.agentType || 'stella-v2-agent';
+    // No user context on this path, so an unreviewed upload never deploys here.
     assertDeployableAgentType(
       agentType,
       await this.prisma.agentType.findUnique({
         where: { slug: agentType },
-        select: { isBuiltIn: true, validationStatus: true, imageUrl: true },
+        select: { isBuiltIn: true, validationStatus: true, imageUrl: true, userId: true },
       }),
+      { reviewRequired: await this.platformSettings.isAgentReviewRequired(), deployerId: null },
     );
     // Encrypt manual env vars so standalone agents have the same restart behavior as regular agents.
     const manualEnvVarsEncrypted = this.encryptManualEnvVarsForStorage(createAgentDto.envVars);
@@ -1106,7 +1113,19 @@ export class AgentsService {
     // Look up AgentType from DB for per-agent resource limits
     const agentTypeRecord = await this.prisma.agentType.findUnique({
       where: { slug: agentType },
-      select: { resourceCpu: true, resourceMemory: true },
+      select: {
+        resourceCpu: true,
+        resourceMemory: true,
+        isBuiltIn: true,
+        validationStatus: true,
+        imageUrl: true,
+        userId: true,
+      },
+    });
+    // Restarts and wakes re-check too: an agent rejected (or put under review)
+    // after it was first deployed must not come back.
+    assertDeployableAgentType(agentType, agentTypeRecord, {
+      reviewRequired: await this.platformSettings.isAgentReviewRequired(),
     });
 
     // Decrypt the stored manual vars so they can be re-merged through the same resolution

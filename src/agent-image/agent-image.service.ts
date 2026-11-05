@@ -192,9 +192,9 @@ export class AgentImageService {
    *   runs: an uploaded package owns its entry point and need not follow the
    *   built-in module-naming convention.
    *
-   * Approval is checked here again, not only at deploy, because restarts and
-   * auto-pause wakes also create pods. An agent rejected after it was first
-   * deployed must not come back.
+   * Who may deploy what is decided before this (assertDeployableAgentType, at
+   * deploy and at restart/wake). This only refuses what can never run: an
+   * unknown type, a rejected one, or one with no build.
    */
   async resolveAgentImage(
     agentType: string,
@@ -209,8 +209,8 @@ export class AgentImageService {
     if (!record) {
       throw new Error(`Unknown agent type: ${agentType}`);
     }
-    if (record.validationStatus !== 'APPROVED') {
-      throw new Error(`Agent type ${agentType} is not approved (status: ${record.validationStatus})`);
+    if (record.validationStatus === 'REJECTED') {
+      throw new Error(`Agent type ${agentType} was rejected in review`);
     }
     if (record.isBuiltIn) {
       // A seeded built-in missing from the registry above is a code bug, not user error.

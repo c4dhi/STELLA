@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time, even after an admin had approved it and it had been built. Now any approved agent type deploys. An uploaded one also needs a finished build, and its pod runs the build's own start command. A restart or a wake after auto-pause checks approval again, so an agent that was rejected after its first deploy does not come back.
+- **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time. Now a user can upload, build and deploy their own agent without waiting for anyone, and its pod runs the build's own start command. Other users can deploy an upload only once an admin approves it, and a rejected agent never deploys, including on restart or wake after auto-pause.
+- **Admin switch: "Review uploaded agents"** in Settings → Platform Defaults. It is off by default. When on, no upload deploys until a system admin approves it, and unreviewed agents also stop coming back on restart or wake.
+
+### Security
+
+- Approving or rejecting an uploaded agent (`/admin/agent-types`) now needs a system admin. Before, any signed-in user could approve their own upload.
 
 ---
 

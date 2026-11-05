@@ -317,13 +317,18 @@ describe('AgentImageService.resolveAgentImage', () => {
     });
   });
 
-  it('refuses an uploaded agent that is no longer approved (restart / wake path)', async () => {
+  it('refuses an uploaded agent that was rejected (restart / wake path)', async () => {
     const svc = makeService({
       isBuiltIn: false,
       validationStatus: 'REJECTED',
       imageUrl: 'elias-interviewer:1.0.0',
     });
-    await expect(svc.resolveAgentImage('elias-interviewer')).rejects.toThrow(/not approved/);
+    await expect(svc.resolveAgentImage('elias-interviewer')).rejects.toThrow(/rejected/);
+  });
+
+  it('runs an unreviewed upload (who may deploy it is decided before this)', async () => {
+    const svc = makeService({ isBuiltIn: false, validationStatus: 'PENDING', imageUrl: 'mine:0.1.0' });
+    await expect(svc.resolveAgentImage('mine')).resolves.toEqual({ image: 'mine:0.1.0' });
   });
 
   it('refuses an uploaded agent with no build', async () => {

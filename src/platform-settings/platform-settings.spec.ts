@@ -115,6 +115,7 @@ describe('PlatformSettingsService', () => {
       updatedBy: 'Admin',
       pinnedDeployments: [],
       mcpEnabled: false,
+      agentReviewRequired: false,
       hardwareFit: expect.objectContaining({ colour: null, sentencesSeen: 0 }),
     });
   });
