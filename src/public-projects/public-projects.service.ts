@@ -1,3 +1,4 @@
+import { agentTypeOrDefault } from '../agents/default-agent-type.js';
 import {
   Injectable,
   NotFoundException,
@@ -224,7 +225,7 @@ export class PublicProjectsService {
       {
         name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
         icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-        agentType: project.publicAgentType?.slug || 'stella-v2-agent',
+        agentType: agentTypeOrDefault(project.publicAgentType?.slug),
         config: this.buildRuntimeAgentConfig(agentConfig),
         agentConfigurationId: agentConfig?.agentConfigurationId,
         personaId: agentConfig?.personaId,
@@ -290,7 +291,7 @@ export class PublicProjectsService {
     const lastAgentConfig = {
       name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
       icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-      agentType: project.publicAgentType?.slug || 'stella-v2-agent',
+      agentType: agentTypeOrDefault(project.publicAgentType?.slug),
       agentConfig: this.buildRuntimeAgentConfig(agentConfig),
       agentConfigurationId: agentConfig?.agentConfigurationId || null,
       personaId: agentConfig?.personaId || null,
@@ -416,7 +417,7 @@ export class PublicProjectsService {
           {
             name: agentConfig?.name || project.publicAgentType?.name || 'Agent',
             icon: agentConfig?.icon || project.publicAgentType?.icon || '🤖',
-            agentType: project.publicAgentType?.slug || 'stella-v2-agent',
+            agentType: agentTypeOrDefault(project.publicAgentType?.slug),
             config: this.buildRuntimeAgentConfig(agentConfig),
             agentConfigurationId: agentConfig?.agentConfigurationId,
             personaId: agentConfig?.personaId,

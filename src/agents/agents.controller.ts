@@ -1,3 +1,4 @@
+import { CURRENT_SDK_VERSION, MIN_SUPPORTED_SDK_VERSION } from '../agent-package/manifest-defaults.js';
 import {
   Controller,
   Get,
@@ -38,6 +39,15 @@ export class AgentsController {
   @Get('agent-types')
   async getAgentTypes() {
     return this.agentImageService.getAgentTypesWithInfo();
+  }
+
+  /**
+   * The SDK versions this STELLA runs: agents built with an SDK older than
+   * `minSupported`, or asking for one newer than `current`, cannot deploy.
+   */
+  @Get('agent-types/sdk-support')
+  getSdkSupport() {
+    return { minSupported: MIN_SUPPORTED_SDK_VERSION, current: CURRENT_SDK_VERSION };
   }
 
   @Post('sessions/:sessionId/agents')

@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { createHash, Hash } from 'crypto';
 import { fileURLToPath } from 'url';
-import { AgentTypeService, AgentTypeInfo as DbAgentTypeInfo } from '../agent-type/agent-type.service.js';
+import { AgentTypeService, type AgentTypeInfo } from '../agent-type/agent-type.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -20,18 +20,8 @@ export interface AgentImageConfig {
 }
 
 // Extended type info for gallery display
-export interface AgentTypeInfo {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  icon: string | null;
-  version: string;
-  isBuiltIn: boolean;
-  capabilities: string[];
-  defaultConfig: Record<string, unknown>;
-  configSchema: Record<string, unknown> | null;  // JSON Schema for agent config (includes x-stella-* extensions)
-}
+// The gallery shape is owned by AgentTypeService.
+export type { AgentTypeInfo } from '../agent-type/agent-type.service.js';
 
 @Injectable()
 export class AgentImageService {

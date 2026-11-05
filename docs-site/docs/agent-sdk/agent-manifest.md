@@ -116,6 +116,23 @@ STELLA refuses a manifest that breaks any of these:
 - An env var is not both required and optional.
 - Unknown keys are refused, not ignored. A typo like `conectors:` is an error, not a silently missing feature.
 
+## What STELLA checks at deploy
+
+STELLA reads the manifest again on every deploy, restart and wake after auto-pause. It refuses the deployment with a 400 that lists every problem when:
+
+- an `env.required` variable is missing or empty;
+- `features.plans.required` is set and the deployment has neither a plan nor, for agents with the `companion` mode, a companion session;
+- the deployment brings a plan, a companion session or a Configurator configuration that the manifest doesn't declare;
+- `features.configurator.required` is set and no configuration was picked;
+- the user's settings, merged over `defaultConfig`, don't fit `configSchema`;
+- `sdk.minVersion` is newer than the SDK this STELLA ships (`GET /agent-types/sdk-support`).
+
+The agent receives its settings at the top level of `AGENT_CONFIG`. A setting the user leaves out takes its value from `defaultConfig`. Objects merge key by key, and an array replaces the default. Next to the settings, STELLA puts the keys it sets itself: `persona`, `mode`, `plan`, `available_plans` and `pipeline_config`. Don't use these names for settings.
+
+`GET /agent-types` returns these resolved `requirements` for every agent type, so a client never needs to read the manifest itself.
+
+`env.optional` defaults are shown to the user when deploying. They are not injected into the pod, so the agent's own fallback still applies when a variable is unset. Keep the two in agreement.
+
 ## Format 1.0
 
 Manifests with `version: "1.0"` still work. STELLA upgrades them on read, and upload and the seed show a deprecation warning. In 1.0 the platform flags lived inside `configSchema`. They map to 2.0 like this:

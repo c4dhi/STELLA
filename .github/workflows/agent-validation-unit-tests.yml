@@ -13,6 +13,12 @@ on:
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
       - 'src/agents/deployable-agent-type.*'
+      - 'src/agents/agent-requirements.*'
+      - 'src/agents/deploy-request.*'
+      - 'src/agents/default-agent-type.*'
+      - 'src/agents/no-agent-slugs.spec.ts'
+      - 'src/agent-type/**'
+      - 'agents/stella-ai-agent-sdk/pyproject.toml'
       - 'src/agent-upload/**'
       - 'src/agent-build/**'
       - 'src/agent-image/**'
@@ -33,6 +39,12 @@ on:
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
       - 'src/agents/deployable-agent-type.*'
+      - 'src/agents/agent-requirements.*'
+      - 'src/agents/deploy-request.*'
+      - 'src/agents/default-agent-type.*'
+      - 'src/agents/no-agent-slugs.spec.ts'
+      - 'src/agent-type/**'
+      - 'agents/stella-ai-agent-sdk/pyproject.toml'
       - 'src/agent-upload/**'
       - 'src/agent-build/**'
       - 'src/agent-image/**'
@@ -77,6 +89,11 @@ jobs:
             src/common/utils/sanitize-config.spec.ts \
             src/kubernetes/utils/resource-clamping.util.spec.ts \
             src/agents/deployable-agent-type.spec.ts \
+            src/agents/agent-requirements.spec.ts \
+            src/agents/deploy-request.spec.ts \
+            src/agents/no-agent-slugs.spec.ts \
+            src/agents/plan-resolution.spec.ts \
+            src/agent-type/deprecation.spec.ts \
             src/agent-upload/agent-upload.controller.spec.ts \
             src/agent-upload/agent-admin.guard.spec.ts \
             src/agent-build/agent-build.safety.spec.ts \

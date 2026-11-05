@@ -3,6 +3,7 @@ import AdmZip from 'adm-zip'
 import { ManifestValidator } from './validators/manifest.validator.js'
 import { DockerfileValidator } from './validators/dockerfile.validator.js'
 import { StorageService } from '../storage/storage.service.js'
+import { compareVersions } from '../agent-configurations/configuration-compat.util.js'
 import { DEFAULT_DOCKERFILE, MIN_SUPPORTED_SDK_VERSION } from './manifest-defaults.js'
 import { isExpertFilePath, selectExpertDefaults } from './expert-defaults.js'
 import type { AgentManifest } from './schemas/agent-manifest.schema.js'
@@ -110,7 +111,7 @@ export class AgentPackageService {
 
       if (!sdkCheck.found) {
         errors.push('requirements.txt must include stella-ai-agent-sdk')
-      } else if (sdkCheck.version && !this.isVersionCompatible(sdkCheck.version, MIN_SUPPORTED_SDK_VERSION)) {
+      } else if (sdkCheck.version && compareVersions(sdkCheck.version, MIN_SUPPORTED_SDK_VERSION) < 0) {
         warnings.push(
           `SDK version ${sdkCheck.version} may not be compatible; minimum recommended: ${MIN_SUPPORTED_SDK_VERSION}`,
         )
@@ -232,23 +233,6 @@ export class AgentPackageService {
     return { found: false }
   }
 
-  /**
-   * Check if version meets minimum requirement.
-   */
-  private isVersionCompatible(version: string, minVersion: string): boolean {
-    const vParts = version.split('.').map(Number)
-    const minParts = minVersion.split('.').map(Number)
-
-    for (let i = 0; i < Math.max(vParts.length, minParts.length); i++) {
-      const v = vParts[i] || 0
-      const min = minParts[i] || 0
-
-      if (v > min) return true
-      if (v < min) return false
-    }
-
-    return true
-  }
 
   /**
    * The default experts an uploaded package publishes (AgentType.expertDefaults),

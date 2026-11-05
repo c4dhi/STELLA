@@ -1,3 +1,4 @@
+import { agentTypeOrDefault } from '../agents/default-agent-type.js';
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -545,7 +546,7 @@ export class WebhooksService {
           {
             name: config.name || 'Agent',
             icon: config.icon || '🤖',
-            agentType: config.agentType || 'stella-v2-agent',
+            agentType: agentTypeOrDefault(config.agentType),
             config: config.agentConfig || {},
             agentConfigurationId: config.agentConfigurationId,
             // Only public projects set this — their saved agentConfig is built

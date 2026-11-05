@@ -569,8 +569,11 @@ function validateJsonSchemaObject(schema: unknown): string[] {
 /** Validate a value against a JSON Schema. Exported for the deploy path. */
 export function validateAgainstSchema(schema: object, value: unknown): string[] {
   const validate = (ajv as any).compile(schema)
-  if (validate(value)) return []
-  return ((validate.errors ?? []) as unknown[]).map(formatAjvError)
+  const valid = validate(value)
+  const errors = ((validate.errors ?? []) as unknown[]).map(formatAjvError)
+  // Ajv caches every compiled schema; each deploy brings its own copy, so drop it.
+  ;(ajv as any).removeSchema(schema)
+  return valid ? [] : errors
 }
 
 function formatAjvError(error: unknown): string {

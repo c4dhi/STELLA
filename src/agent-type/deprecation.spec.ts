@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { parseAgentManifestYaml } from '../agent-package/schemas/agent-manifest.schema.js';
+import { FALLBACK_AGENT_TYPE } from '../agents/default-agent-type.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,18 +40,9 @@ describe('agent deprecation', () => {
   it('does not fall back to a deprecated agent when none is specified', () => {
     // The trap this closes: agentType is optional on several paths, and the
     // default used to be stella-light — so the least-maintained agent was the
-    // one you got by not choosing. Any new fallback must not be deprecated.
-    const sources = [
-      'src/agents/agents.service.ts',
-      'src/public-projects/public-projects.service.ts',
-      'src/webhooks/webhooks.service.ts',
-      'src/kubernetes/kubernetes.service.ts',
-    ];
-    for (const rel of sources) {
-      const src = fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf-8');
-      expect(src).not.toMatch(/\|\|\s*'stella-light-agent'/);
-      expect(src).not.toMatch(/DEFAULT_AGENT_TYPE',\s*'stella-light-agent'/);
-    }
+    // one you got by not choosing. Every path now asks default-agent-type.ts.
+    expect(FALLBACK_AGENT_TYPE).not.toBe('stella-light-agent');
+    expect((manifest(FALLBACK_AGENT_TYPE) as any).metadata.deprecated).toBeFalsy();
   });
 
   it('still allows deploying the deprecated agent explicitly', () => {

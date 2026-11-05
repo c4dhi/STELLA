@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Agent manifest 2.0 (`agent.yaml`).** An agent now declares what it needs in its own blocks: `features` (persona, plans and their modes, configurator), `env` (required and optional env vars) and `connectors`. `configSchema` holds only the settings a user may give the agent. Manifest 1.0 still works and is upgraded on read, with a deprecation warning. A published JSON Schema (`docs-site/static/schemas/agent-manifest.v2.json`) gives editors completion and validation. See *Agent SDK → The agent manifest*.
+- **Deploy enforces what an agent's manifest declares.** One check runs on every deploy, restart and wake after auto-pause, and refuses the deployment with a 400 that lists every problem:
+  - A required env var is missing or empty.
+  - The agent runs plans and has neither a plan nor a companion session.
+  - A plan, companion session or Configurator configuration is given to an agent that doesn't declare it.
+  - The agent needs a configuration (`features.configurator: { required: true }`) and has none.
+  - The agent needs a newer SDK than this STELLA ships.
+  - A user's settings don't fit `configSchema`.
+
+  Before, only a stella-v2 rule hard-coded in the backend was checked. A user's settings are now deep-merged over the agent's `defaultConfig`, which used to be dropped. Pods get the manifest's resource requests as well as its limits.
+- **`GET /agent-types` returns each type's `requirements`** (persona, plans and modes, configurator, env vars, connectors, settings schema and defaults, resources, SDK minimum), so the deploy wizard can stop reading `x-stella-*` flags. **`GET /agent-types/sdk-support`** returns the SDK versions this STELLA runs (`minSupported`, `current`).
+- **Agent platform standards** (*Contributing → Coding standards → Agent platform*): the rules that keep STELLA free of agent-specific code, and which module owns which concern.
 - **MCP: `platform_settings_get` and `platform_settings_update`** for system admins. An assistant can read the platform switches and turn "Review uploaded agents" on or off. Nobody else sees the two tools, and a call by name answers 403. The MCP switch and the TTS playback default stay UI-only.
 
 ### Fixed
@@ -21,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Built-in and uploaded agents are stored by one mapping.** Before, the seed and the upload endpoint each turned agent.yaml into an AgentType their own way. Each had its own expert reader, and companion experts were handled differently in the two. Now both use one mapping, and each AgentType keeps its full manifest (new `manifest` column; the migration adds it and the next seed or re-upload fills it).
 - **Manifest mistakes are refused instead of ignored.** Unknown keys, unknown capabilities, a resource request above its limit, and a `defaultConfig` that doesn't fit `configSchema` now fail validation. Before, these were dropped or let through silently. Manifest 1.0 files keep the old leniency for unknown capabilities (a warning).
+- **One default agent type.** Every path that deploys without naming a type now asks one place (`DEFAULT_AGENT_TYPE`, default `stella-v2-agent`). The deploy scripts defaulted to `stella-light-agent`. A spec fails the build when an agent slug appears in platform code.
+- Removed `AgentsService.createStandaloneAgent` and `updateGrpcAddress`. Nothing called them, and the first skipped deploy validation.
 - A pod whose agent type has no valid resource limit now gets the manifest default (512Mi, 250m) instead of a separate 2Gi / 2000m fallback.
 
 ### Security
