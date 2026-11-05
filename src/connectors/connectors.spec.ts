@@ -951,6 +951,18 @@ describe('ConnectorGatewayService via ConnectorsGrpcController', () => {
     expect(res.success).toBe(true);
   });
 
+  it('still serves an agent while its session is CLOSING, so it can finish its work', async () => {
+    // A plan that reaches its end marks the session CLOSING; the agent then says
+    // its closing line and closes the interview in ELIAS through the connector.
+    const { controller, mcp } = make({ sessionStatus: 'CLOSING' });
+    const res: any = await controller.callTool(
+      { agentId: 'agent-1', handle: 'interview', tool: 'start_interview', argumentsJson: '' },
+      meta(token) as any,
+    );
+    expect(res.error).toBeUndefined();
+    expect(mcp.callTool).toHaveBeenCalled();
+  });
+
   it('refuses a handle not bound to this agent, and bad arguments', async () => {
     const { controller } = make();
     const unbound: any = await controller.callTool(

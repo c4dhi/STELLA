@@ -99,9 +99,12 @@ export class ConnectorGatewayService {
     // A token copied out of a pod must not outlive it. Stopping (which is also
     // how auto-pause ends a pod) clears the hash; this check covers the other
     // ways an agent ends, and closed sessions. Wake issues a new token.
+    // CLOSING still counts: it is the wind-down in which agents finish their
+    // work (a plan that reached its end, on_session_ending), such as writing
+    // the last turn and closing an interview in an outside system.
     if (
       !LIVE_STATUSES.has(instance.status) ||
-      instance.session.status !== SessionStatus.ACTIVE
+      instance.session.status === SessionStatus.CLOSED
     ) {
       throw new GatewayError(
         'unauthenticated',
