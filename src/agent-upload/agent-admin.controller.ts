@@ -8,10 +8,12 @@ import {
   NotFoundException,
   Logger,
   Req,
+  UseGuards,
 } from '@nestjs/common'
 import { Request } from 'express'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentValidationStatus } from '@prisma/client'
+import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js'
 
 interface AuthenticatedRequest extends Request {
   user?: { id: string; email: string }
@@ -25,7 +27,11 @@ interface RejectDto {
   reason: string
 }
 
+// Approving an agent lets its uploaded code run in the cluster (see
+// assertDeployableAgentType), so review is for system admins only. Without
+// this guard any signed-in user could approve their own upload.
 @Controller('admin/agent-types')
+@UseGuards(SystemAdminGuard)
 export class AgentAdminController {
   private readonly logger = new Logger(AgentAdminController.name)
 
