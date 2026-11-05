@@ -133,3 +133,14 @@ export function readBindings(value: unknown): ConnectorBinding[] {
       !!b && typeof b === 'object' && typeof (b as any).handle === 'string' && typeof (b as any).connectorId === 'string',
   );
 }
+
+/**
+ * Stored bindings as a deploy request again, for an agent recreated from a
+ * saved snapshot (wake after auto-pause). Deploy re-checks each one, so a
+ * connector that was deleted or unshared since is refused, not silently kept.
+ */
+export function bindingRequestsFrom(value: unknown): BindingRequest[] {
+  return readBindings(value).map((b) =>
+    b.slot ? { connectorId: b.connectorId, handle: b.handle, slot: b.slot } : { connectorId: b.connectorId, handle: b.handle },
+  );
+}
