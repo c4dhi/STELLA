@@ -69,8 +69,11 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSecti
   useEffect(() => {
     void loadFeatures()
   }, [loadFeatures])
+  // Mirrors assertDeployableAgentType: allowed by review, built, and built with a supported SDK.
   const canDeploy = (agent: CustomAgentType) =>
-    agent.validationStatus === 'APPROVED' || (agent.validationStatus === 'PENDING' && !agentReviewRequired)
+    agent.built &&
+    !agent.sdkProblem &&
+    (agent.validationStatus === 'APPROVED' || (agent.validationStatus === 'PENDING' && !agentReviewRequired))
 
   const getStatusBadge = (status: AgentValidationStatus | undefined) => {
     switch (status) {
@@ -215,6 +218,14 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSecti
                 <div className="flex items-center gap-2 mt-2">
                   {getStatusBadge(agent.validationStatus)}
                   {getBuildStatusBadge(agent.lastBuild)}
+                  {agent.sdkProblem && (
+                    <span
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700"
+                      title={`Cannot deploy: ${agent.sdkProblem}. Rebuild it with a supported SDK.`}
+                    >
+                      Needs SDK update
+                    </span>
+                  )}
                   <span className="text-xs text-gray-400">v{agent.version}</span>
                 </div>
               </div>

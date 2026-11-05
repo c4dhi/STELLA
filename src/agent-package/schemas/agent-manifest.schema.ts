@@ -518,17 +518,22 @@ export function parseAgentManifest(raw: unknown): ManifestSchemaParseResult {
 
   // configSchema must be a valid JSON Schema document, and defaultConfig must fit it.
   if (manifest.configSchema) {
-    const schemaErrors = validateJsonSchemaObject(manifest.configSchema)
+    const schemaErrors = [
+      ...findRegexKeywords(manifest.configSchema).map(regexKeywordError),
+      ...validateJsonSchemaObject(manifest.configSchema),
+    ]
     if (schemaErrors.length > 0) {
       return { valid: false, errors: schemaErrors.map((e) => `configSchema: ${e}`), warnings }
     }
-    if (manifest.defaultConfig) {
-      // Defaults fill in settings; a setting the user must give (e.g. a project id)
-      // has none, so `required` does not apply to them. Types and ranges do.
-      const configErrors = validateAgainstSchema(withoutRequired(manifest.configSchema), manifest.defaultConfig)
-      if (configErrors.length > 0) {
-        return { valid: false, errors: configErrors.map((e) => `defaultConfig: ${e}`), warnings }
-      }
+    // Defaults fill in settings; a setting the user must give (e.g. a project id)
+    // has none, so `required` does not apply to them. Types and ranges do.
+    // Without defaults this still compiles the schema, so one Ajv cannot use
+    // (an unresolved $ref) is refused here and not on the first deploy.
+    const configErrors = validateAgainstSchema(withoutRequired(manifest.configSchema), manifest.defaultConfig ?? {})
+    const relevant = manifest.defaultConfig ? configErrors : configErrors.filter((e) => e.startsWith('schema cannot be used'))
+    if (relevant.length > 0) {
+      const label = relevant[0].startsWith('schema cannot be used') ? 'configSchema' : 'defaultConfig'
+      return { valid: false, errors: relevant.map((e) => `${label}: ${e}`), warnings }
     }
   }
 
@@ -571,9 +576,21 @@ function validateJsonSchemaObject(schema: unknown): string[] {
   return errors.map(formatAjvError)
 }
 
-/** Validate a value against a JSON Schema. Exported for the deploy path. */
+/**
+ * Validate a value against a JSON Schema. Exported for the deploy path. A schema
+ * with regular expressions, or one Ajv cannot compile (say an unresolved $ref),
+ * is reported as an error, never thrown.
+ */
 export function validateAgainstSchema(schema: object, value: unknown): string[] {
-  const validate = (ajv as any).compile(schema)
+  const regexErrors = findRegexKeywords(schema).map(regexKeywordError)
+  if (regexErrors.length > 0) return regexErrors
+  let validate: any
+  try {
+    validate = (ajv as any).compile(schema)
+  } catch (error) {
+    ;(ajv as any).removeSchema(schema)
+    return [`schema cannot be used: ${(error as Error).message}`]
+  }
   const valid = validate(value)
   const errors = ((validate.errors ?? []) as unknown[]).map(formatAjvError)
   // Ajv caches every compiled schema; each deploy brings its own copy, so drop it.
@@ -587,6 +604,42 @@ function formatAjvError(error: unknown): string {
   const path = issue.instancePath || issue.dataPath || ''
   const at = path ? ` at ${path}` : ''
   return `${issue.message || 'invalid JSON Schema'}${at}`
+}
+
+/** JSON Schema keywords whose value is one subschema, a list of them, or a map of them. */
+const SUBSCHEMA = ['not', 'if', 'then', 'else', 'items', 'additionalItems', 'contains', 'propertyNames', 'additionalProperties', 'unevaluatedItems', 'unevaluatedProperties']
+const SUBSCHEMA_LISTS = ['allOf', 'anyOf', 'oneOf', 'prefixItems', 'items']
+const SUBSCHEMA_MAPS = ['properties', '$defs', 'definitions', 'dependentSchemas', 'patternProperties']
+
+/**
+ * Where a JSON Schema uses a regular expression (`pattern`, `patternProperties`),
+ * as JSON pointers. Uploaded schemas run on the server's event loop, where a
+ * backtracking expression like `^(a+)+$` freezes it (ReDoS), so they are refused.
+ */
+export function findRegexKeywords(schema: unknown, at = ''): string[] {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return []
+  const node = schema as Record<string, unknown>
+  const found: string[] = []
+  if ('pattern' in node) found.push(`${at}/pattern`)
+  if ('patternProperties' in node) found.push(`${at}/patternProperties`)
+  for (const key of SUBSCHEMA) {
+    if (node[key] && typeof node[key] === 'object' && !Array.isArray(node[key])) found.push(...findRegexKeywords(node[key], `${at}/${key}`))
+  }
+  for (const key of SUBSCHEMA_LISTS) {
+    if (Array.isArray(node[key])) (node[key] as unknown[]).forEach((sub, i) => found.push(...findRegexKeywords(sub, `${at}/${key}/${i}`)))
+  }
+  for (const key of SUBSCHEMA_MAPS) {
+    const map = node[key]
+    if (map && typeof map === 'object' && !Array.isArray(map)) {
+      for (const [name, sub] of Object.entries(map)) found.push(...findRegexKeywords(sub, `${at}/${key}/${name}`))
+    }
+  }
+  return found
+}
+
+function regexKeywordError(pointer: string): string {
+  const keyword = pointer.split('/').pop()
+  return `${keyword} is not allowed (at ${pointer || '/'}): STELLA checks settings on its server and accepts no regular expressions. Use enum, minLength or maxLength instead`
 }
 
 /** A copy of a JSON Schema with every `required` list removed, at any depth. */

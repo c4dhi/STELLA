@@ -7,6 +7,7 @@ import { promisify } from 'util'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
+import { randomUUID } from 'crypto'
 import { DEFAULT_DOCKERFILE, SLUG_REGEX, VERSION_REGEX } from '../agent-package/manifest-defaults.js'
 import { SDK_PACKAGE, builtSdkProblem, sdkSupport } from '../agent-package/sdk-support.js'
 import { manifestOfAgentType, type AgentTypeManifestSource } from '../agents/agent-requirements.js'
@@ -35,6 +36,21 @@ export function resolveDockerfilePath(extractedPath: string, dockerfile: string)
   const resolved = path.resolve(root, dockerfile)
   if (!resolved.startsWith(root + path.sep)) throw bad()
   return resolved
+}
+
+/** `docker run` arguments for the SDK probe (see AgentBuildService.detectSdkVersion). */
+export function sdkProbeArgs(container: string, imageName: string): string[] {
+  return [
+    'run', '--rm', '--name', container,
+    '--network', 'none',
+    '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges',
+    '--memory', '256m',
+    '--pids-limit', '64',
+    '--entrypoint', 'python',
+    imageName,
+    '-c', `import importlib.metadata as m; print(m.version(${JSON.stringify(SDK_PACKAGE)}))`,
+  ]
 }
 
 /** The version printed by the SDK probe, or null when it printed none. */
@@ -239,21 +255,24 @@ export class AgentBuildService {
 
   /**
    * The stella-ai-agent-sdk version installed in a built image, or null when it
-   * has none. Runs the image's Python only, with no network, and removes the
-   * container. The build already ran this package's Dockerfile on the host, so
-   * this adds no new trust.
+   * has none. Runs only the image's Python, in a locked-down container (no
+   * network, no capabilities, capped memory and processes) that is removed
+   * afterwards, also when it hangs past the timeout. The build already ran this
+   * package's Dockerfile on the host, so this adds no new kind of trust.
+   * The answer is the image's own package metadata: a compatibility check, not
+   * a security one.
    */
   private async detectSdkVersion(imageName: string): Promise<string | null> {
-    const args = [
-      'run', '--rm', '--network', 'none', '--entrypoint', 'python', imageName,
-      '-c', `import importlib.metadata as m; print(m.version(${JSON.stringify(SDK_PACKAGE)}))`,
-    ]
+    const container = `stella-sdk-probe-${randomUUID()}`
     try {
-      const { stdout } = await execFileAsync('docker', args, { timeout: 60000 })
+      const { stdout } = await execFileAsync('docker', sdkProbeArgs(container, imageName), { timeout: 60000 })
       return parseSdkVersionOutput(stdout)
     } catch (error) {
       this.logger.warn(`No ${SDK_PACKAGE} found in ${imageName}: ${(error as Error).message.split('\n')[0]}`)
       return null
+    } finally {
+      // The timeout kills the docker client, not the container: remove it explicitly.
+      await execFileAsync('docker', ['rm', '-f', container], { timeout: 30000 }).catch(() => undefined)
     }
   }
 

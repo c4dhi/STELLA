@@ -171,6 +171,30 @@ describe('manifest 2.0 rules', () => {
     ).toContain('defaultConfig: must be string at /project_id')
   })
 
+  it('refuses regular expressions in configSchema, which could freeze the server (ReDoS)', () => {
+    // The case from review: this took 312 ms at 26 characters and doubles with each one more.
+    const configSchema = {
+      type: 'object',
+      properties: { name: { type: 'string', pattern: '^(a+)+$' } },
+      $defs: { tag: { type: 'object', patternProperties: { '^(a|a)+$': { type: 'string' } } } },
+    }
+    const started = Date.now()
+    const result = parseAgentManifest({ ...base, configSchema, defaultConfig: { name: 'a'.repeat(40) + '!' } })
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(result.errors.join('\n')).toContain('pattern is not allowed (at /properties/name/pattern)')
+    expect(result.errors.join('\n')).toContain('patternProperties is not allowed (at /$defs/tag/patternProperties)')
+    // A setting that is merely named "pattern" is fine.
+    expect(parseAgentManifest({ ...base, configSchema: { type: 'object', properties: { pattern: { type: 'string' } } } }).errors).toEqual([])
+  })
+
+  it('reports a configSchema Ajv cannot compile as an error, not a crash', () => {
+    const configSchema = { type: 'object', properties: { a: { $ref: '#/$defs/missing' } } }
+    for (const extra of [{ defaultConfig: { a: 1 } }, {}]) {
+      const result = parseAgentManifest({ ...base, configSchema, ...extra })
+      expect(result.errors.join('\n')).toMatch(/^configSchema: schema cannot be used/)
+    }
+  })
+
   it('does not ask defaultConfig for settings the user must give', () => {
     const configSchema = {
       type: 'object',

@@ -300,6 +300,12 @@ export interface RuntimeVariable {
 
 // Extended AgentType with build info (for my-agents endpoint)
 export interface CustomAgentType extends AgentType {
+  /** A build succeeded and its image is stored. */
+  built: boolean
+  /** The SDK the last build installed (null: not built, or built before STELLA recorded it). */
+  sdkVersion: string | null
+  /** Why the last build cannot deploy on this STELLA ("Needs SDK update"), or null. */
+  sdkProblem: string | null
   lastBuild: {
     status: string
     startedAt: string
@@ -1821,7 +1827,7 @@ export interface PlatformSettings {
   pinnedDeployments: PinnedDeployment[]
   /** Whether AI clients may connect over MCP. Off unless an admin turns it on. */
   mcpEnabled: boolean
-  /** Whether uploaded agents wait for an admin's approval before they can deploy. Off by default. */
+  /** Whether uploaded agents wait for an admin's approval before they can deploy. On by default. */
   agentReviewRequired: boolean
   /** How well the voice fits this server under concurrent load (#93); null when it could not be read. */
   hardwareFit: HardwareFit | null

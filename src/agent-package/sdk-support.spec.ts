@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { parseSdkVersionOutput } from '../agent-build/agent-build.service.js'
+import { parseSdkVersionOutput, sdkProbeArgs } from '../agent-build/agent-build.service.js'
 import { CURRENT_SDK_VERSION, MIN_SUPPORTED_SDK_VERSION } from './manifest-defaults.js'
 import { builtSdkProblem, requestedSdkProblem, sdkSupport } from './sdk-support.js'
 
@@ -45,5 +45,18 @@ describe('reading the SDK version from a built image', () => {
   it('treats anything else as no SDK', () => {
     expect(parseSdkVersionOutput('')).toBeNull()
     expect(parseSdkVersionOutput('Traceback (most recent call last):')).toBeNull()
+  })
+})
+
+describe('the SDK probe container', () => {
+  it('is named, so a hung one can be removed, and runs without network, capabilities or room to grow', () => {
+    const args = sdkProbeArgs('stella-sdk-probe-1', 'mine:0.1.0')
+    const flag = (name: string) => args[args.indexOf(name) + 1]
+    expect(flag('--name')).toBe('stella-sdk-probe-1')
+    expect(flag('--network')).toBe('none')
+    expect(flag('--cap-drop')).toBe('ALL')
+    expect(flag('--security-opt')).toBe('no-new-privileges')
+    expect(args).toEqual(expect.arrayContaining(['--memory', '--pids-limit', '--rm']))
+    expect(args.indexOf('mine:0.1.0')).toBeGreaterThan(args.indexOf('--entrypoint'))
   })
 })

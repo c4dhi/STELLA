@@ -192,6 +192,7 @@ export class AgentUploadController {
       capabilities: agent.capabilities,
       defaultConfig: agent.defaultConfig,
       createdAt: agent.createdAt,
+      built: !!agent.imageUrl,
       sdkVersion: agent.sdkVersion,
       // Set when the last build can't deploy on this STELLA: "Needs SDK update".
       sdkProblem: agent.imageUrl ? builtSdkProblem(agent.sdkVersion) : null,

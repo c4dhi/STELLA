@@ -112,7 +112,8 @@ STELLA refuses a manifest that breaks any of these:
 - `features.plans` is set exactly when `capabilities` includes `plans`, and `features.plans.modes` includes `companion` exactly when `capabilities` includes `companion`.
 - `features.configurator` needs a `pipelineSchema`. An `experts` agent with the configurator must expose its expert configuration in `configSchema` (`experts`, `expert_overrides`, `experts_dir` or `custom_experts`).
 - A resource `request` is not above its `limit`, and no limit is above the maximum.
-- `configSchema` is a valid JSON Schema, and `defaultConfig` fits it.
+- `configSchema` is a valid JSON Schema that STELLA can compile, and `defaultConfig` fits it. Values for required settings may be left out of the defaults.
+- `configSchema` uses no regular expressions (`pattern`, `patternProperties`). STELLA checks settings on its server, where a badly written expression can stall it. Use `enum`, `minLength` or `maxLength` instead.
 - An env var is not both required and optional.
 - Unknown keys are refused, not ignored. A typo like `conectors:` is an error, not a silently missing feature.
 
