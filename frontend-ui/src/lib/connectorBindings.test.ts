@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AvailableConnector, ConnectorSlot } from './api-types'
-import { bindingsFromChoices, connectorsForSlot, initialSlotChoices, missingTools, unboundRequiredSlots } from './connectorBindings'
+import { bindingsFromChoices, connectorsForSlot, extraCandidates, initialSlotChoices, missingTools, unboundRequiredSlots } from './connectorBindings'
 
 const slot: ConnectorSlot = {
   slot: 'elias',
@@ -50,5 +50,14 @@ describe('connector picker', () => {
     expect(unboundRequiredSlots([slot, optional], { elias: '', notes: '' }).map((s) => s.slot)).toEqual(['elias'])
     expect(unboundRequiredSlots([slot, optional], { elias: 'x', notes: '' })).toEqual([])
     expect(bindingsFromChoices([slot, optional], { elias: 'x', notes: '' })).toEqual([{ connectorId: 'x', slot: 'elias' }])
+  })
+
+  it('offers the connectors no slot uses as extras and sends them without a slot', () => {
+    expect(extraCandidates([full, partial, untested], { elias: 'elias' }).map((c) => c.id)).toEqual(['half', 'new'])
+    expect(bindingsFromChoices([slot], { elias: 'elias' }, ['new', 'elias'])).toEqual([
+      { connectorId: 'elias', slot: 'elias' },
+      { connectorId: 'new' },
+    ])
+    expect(bindingsFromChoices([], {}, ['new'])).toEqual([{ connectorId: 'new' }])
   })
 })

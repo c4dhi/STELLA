@@ -648,7 +648,7 @@ export default function SessionView() {
   }
 
   // Deploy agent
-  const handleDeployAgent = async (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[], connectorBindings?: { connectorId: string; slot: string }[]) => {
+  const handleDeployAgent = async (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[], connectorBindings?: { connectorId: string; slot?: string }[]) => {
     if (!sessionId) return
 
     try {

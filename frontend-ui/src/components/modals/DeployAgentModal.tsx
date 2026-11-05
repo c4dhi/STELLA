@@ -32,7 +32,7 @@ import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredS
 interface DeployAgentModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[], connectorBindings?: { connectorId: string; slot: string }[]) => Promise<void>
+  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[], connectorBindings?: { connectorId: string; slot?: string }[]) => Promise<void>
   /** The session's project: which shared connectors the user may bind here. */
   projectId?: string
 }
@@ -117,26 +117,29 @@ export default function DeployAgentModal({
   const [connectorsLoading, setConnectorsLoading] = useState(false)
   const [connectorsError, setConnectorsError] = useState<string | null>(null)
   const [slotChoices, setSlotChoices] = useState<SlotChoices>({})
+  const [extraConnectors, setExtraConnectors] = useState<string[]>([])
+  // The connectors this user may bind here: their own and those shared with
+  // the session's project. Loaded once per opening, for every agent type,
+  // because any agent may be offered extra connectors.
   useEffect(() => {
-    setSlotChoices({})
+    setAvailableConnectors([])
     setConnectorsError(null)
-    if (connectorSlots.length === 0) return
-    if (!projectId) {
-      setConnectorsError('this session has no project')
-      return
-    }
+    if (!isOpen || !projectId) return
     let cancelled = false
     setConnectorsLoading(true)
     apiClient.listAvailableConnectors(projectId)
-      .then((list) => {
-        if (cancelled) return
-        setAvailableConnectors(list)
-        setSlotChoices(initialSlotChoices(connectorSlots, list))
-      })
+      .then((list) => !cancelled && setAvailableConnectors(list))
       .catch((err) => !cancelled && setConnectorsError(err instanceof Error ? err.message : String(err)))
       .finally(() => !cancelled && setConnectorsLoading(false))
     return () => { cancelled = true }
-  }, [connectorSlots, projectId])
+  }, [isOpen, projectId])
+  // A new agent type starts from its own preselection and no extras.
+  useEffect(() => {
+    setSlotChoices(initialSlotChoices(connectorSlots, availableConnectors))
+    setExtraConnectors([])
+  }, [connectorSlots, availableConnectors])
+  const slotsNeedProject = connectorSlots.length > 0 && !projectId
+  const showConnectorsStep = connectorSlots.length > 0 || availableConnectors.length > 0
 
   // Shared env-var editor (manual entry). Required keys must be filled; values are
   // mirrored back into `envVars` so canContinue + handleSubmit keep working.
@@ -184,7 +187,7 @@ export default function DeployAgentModal({
     if (hasRequiredSettings) {
       steps.push('settings')
     }
-    if (connectorSlots.length > 0) {
+    if (showConnectorsStep) {
       steps.push('connectors')
     }
     if (supportsVoiceSelection) {
@@ -193,7 +196,7 @@ export default function DeployAgentModal({
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
     return steps
-  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode, hasRequiredSettings, connectorSlots.length])
+  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode, hasRequiredSettings, showConnectorsStep])
 
   // Reset state when modal opens
   useEffect(() => {
@@ -455,7 +458,7 @@ export default function DeployAgentModal({
         selectedPersona?.id,
         mode,
         mode === 'companion' ? activityPlanIds : undefined,
-        connectorSlots.length > 0 ? bindingsFromChoices(connectorSlots, slotChoices) : undefined,
+        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, extraConnectors) : undefined,
       )
       onClose()
     } catch (err) {
@@ -875,9 +878,13 @@ export default function DeployAgentModal({
                     slots={connectorSlots}
                     available={availableConnectors}
                     loading={connectorsLoading}
-                    loadError={connectorsError}
+                    loadError={slotsNeedProject ? 'this session has no project' : connectorsError}
                     choices={slotChoices}
                     onChoose={(slot, connectorId) => setSlotChoices((prev) => ({ ...prev, [slot]: connectorId }))}
+                    extras={extraConnectors}
+                    onToggleExtra={(connectorId, on) =>
+                      setExtraConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
+                    }
                   />
                 </motion.div>
               ) : step === 'voice' ? (

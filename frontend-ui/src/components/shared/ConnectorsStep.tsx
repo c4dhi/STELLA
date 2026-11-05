@@ -1,6 +1,6 @@
 import { useThemeStore } from '../../store/themeStore'
 import type { AvailableConnector, ConnectorSlot } from '../../lib/api-types'
-import { connectorsForSlot, missingTools, type SlotChoices } from '../../lib/connectorBindings'
+import { connectorsForSlot, extraCandidates, missingTools, type SlotChoices } from '../../lib/connectorBindings'
 
 interface ConnectorsStepProps {
   slots: ConnectorSlot[]
@@ -9,14 +9,18 @@ interface ConnectorsStepProps {
   loadError: string | null
   choices: SlotChoices
   onChoose: (slot: string, connectorId: string) => void
+  /** Extra connectors offered on top of the slots, by id. */
+  extras: string[]
+  onToggleExtra: (connectorId: string, on: boolean) => void
 }
 
 /**
  * One picker per connector slot the agent declares in agent.yaml. Offers the
  * user's own connectors and those shared with this project, and says which
- * tools a connector is missing for the slot.
+ * tools a connector is missing for the slot. Below, any other connector can be
+ * offered too; the agent finds those with `connectors.list()`.
  */
-export default function ConnectorsStep({ slots, available, loading, loadError, choices, onChoose }: ConnectorsStepProps) {
+export default function ConnectorsStep({ slots, available, loading, loadError, choices, onChoose, extras, onToggleExtra }: ConnectorsStepProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
   const selectClass = `
@@ -30,6 +34,8 @@ export default function ConnectorsStep({ slots, available, loading, loadError, c
 
   if (loading) return <div className={muted}>Loading your connectors…</div>
   if (loadError) return <div className="text-sm text-rose-500">Could not load your connectors: {loadError}</div>
+
+  const others = extraCandidates(available, choices)
 
   return (
     <div className="space-y-5">
@@ -68,6 +74,37 @@ export default function ConnectorsStep({ slots, available, loading, loadError, c
           </div>
         )
       })}
+      {others.length > 0 && (
+        <div>
+          <p className={labelClass}>{slots.length > 0 ? 'Other connectors' : 'Connectors'}</p>
+          <p className={`${hintClass} mt-0 mb-2`}>
+            {slots.length > 0
+              ? 'Optional. The agent can also use these, if its code looks for them.'
+              : 'Optional. This agent asks for no connector, but it can use one you offer, if its code looks for it.'}
+          </p>
+          <div className="space-y-2">
+            {others.map((c) => {
+              const id = `connector-extra-${c.id}`
+              return (
+                <label key={c.id} htmlFor={id} className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    id={id}
+                    type="checkbox"
+                    checked={extras.includes(c.id)}
+                    onChange={(e) => onToggleExtra(c.id, e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded accent-primary-500"
+                  />
+                  <span className={muted}>
+                    {c.name} <span className="opacity-70">({c.handle})</span>
+                    {c.owned ? '' : ` · shared by ${c.ownerName ?? 'a project member'}`}
+                    {c.tools ? ` · ${c.tools.length} tools` : ' · not tested yet'}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

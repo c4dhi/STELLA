@@ -43,6 +43,33 @@ export function unboundRequiredSlots(slots: ConnectorSlot[], choices: SlotChoice
   return slots.filter((slot) => slot.required && !choices[slot.slot])
 }
 
-export function bindingsFromChoices(slots: ConnectorSlot[], choices: SlotChoices): { connectorId: string; slot: string }[] {
-  return slots.filter((slot) => choices[slot.slot]).map((slot) => ({ connectorId: choices[slot.slot], slot: slot.slot }))
+/**
+ * Connectors the user may offer on top of the declared slots: any not already
+ * chosen for a slot. The agent finds them with `connectors.list()`.
+ */
+export function extraCandidates(available: AvailableConnector[], choices: SlotChoices): AvailableConnector[] {
+  const chosen = new Set(Object.values(choices).filter(Boolean))
+  return available.filter((c) => !chosen.has(c.id))
+}
+
+/** What the deploy request sends: the bound slots, then each extra connector without a slot. */
+export function bindingsFromChoices(
+  slots: ConnectorSlot[],
+  choices: SlotChoices,
+  extras: string[] = [],
+): { connectorId: string; slot?: string }[] {
+  const chosen = new Set<string>()
+  const bindings: { connectorId: string; slot?: string }[] = []
+  for (const slot of slots) {
+    const id = choices[slot.slot]
+    if (!id) continue
+    chosen.add(id)
+    bindings.push({ connectorId: id, slot: slot.slot })
+  }
+  for (const id of extras) {
+    if (chosen.has(id)) continue
+    chosen.add(id)
+    bindings.push({ connectorId: id })
+  }
+  return bindings
 }
