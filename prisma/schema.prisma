@@ -202,6 +202,12 @@ model AgentType {
   icon        String? // Default emoji or image URL
   version     String  @default("1.0.0")
 
+  // The agent's normalized manifest (agent.yaml, format 2.0): the source of truth
+  // for everything STELLA knows about this type. The other manifest-derived
+  // columns below are projections of it, kept for queries and existing readers.
+  // Null only for rows written before this column existed (re-seed / re-upload fills it).
+  manifest Json?
+
   // Built-in vs custom
   isBuiltIn Boolean @default(true)
 

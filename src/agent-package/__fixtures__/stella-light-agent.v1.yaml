@@ -1,0 +1,326 @@
+version: "1.0"
+
+metadata:
+  name: "Stella Light"
+  slug: "stella-light-agent"
+  # 1.1.0 — the identity slot is gone; the persona owns identity (#467).
+  version: "1.1.0"
+  description: "DEPRECATED — superseded by STELLA V2 with a lean expert configuration. Lightweight single-LLM agent with prompt-based guardrails."
+  icon: "💡"
+  # Deprecated in favour of stella-v2. Its remaining advantage was cost — fewer
+  # LLM calls per turn — and that is now expressible as a v2 configuration:
+  # disable the experts you do not need on the Expert Pool node. What you keep
+  # by doing that instead is everything stella-light never grew: the bridge (so
+  # the agent starts speaking immediately rather than waiting in silence),
+  # analytics, companion mode, and one codebase where a fix lands once.
+  #
+  # Not retired: existing deployments keep running and their saved
+  # configurations stay valid. It is only demoted in the gallery.
+  deprecated: true
+  deprecationNote: "Use STELLA V2. For a comparably cheap agent, save a V2 configuration with only the experts you need enabled — you keep the bridge, analytics and companion mode."
+  tags:
+    - voice
+    - ai
+    - lightweight
+
+capabilities:
+  - voice
+  - text
+  - plans
+
+image:
+  dockerfile: "Dockerfile"
+
+resources:
+  memory:
+    request: "256Mi"
+    limit: "1Gi"
+  cpu:
+    request: "100m"
+    limit: "500m"
+
+configSchema:
+  type: object
+  x-stella-supports-configurator: true
+  properties:
+    plan:
+      type: object
+      description: "Plan configuration with states, tasks, and deliverables"
+      x-stella-requires-plan: true
+    llm:
+      type: object
+      description: "LLM configuration (model, temperature, etc.)"
+      properties:
+        model:
+          type: string
+          default: "gpt-4o-mini"
+        temperature:
+          type: number
+          default: 0.7
+  x-stella-env-vars:
+    - OPENAI_API_KEY
+  x-stella-optional-env-vars:
+    - name: INTERRUPT_MODE
+      description: "Transcript interrupt behavior: 'none' (turn-based gating, default) or 'smart' (barge-in with re-prompting)"
+      default: "none"
+    - name: BARGE_IN_ENABLED
+      description: "Operator override for barge-in. This agent supports barge-in by default; set 'false' to force it off, 'true' to force on. Leave unset to follow the agent's declaration."
+    - name: BARGE_IN_EVAL_TIMEOUT_MS
+      description: "Wall-clock timeout (ms) for the Barge-in Evaluator decision; defaults to COMMIT on timeout so a slow classifier never freezes the turn."
+      default: "2000"
+    - name: TTS_ENABLED
+      description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
+      default: "true"
+    - name: STELLA_LANGUAGE
+      description: "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT transcribes as it, the resolver forces every turn to it, and the reply is written in it — so a short or garbled first utterance still gets answered in that language. Empty or 'auto' = detect per turn and fall back to the default language."
+    - name: TRANSCRIPT_DEBOUNCE_MS
+      description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
+      default: "300"
+    - name: DISABLE_AEC
+      description: "Disable Acoustic Echo Cancellation (AEC) for debugging audio issues"
+      default: "false"
+    - name: STELLA_TTS_PREROLL_MS
+      description: "Fix the jitter buffer (ms) of audio held before each sentence plays. Leave unset (recommended): the agent measures how fast the voice is generated on this hardware and picks the head start itself, starting at 200 ms and raising it (up to 3 s) when the voice runs slower than real time or 'Playout starved' / 'bridged Xms' shows up in the agent log, then lowering it slowly when there is slack. Setting a value turns that off. 0 also disables the underrun guard."
+    - name: STELLA_TTS_PLAYBACK
+      description: "How synthesized speech is played: 'auto' (default, and what leaving this unset means) starts the session in 'stream' and switches once to 'sentence' if the measured synthesis speed says the provider cannot keep up — never back. 'stream' starts each sentence as it is generated, lowest latency, but can run dry mid-word on a TTS slower than real time (e.g. Qwen3 on a T4). 'sentence' generates the whole sentence first and then plays it, as 1.1.0 did — pin it to skip the auto-switch. Set per deployment, so two deployments can be compared side by side. Only 'stream' or 'sentence' pins a deployment: left at 'auto', it follows the platform default a system admin sets in Settings → Platform Defaults (from the next session). Unknown values fall back to 'auto'."
+      default: "auto"
+    - name: TTS_SPEED
+      description: "Baseline speaking rate (0.5-2.0, default 1.0). Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker. This agent has no bridge stage, so it does not vary rate per turn."
+    - name: TTS_PROGRESS_TICK_MS
+      description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
+
+defaultConfig: {}
+
+# Pipeline configuration schema for the Agent Configurator.
+# Stella Light is a single-LLM agent (no expert pool / arbitration), so it exposes
+# one configurable node — the response generator — plus a history-limit threshold.
+# These slots are injected at runtime through the SDK config (pipeline_config) and
+# consumed in agent.py / LightPromptBuilder, exactly like stella-v2.
+pipelineSchema:
+  nodes:
+    - id: response
+      label: "Response Generator"
+      description: "The single LLM call that produces the spoken response. Override HOW it speaks, its model, and its limits. WHO it is comes from the persona chosen at deploy time, not from here."
+      icon: "💬"
+      position: { row: 0, col: 0 }
+      slots:
+        - id: conversation_style
+          label: "Conversation Style"
+          type: text
+          description: "How the reply is delivered — register, rhythm, sentence shape. NOT identity: who the agent is comes from the persona selected at deploy time, so the same style can front any persona. Replaces the built-in style block. Supports {{variables}} and {{persona.*}}."
+          default: |
+            ## Conversational Style (CRITICAL - Follow These Rules)
+            You are a calm, observant, and grounded conversationalist. Your goal is to sound like a thoughtful peer.
+
+            - Always respond in the SAME LANGUAGE the user is speaking.
+            - Use natural contractions (don't, it's, I'm).
+            - Start occasionally with a safe filler ("Yeah,", "Well,", "Right,") followed by a comma.
+            - Keep responses under 4 sentences; end with one low-pressure follow-up question.
+            - Concise but thorough - aim for 30-50 words per response.
+            - Ask only ONE question at a time, and make it the LAST thing you say: they are listening, not reading, so anything after a question is talked over or forgotten.
+        - id: safety_guidelines
+          label: "Safety Guidelines"
+          type: text
+          description: "Embedded safety/ethics guardrails appended to every turn (replaces the old expert system). Edit to tune how the agent handles medical/financial/legal/harmful/ethical topics. The default is a safe baseline — change it here instead of in code."
+          default: |
+            ## Safety Guidelines (IMPORTANT)
+            When users ask about sensitive topics, provide helpful general information while maintaining appropriate boundaries:
+
+            **Medical Questions:**
+            - Provide general health information and encourage healthy habits
+            - Always recommend consulting healthcare professionals for specific medical advice
+            - Never provide diagnoses or specific treatment recommendations
+
+            **Financial Questions:**
+            - Share general financial literacy information
+            - Suggest consulting financial advisors for specific investment or financial decisions
+            - Never give specific financial advice
+
+            **Legal Questions:**
+            - Provide general information about legal concepts when helpful
+            - Always recommend consulting legal professionals for specific legal matters
+            - Never give specific legal advice
+
+            **Harmful or Dangerous Requests:**
+            - Politely decline requests that could cause harm
+            - Redirect to appropriate resources or topics
+            - Maintain a caring, non-judgmental tone
+
+            **Ethical Dilemmas:**
+            - Provide balanced perspectives without imposing judgment
+            - Help users think through considerations
+            - Respect user autonomy in decision-making
+
+            Remember: You are a supportive companion, not a replacement for professional advice.
+        - id: state_transition_note
+          label: "Phase Transition Note"
+          type: text
+          description: "Guidance shown to the agent on the first turn after moving into a new phase. The '## State Transition Notice' header and the live phase title are added automatically — this is just the behavioral guidance prose."
+          default: |
+            Take a moment to acknowledge this transition naturally and introduce the new topic/focus area.
+            Do NOT continue collecting information from the previous state.
+        - id: model
+          label: "Model"
+          type: select
+          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-4o-mini"
+        - id: temperature
+          label: "Temperature"
+          type: number
+          min: 0
+          max: 1.5
+          step: 0.1
+          default: 0.7
+        - id: max_tokens
+          label: "Max Tokens"
+          type: number
+          min: 50
+          max: 1000
+          step: 10
+          default: 800
+
+    - id: barge_in
+      label: "Interrupt · Barge-in (reversible)"
+      description: "One of two interrupt types. This one is reversible and local: the user interrupts while the agent talks, the agent pauses, and this evaluator decides COMMIT (act on it, drop the rest of the reply) or RESUME (ignore it, resume from exactly where it paused). Control returns to the conversation either way. Spoken interruptions reach it only after two cheaper filters: the agent ducks its voice on the first sound, and goes silent once the user has been speaking for BARGE_IN_MIN_SPEECH_MS (default 400ms); this prompt then judges the FINAL transcript, which is the one question duration cannot answer. After BARGE_IN_STORM_COUNT (3) false interruptions inside BARGE_IN_STORM_WINDOW_MS (60s), spoken interruptions are ignored for BARGE_IN_STORM_COOLDOWN_MS (120s). (The terminal interrupt is 'Interrupt · Session End' below.) Force barge-in off entirely with BARGE_IN_ENABLED=false."
+      icon: "✋"
+      position: { row: -1, col: 0 }
+      slots:
+        - id: system_prompt
+          label: "System Prompt"
+          type: text
+          description: "Decides whether a mid-turn interruption — spoken or typed — is real. The interruption itself arrives as the user message; place the prior context yourself via {{conversationHistory}} and the half-spoken reply via {{interruptedReply}} so the call judges in context. Must output exactly COMMIT (act on it, discard the rest of the current reply) or RESUME (ignore it, continue speaking from where it paused). Supports variables: {{conversationHistory}}, {{interruptedReply}}, {{bargeInTranscript}}, {{userInput}}, {{isBargeIn}}."
+          default: |
+            You decide whether a user's interruption of the assistant's speech is a real interruption that should be acted on, or just a backchannel/noise that should be ignored so the assistant keeps talking.
+            {{#if conversationHistory}}
+
+            Conversation so far:
+            {{conversationHistory}}
+            {{/if}}
+            {{#if interruptedReply}}
+
+            The assistant was in the middle of saying (the user cut in here):
+            {{interruptedReply}}
+            {{/if}}
+
+            The user's interruption (what they said while the assistant was speaking) is given as the user message. JUDGE IT IN CONTEXT.
+
+            Output COMMIT if the user's words are meaningful given the conversation — a relevant answer to what the assistant just asked, a question, a correction, a new request, a clear "stop"/"wait", or a change of topic. An on-topic answer (e.g. giving their name right after being asked for it) is a real turn and must COMMIT.
+
+            Output RESUME if it was just acknowledgement, agreement, thinking-aloud, or noise that does not require the assistant to stop — e.g. "mhm", "yeah", "right", "go on", a cough, or a few filler words.
+
+            When unsure, prefer COMMIT — ignoring a real interruption is worse than briefly pausing.
+
+            Output ONLY one word: COMMIT or RESUME.
+        - id: model
+          label: "Model"
+          type: select
+          options: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"]
+          default: "gpt-4o-mini"
+        - id: temperature
+          label: "Temperature"
+          type: number
+          min: 0
+          max: 1
+          step: 0.1
+          default: 0.0
+        - id: max_tokens
+          label: "Max Tokens"
+          type: number
+          min: 1
+          max: 20
+          step: 1
+          default: 3
+
+    - id: interrupt_handler
+      label: "Interrupt · Session End (terminal)"
+      description: "The other interrupt type. SESSION-END is terminal and global: when the session auto-ends (e.g. the max-duration cap, issue #198) the agent stops taking new turns, lets the current turn finish (or cuts it off at the deadline), speaks ONE closing turn that barge-in cannot suspend, then disconnects itself. Modes: 'Farewell' speaks the plan's End-node farewell (or a built-in goodbye if none is set — it never ends wordlessly); 'Wrap-up' lets the agent generate a short custom closing; 'Silent' is the only mode that closes without speaking."
+      icon: "👋"
+      position: { row: 1, col: 0 }
+      slots:
+        - id: mode
+          label: "On Session End"
+          type: select
+          options: ["farewell", "wrap_up", "silent"]
+          default: "farewell"
+        - id: wrap_up_prompt
+          label: "Wrap-up Prompt"
+          type: text
+          description: "Instruction for the agent's final closing turn when mode is 'wrap_up'. Supports {{variables}}."
+          default: |
+            We're out of time. Warmly thank the person and close the conversation in one short sentence.
+
+  edges: []
+
+  thresholds:
+    - id: history_limit
+      label: "History Limit"
+      description: "Maximum number of conversation history messages to include in each prompt"
+      type: number
+      min: 5
+      max: 50
+      step: 5
+      default: 20
+
+# SDK prompt-compiler version this agent resolves {{placeholder}} tokens with.
+# Keep in sync with PROMPT_COMPILER_VERSION in src/stella_light_agent/agent.py.
+promptCompiler:
+  version: "1.1.0"
+
+# {{placeholder}} palette offered in the Agent Configurator. Mirrors the SDK
+# placeholder compiler's resolvable set (stella_agent_sdk.prompts palette()).
+runtimeVariables:
+  - name: persona
+    label: persona.key
+    # A NAMESPACE, not a flat token: it resolves as {{persona.<key>}} against the
+    # deployed persona, so the compiler matches it by pattern rather than by name.
+    namespaced: true
+    description: "A value defined once on the deployed Persona (e.g. {{persona.name}}). Built-ins: name, voice, language; any other key comes from the persona's own variables. Resolvable here and in a plan's own text, so identity is stated in one place."
+    preview: "Grace"
+  - name: plan
+    label: plan
+    description: "Full plan: all states, tasks, deliverables"
+    preview: "States:\n  - welcome_intro (active)\nTasks:\n  - greeting (completed)"
+  - name: current_focus
+    label: current_focus
+    description: "Active task + pending deliverables with criteria"
+    preview: "Task: collect_basic_info\nPending:\n  - user_name (required)"
+  - name: pending_deliverables
+    label: pending_deliverables
+    description: "Pending deliverables with required/optional flags"
+    preview: "- user_name: User's first name [required]"
+  - name: collected_deliverables
+    label: collected_deliverables
+    description: "Already collected deliverable keys"
+    preview: "- age: 28\n- frequency: 3x per week"
+  - name: turns_without_progress
+    label: turns_without_progress
+    description: "Turns since last deliverable collected"
+    preview: "3"
+  - name: current_state
+    label: current_state
+    description: "Current state name + description"
+    preview: "welcome_intro: Greet the user and collect basic info"
+  - name: progress_percentage
+    label: progress_percentage
+    description: "Overall progress %"
+    preview: "42%"
+  - name: processing_mode
+    label: processing_mode
+    description: "Processing mode (sequential/flexible/goal)"
+    preview: "flexible (any order)"
+  - name: language
+    label: language
+    description: "Resolved session language (single source of truth, #214)"
+    preview: "German"
+  - name: history
+    label: history_N
+    parametric: true
+    description: "Last N conversation messages (e.g. {{history_8}})"
+    preview: "[USER]: Hi\n[ASSISTANT]: Welcome! How can I help?"
+  - name: user_message
+    label: user_message
+    description: "The user's latest message"
+    preview: "I usually go running three times a week."
+
+sdk:
+  minVersion: "0.4.0"

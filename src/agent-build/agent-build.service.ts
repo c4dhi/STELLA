@@ -7,7 +7,7 @@ import { promisify } from 'util'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { SLUG_REGEX, VERSION_REGEX } from '../agent-package/agent-manifest.types.js'
+import { SLUG_REGEX, VERSION_REGEX } from '../agent-package/manifest-defaults.js'
 
 // execFile, never exec: every argument goes to the program as-is, with no shell
 // in between, so nothing from an uploaded package can run a command on the host.

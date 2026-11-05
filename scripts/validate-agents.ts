@@ -2,6 +2,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 import { parseAgentManifestYaml } from '../src/agent-package/schemas/agent-manifest.schema.js'
+import { DEFAULT_DOCKERFILE } from '../src/agent-package/manifest-defaults.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -180,7 +181,7 @@ function main(): void {
     }
 
     if (!manifest.image.imageUrl) {
-      const dockerfileRelativePath = manifest.image.dockerfile || 'Dockerfile'
+      const dockerfileRelativePath = manifest.image.dockerfile ?? DEFAULT_DOCKERFILE
       const dockerfileAbsolutePath = path.join(agentDir, dockerfileRelativePath)
       if (!fs.existsSync(dockerfileAbsolutePath)) {
         failures.push(

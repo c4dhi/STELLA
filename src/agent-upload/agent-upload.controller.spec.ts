@@ -2,6 +2,7 @@ import { jest } from '@jest/globals'
 import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common'
 import { AgentUploadController } from './agent-upload.controller.js'
 import { AgentAdminController } from './agent-admin.controller.js'
+import { agentManifestSchema } from '../agent-package/schemas/agent-manifest.schema.js'
 
 // request.user is an AuthUser ({ userId, ... }). The controllers used to read
 // req.user.id, which is always undefined: uploads got no owner, My Agents listed
@@ -11,13 +12,14 @@ const user = (userId: string, isSystemAdmin = false) => ({
   user: { userId, email: `${userId}@x`, name: null, isSystemAdmin, projectIds: [], projectRoles: {} },
 })
 
-const manifest = (image: Record<string, unknown> = { dockerfile: 'Dockerfile' }) => ({
-  metadata: { slug: 'my-agent', name: 'My agent', version: '0.1.0' },
-  image,
-  capabilities: ['voice'],
-  configSchema: {},
-  defaultConfig: {},
-})
+// A real parsed manifest, so the mapping runs on what upload actually gets.
+const manifest = (image: Record<string, unknown> = { dockerfile: 'Dockerfile' }) =>
+  agentManifestSchema.parse({
+    version: '2.0',
+    metadata: { slug: 'my-agent', name: 'My agent', version: '0.1.0', description: 'd' },
+    image,
+    capabilities: ['voice'],
+  })
 
 function makeUpload(agentRecord: Record<string, unknown> | null = null, m = manifest()) {
   const prisma = {

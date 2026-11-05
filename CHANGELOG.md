@@ -9,12 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agent manifest 2.0 (`agent.yaml`).** An agent now declares what it needs in its own blocks: `features` (persona, plans and their modes, configurator), `env` (required and optional env vars) and `connectors`. `configSchema` holds only the settings a user may give the agent. Manifest 1.0 still works and is upgraded on read, with a deprecation warning. A published JSON Schema (`docs-site/static/schemas/agent-manifest.v2.json`) gives editors completion and validation. See *Agent SDK → The agent manifest*.
 - **MCP: `platform_settings_get` and `platform_settings_update`** for system admins. An assistant can read the platform switches and turn "Review uploaded agents" on or off. Nobody else sees the two tools, and a call by name answers 403. The MCP switch and the TTS playback default stay UI-only.
 
 ### Fixed
 
 - **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time. Now an uploaded agent deploys once a system admin approves it, and its pod runs the build's own start command. A rejected agent never deploys, including on restart or wake after auto-pause.
 - **Admin switch: "Review uploaded agents"** in Settings → Platform Defaults. **It is on by default**, because an agent pod still receives the platform's LiveKit key (which can join any session) and building an upload runs its Dockerfile on the server. A system admin can turn it off; then a user can deploy their own upload as soon as it is built, and other users still need an admin's approval.
+
+### Changed
+
+- **Built-in and uploaded agents are stored by one mapping.** Before, the seed and the upload endpoint each turned agent.yaml into an AgentType their own way. Each had its own expert reader, and companion experts were handled differently in the two. Now both use one mapping, and each AgentType keeps its full manifest (new `manifest` column; the migration adds it and the next seed or re-upload fills it).
+- **Manifest mistakes are refused instead of ignored.** Unknown keys, unknown capabilities, a resource request above its limit, and a `defaultConfig` that doesn't fit `configSchema` now fail validation. Before, these were dropped or let through silently. Manifest 1.0 files keep the old leniency for unknown capabilities (a warning).
+- A pod whose agent type has no valid resource limit now gets the manifest default (512Mi, 250m) instead of a separate 2Gi / 2000m fallback.
 
 ### Security
 

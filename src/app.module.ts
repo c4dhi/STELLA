@@ -27,7 +27,6 @@ import { PublicProjectsModule } from './public-projects/public-projects.module.j
 import { MetricsModule } from './metrics/metrics.module.js';
 import { UserMessagesModule } from './user-messages/user-messages.module.js';
 import { ProjectInvitationsModule } from './project-invitations/project-invitations.module.js';
-import { AgentRegistryModule } from './agent-registry/agent-registry.module.js';
 import { StateMachineModule } from './state-machine/state-machine.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { PlatformSettingsModule } from './platform-settings/platform-settings.module.js';
@@ -70,7 +69,6 @@ const envFilePath = process.env.NODE_ENV === 'production' ? '.env.production' : 
     MetricsModule,
     UserMessagesModule,
     ProjectInvitationsModule,
-    AgentRegistryModule,
     StateMachineModule,
     AdminModule,
     PlatformSettingsModule,

@@ -5,6 +5,11 @@ on:
     branches: [main, development]
     paths:
       - 'src/agent-package/**'
+      - 'agents/*/agent.yaml'
+      - 'agents/*/config/experts/**'
+      - 'prisma/schema.prisma'
+      - 'prisma/seed.ts'
+      - 'docs-site/static/schemas/**'
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
       - 'src/agents/deployable-agent-type.*'
@@ -20,6 +25,11 @@ on:
     branches: [main, development]
     paths:
       - 'src/agent-package/**'
+      - 'agents/*/agent.yaml'
+      - 'agents/*/config/experts/**'
+      - 'prisma/schema.prisma'
+      - 'prisma/seed.ts'
+      - 'docs-site/static/schemas/**'
       - 'src/kubernetes/utils/**'
       - 'src/common/utils/**'
       - 'src/agents/deployable-agent-type.*'
@@ -61,6 +71,8 @@ jobs:
         run: |
           npm test -- --runTestsByPath \
             src/agent-package/validators/manifest.validator.spec.ts \
+            src/agent-package/manifest-contract.spec.ts \
+            src/agent-package/schemas/stella-light-manifest.spec.ts \
             src/kubernetes/utils/agent-config-injection.util.spec.ts \
             src/common/utils/sanitize-config.spec.ts \
             src/kubernetes/utils/resource-clamping.util.spec.ts \

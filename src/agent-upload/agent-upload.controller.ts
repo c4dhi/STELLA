@@ -21,8 +21,9 @@ import { AgentPackageService } from '../agent-package/agent-package.service.js'
 import { AgentBuildService, BuildStatus, resolveDockerfilePath } from '../agent-build/agent-build.service.js'
 import { StorageService } from '../storage/storage.service.js'
 import { PrismaService } from '../prisma/prisma.service.js'
-import { AgentValidationStatus, Prisma } from '@prisma/client'
-import { hashPipelineSchema } from '../agent-configurations/configuration-compat.util.js'
+import { AgentValidationStatus } from '@prisma/client'
+import { DEFAULT_DOCKERFILE } from '../agent-package/manifest-defaults.js'
+import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js'
 
 import type { AuthUser } from '../auth/auth-user.loader.js'
 
@@ -109,7 +110,7 @@ export class AgentUploadController {
 
     // Refuse a Dockerfile path the build would refuse, so the uploader hears it now.
     try {
-      resolveDockerfilePath('/package', manifest.image.dockerfile || 'Dockerfile')
+      resolveDockerfilePath('/package', manifest.image.dockerfile ?? DEFAULT_DOCKERFILE)
     } catch (err) {
       throw new BadRequestException((err as Error).message)
     }
@@ -131,56 +132,20 @@ export class AgentUploadController {
       file.originalname,
     )
 
-    // Publish the agent's declared default experts (config/experts/*.json) so the
-    // Configurator's Expert Module renders them. Null for non-expert agents.
-    const expertDefaults = this.agentPackageService.readExpertDefaults(
-      file.buffer,
-      manifest.capabilities,
-    )
-
-    // Create agent type record
+    // Same mapping as built-in agents (the seed): manifest → AgentType columns,
+    // including the default experts from config/experts/*.json.
+    const expertDefaults = this.agentPackageService.readExpertDefaults(file.buffer, manifest.capabilities)
     const agentType = await this.prisma.agentType.create({
       data: {
-        slug: manifest.metadata.slug,
-        name: manifest.metadata.name,
-        description: manifest.metadata.description,
-        icon: manifest.metadata.icon,
-        version: manifest.metadata.version,
+        ...manifestToAgentTypeData(manifest, expertDefaults),
         isBuiltIn: false,
         userId,
         packagePath: storageInfo.path,
         packageSize: storageInfo.size,
         packageHash: storageInfo.hash,
-        dockerfilePath: manifest.image.dockerfile || 'Dockerfile',
         // Set only by a successful build (AgentBuildService).
         imageUrl: null,
         validationStatus: AgentValidationStatus.PENDING,
-        configSchema: manifest.configSchema as Prisma.InputJsonValue,
-        capabilities: manifest.capabilities as Prisma.InputJsonValue,
-        defaultConfig: manifest.defaultConfig as Prisma.InputJsonValue,
-        // Persist the Configurator/compatibility inputs so uploaded agents behave
-        // like seeded ones: pipelineSchema drives the Configurator, its hash detects
-        // schema drift, runtimeVariables drive the {{placeholder}} palette, and
-        // compilerVersion is what saved configs' minCompilerVersion is checked against
-        // (omitting it left every config with a minCompilerVersion stuck OUTDATED).
-        pipelineSchema: manifest.pipelineSchema
-          ? (manifest.pipelineSchema as Prisma.InputJsonValue)
-          : Prisma.DbNull,
-        pipelineSchemaHash: hashPipelineSchema(manifest.pipelineSchema ?? null),
-        runtimeVariables: manifest.runtimeVariables
-          ? (manifest.runtimeVariables as Prisma.InputJsonValue)
-          : Prisma.DbNull,
-        compilerVersion: manifest.promptCompiler?.version ?? null,
-        resourceMemory: manifest.resources?.memory?.limit || '512Mi',
-        resourceCpu: manifest.resources?.cpu?.limit || '250m',
-        resourceGpu: manifest.resources?.gpu || false,
-        authorName: manifest.metadata.author?.name,
-        authorEmail: manifest.metadata.author?.email,
-        tags: manifest.metadata.tags as Prisma.InputJsonValue,
-        sdkMinVersion: manifest.sdk?.minVersion,
-        expertDefaults: expertDefaults
-          ? (expertDefaults as Prisma.InputJsonValue)
-          : Prisma.DbNull,
       },
     })
 

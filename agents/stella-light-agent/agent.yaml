@@ -1,4 +1,4 @@
-version: "1.0"
+version: "2.0"
 
 metadata:
   name: "Stella Light"
@@ -39,27 +39,17 @@ resources:
     request: "100m"
     limit: "500m"
 
-configSchema:
-  type: object
-  x-stella-supports-configurator: true
-  properties:
-    plan:
-      type: object
-      description: "Plan configuration with states, tasks, and deliverables"
-      x-stella-requires-plan: true
-    llm:
-      type: object
-      description: "LLM configuration (model, temperature, etc.)"
-      properties:
-        model:
-          type: string
-          default: "gpt-4o-mini"
-        temperature:
-          type: number
-          default: 0.7
-  x-stella-env-vars:
+features:
+  persona: true
+  plans:
+    required: true
+    modes: [plan]
+  configurator: true
+
+env:
+  required:
     - OPENAI_API_KEY
-  x-stella-optional-env-vars:
+  optional:
     - name: INTERRUPT_MODE
       description: "Transcript interrupt behavior: 'none' (turn-based gating, default) or 'smart' (barge-in with re-prompting)"
       default: "none"
@@ -88,6 +78,23 @@ configSchema:
       description: "Baseline speaking rate (0.5-2.0, default 1.0). Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker. This agent has no bridge stage, so it does not vary rate per turn."
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
+
+
+# Settings a user may give this agent at deploy. Platform flags live in
+# features/env above, never in here.
+configSchema:
+  type: object
+  properties:
+    llm:
+      type: object
+      description: "LLM configuration (model, temperature, etc.)"
+      properties:
+        model:
+          type: string
+          default: "gpt-4o-mini"
+        temperature:
+          type: number
+          default: 0.7
 
 defaultConfig: {}
 

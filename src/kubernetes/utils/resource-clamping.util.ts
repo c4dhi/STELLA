@@ -1,39 +1,16 @@
-export const MAX_CPU_MILLICORES = 2000 // 2 cores
-export const MAX_MEMORY_BYTES = 4 * 1024 * 1024 * 1024 // 4Gi
-export const DEFAULT_CPU_LIMIT = '2000m'
-export const DEFAULT_MEMORY_LIMIT = '2Gi'
+import {
+  RESOURCE_DEFAULTS,
+  parseCpuMillicores,
+  parseMemoryBytes,
+} from '../../agent-package/manifest-defaults.js'
 
-/**
- * Parse a CPU string (e.g. "250m", "2") to millicores.
- * Returns null for invalid formats.
- */
-export function parseCpuMillicores(value: string): number | null {
-  const match = value.match(/^(\d+)(m?)$/)
-  if (!match) return null
-  const num = parseInt(match[1], 10)
-  return match[2] === 'm' ? num : num * 1000
-}
-
-/**
- * Parse a memory string (e.g. "512Mi", "2Gi") to bytes.
- * Returns null for invalid formats.
- */
-export function parseMemoryBytes(value: string): number | null {
-  const match = value.match(/^(\d+)(Ki|Mi|Gi)?$/)
-  if (!match) return null
-  const num = parseInt(match[1], 10)
-
-  switch (match[2]) {
-    case 'Gi':
-      return num * 1024 * 1024 * 1024
-    case 'Mi':
-      return num * 1024 * 1024
-    case 'Ki':
-      return num * 1024
-    default:
-      return num
-  }
-}
+// Defaults, maxima and parsers come from the manifest's single source, so a pod
+// can never be clamped to a different default than the one an agent type was stored with.
+export { parseCpuMillicores, parseMemoryBytes }
+export const MAX_CPU_MILLICORES = parseCpuMillicores(RESOURCE_DEFAULTS.cpu.max)!
+export const MAX_MEMORY_BYTES = parseMemoryBytes(RESOURCE_DEFAULTS.memory.max)!
+export const DEFAULT_CPU_LIMIT = RESOURCE_DEFAULTS.cpu.limit
+export const DEFAULT_MEMORY_LIMIT = RESOURCE_DEFAULTS.memory.limit
 
 /**
  * Clamp a resource limit to a safe default when the value is invalid or exceeds maximum.
