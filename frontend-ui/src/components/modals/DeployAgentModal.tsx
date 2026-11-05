@@ -17,7 +17,7 @@ import type {
   TtsCapabilities,
   Persona,
 } from '../../lib/api-types'
-import { parseAgentRequirements } from '../../lib/api-types'
+import { asksForMode, deployNeeds, effectiveMode } from '../../lib/deployNeeds'
 import ConfigurationSelectionStep from '../shared/ConfigurationSelectionStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
@@ -87,11 +87,11 @@ export default function DeployAgentModal({
   const [ttsVoice, setTtsVoice] = useState('')
   const [ttsLanguage, setTtsLanguage] = useState('')
 
-  // Parse agent requirements from configSchema
-  const agentRequirements = useMemo(() => {
-    if (!selectedType) return { requiresPlan: false, requiredEnvVars: [] as string[], supportsConfigurator: false }
-    return parseAgentRequirements(selectedType.configSchema)
-  }, [selectedType])
+  // What this agent needs, as the server resolved it from its agent.yaml.
+  const needs = useMemo(() => deployNeeds(selectedType), [selectedType])
+  const runsPlans = needs.modes.length > 0
+  // An agent that runs only one mode is not asked; it simply runs in it.
+  const runMode = effectiveMode(needs, mode)
 
   // The agent's own settings and connector slots, as the server resolved them
   // from its agent.yaml.
@@ -108,9 +108,11 @@ export default function DeployAgentModal({
   useEffect(() => {
     setSettingValues(initialSettings)
   }, [initialSettings])
-  // The step is shown only when the agent needs something from the user. Its
-  // optional settings keep their defaults otherwise.
-  const hasRequiredSettings = settingsFields.some((f) => f.required)
+  // Shown when the agent needs a setting, or when it has optional ones and no
+  // Configurator to set them (an agent with one, like the built-ins, is tuned
+  // there, so its schema defaults are left alone).
+  const showSettingsStep =
+    settingsFields.some((f) => f.required) || (settingsFields.length > 0 && !needs.configurator)
 
   const connectorSlots = useMemo(() => requirements?.connectors ?? [], [requirements])
   const [availableConnectors, setAvailableConnectors] = useState<AvailableConnector[]>([])
@@ -159,7 +161,7 @@ export default function DeployAgentModal({
   // A companion has no plan at start, so no plan declares the language and the
   // operator's pick is the only signal. Reading it off a plan they selected
   // before switching mode would silently pin the wrong language.
-  const planLanguage = mode === 'companion' ? '' : planDeclaredLanguage(selectedPlan)
+  const planLanguage = runMode === 'companion' ? '' : planDeclaredLanguage(selectedPlan)
 
   const supportsVoiceSelection = useMemo(
     () => showsVoiceStep(ttsCapabilities, planLanguage),
@@ -168,23 +170,25 @@ export default function DeployAgentModal({
 
   const dynamicSteps = useMemo((): Step[] => {
     const steps: Step[] = ['gallery', 'configure']
-    if (agentRequirements.supportsConfigurator && selectedType?.pipelineSchema) {
+    if (needs.configurator && selectedType?.pipelineSchema) {
       steps.push('configuration')
     }
     // Mode first: it decides which built-in persona is preselected (a companion
     // has its own default) and whether a MENU of activities or a single plan
     // is picked afterwards.
-    if (agentRequirements.requiresPlan) {
+    if (asksForMode(needs)) {
       steps.push('mode')
     }
     // Persona BEFORE plan: who the agent is, then the task it carries out. Every
     // agent gets one (omitting it means the system default), so unlike the plan
     // step this is not gated on a capability.
-    steps.push('persona')
-    if (agentRequirements.requiresPlan) {
-      steps.push(mode === 'companion' ? 'activities' : 'plan')
+    if (needs.persona) {
+      steps.push('persona')
     }
-    if (hasRequiredSettings) {
+    if (runsPlans) {
+      steps.push(runMode === 'companion' ? 'activities' : 'plan')
+    }
+    if (showSettingsStep) {
       steps.push('settings')
     }
     if (showConnectorsStep) {
@@ -196,7 +200,7 @@ export default function DeployAgentModal({
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
     return steps
-  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode, hasRequiredSettings, showConnectorsStep])
+  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showSettingsStep, showConnectorsStep])
 
   // Reset state when modal opens
   useEffect(() => {
@@ -306,8 +310,9 @@ export default function DeployAgentModal({
       // merging the template, so template-covered required keys never block deploy.)
       const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
       const templateKeySet = new Set(templateKeys)
-      const requiredToFill = agentRequirements.requiredEnvVars.filter((key) => !templateKeySet.has(key))
-      envVarEditor.reset({ requiredKeys: requiredToFill, templateKeys, initial: {} })
+      const requiredToFill = needs.requiredEnvVars.filter((key) => !templateKeySet.has(key))
+      const optionalToOffer = needs.optionalEnvVars.map((v) => v.name).filter((key) => !templateKeySet.has(key))
+      envVarEditor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: {} })
       setEnvVarsView('edit')
       return
     }
@@ -360,7 +365,7 @@ export default function DeployAgentModal({
       case 'configuration':
         return !!selectedConfiguration
       case 'plan':
-        return !!selectedPlan
+        return !!selectedPlan || !needs.planRequired
       case 'settings':
         return missingSettings(settingsFields, settingValues).length === 0
       case 'connectors':
@@ -375,7 +380,7 @@ export default function DeployAgentModal({
         }
         // In edit view: every required var must be satisfied — either entered manually
         // or provided by the selected template (merged server-side on deploy).
-        return agentRequirements.requiredEnvVars.every(
+        return needs.requiredEnvVars.every(
           key => envVars[key]?.trim() || selectedEnvVarTemplate?.variableKeys.includes(key)
         )
       default:
@@ -401,7 +406,7 @@ export default function DeployAgentModal({
 
     // Merge plan content into config if a plan is selected
     // Map PlanTemplate fields to canonical SDK Plan fields
-    if (selectedPlan && mode !== 'companion') {
+    if (selectedPlan && runsPlans && runMode !== 'companion') {
       config = {
         ...config,
         plan: {
@@ -415,7 +420,7 @@ export default function DeployAgentModal({
 
     // The agent's own settings. The server merges them over its defaultConfig
     // and checks them against its configSchema.
-    if (hasRequiredSettings) {
+    if (showSettingsStep) {
       config = { ...settingsFromValues(settingsFields, settingValues, initialSettings), ...config }
     }
 
@@ -455,9 +460,9 @@ export default function DeployAgentModal({
         selectedEnvVarTemplate?.id,
         Object.keys(filteredEnvVars).length > 0 ? filteredEnvVars : undefined,
         selectedConfiguration?.id,
-        selectedPersona?.id,
-        mode,
-        mode === 'companion' ? activityPlanIds : undefined,
+        needs.persona ? selectedPersona?.id : undefined,
+        runsPlans ? runMode : undefined,
+        runsPlans && runMode === 'companion' ? activityPlanIds : undefined,
         showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, extraConnectors) : undefined,
       )
       onClose()
@@ -924,7 +929,7 @@ export default function DeployAgentModal({
                     }}
                     personas={personas}
                     onPersonasChange={setPersonas}
-                    mode={agentRequirements.requiresPlan ? mode : undefined}
+                    mode={runsPlans ? runMode : undefined}
                   />
                 </motion.div>
               ) : step === 'mode' ? (
@@ -978,7 +983,7 @@ export default function DeployAgentModal({
                   className="p-6"
                 >
                   {/* Required env vars info banner */}
-                  {agentRequirements.requiredEnvVars.length > 0 && (
+                  {needs.requiredEnvVars.length > 0 && (
                     <div className={`
                       p-3 rounded-xl mb-4
                       ${isDark ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-amber-50 border border-amber-200'}
@@ -987,7 +992,7 @@ export default function DeployAgentModal({
                         Required Environment Variables
                       </div>
                       <div className={`flex flex-wrap gap-1.5`}>
-                        {agentRequirements.requiredEnvVars.map(key => (
+                        {needs.requiredEnvVars.map(key => (
                           <span key={key} className={`
                             px-2 py-0.5 rounded text-xs font-mono
                             ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}
@@ -996,6 +1001,24 @@ export default function DeployAgentModal({
                           </span>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Optional env vars the agent reads, with what it does without them */}
+                  {needs.optionalEnvVars.length > 0 && (
+                    <div className={`p-3 rounded-xl mb-4 ${isDark ? 'bg-zinc-800/60 border border-zinc-700' : 'bg-neutral-50 border border-neutral-200'}`}>
+                      <div className={`text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
+                        Optional Environment Variables
+                      </div>
+                      <ul className="space-y-1">
+                        {needs.optionalEnvVars.map((v) => (
+                          <li key={v.name} className={`text-xs font-light ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
+                            <span className="font-mono">{v.name}</span>
+                            {v.description ? ` — ${v.description}` : ''}
+                            {v.default !== undefined ? ` (default ${v.default})` : ''}
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   )}
 
@@ -1094,7 +1117,7 @@ export default function DeployAgentModal({
                                 setSelectedEnvVarTemplate(null)
                                 // Initialize with required vars only
                                 const initial: Record<string, string> = {}
-                                agentRequirements.requiredEnvVars.forEach(key => {
+                                needs.requiredEnvVars.forEach(key => {
                                   initial[key] = ''
                                 })
                                 setEnvVars(initial)
@@ -1152,7 +1175,7 @@ export default function DeployAgentModal({
                               type="button"
                               onClick={() => {
                                 const initial: Record<string, string> = {}
-                                agentRequirements.requiredEnvVars.forEach(key => {
+                                needs.requiredEnvVars.forEach(key => {
                                   initial[key] = ''
                                 })
                                 setEnvVars(initial)
