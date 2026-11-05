@@ -298,6 +298,19 @@ export default function DeployAgentModal({
     setStep('gallery')
   }
 
+  // Open the variable editor, seeded from a template (or none). Every way into
+  // the editor goes through here: the editor rows are what gets sent, so setting
+  // `envVars` without resetting them lost what was typed.
+  const openEnvVarEditor = (template: EnvVarTemplate | null) => {
+    setSelectedEnvVarTemplate(template)
+    const templateKeys = template?.variableKeys ?? []
+    const templateKeySet = new Set(templateKeys)
+    const requiredToFill = needs.requiredEnvVars.filter((key) => !templateKeySet.has(key))
+    const optionalToOffer = needs.optionalEnvVars.map((v) => v.name).filter((key) => !templateKeySet.has(key))
+    envVarEditor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: {} })
+    setEnvVarsView('edit')
+  }
+
   const handleContinue = () => {
     // Special handling for envvars step - transition from select to edit view
     if (step === 'envvars' && envVarsView === 'select') {
@@ -308,12 +321,7 @@ export default function DeployAgentModal({
       // template does NOT cover are seeded as required rows the user must fill.
       // (resolveAgentEnvVarsFromConfigSchema computes missingRequiredEnvVars after
       // merging the template, so template-covered required keys never block deploy.)
-      const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
-      const templateKeySet = new Set(templateKeys)
-      const requiredToFill = needs.requiredEnvVars.filter((key) => !templateKeySet.has(key))
-      const optionalToOffer = needs.optionalEnvVars.map((v) => v.name).filter((key) => !templateKeySet.has(key))
-      envVarEditor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: {} })
-      setEnvVarsView('edit')
+      openEnvVarEditor(selectedEnvVarTemplate)
       return
     }
 
@@ -1115,16 +1123,7 @@ export default function DeployAgentModal({
                             {/* Enter Manually card - at the end */}
                             <motion.button
                               type="button"
-                              onClick={() => {
-                                setSelectedEnvVarTemplate(null)
-                                // Initialize with required vars only
-                                const initial: Record<string, string> = {}
-                                needs.requiredEnvVars.forEach(key => {
-                                  initial[key] = ''
-                                })
-                                setEnvVars(initial)
-                                setEnvVarsView('edit')
-                              }}
+                              onClick={() => openEnvVarEditor(null)}
                               whileHover={{ y: -2 }}
                               className={`
                                 p-4 rounded-xl text-left transition-all duration-200
@@ -1175,14 +1174,7 @@ export default function DeployAgentModal({
                             </p>
                             <motion.button
                               type="button"
-                              onClick={() => {
-                                const initial: Record<string, string> = {}
-                                needs.requiredEnvVars.forEach(key => {
-                                  initial[key] = ''
-                                })
-                                setEnvVars(initial)
-                                setEnvVarsView('edit')
-                              }}
+                              onClick={() => openEnvVarEditor(null)}
                               whileTap={{ scale: 0.98 }}
                               className={`
                                 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
