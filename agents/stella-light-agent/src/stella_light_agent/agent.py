@@ -10,7 +10,6 @@ This is a lightweight version of stella-agent that:
 
 import asyncio
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator, Dict, Any, List, Optional
@@ -20,7 +19,6 @@ from stella_agent_sdk import AgentInput
 from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.tools import ToolRegistry
-from stella_agent_sdk.tools.state_machine import create_state_machine_tools
 from stella_agent_sdk.prompts import resolve_persona_tokens
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.progress import progress_from_full_state, build_last_transition
@@ -78,9 +76,6 @@ class StellaLightAgent(BaseAgent):
         """
         super().__init__()
 
-        # Set agent type to match the Docker image name (used for gRPC registration)
-        self._agent_type = "stella-light-agent"
-
         # Determine config path
         if llm_config_path is None:
             llm_config_path = self._find_config_file("config/llm_config.json")
@@ -101,11 +96,9 @@ class StellaLightAgent(BaseAgent):
         self.language_resolver = LanguageResolver()
         self._session_language: Optional[str] = None
 
-        # Tool-based components (initialized per session).
-        # State machine shares the same gRPC port as agent registration (50051).
-        self._state_machine_address = state_machine_address or os.environ.get(
-            "STATE_MACHINE_ADDRESS", "localhost:50051"
-        )
+        # Tool-based components (initialized per session). None: the SDK's
+        # plan_runtime reads STATE_MACHINE_ADDRESS (set on every agent pod).
+        self.state_machine_address = state_machine_address
         self.sm_client: Optional[StateMachineClient] = None
         self.tool_registry: Optional[ToolRegistry] = None
         self.tool_processor: Optional[ToolProcessor] = None
@@ -436,29 +429,14 @@ class StellaLightAgent(BaseAgent):
         self, session_id: str, plan_config: Optional[Dict[str, Any]]
     ) -> None:
         """Initialize tool-based state management."""
-        # Create state machine client and connect
-        self.sm_client = StateMachineClient(
-            session_id=session_id,
-            address=self._state_machine_address
+        # The SDK's plan runtime: connection, plan, state machine tools.
+        await self.plan_runtime.start(plan_config)
+        self.sm_client = self.plan_runtime.client
+        self.tool_registry = self.plan_runtime.tools
+        print(
+            f"[StellaLightAgent] State machine at {self.plan_runtime.address}, "
+            f"{len(self.tool_registry.list_tools())} tools"
         )
-        await self.sm_client.connect()
-        print(f"[StellaLightAgent] Connected to state machine at {self._state_machine_address}")
-
-        # Initialize state machine with plan
-        if plan_config:
-            try:
-                result = await self.sm_client.initialize(plan_config)
-                print(f"[StellaLightAgent] State machine initialized: {result.get('success')}")
-            except Exception as e:
-                print(f"[StellaLightAgent] Failed to initialize state machine: {e}")
-
-        # Create tool registry and register state machine tools
-        self.tool_registry = ToolRegistry()
-        sm_tools = create_state_machine_tools(self.sm_client)
-        for tool in sm_tools:
-            self.tool_registry.register(tool)
-
-        print(f"[StellaLightAgent] Registered {len(sm_tools)} state machine tools")
 
         # Create tool processor
         self.tool_processor = ToolProcessor(

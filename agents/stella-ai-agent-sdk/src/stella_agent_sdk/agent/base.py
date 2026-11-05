@@ -3,16 +3,21 @@
 from abc import ABC, abstractmethod
 import asyncio
 import logging
+import os
 import re
 import time
 import uuid
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional, TYPE_CHECKING
 
+from stella_agent_sdk._version import SDK_VERSION
 from stella_agent_sdk.emotion.tags import strip_emotion_tags
 from stella_agent_sdk.language import turn_language_record
 from stella_agent_sdk.messages.input import AgentInput
 from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.services.connectors_client import ConnectorsClient
+from stella_agent_sdk.participants import human_identities
+from stella_agent_sdk.plan.runtime import PlanRuntime
+from stella_agent_sdk.session_config import PersonaConfig, SessionConfig
 from stella_agent_sdk.messages.types import (
     AgentState,
     BargeInDecision,
@@ -107,8 +112,21 @@ class BaseAgent(ABC):
         self._start_time: float = time.time()
         self._messages_processed: int = 0
         self._last_error: Optional[str] = None
-        self._agent_type: str = self.__class__.__name__
-        self._agent_version: str = "1.0.0"
+        # Identity the agent registers under. The platform injects AGENT_TYPE
+        # (the agent.yaml slug it waits for) and AGENT_VERSION; the class name
+        # and "1.0.0" are only fallbacks for running outside STELLA.
+        self._agent_type: str = os.environ.get("AGENT_TYPE") or self.__class__.__name__
+        self._agent_version: str = os.environ.get("AGENT_VERSION") or "1.0.0"
+        # AGENT_CONFIG, typed (set by run_agent and on_session_start).
+        self._session_config: SessionConfig = SessionConfig()
+        # The state machine + its tools, created on first use of plan_runtime.
+        self._plan_runtime: Optional[PlanRuntime] = None
+        #: Where plan_runtime connects. None: STATE_MACHINE_ADDRESS, then the
+        #: in-cluster default. Set it before the session starts to override.
+        self.state_machine_address: Optional[str] = None
+        # complete_session() already told the frontend; the audio loop must not
+        # announce it a second time.
+        self._completion_announced: bool = False
         # Audio pipeline (set by run_agent when using direct LiveKit mode)
         self._audio_pipeline: Optional["AudioPipeline"] = None
         # History client (set by run_agent for chat history access)
@@ -234,6 +252,43 @@ class BaseAgent(ABC):
     def agent_version(self, value: str) -> None:
         """Set the agent version."""
         self._agent_version = value
+
+    @property
+    def sdk_version(self) -> str:
+        """The installed stella-ai-agent-sdk version, reported at registration."""
+        return SDK_VERSION
+
+    @property
+    def session(self) -> SessionConfig:
+        """This session's ``AGENT_CONFIG``, typed: ``persona``, ``mode``,
+        ``plan``, ``available_plans``, ``pipeline_config``, ``config`` (the
+        user's settings from configSchema) and ``connectors``."""
+        return self._session_config
+
+    @property
+    def persona(self) -> Optional[PersonaConfig]:
+        """The deployed Persona, if the backend resolved one."""
+        return self._session_config.persona
+
+    @property
+    def plan(self) -> Optional[Dict[str, Any]]:
+        """The plan this session follows (inline plans only), else ``None``."""
+        return self._session_config.plan_dict
+
+    @property
+    def plan_runtime(self) -> PlanRuntime:
+        """The session's state machine and its tools (opt-in, see
+        ``stella_agent_sdk.plan.runtime``). Nothing connects until
+        ``await self.plan_runtime.start(plan)``."""
+        session_id = self._session_id or ""
+        if self._plan_runtime is None or self._plan_runtime.session_id != session_id:
+            self._plan_runtime = PlanRuntime(session_id, address=self.state_machine_address)
+        return self._plan_runtime
+
+    @property
+    def session_completed(self) -> bool:
+        """Whether the session has been completed (see ``complete_session``)."""
+        return self._session_completed
 
     @property
     def agent_name(self) -> str:
@@ -461,6 +516,11 @@ class BaseAgent(ABC):
         self._last_error = error
         self._state = AgentState.ERROR
 
+    def record_message_processed(self, count: int = 1) -> None:
+        """Count a handled user message for health reporting. The default audio
+        loop does this itself; an agent with its own loop calls it."""
+        self._messages_processed += count
+
     def get_health_status(self) -> Dict[str, Any]:
         """
         Get the current health status of the agent.
@@ -476,6 +536,7 @@ class BaseAgent(ABC):
             "session_id": self._session_id,
             "agent_type": self._agent_type,
             "agent_version": self._agent_version,
+            "sdk_version": SDK_VERSION,
             "uptime_seconds": self.uptime_seconds,
             "messages_processed": self._messages_processed,
             "last_error": self._last_error,
@@ -648,6 +709,8 @@ class BaseAgent(ABC):
             ```
         """
         self._session_id = session_id
+        self._session_config = SessionConfig.parse(config)
+        self._completion_announced = False
         self._state = AgentState.READY
 
     async def on_session_end(self, session_id: str) -> Dict[str, Any]:
@@ -815,6 +878,83 @@ class BaseAgent(ABC):
         payload["data"]["agent_id"] = self._agent_identity().get("agent_id")
         logger.info(f"[CLIENT COMMAND] {command}")
         await self.audio._room.publish_data(payload)
+
+    # ── public room helpers ───────────────────────────────────────────────
+
+    def human_participants(self) -> List[str]:
+        """Identities of the people in the room now (not agents or services)."""
+        if not self.has_audio:
+            return []
+        return human_identities(self.audio.participant_identities())
+
+    async def wait_for_participant(
+        self, *, timeout: Optional[float] = None, poll_interval: float = 0.3
+    ) -> str:
+        """Wait until a person is in the room and return their identity.
+
+        For agents that speak first. Raises ``asyncio.TimeoutError`` after
+        ``timeout`` seconds (``None``: wait as long as it takes).
+        """
+        async def _poll() -> str:
+            while True:
+                people = self.human_participants()
+                if people:
+                    return people[0]
+                await asyncio.sleep(poll_interval)
+
+        if timeout is None:
+            return await _poll()
+        return await asyncio.wait_for(_poll(), timeout)
+
+    async def publish_progress(
+        self,
+        progress: Any,
+        *,
+        update_trigger: str = "turn_completion",
+        **metadata: Any,
+    ) -> None:
+        """Send the task panel's state to the frontend, outside a turn.
+
+        ``progress`` is a ``ProgressState`` (or its dict), or a ready
+        ``AgentOutput.progress_update``. The SDK keeps the last one and sends it
+        again to anyone who joins later. Inside ``process()``, yield
+        ``AgentOutput.progress_update`` instead.
+        """
+        if isinstance(progress, AgentOutput):
+            output = progress
+        else:
+            output = AgentOutput.progress_update(
+                self._session_id or "", progress, update_trigger=update_trigger, **metadata
+            )
+        if output.type != OutputType.PROGRESS_UPDATE:
+            raise ValueError(f"publish_progress needs a progress update, got {output.type.value}")
+        payload = output.to_data_payload(self._agent_identity())
+        if payload is None:
+            return
+        self._last_progress_payload = payload
+        await self.audio.publish_data(payload)
+
+    async def complete_session(self, reason: str = "completed", *, delay_s: float = 1.0) -> None:
+        """End the session from the agent's side: the work is done.
+
+        Waits until what the agent said has been heard, tells the frontend the
+        session is complete (its completion overlay), and stops the audio loop
+        after the current turn. For an agent that runs its own loop, return
+        from it after this. Calling it twice does nothing the second time.
+        """
+        if self._session_completed and self._completion_announced:
+            return
+        self._session_completed = True
+        self._completion_announced = True
+        if not self.has_audio:
+            return
+        try:
+            await self.audio.wait_for_playout_drain()
+            await self.audio.publish_data({"type": "session_completed", "data": {"reason": reason}})
+            if delay_s > 0:
+                await asyncio.sleep(delay_s)  # let the frame reach the client before teardown
+        except Exception:
+            logger.exception("[SESSION] could not publish completion")
 
     def _note_activity(self) -> None:
         self._last_activity_at = time.monotonic()
@@ -1181,6 +1321,9 @@ class BaseAgent(ABC):
 
                 # If the plan reached __end__ during this turn, stop accepting new input.
                 # The farewell has already been spoken; exit the loop cleanly.
+                if self._session_completed and self._completion_announced:
+                    logger.info("Session completed — exiting audio loop")
+                    break
                 if self._session_completed:
                     # Wait for any remaining TTS audio to finish playing on the
                     # client before sending the completion signal and disconnecting.
@@ -1190,6 +1333,7 @@ class BaseAgent(ABC):
                     await asyncio.sleep(3)
 
                     # Notify frontend that session is complete (triggers completion overlay).
+                    self._completion_announced = True
                     await self.audio._room.publish_data({
                         "type": "session_completed",
                         "data": {}

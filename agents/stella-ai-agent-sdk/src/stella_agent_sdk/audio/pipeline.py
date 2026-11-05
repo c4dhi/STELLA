@@ -1049,6 +1049,18 @@ class AudioPipeline:
         except Exception:
             pass
 
+    async def publish_data(self, payload: Dict[str, Any]) -> None:
+        """Send one data-channel message (a ``{"type": ..., "data": ...}``
+        envelope) to everyone in the room."""
+        await self._room.publish_data(payload)
+
+    def participant_identities(self) -> List[str]:
+        """Identities of everyone else in the room right now (people, other
+        agents and services alike; see ``stella_agent_sdk.participants``)."""
+        room = getattr(self._room, "room", None)
+        participants = getattr(room, "remote_participants", None) or {}
+        return list(participants)
+
     async def publish_session_ended(self, reason: str) -> None:
         """Tell the frontend the session has terminally ended (issue #198) so it can
         show the end overlay. Mirrors the session_completed signal used for a natural

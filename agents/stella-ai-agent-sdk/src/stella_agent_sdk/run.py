@@ -31,7 +31,9 @@ Environment Variables (set by session-management-server):
     TTS_SERVICE_ADDRESS: Address of external TTS service (gRPC)
     SESSION_SERVER_URL: URL of session management server (for chat history)
     SESSION_ID: Database session ID (UUID) for chat history API calls
-    AGENT_CONFIG: JSON string with agent-specific configuration (passed to on_session_start)
+    AGENT_CONFIG: JSON string with the session config (passed to on_session_start
+        as a dict, and typed as ``agent.session``; see session_config.py)
+    AGENT_TYPE / AGENT_VERSION: identity the agent registers under (see BaseAgent)
 """
 
 import asyncio
@@ -55,6 +57,7 @@ from stella_agent_sdk.services.history_client import HistoryClient
 from stella_agent_sdk.services.connectors_client import ConnectorsClient
 from stella_agent_sdk.services.agent_server_client import AgentServerClient
 from stella_agent_sdk.messages.types import OutputType
+from stella_agent_sdk.session_config import SessionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -258,8 +261,17 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
     except json.JSONDecodeError as e:
         logger.warning(f"Invalid AGENT_CONFIG JSON: {e}, using empty config")
         agent_config = {}
+    if not isinstance(agent_config, dict):
+        logger.warning("AGENT_CONFIG is not a JSON object, using empty config")
+        agent_config = {}
+    # Typed view (agent.session / .persona / .plan). on_session_start keeps
+    # getting the plain dict, as before.
+    agent._session_config = SessionConfig.parse(agent_config)
 
-    logger.info(f"Starting agent {agent.agent_type} v{agent.agent_version}")
+    logger.info(
+        f"Starting agent {agent.agent_type} v{agent.agent_version} "
+        f"(stella-ai-agent-sdk {agent.sdk_version})"
+    )
     logger.info(f"Agent config: {agent_config}")
     logger.info(f"Room: {room_name}, Identity: {identity}, Session: {session_id}")
     logger.info(f"STT: {stt_address}, TTS: {tts_address}")
@@ -439,13 +451,17 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             await audio_pipeline._room.publish_data(payload)
 
         # 10b. Register agent with session-management-server (marks status as RUNNING)
-        logger.info(f"Registering agent: type='{agent.agent_type}', version='{agent.agent_version}'")
+        logger.info(
+            f"Registering agent: type='{agent.agent_type}', version='{agent.agent_version}', "
+            f"sdk='{agent.sdk_version}'"
+        )
         agent_server_client = AgentServerClient(agent_server_address)
         try:
             await agent_server_client.connect()
             registration_result = await agent_server_client.register_agent(
                 agent_type=agent.agent_type,
                 agent_version=agent.agent_version,
+                sdk_version=agent.sdk_version,
             )
             if registration_result["success"]:
                 logger.info(f"Agent registered with session-management-server: {registration_result['session_id']}")
@@ -691,6 +707,13 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 await agent.on_session_end(agent._session_id)
             except Exception as e:
                 logger.error(f"Error in on_session_end: {e}")
+
+        # Close the state machine connection, if the agent used plan_runtime
+        if agent._plan_runtime is not None:
+            try:
+                await agent._plan_runtime.close()
+            except Exception as e:
+                logger.error(f"Error closing the plan runtime: {e}")
 
         # Stop audio pipeline
         if audio_pipeline:

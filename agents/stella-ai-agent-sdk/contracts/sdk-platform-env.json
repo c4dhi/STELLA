@@ -1,0 +1,132 @@
+{
+  "description": "Environment variables stella-ai-agent-sdk reads for every agent. Generated from stella_agent_sdk.platform_env; do not edit by hand.",
+  "env": [
+    {
+      "name": "INTERRUPT_MODE",
+      "description": "Transcript interrupt behaviour: 'none' (turn-based gating) or 'smart' (barge-in with re-prompting).",
+      "default": "none",
+      "group": "turn-taking"
+    },
+    {
+      "name": "TRANSCRIPT_DEBOUNCE_MS",
+      "description": "Window (ms) for joining rapid successive final transcripts into one turn. 0 disables it.",
+      "default": "0",
+      "group": "turn-taking"
+    },
+    {
+      "name": "BARGE_IN_ENABLED",
+      "description": "Operator override for barge-in: 'false' forces it off, 'true' on. Unset follows the agent's supports_barge_in.",
+      "group": "barge-in"
+    },
+    {
+      "name": "BARGE_IN_EVAL_TIMEOUT_MS",
+      "description": "How long (ms) the barge-in evaluator may take to decide commit or resume before the agent resumes.",
+      "default": "2000",
+      "group": "barge-in"
+    },
+    {
+      "name": "BARGE_IN_DUCK_GAIN",
+      "description": "Volume (0-1) the agent's voice drops to while the user may be interrupting.",
+      "default": "0.25",
+      "group": "barge-in"
+    },
+    {
+      "name": "BARGE_IN_DUCK_TIMEOUT_MS",
+      "description": "How long (ms) the voice stays ducked without the user's speech becoming an interruption.",
+      "default": "1200",
+      "group": "barge-in"
+    },
+    {
+      "name": "BARGE_IN_SUSPEND_TIMEOUT_MS",
+      "description": "How long (ms) playback stays suspended waiting for the interrupting transcript before it resumes.",
+      "default": "8000",
+      "group": "barge-in"
+    },
+    {
+      "name": "BARGE_IN_STORM_COUNT",
+      "description": "Barge-ins within BARGE_IN_STORM_WINDOW_MS that switch barge-in off for a cool-down (echo protection).",
+      "default": "3",
+      "group": "barge-in"
+    },
+    {
+      "name": "BARGE_IN_STORM_WINDOW_MS",
+      "description": "Window (ms) in which BARGE_IN_STORM_COUNT barge-ins count as a storm.",
+      "default": "60000",
+      "group": "barge-in"
+    },
+    {
+      "name": "BARGE_IN_STORM_COOLDOWN_MS",
+      "description": "How long (ms) barge-in stays off after a storm.",
+      "default": "120000",
+      "group": "barge-in"
+    },
+    {
+      "name": "STELLA_LANGUAGE",
+      "description": "Pin the conversation to one language (ISO 639-1, e.g. 'de'): STT, the reply and the voice follow it. Empty or 'auto' detects per turn.",
+      "group": "language"
+    },
+    {
+      "name": "TTS_ENABLED",
+      "description": "Speak replies. 'false' runs the agent text-only.",
+      "default": "true",
+      "group": "tts"
+    },
+    {
+      "name": "TTS_LANGUAGE",
+      "description": "Seed language for TTS (ISO 639-1). Empty follows the language resolved per turn.",
+      "group": "tts"
+    },
+    {
+      "name": "TTS_VOICE",
+      "description": "Seed TTS voice, for providers that select voices (e.g. Kokoro). Empty is the provider default.",
+      "group": "tts"
+    },
+    {
+      "name": "TTS_SPEED",
+      "description": "Baseline speaking rate (0.5-2.0). Rate is implemented by resampling, so it shifts pitch too.",
+      "default": "1.0",
+      "group": "tts"
+    },
+    {
+      "name": "TTS_PROGRESS_TICK_MS",
+      "description": "How often (ms) a teleprompter progress envelope is sent during playback.",
+      "default": "200",
+      "group": "tts"
+    },
+    {
+      "name": "TTS_PLAYOUT_BUFFER_MS",
+      "description": "Audio (ms) the room may queue ahead of playout.",
+      "default": "1000",
+      "group": "tts"
+    },
+    {
+      "name": "STELLA_TTS_PLAYBACK",
+      "description": "'auto' starts streaming and switches once to 'sentence' if synthesis cannot keep up; 'stream' or 'sentence' pins it. 'auto' follows the platform default.",
+      "default": "auto",
+      "group": "tts"
+    },
+    {
+      "name": "STELLA_TTS_PREROLL_MS",
+      "description": "Fix the audio head start (ms) before each sentence plays. Unset (recommended) lets the SDK measure and adapt it; 0 also disables the underrun guard.",
+      "group": "tts"
+    },
+    {
+      "name": "STELLA_TTS_RATE_VARIATION",
+      "description": "Vary the speaking rate slightly by turn character. 'false' speaks every utterance at one rate.",
+      "default": "true",
+      "group": "tts"
+    },
+    {
+      "name": "STELLA_TELEPROMPTER_ENABLED",
+      "description": "Light the reply up word by word as it is spoken. 'false' turns it off.",
+      "default": "true",
+      "group": "display"
+    },
+    {
+      "name": "STELLA_EMOTION_TAGS_ENABLED",
+      "description": "Turn [emotion] tags in replies into face cues. 'false' turns it off.",
+      "default": "true",
+      "group": "display"
+    }
+  ]
+}
