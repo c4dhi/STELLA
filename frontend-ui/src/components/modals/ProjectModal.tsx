@@ -670,11 +670,13 @@ export default function ProjectModal({
 
                   {/* Step indicator - only for public wizard steps */}
                   {isPublicWizard && (
-                    <div className="flex items-center gap-3 mb-2">
+                    // The lines between the numbers shrink when space runs out, so any
+                    // number of steps fits the panel and clears the close button.
+                    <div className="flex items-center mb-2 pr-10">
                       {visibleStepConfigs.map((s, idx) => (
-                        <div key={s.id} className="flex items-center">
+                        <div key={s.id} className="flex items-center min-w-0">
                           <div className={`
-                            w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
+                            shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
                             ${getStepNumber(step) >= s.number
                               ? isDark ? 'bg-violet-500 text-white' : 'bg-neutral-900 text-white'
                               : isDark ? 'bg-zinc-600 text-zinc-300' : 'bg-neutral-200 text-neutral-600'
@@ -683,7 +685,7 @@ export default function ProjectModal({
                             {s.number}
                           </div>
                           {idx < visibleStepConfigs.length - 1 && (
-                            <div className={`w-8 h-0.5 ml-3 ${getStepNumber(step) > s.number
+                            <div className={`w-8 min-w-1 shrink h-0.5 mx-2 ${getStepNumber(step) > s.number
                               ? isDark ? 'bg-violet-500' : 'bg-neutral-900'
                               : isDark ? 'bg-zinc-600' : 'bg-neutral-200'
                             }`} />
