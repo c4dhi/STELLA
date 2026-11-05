@@ -25,8 +25,11 @@ export interface AgentPodConfig {
   agentIcon: string;
   roomName: string;
   livekitUrl: string;
-  livekitApiKey: string;
-  livekitApiSecret: string;
+  // Built-in agents get the key and secret; uploaded agents only a token
+  // scoped to their room (issue 856). See agentLiveKitCredentials.
+  livekitApiKey?: string;
+  livekitApiSecret?: string;
+  livekitToken?: string;
   ttsProvider: string;
   agentConfig?: Record<string, unknown>;  // Agent-specific config (passed as AGENT_CONFIG env var)
   agentType?: string;       // Agent type (e.g., "stella-light-agent") - determines which image to use
@@ -279,6 +282,7 @@ export class KubernetesService {
         livekitUrl: config.livekitUrl,
         livekitApiKey: config.livekitApiKey,
         livekitApiSecret: config.livekitApiSecret,
+        livekitToken: config.livekitToken,
         roomName: config.roomName,
         ttsProvider: config.ttsProvider,
         agentConfig: config.agentConfig || {},

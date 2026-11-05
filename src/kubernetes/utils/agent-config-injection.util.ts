@@ -30,8 +30,11 @@ export interface PodEnvBuildInput {
 export interface SecretDataBuildInput {
   agentId: string
   livekitUrl: string
-  livekitApiKey: string
-  livekitApiSecret: string
+  // Either the platform key and secret (built-in agents) or a token scoped to
+  // the session's room (uploaded agents, issue 856), never both.
+  livekitApiKey?: string
+  livekitApiSecret?: string
+  livekitToken?: string
   roomName: string
   ttsProvider: string
   agentConfig: Record<string, unknown>
@@ -90,6 +93,26 @@ export function clientChannelEnv(channel: AgentRequirements['client'] | undefine
 export function buildSecretStringData(input: SecretDataBuildInput): Record<string, string> {
   const agentConfigJson = JSON.stringify(input.agentConfig || {})
 
+  if (input.livekitToken) {
+    // A token pod must not hold the key or secret by any route, including a
+    // template or manual var that happens to carry them.
+    const custom = filterNonEmptyEnvVars(input.customEnvVars)
+    delete custom.LIVEKIT_API_KEY
+    delete custom.LIVEKIT_API_SECRET
+    return {
+      LIVEKIT_URL: input.livekitUrl,
+      LIVEKIT_TOKEN: input.livekitToken,
+      ROOM_NAME: input.roomName,
+      IDENTITY: `agent-${input.agentId}`,
+      TTS_PROVIDER: input.ttsProvider,
+      AGENT_CONFIG: agentConfigJson,
+      ...custom,
+    }
+  }
+
+  if (!input.livekitApiKey || !input.livekitApiSecret) {
+    throw new Error('An agent pod needs either a LiveKit token or the LiveKit key and secret')
+  }
   return {
     LIVEKIT_URL: input.livekitUrl,
     LIVEKIT_API_KEY: input.livekitApiKey,

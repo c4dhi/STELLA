@@ -53,6 +53,7 @@ Environment Variables (set by session-management-server):
     AGENT_IDENTITY: Agent participant identity
     LIVEKIT_API_KEY: API key for JWT
     LIVEKIT_API_SECRET: API secret for JWT
+    LIVEKIT_TOKEN: Ready-made room token; when set, key and secret are not needed
     STT_SERVICE_ADDRESS: External STT service address (gRPC)
     TTS_SERVICE_ADDRESS: External TTS service address (gRPC)
 """

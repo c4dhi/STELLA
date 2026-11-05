@@ -105,6 +105,29 @@ describe('agent-config-injection util', () => {
     })
   })
 
+  it('gives a token pod LIVEKIT_TOKEN and neither the LiveKit key nor secret (issue 856)', () => {
+    const secret = buildSecretStringData({
+      agentId: 'agent-123',
+      livekitUrl: 'wss://livekit.local',
+      livekitToken: 'scoped.jwt.token',
+      roomName: 'room-a',
+      ttsProvider: 'opensource',
+      agentConfig: {},
+      // Even a template that carries them must not put them back.
+      customEnvVars: { LIVEKIT_API_KEY: 'lk-key', LIVEKIT_API_SECRET: 'lk-secret', EXTRA: '1' },
+    })
+
+    expect(secret).toEqual({
+      LIVEKIT_URL: 'wss://livekit.local',
+      LIVEKIT_TOKEN: 'scoped.jwt.token',
+      ROOM_NAME: 'room-a',
+      IDENTITY: 'agent-agent-123',
+      TTS_PROVIDER: 'opensource',
+      AGENT_CONFIG: '{}',
+      EXTRA: '1',
+    })
+  })
+
   it('drops empty custom env vars so they fall through to the consumer default', () => {
     // Regression: an optional declared var carried into a template as "" must not
     // be injected — an empty value shadows the agent's built-in default and
