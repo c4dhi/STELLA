@@ -1,5 +1,8 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsIn,
+  IsUUID,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -73,4 +76,12 @@ export class UpdateConnectorDto {
   @IsNotEmpty()
   @MaxLength(8192)
   token?: string;
+}
+
+export class SetConnectorSharesDto {
+  /** Projects whose members may bind this connector. Replaces the current set; [] unshares all. */
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsUUID('all', { each: true })
+  projectIds: string[];
 }

@@ -33,6 +33,8 @@ export class GatewayError extends Error {
 interface AgentContext {
   agentId: string;
   sessionId: string;
+  projectId: string;
+  deployedByUserId: string | null;
   bindings: ConnectorBinding[];
 }
 
@@ -67,7 +69,14 @@ export class ConnectorGatewayService {
     }
     const instance = await this.prisma.agentInstance.findUnique({
       where: { id: agentId },
-      select: { id: true, sessionId: true, connectorBindings: true, connectorTokenHash: true },
+      select: {
+        id: true,
+        sessionId: true,
+        deployedByUserId: true,
+        connectorBindings: true,
+        connectorTokenHash: true,
+        session: { select: { projectId: true } },
+      },
     });
     if (!instance || !agentConnectorTokenMatches(token, instance.connectorTokenHash)) {
       throw new GatewayError('unauthenticated', 'This agent is not allowed to use connectors');
@@ -75,6 +84,8 @@ export class ConnectorGatewayService {
     return {
       agentId: instance.id,
       sessionId: instance.sessionId,
+      projectId: instance.session.projectId,
+      deployedByUserId: instance.deployedByUserId,
       bindings: readBindings(instance.connectorBindings),
     };
   }
@@ -82,12 +93,12 @@ export class ConnectorGatewayService {
   async listConnectors(ctx: AgentContext): Promise<BoundConnectorInfo[]> {
     if (ctx.bindings.length === 0) return [];
     const rows = await this.prisma.connector.findMany({
-      where: { id: { in: ctx.bindings.map((b) => b.connectorId) } },
+      where: { id: { in: ctx.bindings.map((b) => b.connectorId) }, ...this.accessFilter(ctx) },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
     return ctx.bindings.flatMap((b) => {
       const c = byId.get(b.connectorId);
-      if (!c) return []; // deleted in Settings since the deploy
+      if (!c) return []; // deleted, or unshared from this project, since the deploy
       return [
         {
           handle: b.handle,
@@ -139,11 +150,31 @@ export class ConnectorGatewayService {
       const known = ctx.bindings.map((b) => b.handle).join(', ') || 'none';
       throw new GatewayError('not_bound', `No connector "${handle}" is bound to this agent (bound: ${known})`);
     }
-    const connector = await this.prisma.connector.findUnique({ where: { id: binding.connectorId } });
+    const connector = await this.prisma.connector.findUnique({
+      where: { id: binding.connectorId },
+      include: { shares: { where: { projectId: ctx.projectId }, select: { id: true } } },
+    });
     if (!connector) {
-      throw new GatewayError('not_bound', `The connector bound as "${handle}" was deleted`);
+      throw new GatewayError('not_bound', `The connector bound as "${handle}" was deleted by its owner`);
+    }
+    // Re-checked on every call: a connector stops working the moment its owner
+    // unshares it from this project, not at the next deploy.
+    const own = ctx.deployedByUserId !== null && connector.userId === ctx.deployedByUserId;
+    if (!own && connector.shares.length === 0) {
+      throw new GatewayError(
+        'not_bound',
+        `The connector bound as "${handle}" is no longer shared with this project`,
+      );
     }
     return connector;
+  }
+
+  /** Prisma filter for connectors this instance may still use. */
+  private accessFilter(ctx: AgentContext) {
+    const shared = { shares: { some: { projectId: ctx.projectId } } };
+    return ctx.deployedByUserId
+      ? { OR: [{ userId: ctx.deployedByUserId }, shared] }
+      : shared;
   }
 
   private async audited<T extends McpToolInfo[] | McpCallResult>(

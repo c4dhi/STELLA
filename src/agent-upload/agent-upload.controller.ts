@@ -134,11 +134,6 @@ export class AgentUploadController {
           ? (manifest.runtimeVariables as Prisma.InputJsonValue)
           : Prisma.DbNull,
         compilerVersion: manifest.promptCompiler?.version ?? null,
-        // Declared connector slots (x-stella-connectors), for the deploy wizard
-        // and deploy-time binding validation.
-        connectorSlots: manifest['x-stella-connectors']?.length
-          ? (manifest['x-stella-connectors'] as unknown as Prisma.InputJsonValue)
-          : Prisma.DbNull,
         resourceMemory: manifest.resources?.memory?.limit || '512Mi',
         resourceCpu: manifest.resources?.cpu?.limit || '250m',
         resourceGpu: manifest.resources?.gpu || false,

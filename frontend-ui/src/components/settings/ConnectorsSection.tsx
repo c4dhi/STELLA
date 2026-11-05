@@ -4,7 +4,7 @@ import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
 import { apiClient } from '../../services/ApiClient'
 import ConfirmDialog from '../modals/ConfirmDialog'
-import type { Connector, ConnectorAuthType } from '../../lib/api-types'
+import type { Connector, ConnectorAuthType, ProjectWithCounts } from '../../lib/api-types'
 
 const containerVariants = {
   hidden: {},
@@ -69,6 +69,9 @@ export default function ConnectorsSection() {
   const [editing, setEditing] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<{ name: string; url: string; token: string }>({ name: '', url: '', token: '' })
   const [deleting, setDeleting] = useState<Connector | null>(null)
+  const [projects, setProjects] = useState<ProjectWithCounts[] | null>(null)
+  const [sharing, setSharing] = useState<string | null>(null)
+  const [shareSelection, setShareSelection] = useState<Set<string>>(new Set())
 
   const load = () => {
     apiClient.listConnectors()
@@ -76,7 +79,31 @@ export default function ConnectorsSection() {
       .catch(err => setLoadError(err instanceof Error ? err.message : 'Could not load your connectors'))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    apiClient.listProjects().then(setProjects).catch(() => setProjects([]))
+  }, [])
+
+  const startShare = (c: Connector) => {
+    setSharing(c.id)
+    setShareSelection(new Set(c.sharedWith.map(s => s.projectId)))
+  }
+
+  const saveShares = async (c: Connector) => {
+    try {
+      const updated = await apiClient.setConnectorShares(c.id, [...shareSelection])
+      replace(updated)
+      setSharing(null)
+      addToast({
+        message: updated.sharedWith.length
+          ? `${c.name} is shared with ${updated.sharedWith.map(s => s.projectName).join(', ')}`
+          : `${c.name} is no longer shared`,
+        type: 'success',
+      })
+    } catch (err) {
+      addToast({ message: err instanceof Error ? err.message : 'Could not change sharing', type: 'error' })
+    }
+  }
 
   const replace = (c: Connector) =>
     setConnectors(prev => (prev ?? []).map(x => (x.id === c.id ? c : x)))
@@ -191,8 +218,9 @@ export default function ConnectorsSection() {
         <h2 className={`text-heading-lg mb-2 ${strong}`}>Connectors</h2>
         <p className={`text-body-sm ${muted}`}>
           Outside MCP servers your agents can use, such as an interview-question service or a study’s own API. When you
-          deploy an agent, you choose which of your connectors it may call. STELLA makes the calls for the agent, so
-          your token stays here and never reaches the agent.
+          deploy an agent, you choose which connectors it may call. STELLA makes the calls for the agent, so your
+          token stays here and never reaches the agent. Share a connector with a project to let its members’ agents
+          use it too.
         </p>
         <p className={`text-caption mt-2 ${faint}`}>
           This is the opposite of MCP Access, which lets Claude or ChatGPT reach STELLA.
@@ -254,6 +282,11 @@ export default function ConnectorsSection() {
                           {c.lastCheckedAt && ` · checked ${formatDateTime(c.lastCheckedAt)}`}
                           {c.tools && ` · ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}`}
                         </div>
+                        <div className={`text-caption mt-0.5 ${faint}`}>
+                          {c.sharedWith.length
+                            ? <>Shared with: <span className={muted}>{c.sharedWith.map(s => s.projectName).join(', ')}</span></>
+                            : 'Not shared: only your own agents can use it'}
+                        </div>
                         {c.status === 'error' && c.lastError && (
                           <div className="text-caption mt-1 text-red-500">{c.lastError}</div>
                         )}
@@ -262,6 +295,7 @@ export default function ConnectorsSection() {
                         <button className={secondaryButton} disabled={testing === c.id} onClick={() => void test(c)}>
                           {testing === c.id ? 'Testing…' : 'Test connection'}
                         </button>
+                        <button className={secondaryButton} onClick={() => (sharing === c.id ? setSharing(null) : startShare(c))}>Share</button>
                         <button className={secondaryButton} onClick={() => startEdit(c)}>Edit</button>
                         <button
                           onClick={() => setDeleting(c)}
@@ -271,6 +305,41 @@ export default function ConnectorsSection() {
                         </button>
                       </div>
                     </div>
+                    {sharing === c.id && (
+                      <div className={`mt-3 p-3 rounded-lg ${isDark ? 'bg-surface-dark' : 'bg-white border border-neutral-200'}`}>
+                        <p className={`text-caption mb-2 ${muted}`}>
+                          Members of these projects can let their agents use this connector. They never see your
+                          token and can’t change the connector. Unsharing stops their agents at once.
+                        </p>
+                        {projects && projects.length === 0 && (
+                          <p className={`text-caption ${faint}`}>You’re not in any project yet.</p>
+                        )}
+                        {!projects && <p className={`text-caption ${faint}`}>Loading projects…</p>}
+                        <ul className="space-y-1 max-h-48 overflow-y-auto">
+                          {(projects ?? []).map(p => (
+                            <li key={p.id}>
+                              <label className={`flex items-center gap-2 text-body-sm ${strong}`}>
+                                <input
+                                  type="checkbox"
+                                  checked={shareSelection.has(p.id)}
+                                  onChange={e => setShareSelection(prev => {
+                                    const next = new Set(prev)
+                                    if (e.target.checked) next.add(p.id)
+                                    else next.delete(p.id)
+                                    return next
+                                  })}
+                                />
+                                <span className="truncate">{p.name}</span>
+                              </label>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="flex gap-2 mt-3">
+                          <button className="btn-primary" onClick={() => void saveShares(c)}>Save sharing</button>
+                          <button className={secondaryButton} onClick={() => setSharing(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
                     {c.tools && c.tools.length > 0 && (
                       <div className="mt-2">
                         <button

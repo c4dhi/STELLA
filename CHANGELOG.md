@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Connectors.** Each user can store outside MCP servers (URL + bearer token) in Settings → Connectors, test them, and see their tools. Agents reach a connector only through the backend, so the token never reaches the agent pod. Agents declare the connectors they need in `agent.yaml` (`x-stella-connectors`), and users may offer extra ones. The deploy request takes `connectorBindings`; the wizard for choosing them comes next. One database migration (`Connector`, `ConnectorAuditLog`, `AgentInstance.connectorBindings`, `AgentType.connectorSlots`)
+- **Connectors.** Each user can store outside MCP servers (URL + bearer token) in Settings → Connectors, test them, and see their tools. Agents reach a connector only through the backend, so the token never reaches the agent pod. The owner can share a connector with projects they belong to; members' agents there may then use it, without seeing or editing the token, until it is unshared. Agents declare the connectors they need in `configSchema.x-stella-connectors`, and users may offer extra ones. The deploy request takes `connectorBindings`; the wizard for choosing them comes next. One database migration (`Connector`, `ConnectorProjectShare`, `ConnectorAuditLog`, `AgentInstance.connectorBindings`/`deployedByUserId`/`connectorTokenHash`)
 
 ---
 

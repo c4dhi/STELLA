@@ -7,7 +7,7 @@ title: "🔌 Connectors"
 
 Connectors let an agent call **outside MCP servers**, such as an interview-question service, a knowledge base, or a study's own API, without the agent ever seeing the server's credential.
 
-Each STELLA user stores their own connectors in **Settings → Connectors** (a URL plus a bearer token). When they deploy an agent, they bind connectors to that deployment. The agent then reaches them through the SDK as `self.connectors`. Every call goes through the STELLA backend, which is the MCP client: it decrypts the token and talks to the server, and the agent pod only ever holds its own per-deployment pass.
+Each STELLA user stores their own connectors in **Settings → Connectors** (a URL plus a bearer token) and can **share** a connector with projects they belong to. When anyone deploys an agent, they can bind their own connectors and those shared with the session's project. The agent then reaches them through the SDK as `self.connectors`. Every call goes through the STELLA backend, which is the MCP client: it decrypts the token and talks to the server, and the agent pod only ever holds its own per-deployment pass.
 
 ```
 agent pod ──gRPC ConnectorService──▶ STELLA backend ──MCP (Streamable HTTP, Bearer)──▶ outside server
@@ -21,25 +21,27 @@ agent pod ──gRPC ConnectorService──▶ STELLA backend ──MCP (Streama
 
 ## Declaring connectors in `agent.yaml`
 
-An agent that needs a connector declares a **slot** for it. The deploy wizard asks the user to fill each slot with one of their connectors:
+An agent that needs a connector declares a **slot** for it in `configSchema`, next to `x-stella-env-vars`. The deploy wizard asks the user to fill each slot with one of their connectors, or one shared with the project:
 
 ```yaml
-x-stella-connectors:
-  - slot: interview          # the handle the agent calls it by
-    kind: mcp                # only "mcp" for now
-    required: true           # deploy is refused without it
-    label: ELIAS interview server
-    description: Supplies the interview guide and records answers.
-    requiredTools:           # checked against the connector's last test
-      - get_interview_guide
-      - start_interview
-      - record_interview_message
-      - end_interview
+configSchema:
+  type: object
+  x-stella-connectors:
+    - slot: interview          # the handle the agent calls it by
+      kind: mcp                # only "mcp" for now
+      required: true           # deploy is refused without it
+      label: ELIAS interview server
+      description: Supplies the interview guide and records answers.
+      requiredTools:           # checked against the connector's last test
+        - get_interview_guide
+        - start_interview
+        - record_interview_message
+        - end_interview
 ```
 
 | Field | Required | Meaning |
 |-------|----------|---------|
-| `slot` | yes | Lowercase letters, digits and hyphens (max 40), unique within the agent. It is also the handle the agent calls it by. |
+| `slot` | yes | Lowercase letters, digits and hyphens (max 40), unique within the agent. The bound connector's handle is the slot name, so the agent calls `call_tool("interview", ...)` whichever connector the user picked. |
 | `kind` | yes | `mcp`. |
 | `required` | no (default `false`) | A deployment without this slot bound is refused. |
 | `label` | yes | What the deploy wizard shows. |
@@ -107,7 +109,7 @@ Every failure raises `ConnectorError` with `code`, `message`, `retryable`, `hand
 | `timeout` | The server did not answer in time (60 s for a tool call). | yes |
 | `unreachable` | The server or the STELLA backend could not be reached, or answered 5xx/429. | yes |
 | `unauthorized` | The server refused the stored credential. The user must update the token in Settings. | no |
-| `not_bound` | No connector with this handle is bound to the deployment, or it was deleted since. | no |
+| `not_bound` | No connector with this handle is bound to the deployment, or since the deploy it was deleted or unshared from the project. | no |
 | `not_configured` | This deployment has no connectors at all. | no |
 | `tool_not_found` / `invalid_arguments` | Wrong tool name or arguments. | no |
 | `redirect` | The server answered with a redirect, which STELLA does not follow (it would drop the token). Fix the URL. | no |
@@ -120,7 +122,8 @@ The SDK never retries by itself, because a tool call can have side effects (star
 
 - **The token never reaches the agent pod.** It is stored encrypted (AES-256-GCM, `ENV_VAR_ENCRYPTION_KEY`) and decrypted only inside the backend's MCP client. The REST API never returns it after it is saved.
 - **An agent can only call connectors bound to its own deployment.** Each pod gets a fresh random `STELLA_CONNECTOR_TOKEN` when it is created, restarted or woken from auto-pause. The backend stores only its hash, and the SDK sends it as `x-stella-connector-token` gRPC metadata.
-- **Only the deploying user's own connectors can be bound.** Bindings (`AgentInstance.connectorBindings`) are checked at deploy time and kept across restart and auto-pause/wake.
+- **Only connectors the deployer may use can be bound:** their own, or ones shared with the session's project. Bindings (`AgentInstance.connectorBindings`) are checked at deploy time and kept across restart and auto-pause/wake.
+- **Sharing is re-checked on every call.** When the owner unshares a connector from a project, or deletes it, agents in that project get `not_bound` on their next call, not at their next deploy. Members never see the token and cannot edit, test or rotate a shared connector; only the owner can. Audit rows name the owner, whose credential was used, along with the agent and session.
 - **Private addresses are refused.** Connector URLs that resolve to loopback, private, link-local or cluster-internal addresses are rejected, so a connector cannot be used to reach STELLA's internal services. For local development, set `CONNECTORS_ALLOW_PRIVATE_HOSTS=true` on the backend.
 - **Every call is audited** in `ConnectorAuditLog`: connector, agent, session, tool, redacted argument summary, outcome and duration. Rows are kept for 90 days.
 

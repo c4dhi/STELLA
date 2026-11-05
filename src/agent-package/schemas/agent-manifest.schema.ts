@@ -62,6 +62,37 @@ const optionalEnvVarSchema = z.object({
   default: z.string().optional(),
 })
 
+// configSchema.x-stella-connectors: outside MCP servers the agent needs. The deploying user
+// binds one of their own connectors to each slot; the agent reaches it through
+// the SDK (self.connectors) by the slot name. Undeclared extra connectors the
+// user offers are always allowed on top.
+export const CONNECTOR_SLOT_REGEX = /^[a-z][a-z0-9-]{0,39}$/
+
+const connectorSlotSchema = z
+  .object({
+    slot: z
+      .string()
+      .regex(CONNECTOR_SLOT_REGEX, 'must start with a letter and use only lowercase letters, digits and hyphens (max 40)'),
+    kind: z.literal('mcp'),
+    required: z.boolean().default(false),
+    label: z.string().min(1),
+    description: z.string().optional(),
+    requiredTools: z.array(z.string().min(1)).default([]),
+  })
+  .strict()
+
+const connectorSlotsSchema = z.array(connectorSlotSchema).superRefine((slots, ctx) => {
+  const seen = new Set<string>()
+  slots.forEach((s, i) => {
+    if (seen.has(s.slot)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [i, 'slot'], message: `duplicate connector slot "${s.slot}"` })
+    }
+    seen.add(s.slot)
+  })
+})
+
+export type ManifestConnectorSlot = z.infer<typeof connectorSlotSchema>
+
 const configSchemaSchema = z
   .object({
     type: z.string().optional(),
@@ -74,6 +105,7 @@ const configSchemaSchema = z
     'x-stella-env-vars': z.array(z.string().regex(ENV_VAR_NAME_REGEX)).optional(),
     'x-stella-optional-env-vars': z.array(optionalEnvVarSchema).optional(),
     'x-stella-supports-configurator': z.boolean().optional(),
+    'x-stella-connectors': connectorSlotsSchema.optional(),
   })
   .catchall(jsonValueSchema)
   .superRefine((schema, ctx) => {
@@ -290,36 +322,6 @@ const runtimeVariableSchema = z
   })
   .passthrough()
 
-// x-stella-connectors: outside MCP servers the agent needs. The deploying user
-// binds one of their own connectors to each slot; the agent reaches it through
-// the SDK (self.connectors) by the slot name. Undeclared extra connectors the
-// user offers are always allowed on top.
-export const CONNECTOR_SLOT_REGEX = /^[a-z][a-z0-9-]{0,39}$/
-
-const connectorSlotSchema = z
-  .object({
-    slot: z
-      .string()
-      .regex(CONNECTOR_SLOT_REGEX, 'must start with a letter and use only lowercase letters, digits and hyphens (max 40)'),
-    kind: z.literal('mcp'),
-    required: z.boolean().default(false),
-    label: z.string().min(1),
-    description: z.string().optional(),
-    requiredTools: z.array(z.string().min(1)).default([]),
-  })
-  .strict()
-
-const connectorSlotsSchema = z.array(connectorSlotSchema).superRefine((slots, ctx) => {
-  const seen = new Set<string>()
-  slots.forEach((s, i) => {
-    if (seen.has(s.slot)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [i, 'slot'], message: `duplicate connector slot "${s.slot}"` })
-    }
-    seen.add(s.slot)
-  })
-})
-
-export type ManifestConnectorSlot = z.infer<typeof connectorSlotSchema>
 
 const resourcesSchema = z.object({
   memory: z
@@ -398,7 +400,6 @@ export const agentManifestSchema = z
           .regex(VERSION_REGEX, 'must be semantic version format (e.g. 1.0.0)'),
       })
       .optional(),
-    'x-stella-connectors': connectorSlotsSchema.optional(),
     sdk: z
       .object({
         minVersion: z

@@ -19,8 +19,6 @@ export interface AgentTypeInfo {
   pipelineSchema: Record<string, unknown> | null  // Pipeline topology + configurable slots
   // Agent-declared default experts (config/experts/*.json). Null for non-expert agents.
   expertDefaults: Record<string, unknown>[] | null
-  // Connector slots the agent declares (x-stella-connectors). Empty when none.
-  connectorSlots: Record<string, unknown>[]
 }
 
 @Injectable()
@@ -77,7 +75,6 @@ export class AgentTypeService {
       configSchema: (t.configSchema as Record<string, unknown>) || null,
       pipelineSchema: (t.pipelineSchema as Record<string, unknown>) || null,
       expertDefaults: (t.expertDefaults as Record<string, unknown>[]) || null,
-      connectorSlots: (t.connectorSlots as Record<string, unknown>[]) || [],
     }))
   }
 }

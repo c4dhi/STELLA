@@ -81,6 +81,7 @@ model Project {
 
   // Project collaboration invitations
   projectInvitations ProjectInvitation[]
+  connectorShares    ConnectorProjectShare[] // Connectors members may bind in this project
 
   @@index([publicToken])
   @@index([isPublic, publicEnabled])
@@ -265,10 +266,6 @@ model AgentType {
   // SDK requirements
   sdkMinVersion String? // Minimum stella-ai-agent-sdk version
 
-  // Connector slots the agent declares (x-stella-connectors in agent.yaml):
-  // [{ slot, kind, required, label, description?, requiredTools }]
-  connectorSlots Json?
-
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -325,6 +322,10 @@ model AgentInstance {
   // Slots the agent type declares plus any extra connectors the deploying user
   // offered. Kept across restart and auto-pause/wake.
   connectorBindings  Json?
+  // Who deployed this instance. Their own connectors may be bound anywhere;
+  // anyone else's only while shared with the session's project. Re-checked on
+  // every connector call.
+  deployedByUserId   String?
   // sha256 of the per-pod token the agent sends on ConnectorService calls.
   // A new token is issued every time the pod is (re)created.
   connectorTokenHash String?
@@ -955,9 +956,25 @@ model Connector {
   updatedAt           DateTime          @updatedAt
 
   auditLogs ConnectorAuditLog[]
+  shares    ConnectorProjectShare[]
 
   @@unique([userId, handle])
   @@index([userId])
+}
+
+// A connector its owner shared with a project. Members of that project may bind
+// it when they deploy an agent there; they never see or edit the credential.
+// Only the owner shares, unshares, edits or rotates it.
+model ConnectorProjectShare {
+  id          String    @id @default(uuid())
+  connectorId String
+  connector   Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([connectorId, projectId])
+  @@index([projectId])
 }
 
 // One row per outbound connector call (test, tools/list, tools/call). Arguments

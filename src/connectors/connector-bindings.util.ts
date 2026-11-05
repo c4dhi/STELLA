@@ -29,7 +29,8 @@ export interface BindingRequest {
   slot?: string;
 }
 
-export interface OwnedConnector {
+/** A connector the deployer may bind: their own, or one shared with the project. */
+export interface AvailableConnector {
   id: string;
   handle: string;
   name: string;
@@ -48,7 +49,7 @@ function toolNames(snapshot: unknown): string[] | null {
 /**
  * Turn what the deploy request asked for into stored bindings.
  *
- * - every connector must be one of `owned` (the deploying user's own);
+ * - every connector must be in `available`: the deployer's own, or shared with the session's project;
  * - a slot must be declared by the agent type and bound at most once;
  * - every required slot must be bound;
  * - a slot's requiredTools must be in the connector's last tool snapshot (when it has one);
@@ -59,18 +60,20 @@ function toolNames(snapshot: unknown): string[] | null {
 export function resolveConnectorBindings(
   requests: BindingRequest[] | undefined,
   slots: ConnectorSlot[] | null | undefined,
-  owned: OwnedConnector[],
+  available: AvailableConnector[],
 ): ConnectorBinding[] {
   const declared = new Map((slots ?? []).map((s) => [s.slot, s]));
-  const ownedById = new Map(owned.map((c) => [c.id, c]));
+  const availableById = new Map(available.map((c) => [c.id, c]));
   const bindings: ConnectorBinding[] = [];
   const handles = new Set<string>();
   const boundSlots = new Set<string>();
 
   for (const req of requests ?? []) {
-    const connector = ownedById.get(req.connectorId);
+    const connector = availableById.get(req.connectorId);
     if (!connector) {
-      throw new BindingValidationError(`Connector ${req.connectorId} not found among your connectors`);
+      throw new BindingValidationError(
+        `Connector ${req.connectorId} is neither yours nor shared with this project`,
+      );
     }
     let slot: ConnectorSlot | undefined;
     if (req.slot) {
@@ -104,6 +107,22 @@ export function resolveConnectorBindings(
     );
   }
   return bindings;
+}
+
+/**
+ * The connector slots an agent type declares: configSchema['x-stella-connectors'],
+ * validated by the manifest parser at upload/seed. Read defensively anyway.
+ */
+export function connectorSlotsOf(configSchema: unknown): ConnectorSlot[] {
+  const raw =
+    configSchema && typeof configSchema === 'object'
+      ? (configSchema as Record<string, unknown>)['x-stella-connectors']
+      : undefined;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (s): s is ConnectorSlot =>
+      !!s && typeof s === 'object' && typeof (s as any).slot === 'string' && typeof (s as any).label === 'string',
+  );
 }
 
 /** Read stored bindings defensively: the column is plain Json. */

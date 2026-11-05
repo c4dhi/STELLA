@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,10 +8,16 @@ import {
   Param,
   Patch,
   Post,
+  Put,
+  Query,
 } from '@nestjs/common';
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { ConnectorsService } from './connectors.service.js';
-import { CreateConnectorDto, UpdateConnectorDto } from './dto/connector.dto.js';
+import {
+  CreateConnectorDto,
+  SetConnectorSharesDto,
+  UpdateConnectorDto,
+} from './dto/connector.dto.js';
 
 /**
  * Settings → Connectors: outside MCP servers the user's agents may call.
@@ -24,6 +31,16 @@ export class ConnectorsController {
   @Get()
   list(@CurrentUser() user: any) {
     return this.connectors.list(this.userIdOf(user));
+  }
+
+  /**
+   * What the user may bind when deploying in a project: their own connectors
+   * plus those shared with it. Declared before :id so "available" is not an id.
+   */
+  @Get('available')
+  available(@Query('projectId') projectId: string, @CurrentUser() user: any) {
+    if (!projectId) throw new BadRequestException('projectId is required');
+    return this.connectors.listAvailable(this.userIdOf(user), projectId);
   }
 
   @Get(':id')
@@ -44,6 +61,12 @@ export class ConnectorsController {
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: any) {
     return this.connectors.remove(id, this.userIdOf(user));
+  }
+
+  /** Replace the projects this connector is shared with. Owner only. */
+  @Put(':id/shares')
+  setShares(@Param('id') id: string, @CurrentUser() user: any, @Body() dto: SetConnectorSharesDto) {
+    return this.connectors.setShares(id, this.userIdOf(user), dto.projectIds);
   }
 
   /** MCP initialize + tools/list against the server; stores the tool list. */

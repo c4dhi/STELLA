@@ -25,8 +25,7 @@ import { AgentConfigurationsService } from '../agent-configurations/agent-config
 import { PersonasService } from '../personas/personas.service.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
 import { ConnectorsService } from '../connectors/connectors.service.js';
-import type { ConnectorSlot } from '../connectors/connector-bindings.util.js';
-import { readBindings } from '../connectors/connector-bindings.util.js';
+import { connectorSlotsOf, readBindings } from '../connectors/connector-bindings.util.js';
 import { CONNECTOR_TOKEN_ENV, issueAgentConnectorToken } from '../connectors/agent-connector-token.util.js';
 
 /**
@@ -309,7 +308,6 @@ export class AgentsService {
         defaultConfig: true,
         pipelineSchema: true,
         configSchema: true,
-        connectorSlots: true,
       },
     });
 
@@ -332,12 +330,14 @@ export class AgentsService {
     // (Previously this only ran for public-project flows in PublicProjectsService.)
     this.validateRuntimeConfigForAgentType(agentType, agentConfig);
 
-    // Connectors this deployment may call: the agent's declared slots plus any
-    // extras the user offers. All must be the deploying user's own.
+    // Connectors this deployment may call: the slots the agent declares in
+    // configSchema['x-stella-connectors'] plus any extras the user offers. Each
+    // must be the deployer's own or shared with this session's project.
     const connectorBindings = await this.connectorsService.resolveBindingsForDeploy(
       userId,
+      session.projectId,
       createAgentDto.connectorBindings,
-      (agentTypeRecord?.connectorSlots as unknown as ConnectorSlot[] | null) ?? null,
+      connectorSlotsOf(agentTypeRecord?.configSchema),
     );
 
     // Encrypt manual env vars now so they are persisted before the async pod creation.
@@ -360,6 +360,7 @@ export class AgentsService {
         connectorBindings: connectorBindings.length
           ? (connectorBindings as unknown as Prisma.InputJsonValue)
           : Prisma.DbNull,
+        deployedByUserId: userId,
         status: AgentStatus.STARTING,
         healthState: 'initializing',
       },

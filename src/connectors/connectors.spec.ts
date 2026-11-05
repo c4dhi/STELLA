@@ -19,6 +19,7 @@ import { ConnectorCallError, McpClientService } from './mcp-client.service.js';
 import { ConnectorsService } from './connectors.service.js';
 import { ConnectorGatewayService, GatewayError } from './connector-gateway.service.js';
 import { ConnectorsGrpcController } from './connectors-grpc.controller.js';
+import { connectorSlotsOf } from './connector-bindings.util.js';
 import { parseAgentManifestYaml } from '../agent-package/schemas/agent-manifest.schema.js';
 
 describe('normalizeConnectorUrl', () => {
@@ -89,7 +90,7 @@ describe('resolveConnectorBindings', () => {
   });
 
   it('refuses a connector the user does not own', () => {
-    expect(() => resolveConnectorBindings([{ connectorId: 'someone-elses' }], null, owned)).toThrow(/not found/);
+    expect(() => resolveConnectorBindings([{ connectorId: 'someone-elses' }], null, owned)).toThrow(/neither yours nor shared/);
   });
 
   it('refuses a missing required slot', () => {
@@ -325,7 +326,8 @@ function connectorRow(overrides: Record<string, unknown> = {}) {
 }
 
 describe('ConnectorsService', () => {
-  function make(row = connectorRow()) {
+  function make(row = connectorRow(), memberOf: string[] = ['p1', 'p2']) {
+    let shares: string[] = [];
     const prisma = {
       connector: {
         create: jest.fn(async (args: any) => connectorRow({ ...args.data })),
@@ -333,7 +335,30 @@ describe('ConnectorsService', () => {
         findMany: jest.fn(async () => [row]),
         update: jest.fn(async (args: any) => connectorRow({ ...row, ...args.data })),
         delete: jest.fn(async () => row),
+        findUniqueOrThrow: jest.fn(async () => ({
+          ...row,
+          shares: shares.map((projectId) => ({ projectId, project: { name: `Project ${projectId}` } })),
+        })),
       },
+      projectMembership: {
+        findMany: jest.fn(async ({ where }: any) =>
+          memberOf.filter((p) => where.projectId.in.includes(p)).map((projectId) => ({ projectId })),
+        ),
+        findUnique: jest.fn(async ({ where }: any) =>
+          memberOf.includes(where.userId_projectId.projectId) ? { id: 'm' } : null,
+        ),
+      },
+      connectorProjectShare: {
+        deleteMany: jest.fn(async ({ where }: any) => {
+          shares = shares.filter((p) => where.projectId.notIn.includes(p));
+          return { count: 0 };
+        }),
+        createMany: jest.fn(async ({ data }: any) => {
+          for (const d of data) if (!shares.includes(d.projectId)) shares.push(d.projectId);
+          return { count: data.length };
+        }),
+      },
+      $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
     };
     const mcp = {
       probe: jest.fn(async () => ({
@@ -398,6 +423,57 @@ describe('ConnectorsService', () => {
     await expect(service.test('c1', 'someone-else')).rejects.toThrow(/not found/);
   });
 
+  it('shares with projects the owner belongs to, and replaces the set', async () => {
+    const { service, prisma } = make();
+    let res = await service.setShares('c1', 'u1', ['p1', 'p2', 'p1']);
+    expect(res.sharedWith.map((s) => s.projectId)).toEqual(['p1', 'p2']);
+    res = await service.setShares('c1', 'u1', ['p2']);
+    expect(res.sharedWith.map((s) => s.projectId)).toEqual(['p2']);
+    res = await service.setShares('c1', 'u1', []);
+    expect(res.sharedWith).toEqual([]);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(res)).not.toContain('tok-123');
+  });
+
+  it('refuses to share with a project the owner is not in, and lets only the owner share', async () => {
+    const { service } = make();
+    await expect(service.setShares('c1', 'u1', ['p1', 'not-mine'])).rejects.toThrow(/projects you belong to/);
+    await expect(service.setShares('c1', 'someone-else', ['p1'])).rejects.toThrow(/not found/);
+  });
+
+  it('deploy validation looks at own connectors plus those shared with the project', async () => {
+    const { service, prisma } = make();
+    (prisma.connector.findMany as any).mockResolvedValueOnce([
+      { id: 'c1', handle: 'elias', name: 'ELIAS', toolsSnapshot: null },
+    ]);
+    const bindings = await service.resolveBindingsForDeploy(
+      'member-2',
+      'p1',
+      [{ connectorId: 'c1', slot: 'elias' }],
+      [{ slot: 'elias', kind: 'mcp', required: true, label: 'ELIAS' }],
+    );
+    expect(bindings).toEqual([{ handle: 'elias', connectorId: 'c1', slot: 'elias' }]);
+    const where = (prisma.connector.findMany.mock.calls[0][0] as any).where;
+    expect(where.OR).toEqual([{ userId: 'member-2' }, { shares: { some: { projectId: 'p1' } } }]);
+    (prisma.connector.findMany as any).mockResolvedValueOnce([]);
+    await expect(
+      service.resolveBindingsForDeploy('member-2', 'p1', [{ connectorId: 'c9' }], []),
+    ).rejects.toThrow(/neither yours nor shared/);
+  });
+
+  it('lists available connectors only for project members, without credentials', async () => {
+    const { service, prisma } = make();
+    (prisma.connector.findMany as any).mockResolvedValueOnce([
+      { ...connectorRow(), user: { name: 'Owner', email: 'o@x.test' } },
+    ]);
+    const list = await service.listAvailable('member-2', 'p1');
+    expect(list).toEqual([
+      expect.objectContaining({ id: 'c1', owned: false, ownerName: 'Owner', handle: 'elias' }),
+    ]);
+    expect(JSON.stringify(list)).not.toMatch(/tok-123|enc:/);
+    await expect(service.listAvailable('member-2', 'not-mine')).rejects.toThrow(/Project not found/);
+  });
+
   it('changing the token resets the status and drops the cached connection', async () => {
     const { service, prisma, mcp } = make(connectorRow({ status: 'OK' }));
     await service.update('c1', 'u1', { token: 'new' });
@@ -414,11 +490,12 @@ describe('ConnectorsService', () => {
 describe('ConnectorGatewayService via ConnectorsGrpcController', () => {
   const { token, hash } = issueAgentConnectorToken();
 
-  function make() {
+  function make(opts: { deployedBy?: string; sharedWithP1?: boolean } = {}) {
     const connector = connectorRow({
       status: 'OK',
       toolsSnapshot: [{ name: 'start_interview', description: 'Start', inputSchema: { type: 'object' } }],
     });
+    const shares = () => (opts.sharedWithP1 ? [{ id: 's' }] : []);
     const prisma = {
       agentInstance: {
         findUnique: jest.fn(async ({ where }: any) =>
@@ -426,6 +503,8 @@ describe('ConnectorGatewayService via ConnectorsGrpcController', () => {
             ? {
                 id: 'agent-1',
                 sessionId: 's1',
+                session: { projectId: 'p1' },
+                deployedByUserId: opts.deployedBy ?? 'u1',
                 connectorTokenHash: hash,
                 connectorBindings: [{ handle: 'interview', connectorId: 'c1', slot: 'interview' }],
               }
@@ -433,8 +512,16 @@ describe('ConnectorGatewayService via ConnectorsGrpcController', () => {
         ),
       },
       connector: {
-        findMany: jest.fn(async () => [connector]),
-        findUnique: jest.fn(async ({ where }: any) => (where.id === 'c1' ? connector : null)),
+        // Applies the gateway's access filter the way Postgres would.
+        findMany: jest.fn(async ({ where }: any) => {
+          const ok = (where.OR ?? [where]).some((w: any) =>
+            w.userId ? w.userId === connector.userId : opts.sharedWithP1 === true,
+          );
+          return ok ? [connector] : [];
+        }),
+        findUnique: jest.fn(async ({ where }: any) =>
+          where.id === 'c1' ? { ...connector, shares: shares() } : null,
+        ),
       },
     };
     const connectors = new ConnectorsService(prisma as any, fakeEncryption() as any, {} as any, {} as any);
@@ -522,6 +609,28 @@ describe('ConnectorGatewayService via ConnectorsGrpcController', () => {
     expect(res).toMatchObject({ success: false, isError: true, error: { code: 'tool_error', message: 'project closed' } });
   });
 
+  it("lets a member's agent use a connector shared with the project, and stops at once when unshared", async () => {
+    const shared = make({ deployedBy: 'member-2', sharedWithP1: true });
+    const ok: any = await shared.controller.callTool(
+      { agentId: 'agent-1', handle: 'interview', tool: 'start_interview', argumentsJson: '{}' },
+      meta(token) as any,
+    );
+    expect(ok.success).toBe(true);
+    // The audit row names the owner, whose credential was used.
+    expect(shared.audit.record).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', agentInstanceId: 'agent-1' }));
+
+    const unshared = make({ deployedBy: 'member-2', sharedWithP1: false });
+    const res: any = await unshared.controller.callTool(
+      { agentId: 'agent-1', handle: 'interview', tool: 'start_interview', argumentsJson: '{}' },
+      meta(token) as any,
+    );
+    expect(res.error).toMatchObject({ code: 'not_bound', retryable: false });
+    expect(res.error.message).toMatch(/no longer shared with this project/);
+    expect(unshared.mcp.callTool).not.toHaveBeenCalled();
+    const listed: any = await unshared.controller.listConnectors({ agentId: 'agent-1' }, meta(token) as any);
+    expect(listed.connectors).toEqual([]);
+  });
+
   it('marks timeouts retryable', async () => {
     const { controller, mcp } = make();
     mcp.callTool.mockRejectedValueOnce(new ConnectorCallError('timeout', 'slow') as never);
@@ -550,21 +659,25 @@ image:
   dockerfile: Dockerfile
 `;
 
-  it('accepts declared slots and fills in defaults', () => {
+  it('accepts declared slots in configSchema and fills in defaults', () => {
     const result = parseAgentManifestYaml(`${base}
-x-stella-connectors:
-  - slot: interview
-    kind: mcp
-    required: true
-    label: ELIAS server
-    description: Where interview questions come from
-    requiredTools: [get_interview_guide, start_interview]
-  - slot: notes
-    kind: mcp
-    label: Optional notes
+configSchema:
+  type: object
+  x-stella-connectors:
+    - slot: interview
+      kind: mcp
+      required: true
+      label: ELIAS server
+      description: Where interview questions come from
+      requiredTools: [get_interview_guide, start_interview]
+    - slot: notes
+      kind: mcp
+      label: Optional notes
 `);
     expect(result.errors).toEqual([]);
-    expect(result.manifest?.['x-stella-connectors']).toEqual([
+    const slots = result.manifest?.configSchema?.['x-stella-connectors'];
+    expect(connectorSlotsOf(result.manifest?.configSchema)).toEqual(slots);
+    expect(slots).toEqual([
       {
         slot: 'interview',
         kind: 'mcp',
@@ -584,7 +697,8 @@ x-stella-connectors:
     ['an unknown key', '  - { slot: a, kind: mcp, label: A, token: secret }'],
     ['a duplicate slot', '  - { slot: a, kind: mcp, label: A }\n  - { slot: a, kind: mcp, label: B }'],
   ])('rejects %s', (_name, entries) => {
-    const result = parseAgentManifestYaml(`${base}\nx-stella-connectors:\n${entries}\n`);
+    const indented = entries.replace(/^/gm, '  ');
+    const result = parseAgentManifestYaml(`${base}\nconfigSchema:\n  x-stella-connectors:\n${indented}\n`);
     expect(result.valid).toBe(false);
     expect(result.errors.join('\n')).toMatch(/x-stella-connectors/);
   });
@@ -592,6 +706,11 @@ x-stella-connectors:
   it('is optional', () => {
     const result = parseAgentManifestYaml(base);
     expect(result.valid).toBe(true);
-    expect(result.manifest?.['x-stella-connectors']).toBeUndefined();
+    expect(connectorSlotsOf(result.manifest?.configSchema)).toEqual([]);
+  });
+
+  it('is not read at the top level of agent.yaml', () => {
+    const result = parseAgentManifestYaml(`${base}\nx-stella-connectors:\n  - { slot: a, kind: mcp, label: A }\n`);
+    expect((result.manifest as any)?.['x-stella-connectors']).toBeUndefined();
   });
 });

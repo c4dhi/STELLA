@@ -9,10 +9,8 @@ CREATE TYPE "ConnectorStatus" AS ENUM ('UNTESTED', 'OK', 'ERROR');
 
 -- AlterTable
 ALTER TABLE "AgentInstance" ADD COLUMN     "connectorBindings" JSONB,
-ADD COLUMN     "connectorTokenHash" TEXT;
-
--- AlterTable
-ALTER TABLE "AgentType" ADD COLUMN     "connectorSlots" JSONB;
+ADD COLUMN     "connectorTokenHash" TEXT,
+ADD COLUMN     "deployedByUserId" TEXT;
 
 -- CreateTable
 CREATE TABLE "Connector" (
@@ -33,6 +31,16 @@ CREATE TABLE "Connector" (
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "Connector_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ConnectorProjectShare" (
+    "id" TEXT NOT NULL,
+    "connectorId" TEXT NOT NULL,
+    "projectId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ConnectorProjectShare_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -60,6 +68,12 @@ CREATE INDEX "Connector_userId_idx" ON "Connector"("userId");
 CREATE UNIQUE INDEX "Connector_userId_handle_key" ON "Connector"("userId", "handle");
 
 -- CreateIndex
+CREATE INDEX "ConnectorProjectShare_projectId_idx" ON "ConnectorProjectShare"("projectId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ConnectorProjectShare_connectorId_projectId_key" ON "ConnectorProjectShare"("connectorId", "projectId");
+
+-- CreateIndex
 CREATE INDEX "ConnectorAuditLog_connectorId_createdAt_idx" ON "ConnectorAuditLog"("connectorId", "createdAt");
 
 -- CreateIndex
@@ -70,6 +84,12 @@ CREATE INDEX "ConnectorAuditLog_createdAt_idx" ON "ConnectorAuditLog"("createdAt
 
 -- AddForeignKey
 ALTER TABLE "Connector" ADD CONSTRAINT "Connector_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ConnectorProjectShare" ADD CONSTRAINT "ConnectorProjectShare_connectorId_fkey" FOREIGN KEY ("connectorId") REFERENCES "Connector"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ConnectorProjectShare" ADD CONSTRAINT "ConnectorProjectShare_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "ConnectorAuditLog" ADD CONSTRAINT "ConnectorAuditLog_connectorId_fkey" FOREIGN KEY ("connectorId") REFERENCES "Connector"("id") ON DELETE SET NULL ON UPDATE CASCADE;
