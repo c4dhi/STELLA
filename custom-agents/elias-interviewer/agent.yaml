@@ -1,0 +1,93 @@
+version: "1.0"
+
+metadata:
+  name: "ELIAS-Interviewer"
+  slug: "elias-interviewer"
+  version: "0.1.0"
+  description: "Runs an ELIAS interview guide: asks every question word for word, re-asks unclear answers up to three times, and writes each turn back to ELIAS as it happens."
+  icon: "🎙️"
+  author:
+    name: "STELLA Team"
+  tags:
+    - interview
+    - research
+    - elias
+
+capabilities:
+  - voice
+  - text
+  - progress
+
+image:
+  dockerfile: "Dockerfile"
+
+resources:
+  memory:
+    request: "256Mi"
+    limit: "512Mi"
+  cpu:
+    request: "100m"
+    limit: "500m"
+
+configSchema:
+  type: object
+  properties:
+    elias:
+      type: object
+      description: "Which ELIAS project to interview for"
+      required: [project_id]
+      properties:
+        project_id:
+          type: string
+          description: "ELIAS project id (the guide's questions are asked in order)"
+        connector:
+          type: string
+          description: "Connector handle to reach ELIAS through"
+          default: "elias"
+        max_attempts:
+          type: integer
+          description: "How many times a question is asked in total before it is skipped"
+          default: 3
+          minimum: 1
+          maximum: 5
+    messages:
+      type: object
+      description: "Fixed lines the agent says. Questions themselves always come from ELIAS, word for word."
+      properties:
+        opening: { type: string }
+        reask_prefix: { type: string }
+        closing: { type: string }
+        error: { type: string }
+    llm:
+      type: object
+      description: "Model that checks whether a reply answers the question"
+      properties:
+        model:
+          type: string
+          default: "gpt-4o-mini"
+  # Connectors this agent needs. The user picks one of their own (or one shared
+  # with the project) for each slot at deploy time, and may offer more.
+  x-stella-connectors:
+    - slot: elias
+      kind: mcp
+      required: true
+      label: "ELIAS"
+      description: "ELIAS interview-questions server (https://elias.apps.c4dhi.org/mcp)"
+      requiredTools:
+        - get_interview_guide
+        - start_interview
+        - record_interview_message
+        - end_interview
+  x-stella-env-vars:
+    - OPENAI_API_KEY
+  x-stella-optional-env-vars:
+    - name: STELLA_LANGUAGE
+      description: "Pin speech recognition and the voice to one language (ISO 639-1, e.g. 'de'). Set it to the language of the guide."
+    - name: ANSWER_CHECK_TIMEOUT_S
+      description: "Seconds the answer check may take before the reply is accepted as is."
+      default: "8"
+
+defaultConfig:
+  elias:
+    connector: "elias"
+    max_attempts: 3
