@@ -15,7 +15,7 @@ These rules keep it that way. They apply to backend, frontend, SDK and scripts, 
 - **Anything an agent needs is declared in its manifest:** env vars, plans, persona, Configurator, connectors, resources, settings, SDK version. If the manifest doesn't declare something, STELLA doesn't support it.
 - **What is declared is enforced.** A declaration that only the UI reads is a bug. Deploy, restart and wake check every declaration and refuse what doesn't fit with a 400 that names the problem.
 - **What is not declared is refused.** It is never ignored. Unknown manifest keys are errors. A plan for an agent without `features.plans` is refused. So is a Configurator configuration for an agent without `features.configurator`, or a persona for one with `persona: false`.
-- **Built-in agents get no special treatment.** stella-v2 and stella-light go through the same parser, mapper, requirements and checks as an upload. They differ only in `isBuiltIn` and where their image comes from.
+- **Built-in agents get no special treatment.** stella-v2 and stella-light go through the same parser, mapper, requirements and checks as an upload. They differ only in `isBuiltIn` and where their image comes from: `agents/<slug>/` with the manifest's Dockerfile. There is no list of built-ins in code or scripts. Add a folder with an `agent.yaml` and it is seeded and built.
 
 ## 2. One owner per concern
 
@@ -26,7 +26,9 @@ Every concern has exactly one module that owns it. Everything else calls that mo
 | Manifest format, validation, published JSON Schema | `src/agent-package/schemas/agent-manifest.schema.ts` |
 | Older manifest formats (1.0) | `src/agent-package/manifest-normalizer.ts`. Nothing else reads an `x-stella-*` flag. |
 | Manifest → `AgentType` row | `src/agent-package/manifest-mapper.ts` (seed and upload) |
-| Defaults, maxima, vocabularies, SDK support window | `src/agent-package/manifest-defaults.ts` |
+| Defaults, maxima, vocabularies, SDK versions | `src/agent-package/manifest-defaults.ts` |
+| Which SDK versions STELLA runs (build and deploy) | `src/agent-package/sdk-support.ts` |
+| Where a built-in agent lives and how its image is built | `src/agent-package/agent-directory.ts` (`builtInDockerfilePath`), `builtInImageConfig` in `src/agent-image/agent-image.service.ts` |
 | Experts an agent publishes | `src/agent-package/expert-defaults.ts` |
 | What deploying a type takes | `src/agents/agent-requirements.ts` (`resolveAgentRequirements`) |
 | Whether a deploy request is allowed | `src/agents/deploy-request.ts` |
@@ -60,6 +62,7 @@ Before writing a helper, search for the owner. Two copies of a rule always drift
 - **A new manifest format** adds a step to the normalizer, so older files keep working with a deprecation warning. Golden tests pin that each built-in's old file upgrades to exactly its current one.
 - **The SDK support window.**
   - `MIN_SUPPORTED_SDK_VERSION` is the oldest SDK STELLA still runs. `CURRENT_SDK_VERSION` is the one it ships, and a spec keeps it equal to the SDK's `pyproject.toml`.
+  - The build records the SDK actually installed in each image (`AgentType.sdkVersion`). `sdk-support.ts` decides for both the build and the deploy.
   - An agent that needs a newer SDK, or was built with one older than the floor, is refused at deploy and has to be rebuilt.
   - Retiring an SDK takes one line plus a CHANGELOG entry.
 - **Published artefacts are generated from code, never written by hand.** The manifest JSON Schema comes from `npm run manifest:schema`, and a spec fails when the committed file is stale.

@@ -1,3 +1,4 @@
+import { builtSdkProblem } from '../agent-package/sdk-support.js';
 import { BadRequestException } from '@nestjs/common';
 import { AgentValidationStatus } from '@prisma/client';
 
@@ -7,6 +8,8 @@ export interface DeployableAgentTypeFields {
   validationStatus: AgentValidationStatus;
   imageUrl: string | null;
   userId: string | null;
+  /** The SDK the stored build has installed (null: not built). */
+  sdkVersion: string | null;
 }
 
 export interface DeployContext {
@@ -34,6 +37,9 @@ export interface DeployContext {
  *   Once an admin approves it, anyone can deploy it.
  * - An uploaded type must also have a built image: the build writes
  *   `imageUrl`. Built-ins are built on demand from the repo instead.
+ * - An uploaded type's build must have an SDK inside the support window
+ *   (sdk-support.ts). Raising the floor makes older builds undeployable
+ *   until they are rebuilt.
  *
  * A failed check throws a 400 that says which step is missing.
  */
@@ -64,6 +70,14 @@ export function assertDeployableAgentType(
   if (!record.isBuiltIn && !record.imageUrl) {
     throw new BadRequestException(
       `Agent type ${slug} has no built image yet. Build it from My Agents, then deploy again`,
+    );
+  }
+  // Built-ins are built from this repo's SDK on demand. An upload keeps the SDK
+  // its last build installed, which can fall out of the support window.
+  const sdkProblem = record.isBuiltIn ? null : builtSdkProblem(record.sdkVersion);
+  if (sdkProblem) {
+    throw new BadRequestException(
+      `Agent type ${slug} cannot be deployed: ${sdkProblem}. Rebuild it with a supported SDK from My Agents`,
     );
   }
 }

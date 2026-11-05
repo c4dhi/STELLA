@@ -1,4 +1,4 @@
-import { CURRENT_SDK_VERSION, MIN_SUPPORTED_SDK_VERSION } from '../agent-package/manifest-defaults.js';
+import { sdkSupport } from '../agent-package/sdk-support.js';
 import {
   Controller,
   Get,
@@ -47,7 +47,7 @@ export class AgentsController {
    */
   @Get('agent-types/sdk-support')
   getSdkSupport() {
-    return { minSupported: MIN_SUPPORTED_SDK_VERSION, current: CURRENT_SDK_VERSION };
+    return sdkSupport();
   }
 
   @Post('sessions/:sessionId/agents')

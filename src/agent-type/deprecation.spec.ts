@@ -3,6 +3,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { parseAgentManifestYaml } from '../agent-package/schemas/agent-manifest.schema.js';
 import { FALLBACK_AGENT_TYPE } from '../agents/default-agent-type.js';
+import { builtInImageConfig } from '../agent-image/agent-image.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,16 +48,15 @@ describe('agent deprecation', () => {
 
   it('still allows deploying the deprecated agent explicitly', () => {
     // Deprecated ≠ removed: the three existing deployments must stay
-    // reproducible. Deployability is no longer a slug allow-list in
-    // agents.service.ts: any APPROVED type deploys (assertDeployableAgentType),
-    // and a built-in also needs its image registry entry to get an image.
-    // The seed keeps stella-light APPROVED, so the registry entry is what
-    // must survive.
-    const imageSrc = fs.readFileSync(
-      path.resolve(__dirname, '../agent-image/agent-image.service.ts'),
-      'utf-8',
-    );
-    expect(imageSrc).toMatch(/\['stella-light-agent',\s*\{/);
+    // reproducible. Any APPROVED type deploys (assertDeployableAgentType), and
+    // the seed keeps stella-light APPROVED. A built-in's image comes from its
+    // own folder and manifest, so what must survive is the folder.
+    expect(builtInImageConfig(manifest('stella-light-agent'))).toEqual({
+      imageName: 'stella-light-agent',
+      dockerfilePath: 'agents/stella-light-agent/Dockerfile',
+      contextPath: '.',
+      tag: 'latest',
+    });
 
     const agentsSrc = fs.readFileSync(
       path.resolve(__dirname, '../agents/agents.service.ts'),

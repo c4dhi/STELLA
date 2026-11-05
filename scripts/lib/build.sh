@@ -1240,8 +1240,10 @@ wait_for_parallel_builds() {
 # =============================================================================
 # Agent Auto-Discovery
 # =============================================================================
-# Scans agents/ for subdirectories containing a Dockerfile.
-# This allows new agents to be built automatically without editing this script.
+# Scans agents/ for agents: subdirectories with an agent.yaml (the SDK has none).
+# The folder is named after the agent's slug (the seed refuses one that is
+# not), and a spec keeps built-in manifests on the default Dockerfile name.
+# New agents are built automatically without editing this script.
 
 # Discovered agent names (populated by discover_agents)
 declare -a DISCOVERED_AGENTS=()
@@ -1262,8 +1264,8 @@ discover_agents() {
         local agent_name
         agent_name=$(basename "$agent_dir")
 
-        # An agent must have a Dockerfile to be buildable
-        if [[ -f "${agent_dir}Dockerfile" ]]; then
+        # An agent has a manifest and a Dockerfile
+        if [[ -f "${agent_dir}agent.yaml" && -f "${agent_dir}Dockerfile" ]]; then
             DISCOVERED_AGENTS+=("$agent_name")
             verbose "Discovered agent: $agent_name"
         fi

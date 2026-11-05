@@ -7,7 +7,9 @@ import { promisify } from 'util'
 import * as fs from 'fs/promises'
 import * as os from 'os'
 import * as path from 'path'
-import { SLUG_REGEX, VERSION_REGEX } from '../agent-package/manifest-defaults.js'
+import { DEFAULT_DOCKERFILE, SLUG_REGEX, VERSION_REGEX } from '../agent-package/manifest-defaults.js'
+import { SDK_PACKAGE, builtSdkProblem, sdkSupport } from '../agent-package/sdk-support.js'
+import { manifestOfAgentType, type AgentTypeManifestSource } from '../agents/agent-requirements.js'
 
 // execFile, never exec: every argument goes to the program as-is, with no shell
 // in between, so nothing from an uploaded package can run a command on the host.
@@ -33,6 +35,12 @@ export function resolveDockerfilePath(extractedPath: string, dockerfile: string)
   const resolved = path.resolve(root, dockerfile)
   if (!resolved.startsWith(root + path.sep)) throw bad()
   return resolved
+}
+
+/** The version printed by the SDK probe, or null when it printed none. */
+export function parseSdkVersionOutput(stdout: string): string | null {
+  const version = stdout.trim().split('\n').pop()?.trim() ?? ''
+  return /^\d+(\.\d+)*([.-]?[A-Za-z0-9.]+)?$/.test(version) ? version : null
 }
 
 export interface BuildResult {
@@ -121,7 +129,7 @@ export class AgentBuildService {
    * Execute the Docker build process.
    */
   private async executeBuild(
-    agentType: { id: string; slug: string; packagePath: string | null; version: string },
+    agentType: AgentTypeManifestSource & { id: string; packagePath: string | null },
     buildLogId: string,
   ): Promise<BuildResult> {
     const imageName = buildImageName(agentType.slug, agentType.version)
@@ -138,8 +146,9 @@ export class AgentBuildService {
       this.logger.log(`Extracting package for ${agentType.slug}...`)
       extractedPath = await this.agentPackageService.extractPackage(agentType.packagePath!)
 
-      // Find Dockerfile
-      const dockerfilePath = await this.findDockerfile(extractedPath, agentType.packagePath!)
+      // The Dockerfile the stored manifest names (checked on upload, read here once more).
+      const manifest = manifestOfAgentType(agentType)
+      const dockerfilePath = await this.findDockerfile(extractedPath, manifest.image.dockerfile ?? DEFAULT_DOCKERFILE)
       if (!dockerfilePath) {
         throw new Error('Dockerfile not found in package')
       }
@@ -147,6 +156,14 @@ export class AgentBuildService {
       // Build Docker image
       this.logger.log(`Building image ${imageName}...`)
       const buildOutput = await this.buildDockerImage(imageName, extractedPath, dockerfilePath)
+
+      // What the image really has installed decides deployability, not what the
+      // package claims: a build outside the SDK support window fails here.
+      const sdkVersion = await this.detectSdkVersion(imageName)
+      const sdkProblem = builtSdkProblem(sdkVersion)
+      if (sdkProblem) {
+        throw new Error(`Built ${imageName}, but ${sdkProblem}. Install ${SDK_PACKAGE} ${sdkSupport().minSupported} or newer in the package, then build again`)
+      }
 
       // Update build log with success
       await this.prisma.agentBuildLog.update({
@@ -166,7 +183,7 @@ export class AgentBuildService {
       // Update agent type with image info
       await this.prisma.agentType.update({
         where: { id: agentType.id },
-        data: { imageUrl: imageName },
+        data: { imageUrl: imageName, sdkVersion },
       })
 
       this.logger.log(`Successfully built image ${imageName}`)
@@ -207,19 +224,35 @@ export class AgentBuildService {
   }
 
   /**
-   * Find Dockerfile path in extracted package.
+   * The manifest's Dockerfile inside the extracted package, or null when missing.
    */
-  private async findDockerfile(extractedPath: string, storagePath: string): Promise<string | null> {
-    // Check manifest for custom dockerfile path
-    const manifest = await this.agentPackageService.parseManifest(storagePath)
-    const dockerfileName = manifest?.image?.dockerfile || 'Dockerfile'
-
+  private async findDockerfile(extractedPath: string, dockerfileName: string): Promise<string | null> {
     const dockerfilePath = resolveDockerfilePath(extractedPath, dockerfileName)
 
     try {
       await fs.access(dockerfilePath)
       return dockerfilePath
     } catch {
+      return null
+    }
+  }
+
+  /**
+   * The stella-ai-agent-sdk version installed in a built image, or null when it
+   * has none. Runs the image's Python only, with no network, and removes the
+   * container. The build already ran this package's Dockerfile on the host, so
+   * this adds no new trust.
+   */
+  private async detectSdkVersion(imageName: string): Promise<string | null> {
+    const args = [
+      'run', '--rm', '--network', 'none', '--entrypoint', 'python', imageName,
+      '-c', `import importlib.metadata as m; print(m.version(${JSON.stringify(SDK_PACKAGE)}))`,
+    ]
+    try {
+      const { stdout } = await execFileAsync('docker', args, { timeout: 60000 })
+      return parseSdkVersionOutput(stdout)
+    } catch (error) {
+      this.logger.warn(`No ${SDK_PACKAGE} found in ${imageName}: ${(error as Error).message.split('\n')[0]}`)
       return null
     }
   }

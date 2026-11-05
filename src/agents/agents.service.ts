@@ -276,6 +276,7 @@ export class AgentsService {
         isBuiltIn: true,
         validationStatus: true,
         imageUrl: true,
+        sdkVersion: true,
         userId: true,
       },
     });
@@ -1014,6 +1015,7 @@ export class AgentsService {
         isBuiltIn: true,
         validationStatus: true,
         imageUrl: true,
+        sdkVersion: true,
         userId: true,
       },
     });

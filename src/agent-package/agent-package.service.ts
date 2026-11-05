@@ -194,18 +194,6 @@ export class AgentPackageService {
     return tempDir
   }
 
-  /**
-   * Parse manifest from stored package.
-   */
-  async parseManifest(storagePath: string): Promise<AgentManifest | null> {
-    const manifestBuffer = await this.extractFile(storagePath, 'agent.yaml')
-    if (!manifestBuffer) {
-      return null
-    }
-
-    const result = this.manifestValidator.validate(manifestBuffer.toString('utf-8'))
-    return result.manifest || null
-  }
 
   /**
    * Check if SDK is in requirements.txt.

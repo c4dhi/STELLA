@@ -1,3 +1,4 @@
+import { builtSdkProblem } from '../agent-package/sdk-support.js'
 import {
   Controller,
   Post,
@@ -143,7 +144,7 @@ export class AgentUploadController {
         packagePath: storageInfo.path,
         packageSize: storageInfo.size,
         packageHash: storageInfo.hash,
-        // Set only by a successful build (AgentBuildService).
+        // Set only by a successful build (AgentBuildService), with sdkVersion.
         imageUrl: null,
         validationStatus: AgentValidationStatus.PENDING,
       },
@@ -191,6 +192,9 @@ export class AgentUploadController {
       capabilities: agent.capabilities,
       defaultConfig: agent.defaultConfig,
       createdAt: agent.createdAt,
+      sdkVersion: agent.sdkVersion,
+      // Set when the last build can't deploy on this STELLA: "Needs SDK update".
+      sdkProblem: agent.imageUrl ? builtSdkProblem(agent.sdkVersion) : null,
       lastBuild: agent.buildLogs[0]
         ? {
             status: agent.buildLogs[0].status,

@@ -1,7 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 import { deepmergeCustom } from 'deepmerge-ts'
-import { compareVersions } from '../agent-configurations/configuration-compat.util.js'
-import { CURRENT_SDK_VERSION } from '../agent-package/manifest-defaults.js'
+import { requestedSdkProblem } from '../agent-package/sdk-support.js'
 import { validateAgainstSchema } from '../agent-package/schemas/agent-manifest.schema.js'
 import type { AgentRequirements } from './agent-requirements.js'
 
@@ -74,9 +73,8 @@ function envProblems({ env }: AgentRequirements, provided: Record<string, string
 }
 
 function sdkProblems({ sdkMinVersion }: AgentRequirements): string[] {
-  return sdkMinVersion && compareVersions(sdkMinVersion, CURRENT_SDK_VERSION) > 0
-    ? [`it needs stella-ai-agent-sdk ${sdkMinVersion}, newer than this STELLA supports (${CURRENT_SDK_VERSION})`]
-    : []
+  const problem = requestedSdkProblem(sdkMinVersion)
+  return problem ? [problem] : []
 }
 
 /** Arrays in a user setting replace the default instead of being appended to it. */

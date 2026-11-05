@@ -291,6 +291,7 @@ export class AgentAdminController {
       authorEmail: agent.authorEmail,
       tags: agent.tags,
       sdkMinVersion: agent.sdkMinVersion,
+      sdkVersion: agent.sdkVersion,
       createdAt: agent.createdAt,
       updatedAt: agent.updatedAt,
       owner: agent.user

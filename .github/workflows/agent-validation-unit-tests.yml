@@ -90,6 +90,7 @@ jobs:
             src/kubernetes/utils/resource-clamping.util.spec.ts \
             src/agents/deployable-agent-type.spec.ts \
             src/agents/agent-requirements.spec.ts \
+            src/agent-package/sdk-support.spec.ts \
             src/agents/deploy-request.spec.ts \
             src/agents/no-agent-slugs.spec.ts \
             src/agents/plan-resolution.spec.ts \

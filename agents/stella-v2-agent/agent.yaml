@@ -24,6 +24,8 @@ capabilities:
 
 image:
   dockerfile: "Dockerfile"
+  # The Dockerfile CMD passes a fixed --server address; pods read GRPC_SERVER instead.
+  command: [python, -m, stella_v2_agent]
 
 resources:
   memory:

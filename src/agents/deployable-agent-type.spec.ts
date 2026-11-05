@@ -1,12 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
 import { AgentValidationStatus } from '@prisma/client';
+import { CURRENT_SDK_VERSION, MIN_SUPPORTED_SDK_VERSION } from '../agent-package/manifest-defaults.js';
 import { assertDeployableAgentType } from './deployable-agent-type.util.js';
 
 const { APPROVED, PENDING, REJECTED } = AgentValidationStatus;
 
 describe('assertDeployableAgentType', () => {
-  const builtIn = { isBuiltIn: true, validationStatus: APPROVED, imageUrl: null, userId: null };
-  const upload = { isBuiltIn: false, validationStatus: PENDING, imageUrl: 'elias-interviewer:0.1.0', userId: 'owner' };
+  const builtIn = { isBuiltIn: true, validationStatus: APPROVED, imageUrl: null, userId: null, sdkVersion: null };
+  const upload = { isBuiltIn: false, validationStatus: PENDING, imageUrl: 'elias-interviewer:0.1.0', userId: 'owner', sdkVersion: CURRENT_SDK_VERSION };
   const reviewOff = { reviewRequired: false };
   const reviewOn = { reviewRequired: true };
 
@@ -28,7 +29,7 @@ describe('assertDeployableAgentType', () => {
       no(upload, { ...reviewOff, deployerId: 'someone-else' }, /only the user who uploaded it/);
     });
 
-    it('turns it away on the standalone path, which has no user', () => {
+    it('turns it away on a path with no user', () => {
       no(upload, { ...reviewOff, deployerId: null }, /only the user who uploaded it/);
     });
 
@@ -67,5 +68,24 @@ describe('assertDeployableAgentType', () => {
   it('rejects an unknown slug with a 400', () => {
     expect(() => assertDeployableAgentType('nope', null, reviewOff)).toThrow(BadRequestException);
     no(null, reviewOff, /Unknown agent type/);
+  });
+
+  describe('SDK support window', () => {
+    const approved = { ...upload, validationStatus: APPROVED };
+    const ctx = { ...reviewOff, deployerId: 'anyone' };
+
+    it('refuses an upload built before its SDK version was recorded, or with no SDK', () => {
+      no({ ...approved, sdkVersion: null }, ctx, /no stella-ai-agent-sdk version is known for its build\. Rebuild it/);
+    });
+
+    it('refuses an upload built with an SDK below the supported floor, on restart too', () => {
+      no({ ...approved, sdkVersion: '0.0.1' }, ctx, new RegExp(`built with stella-ai-agent-sdk 0\\.0\\.1, older than .*\\(${MIN_SUPPORTED_SDK_VERSION.replace(/\./g, '\\.')}\\)`));
+      no({ ...approved, sdkVersion: '0.0.1' }, reviewOff, /older than the oldest this STELLA supports/);
+    });
+
+    it('accepts the floor itself, and does not ask built-ins (built from this repo)', () => {
+      ok({ ...approved, sdkVersion: MIN_SUPPORTED_SDK_VERSION }, ctx);
+      ok({ ...builtIn, sdkVersion: null }, ctx);
+    });
   });
 });

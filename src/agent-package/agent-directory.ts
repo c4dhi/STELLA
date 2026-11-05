@@ -4,6 +4,17 @@ import { DEFAULT_DOCKERFILE } from './manifest-defaults.js'
 import { selectExpertDefaults, type ExpertFile } from './expert-defaults.js'
 import { parseAgentManifestYaml, type AgentManifest } from './schemas/agent-manifest.schema.js'
 
+/** Where built-in agents live, relative to the backend root. Each folder is named after its slug. */
+export const BUILT_IN_AGENTS_DIR = 'agents'
+
+/**
+ * The Dockerfile of a built-in agent, relative to the backend root, which is
+ * its build context (its Dockerfile copies the SDK from agents/ too).
+ */
+export function builtInDockerfilePath(manifest: AgentManifest): string {
+  return path.posix.join(BUILT_IN_AGENTS_DIR, manifest.metadata.slug, manifest.image.dockerfile ?? DEFAULT_DOCKERFILE)
+}
+
 export interface LoadedAgentDirectory {
   directoryPath: string
   manifest: AgentManifest
@@ -28,6 +39,10 @@ export function loadAgentDirectory(directoryPath: string): LoadedAgentDirectory 
     throw new Error(`Invalid agent.yaml in ${name}:\n  - ${parsed.errors.join('\n  - ')}`)
   }
   const manifest = parsed.manifest
+  if (manifest.metadata.slug !== name) {
+    // The image build and the scripts find a built-in by its folder.
+    throw new Error(`The folder of agent ${manifest.metadata.slug} must be named ${manifest.metadata.slug}, not ${name}`)
+  }
 
   if (!manifest.image.imageUrl) {
     const dockerfilePath = path.join(directoryPath, manifest.image.dockerfile ?? DEFAULT_DOCKERFILE)

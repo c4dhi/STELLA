@@ -6,6 +6,7 @@ import * as dotenv from 'dotenv'
 import { fileURLToPath } from 'url'
 import { loadAgentDirectory, type LoadedAgentDirectory } from '../src/agent-package/agent-directory.js'
 import { manifestToAgentTypeData } from '../src/agent-package/manifest-mapper.js'
+import { CURRENT_SDK_VERSION } from '../src/agent-package/manifest-defaults.js'
 import { reconcileAgentTypeConfigurations } from '../src/agent-configurations/configuration-reconciliation.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -412,7 +413,8 @@ async function main() {
 
   // Upsert each agent to database
   for (const { manifest, expertDefaults } of agents) {
-    const dbFields = manifestToAgentTypeData(manifest, expertDefaults)
+    // Built-ins are built from this repo, so they install the repo's SDK.
+    const dbFields = { ...manifestToAgentTypeData(manifest, expertDefaults), sdkVersion: CURRENT_SDK_VERSION }
 
     // Capture the pre-upsert state so we can detect a version/schema change and
     // reconcile saved configurations ONLY when the agent type actually changed.

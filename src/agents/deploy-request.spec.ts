@@ -1,5 +1,3 @@
-import * as fs from 'fs'
-import * as path from 'path'
 import { CURRENT_SDK_VERSION } from '../agent-package/manifest-defaults.js'
 import { parseAgentManifest } from '../agent-package/schemas/agent-manifest.schema.js'
 import { resolveAgentRequirements } from './agent-requirements.js'
@@ -140,12 +138,5 @@ describe('withUserSettings', () => {
 
   it('passes settings through when the agent declares no configSchema', () => {
     expect(withUserSettings('a-agent', requirements(), { anything: 1 })).toEqual({ anything: 1 })
-  })
-})
-
-describe('SDK support window', () => {
-  it('CURRENT_SDK_VERSION is the SDK this repo ships', () => {
-    const pyproject = fs.readFileSync(path.join(process.cwd(), 'agents/stella-ai-agent-sdk/pyproject.toml'), 'utf-8')
-    expect(pyproject.match(/^version = "([^"]+)"/m)?.[1]).toBe(CURRENT_SDK_VERSION)
   })
 })

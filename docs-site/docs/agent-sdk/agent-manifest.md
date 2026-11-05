@@ -92,14 +92,14 @@ sdk:
 | `features` | Which platform features STELLA wires up for the agent. `persona` (default `true`), `plans` (`required`, `modes`) and `configurator` (`required`; `true` is short for an optional configuration). Leave a block out to turn the feature off. |
 | `env` | Environment variables the deploying user provides: `required` names, and `optional` entries with a `description` and a `default`. |
 | `connectors` | Outside MCP servers (Connectors) the agent reaches through the SDK by slot name. Users can always offer extra ones on top. |
-| `image` | `dockerfile` (default `Dockerfile`). Uploaded agents are always built by STELLA from it. |
+| `image` | `dockerfile` (default `Dockerfile`). Uploaded agents are always built by STELLA from it. `command` (optional, exec form, e.g. `[python, -m, my_agent]`) is the pod's start command. Leave it out and the image's own `CMD` runs. |
 | `resources` | Kubernetes `request` and `limit` for `memory` and `cpu`. Defaults: 512Mi and 250m. Maximum limits: 4Gi and 2000m. |
 | `configSchema` | The settings a user may give the agent at deploy, as a JSON Schema object. Only user settings belong here. |
 | `defaultConfig` | Default values for those settings. They must fit `configSchema`. |
 | `pipelineSchema` | The pipeline the Configurator edits (nodes, slots, thresholds). Needed for `features.configurator`. |
 | `runtimeVariables` | The `{{placeholder}}` palette the agent's prompt compiler resolves. |
 | `promptCompiler.version` | The SDK prompt compiler version the agent uses. Saved configurations are checked against it. |
-| `sdk.minVersion` | The oldest `stella-ai-agent-sdk` the agent works with. |
+| `sdk.minVersion` | The oldest `stella-ai-agent-sdk` the agent works with. It may not be newer than the SDK this STELLA ships. |
 
 ### Experts
 
@@ -132,6 +132,14 @@ The agent receives its settings at the top level of `AGENT_CONFIG`. A setting th
 `GET /agent-types` returns these resolved `requirements` for every agent type, so a client never needs to read the manifest itself.
 
 `env.optional` defaults are shown to the user when deploying. They are not injected into the pod, so the agent's own fallback still applies when a variable is unset. Keep the two in agreement.
+
+## SDK versions
+
+STELLA supports a window of `stella-ai-agent-sdk` versions. `GET /agent-types/sdk-support` returns it as `{ minSupported, current }`.
+
+- After every build, STELLA reads the SDK version that is actually installed in the image. A build with no SDK, or one older than `minSupported`, fails and says so.
+- When STELLA raises `minSupported`, agent types built with an older SDK stay listed, but can't be deployed, restarted or woken. My Agents marks them as needing an SDK update. Update the SDK in the package and build again.
+- `sdk.minVersion` must not be newer than `current`. Such an agent needs a newer STELLA.
 
 ## Format 1.0
 

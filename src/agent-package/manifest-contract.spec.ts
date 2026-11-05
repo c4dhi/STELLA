@@ -2,9 +2,10 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as yaml from 'js-yaml'
 import AdmZip from 'adm-zip'
-import { loadAgentDirectory } from './agent-directory.js'
+import * as os from 'os'
+import { builtInDockerfilePath, loadAgentDirectory } from './agent-directory.js'
 import { AgentPackageService } from './agent-package.service.js'
-import { RESOURCE_DEFAULTS } from './manifest-defaults.js'
+import { DEFAULT_DOCKERFILE, RESOURCE_DEFAULTS } from './manifest-defaults.js'
 import { manifestToAgentTypeData, toLegacyConfigSchema } from './manifest-mapper.js'
 import {
   MANIFEST_JSON_SCHEMA_PATH,
@@ -40,10 +41,11 @@ describe('built-in agents on manifest 2.0', () => {
     const v2 = parse(read(path.join(ROOT, 'agents', slug, 'agent.yaml')))
     expect(v2.warnings).toEqual([])
     expect(v1.warnings.join('\n')).toContain('Manifest version 1.0 is deprecated')
-    // 1.0 could not say a configuration is required (STELLA hard-coded it for
-    // stella-v2); that is the one thing the 2.0 file adds.
-    const v2Features = { ...v2.manifest!.features, configurator: { required: false } }
-    expect(v1.manifest).toEqual({ ...v2.manifest, features: v2Features })
+    // What 1.0 could not say, which STELLA used to hard-code for the built-ins:
+    // that a configuration is required, and the pod's start command.
+    const v2Features = { ...v2.manifest!.features, configurator: v2.manifest!.features.configurator && { required: false } }
+    const { command: _command, ...v2Image } = v2.manifest!.image
+    expect(v1.manifest).toEqual({ ...v2.manifest, features: v2Features, image: v2Image })
   })
 
   it.each(BUILTIN)('%s: the configSchema column stays what readers of 1.0 flags expect', (slug) => {
@@ -53,6 +55,20 @@ describe('built-in agents on manifest 2.0', () => {
     const { 'x-stella-connectors': connectors, ...rest } = column
     expect(connectors).toEqual([])
     expect(rest).toEqual(old)
+  })
+})
+
+describe('built-in agents are found by their folder', () => {
+  it.each(BUILTIN)('%s: lives in agents/<slug>/ with the default Dockerfile name, which build.sh pre-builds', (slug) => {
+    const { manifest } = loadAgentDirectory(path.join(ROOT, 'agents', slug))
+    expect(builtInDockerfilePath(manifest)).toBe(`agents/${slug}/${DEFAULT_DOCKERFILE}`)
+  })
+
+  it('refuses a built-in whose folder is not named after its slug', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-'))
+    fs.copyFileSync(path.join(ROOT, 'agents/stella-light-agent/agent.yaml'), path.join(dir, 'agent.yaml'))
+    expect(() => loadAgentDirectory(dir)).toThrow(/must be named stella-light-agent/)
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 })
 

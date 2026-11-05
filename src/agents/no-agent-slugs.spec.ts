@@ -12,8 +12,6 @@ const SRC = path.join(ROOT, 'src')
 const ALLOWED = new Set([
   // The default agent type: the one place a slug is allowed.
   'src/agents/default-agent-type.ts',
-  // Built-in image registry. Moves to the manifests in PR 3/5 ("images and scripts").
-  'src/agent-image/agent-image.service.ts',
 ])
 
 function sourceFiles(dir: string): string[] {

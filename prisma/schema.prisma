@@ -269,6 +269,10 @@ model AgentType {
 
   // SDK requirements
   sdkMinVersion String? // Minimum stella-ai-agent-sdk version
+  // The stella-ai-agent-sdk version installed in the built image (read from the
+  // image after each build; the repo SDK for built-ins). Deploy refuses one below
+  // MIN_SUPPORTED_SDK_VERSION. Null: not built yet.
+  sdkVersion    String?
 
   // Timestamps
   createdAt DateTime @default(now())

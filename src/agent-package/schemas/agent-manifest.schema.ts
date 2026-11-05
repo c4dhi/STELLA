@@ -395,6 +395,11 @@ export const agentManifestSchema = z
       .object({
         dockerfile: z.string().min(1).optional(),
         imageUrl: z.string().min(1).optional(),
+        /**
+         * The pod's start command (exec form). Left out, the image's own CMD runs.
+         * Use it when the CMD carries arguments that don't fit a pod, e.g. a fixed server address.
+         */
+        command: z.array(z.string().min(1)).min(1).optional(),
       })
       .strict()
       .superRefine((value, ctx) => {
