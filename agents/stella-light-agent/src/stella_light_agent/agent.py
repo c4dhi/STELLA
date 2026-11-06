@@ -149,6 +149,15 @@ class StellaLightAgent(BaseAgent):
 
         return None
 
+    def session_end_mode(self) -> str:
+        """This agent lets the Configurator choose it: the interrupt_handler
+        node's `mode` in its pipelineSchema. Without one, the SDK default."""
+        pipeline_config = (self.session.pipeline_config if self.session else None) or {}
+        nodes = pipeline_config.get("nodes") if isinstance(pipeline_config, dict) else None
+        handler = nodes.get("interrupt_handler") if isinstance(nodes, dict) else None
+        mode = handler.get("mode") if isinstance(handler, dict) else None
+        return mode if mode in self.SESSION_END_MODES else super().session_end_mode()
+
     def _apply_pipeline_config(self, pipeline_config: Dict[str, Any]) -> None:
         """Apply Agent Configurator overrides injected via SDK config.
 

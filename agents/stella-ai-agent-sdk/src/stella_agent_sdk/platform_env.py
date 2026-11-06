@@ -157,6 +157,13 @@ PLATFORM_ENV: List[PlatformEnvVar] = [
         "true",
         "tts",
     ),
+    # ── session end ──────────────────────────────────────────────────────
+    PlatformEnvVar(
+        "SESSION_END_MODE",
+        "What the agent does when the session time runs out: 'farewell' says the plan's farewell, 'wrap_up' lets the agent write a short closing, 'silent' just ends. An agent may choose it another way.",
+        "farewell",
+        "session",
+    ),
     # ── display ──────────────────────────────────────────────────────────
     PlatformEnvVar(
         "STELLA_TELEPROMPTER_ENABLED",

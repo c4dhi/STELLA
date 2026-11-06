@@ -117,6 +117,12 @@
       "group": "tts"
     },
     {
+      "name": "SESSION_END_MODE",
+      "description": "What the agent does when the session time runs out: 'farewell' says the plan's farewell, 'wrap_up' lets the agent write a short closing, 'silent' just ends. An agent may choose it another way.",
+      "default": "farewell",
+      "group": "session"
+    },
+    {
       "name": "STELLA_TELEPROMPTER_ENABLED",
       "description": "Light the reply up word by word as it is spoken. 'false' turns it off.",
       "default": "true",

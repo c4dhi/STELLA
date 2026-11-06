@@ -262,8 +262,9 @@ class BaseAgent(ABC):
     def session(self) -> SessionConfig:
         """This session's ``AGENT_CONFIG``, typed: ``persona``, ``mode``,
         ``plan``, ``available_plans`` and ``pipeline_config`` (the platform
-        keys), and ``config``: every other key, the user's settings from
-        configSchema."""
+        keys), and ``config``: every other key, the agent's own defaultConfig
+        from agent.yaml. A deployment sets nothing else; its choices arrive
+        as env vars."""
         return self._session_config
 
     @property
@@ -745,6 +746,20 @@ class BaseAgent(ABC):
         self._state = AgentState.SHUTTING_DOWN
         self._session_id = None
         return {}
+
+    SESSION_END_MODES = ("farewell", "wrap_up", "silent")
+
+    def session_end_mode(self) -> str:
+        """What the agent does when the platform ends the session (issue #198):
+        'farewell' speaks the plan's farewell (or a built-in goodbye), 'wrap_up'
+        lets ``on_session_ending`` generate a closing, 'silent' just closes.
+
+        Read from the ``SESSION_END_MODE`` env var, default 'farewell'. An agent
+        that lets its deployer choose this some other way (its own Configurator
+        node, say) overrides this method; the SDK reads nothing agent-specific.
+        """
+        mode = (os.environ.get("SESSION_END_MODE") or "").strip().lower()
+        return mode if mode in self.SESSION_END_MODES else "farewell"
 
     async def on_session_ending(
         self, session_id: str, reason: str, deadline_ms: int

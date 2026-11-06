@@ -77,16 +77,14 @@ def _resolve_farewell_message(agent_config: Dict[str, Any]) -> str:
     return farewell.strip() if isinstance(farewell, str) else ""
 
 
-def _resolve_interrupt_mode(agent_config: Dict[str, Any]) -> str:
-    """Author-configured session-end behavior (issue #198), read from the
-    Configurator's interrupt_handler node: 'farewell' (speak the plan farewell),
-    'wrap_up' (let the agent's on_session_ending generate a custom closing), or
-    'silent' (just close). Defaults to 'farewell' — safe for every agent.
-    """
-    pipeline_config = agent_config.get("pipeline_config")
-    nodes = pipeline_config.get("nodes") if isinstance(pipeline_config, dict) else None
-    handler = nodes.get("interrupt_handler") if isinstance(nodes, dict) else None
-    mode = handler.get("mode") if isinstance(handler, dict) else None
+def _resolve_session_end_mode(agent: Any) -> str:
+    """The agent's session-end mode (BaseAgent.session_end_mode), falling back
+    to 'farewell' if an override raises or returns something unknown."""
+    try:
+        mode = agent.session_end_mode()
+    except Exception as e:  # never let a bad override stop the goodbye
+        logger.warning(f"[SESSION END] session_end_mode() failed: {e}; using 'farewell'")
+        return "farewell"
     return mode if mode in ("farewell", "wrap_up", "silent") else "farewell"
 
 
@@ -595,7 +593,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 return
             session_end_started = True  # set before the first await — gates re-entry
 
-            mode = _resolve_interrupt_mode(agent_config)
+            mode = _resolve_session_end_mode(agent)
             logger.info(
                 f"[SESSION END] signal received (reason={reason}, mode={mode}, deadline={deadline_ms}ms)"
             )
