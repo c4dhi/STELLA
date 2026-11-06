@@ -77,7 +77,8 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
       },
     }))
 
-    // Follow the conversation (streamed replies included).
+    // Follow the conversation. A reply the agent streams grows in place; one it
+    // sends whole just appears.
     useEffect(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages])
@@ -237,12 +238,6 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                             spokenTranscriptId={spokenTranscriptId}
                             frozenSpoken={frozenSpoken}
                           />
-                          {message.isStreaming && (
-                            <span
-                              aria-hidden="true"
-                              className="inline-block w-0.5 h-[1em] ml-0.5 align-[-2px] bg-violet-300 animate-pulse"
-                            />
-                          )}
                         </p>
                         {message.role === 'user' && message.deliveryStatus && (
                           <div className="flex justify-end mt-1">

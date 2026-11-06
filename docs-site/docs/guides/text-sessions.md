@@ -9,7 +9,7 @@ Participants can hold a conversation in writing instead of by voice. Text is one
 
 ## What the participant sees
 
-- **The Text face** fills the screen with the conversation. The participant types their answers. The agent's replies stream in word by word, with "… is writing…" under the reply while it comes in.
+- **The Text face** fills the screen with the conversation. The participant types their answers. The agent's replies show as the agent sends them: an agent that streams its reply shows it growing, with "… is writing…" under it until it is done; an agent that sends whole messages shows each one at once.
 - **Nothing is spoken.** The microphone is off, and nothing the participant says aloud counts as an answer.
 - **The other faces** are the voice interface. Their chat drawer stays as a fallback for typing next to speech; the voice carries on while it is open.
 - **Silence** has no special handling in text: the agent waits.

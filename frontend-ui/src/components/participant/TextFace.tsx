@@ -9,7 +9,7 @@ import ParticipantChatThread, {
 /**
  * The Text face (#92): the whole conversation in writing. One of the faces in
  * the gallery; while it shows, the agent is in text mode (nothing spoken, the
- * microphone off) and its replies stream in.
+ * microphone off). Replies show as the agent sends them: streamed or whole.
  */
 interface TextFaceProps extends Omit<ParticipantChatThreadProps, 'variant' | 'hint' | 'spokenTranscriptId' | 'spokenChar' | 'frozenSpoken'> {
   /** Open the face gallery; absent when the face is locked for this session. */
@@ -35,10 +35,9 @@ export default function TextFace({
     threadRef.current?.focus()
   }, [])
 
-  // The agent's name from its latest message; its status while a reply streams.
+  // The agent's name from its latest message.
   const lastAgent = [...thread.messages].reverse().find(m => m.role === 'assistant')
   const agentName = lastAgent?.speakerName || 'Assistant'
-  const isWriting = thread.messages.some(m => m.role === 'assistant' && m.isStreaming)
 
   return (
     <motion.div
@@ -54,9 +53,7 @@ export default function TextFace({
           </div>
           <div className="min-w-0">
             <p className="text-[15px] font-medium truncate">{agentName}</p>
-            <p className="text-xs text-white/60" aria-live="polite">
-              {isWriting ? 'Writing…' : 'Text · nothing is read aloud'}
-            </p>
+            <p className="text-xs text-white/60">Text · nothing is read aloud</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
