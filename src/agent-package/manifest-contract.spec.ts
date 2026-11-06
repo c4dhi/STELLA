@@ -43,10 +43,11 @@ describe('built-in agents on manifest 2.0', () => {
     expect(v2.warnings).toEqual([])
     expect(v1.warnings.join('\n')).toContain('Manifest version 1.0 is deprecated')
     // What 1.0 could not say, which STELLA used to hard-code for the built-ins:
-    // that a configuration is required, and the pod's start command.
+    // that a configuration is required, and the pod's start command. Nor the
+    // client channel, which is new in 2.0 (1.0 allowed every event).
     const v2Features = { ...v2.manifest!.features, configurator: v2.manifest!.features.configurator && { required: false } }
     const { command: _command, ...v2Image } = v2.manifest!.image
-    expect(v1.manifest).toEqual({ ...v2.manifest, features: v2Features, image: v2Image })
+    expect(v1.manifest).toEqual({ ...v2.manifest, features: v2Features, image: v2Image, client: { events: [], commands: [] } })
   })
 
   it.each(BUILTIN)('%s: the configSchema column holds the agent\'s configSchema and no platform flags', (slug) => {

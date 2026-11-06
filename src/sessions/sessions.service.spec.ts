@@ -321,3 +321,46 @@ describe('SessionsService.storeRecordedMessage — cap-timer arming (issue #198)
     );
   });
 });
+
+describe('SessionsService.storeRecordedMessage — the client channel', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('stores an agent reply as a readable system line, never as an agent message', async () => {
+    const { service, prisma, eventEmitter } = setup({
+      session: { id: 's1', projectId: 'p1', name: null, status: 'ACTIVE' },
+    });
+    const envelope = {
+      type: 'client_event_reply',
+      data: { request_id: 'r1', event: 'tap', ok: false, error: 'not declared' },
+    };
+
+    await service.storeRecordedMessage('s1', envelope, 'agent-abc', 'Agent');
+
+    expect(prisma.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        content: 'Reply to tap: error: not declared',
+        role: 'system',
+        messageType: 'client_event_reply',
+        metadata: expect.objectContaining({ envelope }),
+      }),
+    });
+    expect(eventEmitter.emit).not.toHaveBeenCalledWith('session.agent-message', expect.anything());
+  });
+
+  it('stores a screen event from the participant', async () => {
+    const { service, prisma } = setup({
+      session: { id: 's1', projectId: 'p1', name: null, status: 'ACTIVE' },
+    });
+
+    await service.storeRecordedMessage(
+      's1',
+      { type: 'client_event', data: { event: 'stella.interaction_mode', mode: 'text' } },
+      'participant-1',
+      'P',
+    );
+
+    expect(prisma.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ content: 'Screen event: stella.interaction_mode', role: 'system' }),
+    });
+  });
+});

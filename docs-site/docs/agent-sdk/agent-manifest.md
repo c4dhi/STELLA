@@ -92,6 +92,7 @@ sdk:
 | `features` | Which platform features STELLA wires up for the agent. `persona` (default `true`), `plans` (`required`, `modes`) and `configurator` (`required`; `true` is short for an optional configuration). Leave a block out to turn the feature off. |
 | `env` | Environment variables the deploying user provides: `required` names, and `optional` entries with a `description` and a `default`. |
 | `connectors` | Outside MCP servers (Connectors) the agent reaches through the SDK by slot name. Users can always offer extra ones on top. |
+| `client` | What the user's screen and the agent may send each other beyond speech and chat text: `events` (screen → agent) and `commands` (agent → screen), each with a `name`, a `description` and an optional JSON Schema for its `data`. See [The client channel](#the-client-channel). |
 | `image` | `dockerfile` (default `Dockerfile`). Uploaded agents are always built by STELLA from it. `command` (optional, exec form, e.g. `[python, -m, my_agent]`) is the pod's start command. Leave it out and the image's own `CMD` runs. |
 | `resources` | Kubernetes `request` and `limit` for `memory` and `cpu`. Defaults: 512Mi and 250m. Maximum limits: 4Gi and 2000m. |
 | `configSchema` | Describes the agent's `defaultConfig`, as a JSON Schema object. A user never sets these at deploy: anything a deployer chooses is an `env` variable. |
@@ -105,6 +106,31 @@ sdk:
 
 An agent publishes default experts from `config/experts/*.json`, one expert per file. Each expert needs the matching capability. `task_extraction` needs `plans` and `companion_router` needs `companion`. Every other expert needs `experts`. A broken file stops the upload or the seed: invalid JSON, a missing or duplicate `name`, or an unknown verdict action (`inform`, `prepend`, `override`, `short_circuit`).
 
+### The client channel
+
+```yaml
+client:
+  events:          # the screen sends, the agent handles (and can answer)
+    - name: wake
+      description: "The user tapped the sleeping face awake."
+    - name: rate_answer
+      description: "The participant rated the last question."
+      data:
+        type: object
+        properties:
+          stars: { type: integer, minimum: 1, maximum: 5 }
+        required: [stars]
+  commands:        # the agent sends, the screen acts on
+    - name: sleep_allowed
+      data:
+        type: object
+        properties:
+          allowed: { type: boolean }
+        required: [allowed]
+```
+
+An undeclared event or command is refused, and so is one whose data does not fit its schema: the SDK checks both in the pod. Names are lowercase letters, digits and underscores. Dotted names such as `stella.interaction_mode` belong to the platform: every agent gets them without declaring them (see [the platform contract](./platform-contract.md#the-screen-and-the-agent)).
+
 ## Rules
 
 STELLA refuses a manifest that breaks any of these:
@@ -115,6 +141,7 @@ STELLA refuses a manifest that breaks any of these:
 - `configSchema` is a valid JSON Schema that STELLA can compile, and `defaultConfig` fits it. Values for required settings may be left out of the defaults.
 - `configSchema` uses no regular expressions (`pattern`, `patternProperties`, or a `propertyNames` pattern), anywhere in the document, including parts reached through `$ref`. STELLA checks settings on its server, where a badly written expression can stall it. Use `enum`, `minLength` or `maxLength` instead.
 - An env var is not both required and optional.
+- `client` event and command names are unique in their list, and each `data` is a JSON Schema STELLA can compile, without regular expressions.
 - Unknown keys are refused, not ignored. A typo like `conectors:` is an error, not a silently missing feature.
 
 ## What STELLA checks at deploy

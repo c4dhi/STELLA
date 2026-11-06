@@ -23,6 +23,8 @@ export interface PodEnvBuildInput {
   ttsServiceAddress: string
   stateMachineAddress: string
   nodeEnv: string
+  /** requirements.client: the messages the screen and the agent may send each other. */
+  clientChannel?: AgentRequirements['client']
 }
 
 export interface SecretDataBuildInput {
@@ -66,7 +68,19 @@ export function buildPodEnvVars(input: PodEnvBuildInput): Array<{ name: string; 
     { name: 'TTS_SERVICE_ADDRESS', value: input.ttsServiceAddress },
     { name: 'STATE_MACHINE_ADDRESS', value: input.stateMachineAddress },
     { name: 'NODE_ENV', value: input.nodeEnv },
+    // Always set, so the SDK refuses what the manifest did not declare (an
+    // agent run outside STELLA has none and allows everything).
+    { name: CLIENT_CHANNEL_ENV, value: clientChannelEnv(input.clientChannel) },
   ]
+}
+
+export const CLIENT_CHANNEL_ENV = 'STELLA_CLIENT_CHANNEL'
+
+/** The client channel as the SDK reads it: names and data schemas only. */
+export function clientChannelEnv(channel: AgentRequirements['client'] | undefined): string {
+  const slim = (list: { name: string; data?: unknown }[] = []) =>
+    list.map((m) => (m.data ? { name: m.name, data: m.data } : { name: m.name }))
+  return JSON.stringify({ events: slim(channel?.events), commands: slim(channel?.commands) })
 }
 
 /**

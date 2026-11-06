@@ -68,6 +68,15 @@ const VisualizerPreview: React.FC<VisualizerPreviewProps> = ({ type, size = 'md'
   const sphereSize = isSmall ? 'w-8 h-8' : 'w-16 h-16';
 
   switch (type) {
+    case 'text':
+      return (
+        <div className={`absolute inset-x-0 top-0 flex flex-col ${isSmall ? 'gap-1 p-2' : 'gap-1.5 px-4 py-3'}`}>
+          <div className={`${isSmall ? 'h-1.5' : 'h-3.5'} w-[62%] rounded-lg rounded-bl-sm bg-white/15`} />
+          <div className={`${isSmall ? 'h-1.5' : 'h-3.5'} w-[46%] self-end rounded-lg rounded-br-sm bg-violet-500/50`} />
+          <div className={`${isSmall ? 'h-1.5' : 'h-3.5'} w-[54%] rounded-lg rounded-bl-sm bg-white/15`} />
+        </div>
+      );
+
     case 'face':
       return (
         <div className="absolute inset-0 flex items-center justify-center">

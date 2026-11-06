@@ -18,6 +18,8 @@ Visualizers are the animated "face" of the AI assistant. They respond to:
 
 Built-in visualizers include animated faces, glowing orbs, and themed particle effects (galaxy, weather, etc.). The visualizer gallery lets users switch between them in real-time.
 
+One entry in the gallery is not an animation: the **Text face** (`text`) replaces the whole screen with the written conversation and puts the agent in text mode. `VisualizerRenderer` draws nothing for it; the participant screen shows `TextFace` instead. See [Text sessions](./text-sessions.md).
+
 ## Architecture Overview
 
 All visualizer code lives in the frontend:

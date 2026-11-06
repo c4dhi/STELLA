@@ -10,6 +10,14 @@ import uuid
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional, TYPE_CHECKING
 
 from stella_agent_sdk._version import SDK_VERSION
+from stella_agent_sdk.client_channel import (
+    INTERACTION_MODE_EVENT,
+    INTERACTION_MODES,
+    PLATFORM_PREFIX,
+    ClientChannel,
+    message_data,
+    reply_payload,
+)
 from stella_agent_sdk.emotion.tags import strip_emotion_tags
 from stella_agent_sdk.language import turn_language_record
 from stella_agent_sdk.messages.input import AgentInput
@@ -873,14 +881,26 @@ class BaseAgent(ABC):
         ``self.audio.speak`` or ``send_client_command``. Default: do nothing.
         """
 
-    async def on_client_event(self, session_id: str, event: str, data: Dict[str, Any]) -> None:
-        """The user did something on the device that is neither speech nor text.
+    async def on_client_event(self, session_id: str, event: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The user's screen sent an event (``{"type": "client_event", "data":
+        {"event": ..., ...}}``) that the manifest declares in ``client.events``.
 
-        ``event`` and ``data`` are whatever the client sent as ``{"type":
-        "client_event", "data": {"event": ..., ...}}``. The SDK gives them no
-        meaning: which events exist is agreed between an agent and its client.
-        May arrive while a turn is being processed. Default: do nothing.
+        ``data`` is the event's own data, already checked against its declared
+        schema. What you return (a dict, or None) is the reply when the screen
+        asked for one (the event carried a ``request_id``); raise to reply with
+        an error. Undeclared events never get here, and ``stella.…`` events are
+        the SDK's own. May arrive while a turn is being processed. Default: do
+        nothing.
         """
+        return None
+
+    @property
+    def client_channel(self) -> ClientChannel:
+        """What ``agent.yaml`` declares the screen and the agent may send each
+        other (``STELLA_CLIENT_CHANNEL``). Unset outside STELLA: all allowed."""
+        if getattr(self, "_client_channel", None) is None:
+            self._client_channel = ClientChannel.from_env()
+        return self._client_channel
 
     async def send_client_command(self, command: str, **data: Any) -> None:
         """Send a command to the user's device right now, outside a turn.
@@ -888,6 +908,9 @@ class BaseAgent(ABC):
         Inside ``process()``, yield ``AgentOutput.client_command`` instead: that
         one waits until the turn's speech has been heard.
         """
+        problem = self.client_channel.command_problem(command, data)
+        if problem:
+            raise ValueError(f"cannot send {problem}")
         payload = AgentOutput.client_command(
             self._session_id or "", command, **data
         ).to_data_payload()
@@ -992,12 +1015,49 @@ class BaseAgent(ABC):
         if self.has_audio:
             self.audio.start_agent_turn(metadata)
 
-    async def _dispatch_client_event(self, event: str, data: Dict[str, Any]) -> None:
+    async def _dispatch_client_event(self, event: str, payload: Dict[str, Any]) -> None:
+        """One event from the screen: the platform's own (``stella.…``), or one
+        the manifest declares. Answers when it carries a ``request_id``."""
         self._note_activity()
-        try:
-            await self.on_client_event(self._session_id or "", event, data)
-        except Exception as e:
-            logger.error(f"Error in on_client_event({event!r}): {e}")
+        request_id = payload.get("request_id")
+        data = message_data(payload)
+        ok, result, error = True, None, None
+        if event.startswith(PLATFORM_PREFIX):
+            error = await self._platform_event(event, data)
+            ok = error is None
+            result = {"mode": data.get("mode")} if ok and event == INTERACTION_MODE_EVENT else None
+        else:
+            error = self.client_channel.event_problem(event, data)
+            if error:
+                ok = False
+                logger.warning(f"[CLIENT EVENT] refused: {error}")
+            else:
+                try:
+                    result = await self.on_client_event(self._session_id or "", event, data)
+                except Exception as e:
+                    ok, error = False, str(e) or e.__class__.__name__
+                    logger.error(f"Error in on_client_event({event!r}): {e}")
+        if request_id and self.has_audio:
+            reply = reply_payload(
+                str(request_id), event, ok=ok,
+                data=result if isinstance(result, dict) else None,
+                error=error, agent_id=self._agent_identity().get("agent_id"),
+            )
+            try:
+                await self.audio._room.publish_data(reply)
+            except Exception as e:
+                logger.error(f"[CLIENT EVENT] could not reply to {event!r}: {e}")
+
+    async def _platform_event(self, event: str, data: Dict[str, Any]) -> Optional[str]:
+        """Handle a ``stella.…`` event; return why it failed, or None."""
+        if event == INTERACTION_MODE_EVENT:
+            mode = data.get("mode")
+            if mode not in INTERACTION_MODES:
+                return f"{event}: mode must be one of {', '.join(INTERACTION_MODES)}"
+            if self.has_audio:
+                self.audio.set_interaction_mode(mode)
+            return None
+        return f"unknown platform event {event!r}"
 
     async def _idle_watchdog(self) -> None:
         """Fire ``on_idle`` once per quiet stretch. Ends with the session."""
@@ -1326,7 +1386,12 @@ class BaseAgent(ABC):
                     if client_commands and not self.audio.is_turn_aborted:
                         await self.audio.wait_for_playout_drain()
                         for command in client_commands:
-                            await self.send_client_command(command.content, **command.metadata)
+                            # A command the manifest doesn't declare is an
+                            # author's mistake: log it, don't end the turn loop.
+                            try:
+                                await self.send_client_command(command.content, **command.metadata)
+                            except ValueError as e:
+                                logger.error(f"[CLIENT] Not sent: {e}")
                     self._sentence_buffer = ""
                     self._is_processing = False
                     self._note_activity()

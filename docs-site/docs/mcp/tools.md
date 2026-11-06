@@ -289,7 +289,7 @@ Create the join link for an active session. A session has at most one open invit
 | `sessionId` | id | |
 | `participantName` | string, *optional* | |
 | `customMessage` | string, *optional* | Shown to the participant before they join |
-| `visualizerType` | string, *optional* | e.g. `sphere`, `face`, `galaxy` |
+| `visualizerType` | string, *optional* | e.g. `sphere`, `face`, `galaxy`, or `text` for the Text face (a text-only session when locked) |
 | `visualizerLocked` | boolean, *optional* | |
 | `expiresInHours` | number 1–8760, *optional* | |
 | `maxSessionDurationSeconds` | number 60–7200, *optional* | Caps the conversation, counted from the agent's first message |

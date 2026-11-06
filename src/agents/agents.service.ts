@@ -438,6 +438,7 @@ export class AgentsService {
         forceRebuild: createAgentDto.forceRebuild,
         resolvedEnvVars,
         resources: requirements.resources,
+        clientChannel: requirements.client,
       });
 
       // Update agent with pod info
@@ -1141,6 +1142,7 @@ export class AgentsService {
         agentType,
         resolvedEnvVars,
         resources: requirements.resources,
+        clientChannel: requirements.client,
       });
 
       // Update agent with new pod info

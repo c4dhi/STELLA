@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertCircle, Loader2, Clock, RefreshCw } from 'lucide-react';
+import { AlertCircle, Loader2, Clock, RefreshCw, MessageSquareText, ArrowRight } from 'lucide-react';
 import { apiClient } from '../services/ApiClient';
 import type {
   InvitationDetails,
@@ -12,6 +12,7 @@ import { checkMicrophonePermission } from '../lib/mediaDevices';
 import TermsModal from '../components/participant/TermsModal';
 import OrganizerMessageModal from '../components/participant/OrganizerMessageModal';
 import PermissionsModal from '../components/participant/PermissionsModal';
+import { isTextFace } from '../components/face/types';
 import ParticipantSessionView from '../components/participant/ParticipantSessionView';
 import {
   OnboardingLayout,
@@ -26,6 +27,7 @@ type PageState =
   | 'TERMS_MODAL'
   | 'MESSAGE_MODAL'
   | 'PERMISSIONS_CHECK' // Device permissions screen
+  | 'TEXT_READY' // Locked to the Text face: no devices needed
   | 'WAITING' // When participant is active, waiting in queue
   | 'SESSION_VIEW';
 
@@ -205,6 +207,13 @@ export default function ParticipantJoinPage() {
 
   // Check if we need to show permissions screen
   const checkAndProceed = useCallback(async () => {
+    // Locked to the Text face: the whole session is typed, so no microphone
+    // or camera is asked for.
+    if (invitation && isTextFace(invitation.visualizerType) && invitation.visualizerLocked) {
+      setPageState('TEXT_READY');
+      return;
+    }
+
     const micPermission = await checkMicrophonePermission();
 
     if (micPermission === 'granted') {
@@ -214,7 +223,7 @@ export default function ParticipantJoinPage() {
       // Show permissions screen
       setPageState('PERMISSIONS_CHECK');
     }
-  }, [handleAcceptInvitation]);
+  }, [handleAcceptInvitation, invitation]);
 
   // Handle terms acceptance
   const handleTermsAccepted = useCallback(() => {
@@ -352,6 +361,41 @@ export default function ParticipantJoinPage() {
           participantName={invitation.participantName}
           onComplete={handlePermissionsComplete}
         />
+      )}
+
+      {/* TEXT_READY State - a text-only session needs no devices */}
+      {pageState === 'TEXT_READY' && invitation && (
+        <OnboardingLayout key="text-ready">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="max-w-md w-full"
+          >
+            <StellaBranding />
+            <OnboardingCard contentClassName="p-8">
+              <div className="flex flex-col items-center text-center">
+                <div className="w-12 h-12 rounded-full bg-violet-100 dark:bg-violet-500/10 flex items-center justify-center mb-4">
+                  <MessageSquareText className="w-6 h-6 text-violet-700 dark:text-violet-300" />
+                </div>
+                <h2 className="text-lg font-medium text-content dark:text-content-inverse mb-2">
+                  This conversation is in writing
+                </h2>
+                <p className="text-content-secondary dark:text-content-inverse-secondary text-sm mb-6">
+                  You will type your answers. No microphone or camera is needed, and nothing is read aloud.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void handlePermissionsComplete()}
+                  className="w-full py-2.5 px-6 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-100 text-white dark:text-neutral-900 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2"
+                >
+                  Start
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </OnboardingCard>
+          </motion.div>
+        </OnboardingLayout>
       )}
 
       {/* WAITING State - Session in use by another participant */}

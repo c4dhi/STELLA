@@ -612,6 +612,11 @@ class AudioPipeline:
 
         # TTS enabled flag
         self._tts_enabled = os.getenv("TTS_ENABLED", "true").lower() != "false"
+        # Which interface the participant uses ("voice" or "text"), set by the
+        # screen (stella.interaction_mode). In "text" nothing is spoken and
+        # speech from the microphone is not a turn; the TTS and STT connections
+        # stay open, so switching back is instant.
+        self._interaction_mode = "voice"
 
         # Deployment language PIN (STELLA_LANGUAGE). When set, this deployment
         # is fixed to one language: STT transcription is pinned to it below
@@ -2325,6 +2330,10 @@ class AudioPipeline:
                     timeout=1.0,
                 )
 
+                # On the text interface only typed messages are turns.
+                if self._interaction_mode == "text" and not getattr(event, "typed", False):
+                    logger.info("[MODE] text interface: ignoring a spoken transcript")
+                    continue
                 # [GATE DISABLED] AEC handles echo cancellation at audio level
                 self._anchor_turn_if_unanchored(event)
                 yield event
@@ -2487,6 +2496,10 @@ class AudioPipeline:
             logger.debug("TTS disabled (TTS_ENABLED=false), skipping speak()")
             return
 
+        if self._interaction_mode == "text":
+            logger.debug("Text interface, skipping speak()")
+            return
+
         if self._tts is None:
             logger.debug("TTS not available, skipping speak()")
             return
@@ -2516,8 +2529,32 @@ class AudioPipeline:
 
     @property
     def has_tts(self) -> bool:
-        """Whether TTS is available for audio synthesis."""
-        return self._tts is not None and self._tts_enabled
+        """Whether replies are spoken: TTS is connected and enabled, and the
+        participant is not on the text interface."""
+        return self._tts is not None and self._tts_enabled and self._interaction_mode != "text"
+
+    @property
+    def interaction_mode(self) -> str:
+        """``"voice"`` (default) or ``"text"``; see ``set_interaction_mode``."""
+        return self._interaction_mode
+
+    def set_interaction_mode(self, mode: str) -> None:
+        """Switch between the voice and the text interface.
+
+        ``"text"``: replies are published as text only, nothing is synthesised
+        and nothing waits for playback, and speech from the microphone is not
+        taken as a turn (typed messages are). Speech still playing stops.
+        ``"voice"``: speak and listen again. Both connections stay open, so the
+        switch takes effect on the next line.
+        """
+        if mode not in ("voice", "text"):
+            raise ValueError(f"unknown interaction mode {mode!r}")
+        if mode == self._interaction_mode:
+            return
+        self._interaction_mode = mode
+        logger.info(f"[MODE] interaction mode: {mode}")
+        if mode == "text" and self._is_speaking:
+            asyncio.create_task(self.stop_speaking())
 
     async def _speak_sentence(
         self,
@@ -3561,6 +3598,10 @@ class AudioPipeline:
         progress envelope.
         """
         if not sentence.strip():
+            return
+        if self._interaction_mode == "text" or not self._tts_enabled:
+            # Text interface, or TTS switched off: the text is already
+            # published; there is nothing to voice and nothing to wait for.
             return
 
         # Start worker lazily

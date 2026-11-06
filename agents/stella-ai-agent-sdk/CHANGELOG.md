@@ -15,6 +15,8 @@ Releases as 0.10.0 (`pyproject.toml` is already bumped). The platform contract: 
 
 ### Added
 
+- **The client channel as a protocol.** Screen events and agent commands are declared in `agent.yaml` (`client.events`, `client.commands`, each with an optional JSON Schema for its data); STELLA passes the declaration as `STELLA_CLIENT_CHANNEL`. The SDK refuses undeclared events and commands and data that does not fit (`send_client_command` raises `ValueError`). An event with a `request_id` gets a `client_event_reply`: what `on_client_event` returns, or its error. The channel is connected in `run.py`, so agents with their own `run_audio_loop` get events too. New dependency: `jsonschema` (reinstall the SDK, `pip install -e .`, in an existing venv). A command yielded from `process()` that is not declared is logged and dropped; the turn still ends.
+- **Voice or text interface (`stella.interaction_mode`).** The SDK's own event, needing no declaration. In `"text"` mode nothing is spoken or waited for, playing speech stops, and spoken transcripts are not turns (typed messages are). `"voice"` switches back on the next line; TTS and STT stay connected. `AudioPipeline.set_interaction_mode()` / `.interaction_mode`.
 - **Identity from the platform.** `BaseAgent` registers under `AGENT_TYPE` (the slug STELLA deployed and waits for) and `AGENT_VERSION`, falling back to the class name and `1.0.0` outside STELLA. Agents should stop setting `_agent_type`/`_agent_version`: a type that does not match the slug fails registration with "No pending session"
 - **`SessionConfig`**: `AGENT_CONFIG`, typed, as `self.session` (with `self.persona` and `self.plan`). The platform keys are typed: `persona`, `mode`, `plan`, `available_plans` and `pipeline_config`, mirroring `PLATFORM_CONFIG_KEYS` in the backend's `src/agents/deploy-request.ts`, which owns the list (a test checks the two agree). Every other key is a user setting from `configSchema`, with `defaultConfig` already merged in: `self.session.config`. A malformed platform key is logged as a warning and ignored. `on_session_start` still gets the plain dict. JSON Schema for the backend: `contracts/agent-session-config.schema.json`
 - **`self.plan_runtime`** (opt-in): one session's `StateMachineClient` from `STATE_MACHINE_ADDRESS` (default `session-management-server:50051`, override with `self.state_machine_address`), the plan loaded into it, and a `ToolRegistry` with the state machine tools. Nothing connects until `await self.plan_runtime.start(plan)`; `run_agent_from_env` closes it at teardown. stella-v2 and stella-light use it
@@ -26,6 +28,7 @@ Releases as 0.10.0 (`pyproject.toml` is already bumped). The platform contract: 
 
 ### Fixed
 
+- `enqueue_sentence` with `TTS_ENABLED=false` no longer starts a speech worker that tries to synthesise.
 - **A typed message sent while the agent speaks is no longer lost.** With barge-in off, a `user_text` message queued behind the closed transcript gate was dropped as "stale" when the gate reopened, although the chat had already shown it as sent. Typed events (`TranscriptEvent.typed`) now survive the gate; speech heard while the agent talked is still dropped.
 
 ## [0.9.0] - 2026-10-28

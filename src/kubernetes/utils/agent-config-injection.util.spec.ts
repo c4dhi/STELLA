@@ -1,5 +1,7 @@
 import {
+  CLIENT_CHANNEL_ENV,
   buildPodEnvVars,
+  clientChannelEnv,
   buildPodInjectionFromAgentTypeAndConfiguration,
   buildSecretStringData,
   deriveEffectiveAgentConfig,
@@ -35,7 +37,22 @@ describe('agent-config-injection util', () => {
       { name: 'TTS_SERVICE_ADDRESS', value: 'tts-service:50052' },
       { name: 'STATE_MACHINE_ADDRESS', value: 'session-management-server:50051' },
       { name: 'NODE_ENV', value: 'local' },
+      { name: 'STELLA_CLIENT_CHANNEL', value: '{"events":[],"commands":[]}' },
     ])
+  })
+
+  it('passes the declared client channel as names and data schemas only', () => {
+    const channel = {
+      events: [{ name: 'wake', description: 'tapped awake' }],
+      commands: [{ name: 'sleep_allowed', description: 'may sleep', data: { type: 'object', properties: { allowed: { type: 'boolean' } } } }],
+    }
+    const env = buildPodEnvVars({ ...podEnvInput, clientChannel: channel as any }).find((v) => v.name === CLIENT_CHANNEL_ENV)
+    expect(JSON.parse(env!.value)).toEqual({
+      events: [{ name: 'wake' }],
+      commands: [{ name: 'sleep_allowed', data: { type: 'object', properties: { allowed: { type: 'boolean' } } } }],
+    })
+    // Nothing declared is still set: the SDK then refuses everything.
+    expect(clientChannelEnv(undefined)).toBe('{"events":[],"commands":[]}')
   })
 
   it('derives effective config by deep-merging AgentType defaults with user configuration', () => {
