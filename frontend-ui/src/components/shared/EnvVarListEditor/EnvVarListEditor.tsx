@@ -16,6 +16,8 @@ interface EnvVarListEditorProps {
   showOriginBadges?: boolean
   /** Fires after any user mutation (add/edit/remove/fix) — for dirty tracking / sync. */
   onChange?: () => void
+  /** A line under a row, by key: what the variable does (from agent.yaml). */
+  hints?: Record<string, string>
 }
 
 const PRESERVED_PLACEHOLDER = '•••••••• unchanged'
@@ -27,6 +29,7 @@ export default function EnvVarListEditor({
   valueInputType = 'password',
   showOriginBadges = true,
   onChange,
+  hints = {},
 }: EnvVarListEditorProps) {
   const { rows, validation } = editor
   const keyInputRefs = useRef<Map<string, HTMLInputElement>>(new Map())
@@ -52,6 +55,7 @@ export default function EnvVarListEditor({
             isInvalidKey={validation.invalidKeyIds.has(row.id)}
             isEmptyKey={validation.emptyKeyIds.has(row.id)}
             isMissingValue={validation.missingValueIds.has(row.id)}
+            hint={hints[row.key.trim()]}
             onKeyChange={(v) => { editor.updateKey(row.id, v); onChange?.() }}
             onValueChange={(v) => { editor.updateValue(row.id, v); onChange?.() }}
             onFixKey={() => { editor.fixKey(row.id); onChange?.() }}
@@ -90,6 +94,7 @@ interface EnvVarRowItemProps {
   isInvalidKey: boolean
   isEmptyKey: boolean
   isMissingValue: boolean
+  hint?: string
   onKeyChange: (value: string) => void
   onValueChange: (value: string) => void
   onFixKey: () => void
@@ -106,6 +111,7 @@ function EnvVarRowItem({
   isInvalidKey,
   isEmptyKey,
   isMissingValue,
+  hint,
   onKeyChange,
   onValueChange,
   onFixKey,
@@ -194,6 +200,13 @@ function EnvVarRowItem({
           </svg>
         </button>
       </div>
+
+      {/* What the variable does, when the agent says */}
+      {hint && !(keyHasError || isMissingValue) && (
+        <div className={`mt-1 ml-0.5 text-xs font-light ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
+          {hint}
+        </div>
+      )}
 
       {/* Inline feedback */}
       {(keyHasError || isMissingValue) && (

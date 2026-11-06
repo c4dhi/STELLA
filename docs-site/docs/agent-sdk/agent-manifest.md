@@ -94,8 +94,8 @@ sdk:
 | `connectors` | Outside MCP servers (Connectors) the agent reaches through the SDK by slot name. Users can always offer extra ones on top. |
 | `image` | `dockerfile` (default `Dockerfile`). Uploaded agents are always built by STELLA from it. `command` (optional, exec form, e.g. `[python, -m, my_agent]`) is the pod's start command. Leave it out and the image's own `CMD` runs. |
 | `resources` | Kubernetes `request` and `limit` for `memory` and `cpu`. Defaults: 512Mi and 250m. Maximum limits: 4Gi and 2000m. |
-| `configSchema` | The settings a user may give the agent at deploy, as a JSON Schema object. Only user settings belong here. |
-| `defaultConfig` | Default values for those settings. They must fit `configSchema`. |
+| `configSchema` | Describes the agent's `defaultConfig`, as a JSON Schema object. A user never sets these at deploy: anything a deployer chooses is an `env` variable. |
+| `defaultConfig` | Fixed values the agent receives in `config`. They must fit `configSchema`. |
 | `pipelineSchema` | The pipeline the Configurator edits (nodes, slots, thresholds). Needed for `features.configurator`. |
 | `runtimeVariables` | The `{{placeholder}}` palette the agent's prompt compiler resolves. |
 | `promptCompiler.version` | The SDK prompt compiler version the agent uses. Saved configurations are checked against it. |
@@ -125,14 +125,14 @@ STELLA reads the manifest again on every deploy, restart and wake after auto-pau
 - `features.plans.required` is set and the deployment has neither a plan nor, for agents with the `companion` mode, a companion session;
 - the deployment brings a plan, a companion session or a Configurator configuration that the manifest doesn't declare;
 - `features.configurator.required` is set and no configuration was picked;
-- the user's settings, merged over `defaultConfig`, don't fit `configSchema`;
+- the deployment sets any other config key to something other than the agent's `defaultConfig` (a deployment has no per-agent settings; anything the deployer should choose is an env var);
 - `sdk.minVersion` is newer than the SDK this STELLA ships (`GET /agent-types/sdk-support`).
 
-The agent receives its settings at the top level of `AGENT_CONFIG`. A setting the user leaves out takes its value from `defaultConfig`. Objects merge key by key, and an array replaces the default. Next to the settings, STELLA puts the keys it sets itself: `persona`, `mode`, `plan`, `available_plans` and `pipeline_config`. Don't use these names for settings.
+The agent receives its `defaultConfig` at the top level of `AGENT_CONFIG`, unchanged. Next to it, STELLA puts the keys it sets itself: `persona`, `mode`, `plan`, `available_plans` and `pipeline_config`. A deployment sets only those keys; a request that tries to change anything else gets a 400 that points at env vars. Don't use these names in `defaultConfig`.
 
 `GET /agent-types` returns these resolved `requirements` for every agent type, so a client never needs to read the manifest itself.
 
-`env.optional` defaults are shown to the user when deploying. They are not injected into the pod, so the agent's own fallback still applies when a variable is unset. Keep the two in agreement.
+`env.optional` defaults are shown to the user when deploying and are set on the pod for every variable the deployer leaves empty, on deploy and on restart. A value the deployer enters wins. Keep the agent's own fallback the same as the declared default, for runs outside STELLA.
 
 ## SDK versions
 

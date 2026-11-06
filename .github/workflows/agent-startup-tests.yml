@@ -47,5 +47,6 @@ jobs:
           find agents -type d -name __pycache__ -prune -exec rm -rf {} +
           python -m pytest --import-mode=importlib -q \
             agents/stella-ai-agent-sdk/tests/test_version.py \
+            agents/stella-ai-agent-sdk/tests/test_platform_contract.py \
             agents/stella-light-agent/tests/test_startup_config.py \
             agents/stella-v2-agent/tests/test_startup_config.py

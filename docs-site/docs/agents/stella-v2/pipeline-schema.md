@@ -29,17 +29,15 @@ The schema serves two purposes:
 
 ## Enabling the Configurator
 
-Add `x-stella-supports-configurator: true` to `configSchema` to enable the Pipeline Configurator for an agent type:
+Declare the Configurator under `features` in `agent.yaml` (manifest 2.0) to enable it for an agent type:
 
 ```yaml
-configSchema:
-  type: object
-  x-stella-supports-configurator: true
-  properties:
-    # ... other config properties
+features:
+  configurator:
+    required: true   # a deployment must pick a configuration
 ```
 
-Without this flag, the agent uses the legacy configuration view.
+Without it, the agent has no Configurator and a deployment that brings a configuration is refused.
 
 ## Nodes
 

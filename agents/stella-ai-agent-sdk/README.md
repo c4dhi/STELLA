@@ -177,9 +177,14 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `AGENT_NAME` | `Agent` | Display name for the agent |
 | `AGENT_ID` | *(falls back to AGENT_IDENTITY)* | Unique agent identifier |
 | `AGENT_ICON` | `🤖` | Display icon for the agent |
-| `AGENT_CONFIG` | | JSON string with agent-specific configuration |
+| `AGENT_CONFIG` | | Session config JSON; typed as `self.session` (`SessionConfig`, schema in `contracts/agent-session-config.schema.json`) |
+| `AGENT_TYPE` | *(class name)* | Type the agent registers under; STELLA sets it to the `agent.yaml` slug |
+| `AGENT_VERSION` | `1.0.0` | Version the agent registers with |
+| `STATE_MACHINE_ADDRESS` | `session-management-server:50051` | State machine used by `self.plan_runtime` |
 | `TRANSCRIPT_DEBOUNCE_MS` | `0` | Aggregate rapid successive finals within this window (ms). Off by default: STT endpointing already guarantees a &gt;1s gap between finals, so any window this size is unreachable. Set it only for an STT provider that can fragment faster than that. |
 | `INTERRUPT_MODE` | `none` | Barge-in behavior: `none` (strict gating) or `smart` |
+
+The voice-pipeline tuning variables above (and the rest of `BARGE_IN_*`, `TTS_*`, `STELLA_TTS_*`) are owned by the SDK: the full list with defaults is `stella_agent_sdk.platform_env.PLATFORM_ENV`, exported as `contracts/sdk-platform-env.json`. An agent does not need to declare them in its `agent.yaml`.
 
 ## Examples
 

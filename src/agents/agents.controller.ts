@@ -36,9 +36,14 @@ export class AgentsController {
     private readonly agentImageService: AgentImageService,
   ) {}
 
+  /**
+   * The agent types this user can deploy: built-ins, their own uploads, and
+   * uploads shared with a project they are in. `?projectId=` narrows the shared
+   * ones to that project (the deploy dialogs pass it).
+   */
   @Get('agent-types')
-  async getAgentTypes() {
-    return this.agentImageService.getAgentTypesWithInfo();
+  async getAgentTypes(@CurrentUser() user: any, @Query('projectId') projectId?: string) {
+    return this.agentImageService.getAgentTypesWithInfo({ userId: user.userId, projectId: projectId || null });
   }
 
   /**

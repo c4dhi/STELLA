@@ -1,11 +1,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import EmojiPicker from '../EmojiPicker'
-import AgentGalleryCard from '../agents/AgentGalleryCard'
-import { AgentUploadCard, MyAgentsSection } from '../agents'
+import { AgentUploadCard } from '../agents'
 import { apiClient } from '../../services/ApiClient'
 import { useThemeStore } from '../../store/themeStore'
-import { PlanSelectionStep, PersonaSelectionStep, ModeSelectionStep, ActivitySelectionStep } from '../shared'
+import { PlanSelectionStep, PersonaSelectionStep, ModeSelectionStep, ActivitySelectionStep, AgentPickerSections } from '../shared'
 import type { AgentMode } from '../shared'
 import type {
   AgentType,
@@ -17,30 +16,36 @@ import type {
   TtsCapabilities,
   Persona,
 } from '../../lib/api-types'
-import { parseAgentRequirements } from '../../lib/api-types'
+import { asksForMode, deployNeeds, effectiveMode, envVarHints } from '../../lib/deployNeeds'
 import ConfigurationSelectionStep from '../shared/ConfigurationSelectionStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import { useEnvVarListEditor } from '../shared/EnvVarListEditor/useEnvVarListEditor'
+import WizardProgress from '../shared/WizardProgress'
+import EnvVarNeedsSummary from '../shared/EnvVarNeedsSummary'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
+import ConnectorsStep from '../shared/ConnectorsStep'
+import type { AvailableConnector } from '../../lib/api-types'
+import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
 
 interface DeployAgentModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[]) => Promise<void>
+  onSubmit: (name: string, icon?: string, config?: Record<string, unknown>, agentType?: string, envVarTemplateId?: string, envVars?: Record<string, string>, agentConfigurationId?: string, personaId?: string, mode?: 'plan' | 'companion', availablePlanIds?: string[], connectorBindings?: { connectorId: string; slot?: string }[]) => Promise<void>
+  /** The session's project: which shared connectors the user may bind here. */
+  projectId?: string
 }
 
-type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'voice' | 'plan' | 'envvars'
-type GalleryTab = 'builtin' | 'myagents'
+type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'connectors' | 'voice' | 'plan' | 'envvars'
 type EnvVarsView = 'select' | 'edit'  // select=choose template, edit=manual entry
 
 export default function DeployAgentModal({
   isOpen,
   onClose,
   onSubmit,
+  projectId,
 }: DeployAgentModalProps) {
   const [step, setStep] = useState<Step>('gallery')
-  const [galleryTab, setGalleryTab] = useState<GalleryTab>('builtin')
   const [selectedType, setSelectedType] = useState<AgentType | null>(null)
   const [name, setName] = useState('')
   const [icon, setIcon] = useState('🤖')
@@ -79,11 +84,42 @@ export default function DeployAgentModal({
   const [ttsVoice, setTtsVoice] = useState('')
   const [ttsLanguage, setTtsLanguage] = useState('')
 
-  // Parse agent requirements from configSchema
-  const agentRequirements = useMemo(() => {
-    if (!selectedType) return { requiresPlan: false, requiredEnvVars: [] as string[], supportsConfigurator: false }
-    return parseAgentRequirements(selectedType.configSchema)
-  }, [selectedType])
+  // What this agent needs, as the server resolved it from its agent.yaml.
+  const needs = useMemo(() => deployNeeds(selectedType), [selectedType])
+  const runsPlans = needs.modes.length > 0
+  // An agent that runs only one mode is not asked; it simply runs in it.
+  const runMode = effectiveMode(needs, mode)
+
+  // The agent's connector slots, as the server resolved them from its agent.yaml.
+  const requirements = selectedType?.requirements
+  const connectorSlots = useMemo(() => requirements?.connectors ?? [], [requirements])
+  const [availableConnectors, setAvailableConnectors] = useState<AvailableConnector[]>([])
+  const [connectorsLoading, setConnectorsLoading] = useState(false)
+  const [connectorsError, setConnectorsError] = useState<string | null>(null)
+  const [slotChoices, setSlotChoices] = useState<SlotChoices>({})
+  const [extraConnectors, setExtraConnectors] = useState<string[]>([])
+  // The connectors this user may bind here: their own and those shared with
+  // the session's project. Loaded once per opening, for every agent type,
+  // because any agent may be offered extra connectors.
+  useEffect(() => {
+    setAvailableConnectors([])
+    setConnectorsError(null)
+    if (!isOpen || !projectId) return
+    let cancelled = false
+    setConnectorsLoading(true)
+    apiClient.listAvailableConnectors(projectId)
+      .then((list) => !cancelled && setAvailableConnectors(list))
+      .catch((err) => !cancelled && setConnectorsError(err instanceof Error ? err.message : String(err)))
+      .finally(() => !cancelled && setConnectorsLoading(false))
+    return () => { cancelled = true }
+  }, [isOpen, projectId])
+  // A new agent type starts from its own preselection and no extras.
+  useEffect(() => {
+    setSlotChoices(initialSlotChoices(connectorSlots, availableConnectors))
+    setExtraConnectors([])
+  }, [connectorSlots, availableConnectors])
+  const slotsNeedProject = connectorSlots.length > 0 && !projectId
+  const showConnectorsStep = connectorSlots.length > 0 || availableConnectors.length > 0
 
   // Shared env-var editor (manual entry). Required keys must be filled; values are
   // mirrored back into `envVars` so canContinue + handleSubmit keep working.
@@ -103,7 +139,7 @@ export default function DeployAgentModal({
   // A companion has no plan at start, so no plan declares the language and the
   // operator's pick is the only signal. Reading it off a plan they selected
   // before switching mode would silently pin the wrong language.
-  const planLanguage = mode === 'companion' ? '' : planDeclaredLanguage(selectedPlan)
+  const planLanguage = runMode === 'companion' ? '' : planDeclaredLanguage(selectedPlan)
 
   const supportsVoiceSelection = useMemo(
     () => showsVoiceStep(ttsCapabilities, planLanguage),
@@ -112,21 +148,26 @@ export default function DeployAgentModal({
 
   const dynamicSteps = useMemo((): Step[] => {
     const steps: Step[] = ['gallery', 'configure']
-    if (agentRequirements.supportsConfigurator && selectedType?.pipelineSchema) {
+    if (needs.configurator && selectedType?.pipelineSchema) {
       steps.push('configuration')
     }
     // Mode first: it decides which built-in persona is preselected (a companion
     // has its own default) and whether a MENU of activities or a single plan
     // is picked afterwards.
-    if (agentRequirements.requiresPlan) {
+    if (asksForMode(needs)) {
       steps.push('mode')
     }
     // Persona BEFORE plan: who the agent is, then the task it carries out. Every
     // agent gets one (omitting it means the system default), so unlike the plan
     // step this is not gated on a capability.
-    steps.push('persona')
-    if (agentRequirements.requiresPlan) {
-      steps.push(mode === 'companion' ? 'activities' : 'plan')
+    if (needs.persona) {
+      steps.push('persona')
+    }
+    if (runsPlans) {
+      steps.push(runMode === 'companion' ? 'activities' : 'plan')
+    }
+    if (showConnectorsStep) {
+      steps.push('connectors')
     }
     if (supportsVoiceSelection) {
       steps.push('voice')
@@ -134,13 +175,12 @@ export default function DeployAgentModal({
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
     return steps
-  }, [agentRequirements, selectedType?.pipelineSchema, supportsVoiceSelection, mode])
+  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep])
 
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
       setStep('gallery')
-      setGalleryTab('builtin')
       setSelectedType(null)
       setName('')
       setIcon('🤖')
@@ -171,25 +211,14 @@ export default function DeployAgentModal({
 
       // Fetch agent types
       setIsLoadingTypes(true)
-      apiClient.getAgentTypes()
+      apiClient.getAgentTypes(projectId)
         .then((types) => {
           setAgentTypes(types)
         })
         .catch((err) => {
           console.error('Failed to fetch agent types:', err)
-          setAgentTypes([
-            {
-              id: 'stella-light-agent',
-              slug: 'stella-light-agent',
-              name: 'Stella Light Agent',
-              description: 'Lightweight single-LLM-call agent',
-              icon: '⚡',
-              version: '1.0.0',
-              isBuiltIn: true,
-              capabilities: ['voice', 'text'],
-              defaultConfig: {}
-            }
-          ])
+          setAgentTypes([])
+          setError('Could not load the agents. Close this dialog and try again.')
         })
         .finally(() => setIsLoadingTypes(false))
     }
@@ -220,13 +249,28 @@ export default function DeployAgentModal({
   }
 
   const handleSelectCustomAgent = (agent: CustomAgentType) => {
-    setSelectedType(agent as AgentType)
+    // "My Agents" lists the user's uploads from their own endpoint, without what
+    // deploying them takes. The gallery entry of the same type carries the
+    // server-resolved requirements (connectors, env vars), so deploy from that.
+    setSelectedType(agentTypes.find((t) => t.id === agent.id) ?? (agent as AgentType))
   }
 
   const handleUploadComplete = (_result: AgentUploadResponse) => {
     setUploadRefreshTrigger(prev => prev + 1)
-    setGalleryTab('myagents')
     setStep('gallery')
+  }
+
+  // Open the variable editor, seeded from a template (or none). Every way into
+  // the editor goes through here: the editor rows are what gets sent, so setting
+  // `envVars` without resetting them lost what was typed.
+  const openEnvVarEditor = (template: EnvVarTemplate | null) => {
+    setSelectedEnvVarTemplate(template)
+    const templateKeys = template?.variableKeys ?? []
+    const templateKeySet = new Set(templateKeys)
+    const requiredToFill = needs.requiredEnvVars.filter((key) => !templateKeySet.has(key))
+    const optionalToOffer = needs.optionalEnvVars.map((v) => v.name).filter((key) => !templateKeySet.has(key))
+    envVarEditor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: {} })
+    setEnvVarsView('edit')
   }
 
   const handleContinue = () => {
@@ -239,11 +283,7 @@ export default function DeployAgentModal({
       // template does NOT cover are seeded as required rows the user must fill.
       // (resolveAgentEnvVarsFromConfigSchema computes missingRequiredEnvVars after
       // merging the template, so template-covered required keys never block deploy.)
-      const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
-      const templateKeySet = new Set(templateKeys)
-      const requiredToFill = agentRequirements.requiredEnvVars.filter((key) => !templateKeySet.has(key))
-      envVarEditor.reset({ requiredKeys: requiredToFill, templateKeys, initial: {} })
-      setEnvVarsView('edit')
+      openEnvVarEditor(selectedEnvVarTemplate)
       return
     }
 
@@ -295,7 +335,12 @@ export default function DeployAgentModal({
       case 'configuration':
         return !!selectedConfiguration
       case 'plan':
-        return !!selectedPlan
+        return !!selectedPlan || !needs.planRequired
+      case 'connectors':
+        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0 && connectorSlots.every((slot) => {
+          const chosen = availableConnectors.find((c) => c.id === slotChoices[slot.slot])
+          return !chosen || !missingTools(slot, chosen)?.length
+        })
       case 'envvars':
         // In select view: can always continue (template selection is optional)
         if (envVarsView === 'select') {
@@ -303,7 +348,7 @@ export default function DeployAgentModal({
         }
         // In edit view: every required var must be satisfied — either entered manually
         // or provided by the selected template (merged server-side on deploy).
-        return agentRequirements.requiredEnvVars.every(
+        return needs.requiredEnvVars.every(
           key => envVars[key]?.trim() || selectedEnvVarTemplate?.variableKeys.includes(key)
         )
       default:
@@ -329,7 +374,7 @@ export default function DeployAgentModal({
 
     // Merge plan content into config if a plan is selected
     // Map PlanTemplate fields to canonical SDK Plan fields
-    if (selectedPlan && mode !== 'companion') {
+    if (selectedPlan && runsPlans && runMode !== 'companion') {
       config = {
         ...config,
         plan: {
@@ -377,9 +422,10 @@ export default function DeployAgentModal({
         selectedEnvVarTemplate?.id,
         Object.keys(filteredEnvVars).length > 0 ? filteredEnvVars : undefined,
         selectedConfiguration?.id,
-        selectedPersona?.id,
-        mode,
-        mode === 'companion' ? activityPlanIds : undefined,
+        needs.persona ? selectedPersona?.id : undefined,
+        runsPlans ? runMode : undefined,
+        runsPlans && runMode === 'companion' ? activityPlanIds : undefined,
+        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, extraConnectors) : undefined,
       )
       onClose()
     } catch (err) {
@@ -402,6 +448,7 @@ export default function DeployAgentModal({
       case 'upload': return 'Upload Agent'
       case 'configure': return 'Customize Agent'
       case 'configuration': return 'Pipeline Configuration'
+      case 'connectors': return 'Connectors'
       case 'voice': return 'Voice & Language'
       case 'persona': return 'Choose a Persona'
       case 'mode': return 'How should it run?'
@@ -417,6 +464,7 @@ export default function DeployAgentModal({
       case 'upload': return 'Upload a custom agent package (.zip)'
       case 'configure': return `Set a name and icon for your ${selectedType?.name || 'agent'}`
       case 'configuration': return `Customize the pipeline configuration for ${selectedType?.name || 'the agent'}`
+      case 'connectors': return `Which of your connectors ${selectedType?.name || 'the agent'} may use`
       case 'voice': return `Choose the voice and language for ${selectedType?.name || 'the agent'}`
       case 'persona': return 'Who the agent is — its character and voice, independent of the plan'
       case 'mode': return 'Follow one plan from the start, or talk freely and run activities on request'
@@ -475,6 +523,7 @@ export default function DeployAgentModal({
             transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             className={`
               backdrop-blur-xl rounded-[20px] w-full max-w-2xl overflow-hidden
+              flex flex-col max-h-[calc(100dvh-2rem)]
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
@@ -483,7 +532,7 @@ export default function DeployAgentModal({
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className={`px-6 pt-6 pb-4 border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+            <div className={`shrink-0 px-6 pt-6 pb-4 border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
               <div className="relative">
                 <button
                   onClick={handleClose}
@@ -503,28 +552,7 @@ export default function DeployAgentModal({
                   </svg>
                 </button>
 
-                {/* Step indicator */}
-                <div className="flex items-center gap-3 mb-2">
-                  {Array.from({ length: getTotalSteps() }, (_, idx) => idx + 1).map((num, idx) => (
-                    <div key={num} className="flex items-center">
-                      <div className={`
-                        w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
-                        ${getCurrentStepNumber() >= num
-                          ? isDark ? 'bg-primary-500 text-white' : 'bg-primary-500 text-neutral-900'
-                          : isDark ? 'bg-zinc-600 text-zinc-300' : 'bg-neutral-200 text-neutral-600'
-                        }
-                      `}>
-                        {num}
-                      </div>
-                      {idx < getTotalSteps() - 1 && (
-                        <div className={`w-8 h-0.5 ml-3 ${getCurrentStepNumber() > num
-                            ? 'bg-primary-500'
-                            : isDark ? 'bg-zinc-600' : 'bg-neutral-200'
-                          }`} />
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <WizardProgress current={getCurrentStepNumber()} total={getTotalSteps()} isDark={isDark} />
 
                 <h2 className={`text-2xl font-light tracking-wide ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
                   {getStepTitle()}
@@ -535,7 +563,8 @@ export default function DeployAgentModal({
               </div>
             </div>
 
-            {/* Content */}
+            {/* Content: the only part that scrolls, so the footer stays on screen */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
             <AnimatePresence mode="wait">
               {step === 'gallery' ? (
                 <motion.div
@@ -546,108 +575,16 @@ export default function DeployAgentModal({
                   transition={{ duration: 0.2 }}
                   className="p-6"
                 >
-                  {/* Tab bar */}
-                  <div className={`flex gap-1 p-1 rounded-lg mb-4 ${isDark ? 'bg-zinc-700/50' : 'bg-neutral-100'}`}>
-                    <button
-                      onClick={() => setGalleryTab('builtin')}
-                      className={`
-                        flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all
-                        ${galleryTab === 'builtin'
-                          ? isDark ? 'bg-zinc-600 text-white' : 'bg-white text-neutral-900 shadow-sm'
-                          : isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-700'
-                        }
-                      `}
-                    >
-                      Built-in Agents
-                    </button>
-                    <button
-                      onClick={() => setGalleryTab('myagents')}
-                      className={`
-                        flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all
-                        ${galleryTab === 'myagents'
-                          ? isDark ? 'bg-zinc-600 text-white' : 'bg-white text-neutral-900 shadow-sm'
-                          : isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-700'
-                        }
-                      `}
-                    >
-                      My Agents
-                    </button>
-                  </div>
-
-                  {galleryTab === 'builtin' ? (
-                    <>
-                      {isLoadingTypes ? (
-                        <div className={`h-48 flex items-center justify-center text-sm ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-                          <div className="flex items-center gap-3">
-                            <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                            Loading agent types...
-                          </div>
-                        </div>
-                      ) : agentTypes.length === 0 ? (
-                        <div className={`h-48 flex items-center justify-center text-sm ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-                          No agent types available
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-2 gap-3 max-h-[350px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
-                          {agentTypes.map((type) => (
-                            <AgentGalleryCard
-                              key={type.id}
-                              agentType={type}
-                              isSelected={selectedType?.id === type.id}
-                              onClick={() => handleSelectType(type)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="space-y-4">
-                      {/* Upload button */}
-                      <button
-                        type="button"
-                        onClick={() => setStep('upload')}
-                        className={`
-                          w-full p-4 rounded-xl text-left transition-all duration-200
-                          border-2 border-dashed hover:border-solid
-                          ${isDark
-                            ? 'border-zinc-600 hover:border-primary-500 bg-zinc-800/30 hover:bg-zinc-700/50'
-                            : 'border-neutral-300 hover:border-primary-500 bg-neutral-50/50 hover:bg-primary-50'
-                          }
-                        `}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className={`
-                            w-10 h-10 rounded-lg flex items-center justify-center
-                            ${isDark ? 'bg-zinc-700' : 'bg-neutral-100'}
-                          `}>
-                            <svg
-                              className={`w-5 h-5 ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.5"
-                            >
-                              <path d="M12 16V4m0 0l-4 4m4-4l4 4" strokeLinecap="round" strokeLinejoin="round" />
-                              <path d="M3 20h18" strokeLinecap="round" />
-                            </svg>
-                          </div>
-                          <div>
-                            <h3 className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-neutral-700'}`}>
-                              Upload New Agent
-                            </h3>
-                            <p className={`text-xs ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>
-                              Upload a custom agent package (.zip)
-                            </p>
-                          </div>
-                        </div>
-                      </button>
-
-                      <MyAgentsSection
-                        onSelectAgent={handleSelectCustomAgent}
-                        refreshTrigger={uploadRefreshTrigger}
-                      />
-                    </div>
-                  )}
+                  <AgentPickerSections
+                    agentTypes={agentTypes}
+                    isLoading={isLoadingTypes}
+                    selectedId={selectedType?.id ?? null}
+                    onSelectType={handleSelectType}
+                    onSelectCustom={handleSelectCustomAgent}
+                    refreshTrigger={uploadRefreshTrigger}
+                    onUpload={() => setStep('upload')}
+                    isDark={isDark}
+                  />
                 </motion.div>
               ) : step === 'upload' ? (
                 <motion.div
@@ -766,6 +703,28 @@ export default function DeployAgentModal({
                     />
                   )}
                 </motion.div>
+              ) : step === 'connectors' ? (
+                <motion.div
+                  key="connectors"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <ConnectorsStep
+                    slots={connectorSlots}
+                    available={availableConnectors}
+                    loading={connectorsLoading}
+                    loadError={slotsNeedProject ? 'this session has no project' : connectorsError}
+                    choices={slotChoices}
+                    onChoose={(slot, connectorId) => setSlotChoices((prev) => ({ ...prev, [slot]: connectorId }))}
+                    extras={extraConnectors}
+                    onToggleExtra={(connectorId, on) =>
+                      setExtraConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
+                    }
+                  />
+                </motion.div>
               ) : step === 'voice' ? (
                 <motion.div
                   key="voice"
@@ -803,7 +762,7 @@ export default function DeployAgentModal({
                     }}
                     personas={personas}
                     onPersonasChange={setPersonas}
-                    mode={agentRequirements.requiresPlan ? mode : undefined}
+                    mode={runsPlans ? runMode : undefined}
                   />
                 </motion.div>
               ) : step === 'mode' ? (
@@ -856,26 +815,12 @@ export default function DeployAgentModal({
                   transition={{ duration: 0.2 }}
                   className="p-6"
                 >
-                  {/* Required env vars info banner */}
-                  {agentRequirements.requiredEnvVars.length > 0 && (
-                    <div className={`
-                      p-3 rounded-xl mb-4
-                      ${isDark ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-amber-50 border border-amber-200'}
-                    `}>
-                      <div className={`text-xs font-medium mb-1 ${isDark ? 'text-amber-400' : 'text-amber-700'}`}>
-                        Required Environment Variables
-                      </div>
-                      <div className={`flex flex-wrap gap-1.5`}>
-                        {agentRequirements.requiredEnvVars.map(key => (
-                          <span key={key} className={`
-                            px-2 py-0.5 rounded text-xs font-mono
-                            ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}
-                          `}>
-                            {key}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
+                  {envVarsView === 'select' && (
+                    <EnvVarNeedsSummary
+                      required={needs.requiredEnvVars}
+                      optional={needs.optionalEnvVars.map((v) => v.name)}
+                      isDark={isDark}
+                    />
                   )}
 
                   <AnimatePresence mode="wait">
@@ -969,16 +914,7 @@ export default function DeployAgentModal({
                             {/* Enter Manually card - at the end */}
                             <motion.button
                               type="button"
-                              onClick={() => {
-                                setSelectedEnvVarTemplate(null)
-                                // Initialize with required vars only
-                                const initial: Record<string, string> = {}
-                                agentRequirements.requiredEnvVars.forEach(key => {
-                                  initial[key] = ''
-                                })
-                                setEnvVars(initial)
-                                setEnvVarsView('edit')
-                              }}
+                              onClick={() => openEnvVarEditor(null)}
                               whileHover={{ y: -2 }}
                               className={`
                                 p-4 rounded-xl text-left transition-all duration-200
@@ -1029,14 +965,7 @@ export default function DeployAgentModal({
                             </p>
                             <motion.button
                               type="button"
-                              onClick={() => {
-                                const initial: Record<string, string> = {}
-                                agentRequirements.requiredEnvVars.forEach(key => {
-                                  initial[key] = ''
-                                })
-                                setEnvVars(initial)
-                                setEnvVarsView('edit')
-                              }}
+                              onClick={() => openEnvVarEditor(null)}
                               whileTap={{ scale: 0.98 }}
                               className={`
                                 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
@@ -1092,7 +1021,7 @@ export default function DeployAgentModal({
                         )}
 
                         <div className="max-h-[300px] overflow-y-auto pr-2">
-                          <EnvVarListEditor editor={envVarEditor} isDark={isDark} />
+                          <EnvVarListEditor editor={envVarEditor} isDark={isDark} hints={envVarHints(needs.optionalEnvVars)} />
                         </div>
                       </motion.div>
                     )}
@@ -1100,9 +1029,10 @@ export default function DeployAgentModal({
                 </motion.div>
               ) : null}
             </AnimatePresence>
+            </div>
 
             {/* Footer */}
-            <div className={`px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+            <div className={`shrink-0 px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
               <div className="flex gap-3">
                 {step === 'gallery' ? (
                   <>

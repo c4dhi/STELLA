@@ -3,7 +3,6 @@ import {
   buildPodInjectionFromAgentTypeAndConfiguration,
   buildSecretStringData,
   deriveEffectiveAgentConfig,
-  resolveAgentEnvVarsFromConfigSchema,
 } from './agent-config-injection.util.js'
 
 describe('agent-config-injection util', () => {
@@ -119,13 +118,7 @@ describe('agent-config-injection util', () => {
           llm: { model: 'gpt-4o-mini', temperature: 0.7 },
           pipeline: { input_gate: { max_tokens: 60 } },
         },
-        configSchema: {
-          type: 'object',
-          'x-stella-env-vars': ['OPENAI_API_KEY'],
-          'x-stella-optional-env-vars': [
-            { name: 'TTS_ENABLED', default: 'true' },
-          ],
-        },
+        env: { required: ['OPENAI_API_KEY'], optional: [{ name: 'TTS_ENABLED', default: 'true' }] },
       },
       userConfiguration: {
         configuration: {
@@ -163,28 +156,5 @@ describe('agent-config-injection util', () => {
     expect(payload.appliedOptionalDefaults).toEqual(['TTS_ENABLED'])
     // Required env var is satisfied by provided OPENAI_API_KEY.
     expect(payload.missingRequiredEnvVars).toEqual([])
-  })
-
-  it('resolves required and optional env vars from configSchema', () => {
-    // Required env vars are reported when missing; optional defaults are applied as fallback.
-    const result = resolveAgentEnvVarsFromConfigSchema(
-      {
-        type: 'object',
-        'x-stella-env-vars': ['OPENAI_API_KEY', 'ELEVENLABS_API_KEY'],
-        'x-stella-optional-env-vars': [
-          { name: 'TTS_ENABLED', default: 'true' },
-          { name: 'TRANSCRIPT_DEBOUNCE_MS', default: '300' },
-        ],
-      },
-      { OPENAI_API_KEY: 'sk-test', TTS_ENABLED: 'false' },
-    )
-
-    expect(result.resolvedEnvVars).toEqual({
-      OPENAI_API_KEY: 'sk-test',
-      TTS_ENABLED: 'false',
-      TRANSCRIPT_DEBOUNCE_MS: '300',
-    })
-    expect(result.appliedOptionalDefaults).toEqual(['TRANSCRIPT_DEBOUNCE_MS'])
-    expect(result.missingRequiredEnvVars).toEqual(['ELEVENLABS_API_KEY'])
   })
 })

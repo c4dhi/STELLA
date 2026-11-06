@@ -36,7 +36,6 @@ from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.tools import ToolRegistry
-from stella_agent_sdk.tools.state_machine import create_state_machine_tools
 from stella_v2_agent.companion_tools import create_companion_tools
 
 from stella_agent_sdk.llm import LLMService
@@ -166,17 +165,13 @@ class StellaV2Agent(BaseAgent):
         """
         super().__init__()
 
-        self._agent_type = "stella-v2-agent"
-
         # Resolve config paths
         if llm_config_path is None:
             llm_config_path = self._find_config_file("config/llm_config.json")
 
-        # State machine gRPC address
-        self._state_machine_address = (
-            state_machine_address
-            or os.environ.get("STATE_MACHINE_ADDRESS", "localhost:50051")
-        )
+        # State machine gRPC address. None: the SDK's plan_runtime reads
+        # STATE_MACHINE_ADDRESS (set on every agent pod).
+        self.state_machine_address = state_machine_address
 
         # Explicit prompt-compiler version (never implicit/latest). Defaults to the
         # version this agent was authored against; overridable per deployment via
@@ -1108,25 +1103,12 @@ class StellaV2Agent(BaseAgent):
         if plan or self._companion_mode:
             self._plan_config = plan
 
-            # Connect to gRPC state machine service
-            self.sm_client = StateMachineClient(
-                session_id=session_id,
-                address=self._state_machine_address,
-            )
-            await self.sm_client.connect()
-
-            if plan:
-                result = await self.sm_client.initialize(plan)
-                if result and result.get("success"):
-                    logger.info(f"State machine initialized via gRPC: {plan.get('title', 'Unknown')}")
-                else:
-                    error = result.get("error", "unknown") if result else "no response"
-                    logger.error(f"Failed to initialize state machine: {error}")
-
-            # Create tool registry with SDK state machine tools
-            self.tool_registry = ToolRegistry()
-            for tool in create_state_machine_tools(self.sm_client):
-                self.tool_registry.register(tool)
+            # The SDK's plan runtime: state machine connection, the plan loaded
+            # into it (a companion loads an activity's plan later), and a tool
+            # registry holding the state machine tools.
+            await self.plan_runtime.start(plan)
+            self.sm_client = self.plan_runtime.client
+            self.tool_registry = self.plan_runtime.tools
 
             if self._companion_mode:
                 for tool in create_companion_tools(self.companion.activities):

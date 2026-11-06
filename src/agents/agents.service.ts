@@ -1,6 +1,6 @@
 import { AGENT_TYPE_MANIFEST_SELECT, manifestOfAgentType, resolveAgentRequirements, type AgentRequirements } from './agent-requirements.js';
 import { agentTypeOrDefault } from './default-agent-type.js';
-import { assertDeployRequest, withUserSettings } from './deploy-request.js';
+import { assertDeployRequest, withAgentDefaults, withEnvDefaults } from './deploy-request.js';
 import { Injectable, NotFoundException, BadRequestException, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -28,6 +28,9 @@ import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.s
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
 import { PersonasService } from '../personas/personas.service.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
+import { ConnectorsService } from '../connectors/connectors.service.js';
+import { readBindings, type BindingRequest } from '../connectors/connector-bindings.util.js';
+import { CONNECTOR_TOKEN_ENV, issueAgentConnectorToken } from '../connectors/agent-connector-token.util.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -57,6 +60,8 @@ export class AgentsService {
     private readonly eventEmitter: EventEmitter2,
     // Platform defaults a system admin sets (TTS playback), applied at every pod creation.
     private readonly platformSettings: PlatformSettingsService,
+    // Validates connector bindings at deploy time (the user must own them).
+    private readonly connectorsService: ConnectorsService,
     @Optional() private agentServerService?: AgentServerService,
     // See the matching comment in SessionsService: typed `any` here (and
     // assigned to the class field below) so TS's emitDecoratorMetadata
@@ -278,14 +283,16 @@ export class AgentsService {
         imageUrl: true,
         sdkVersion: true,
         userId: true,
+        projectShares: { select: { projectId: true } },
       },
     });
 
-    // Security: see assertDeployableAgentType. Reviewed types deploy for anyone;
-    // an unreviewed upload only for its uploader, and only while review is off.
+    // Security: see assertDeployableAgentType. An upload deploys for its owner,
+    // and for others only in a project the owner shared it with.
     assertDeployableAgentType(agentType, agentTypeRecord, {
       reviewRequired: await this.platformSettings.isAgentReviewRequired(),
       deployerId: userId,
+      projectId: session.projectId,
     });
     const requirements = resolveAgentRequirements(manifestOfAgentType(agentTypeRecord!));
 
@@ -303,18 +310,30 @@ export class AgentsService {
     // `pipeline_config` before the requirements check looks for it
     // (the deploy modal passes only the id and intentionally does not inline it).
     await this.applyScopedConfiguration(createAgentDto, userId, agentTypeRecord, requestedConfig, requirements);
-    const agentConfig = withUserSettings(agentType, requirements, requestedConfig);
+    const agentConfig = withAgentDefaults(agentType, requirements, requestedConfig);
 
     // Env vars are resolved now, not in the background pod creation, so a
     // missing required one is a 400 here instead of a FAILED agent later.
-    const { merged: envVars } = await this.envVarTemplatesService.resolveEnvVars(
+    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
       createAgentDto.envVarTemplateId,
       userId,
       createAgentDto.envVars,
     );
+    // Optional vars the agent declares with a default get it when left out.
+    const { env: envVars } = withEnvDefaults(requirements.env, merged);
     // One check for every path (wizard, public projects, wake): what the
     // manifest declares is what the deployment must carry.
     assertDeployRequest(agentType, requirements, agentConfig, envVars);
+
+    // Connectors this deployment may call: the slots the agent declares in its
+    // manifest (`connectors`) plus any extras the user offers. Each
+    // must be the deployer's own or shared with this session's project.
+    const connectorBindings = await this.connectorsService.resolveBindingsForDeploy(
+      userId,
+      session.projectId,
+      createAgentDto.connectorBindings,
+      requirements.connectors,
+    );
 
     // Encrypt manual env vars now so they are persisted before the async pod creation.
     // This guarantees restart() can recover them even if the pod creation fails.
@@ -332,6 +351,11 @@ export class AgentsService {
         envVarTemplateId: createAgentDto.envVarTemplateId || null,  // Store for restarts
         // Keep encrypted manual env vars for restart path parity with template-based deployments.
         manualEnvVarsEncrypted,
+        // Kept for restart and auto-pause/wake, like envVarTemplateId.
+        connectorBindings: connectorBindings.length
+          ? (connectorBindings as unknown as Prisma.InputJsonValue)
+          : Prisma.DbNull,
+        deployedByUserId: userId,
         status: AgentStatus.STARTING,
         healthState: 'initializing',
       },
@@ -392,7 +416,10 @@ export class AgentsService {
       // env was resolved (template decrypted, manual values on top) and checked in create().
       // KubernetesService receives only the merged plaintext — no business logic leaks into infrastructure.
       // The deployment's own playback mode wins; otherwise the platform default.
-      const resolvedEnvVars = await this.platformSettings.applyToPodEnv(envVars, agentId);
+      const resolvedEnvVars = await this.withConnectorToken(
+        agentId,
+        await this.platformSettings.applyToPodEnv(envVars, agentId),
+      );
 
       // Create K8s pod - agent connects directly to LiveKit via SDK
       const { podName, secretName } = await this.k8s.createAgentPod({
@@ -708,6 +735,29 @@ export class AgentsService {
    * Handles room disconnection, K8s resource cleanup, and DB status update.
    * @returns The updated agent instance
    */
+  /**
+   * The agents of one type that count as running (STARTING, RUNNING or
+   * STOPPING), split by whether their pod is really there. A row whose pod is
+   * gone or finished (OOMKilled, completed, never created) is `stale`.
+   */
+  async runningAgentsOfType(agentTypeId: string): Promise<{
+    live: { id: string; deployedByUserId: string | null }[];
+    stale: string[];
+  }> {
+    const rows = await this.prisma.agentInstance.findMany({
+      where: { agentTypeId, status: { in: [AgentStatus.STARTING, AgentStatus.RUNNING, AgentStatus.STOPPING] } },
+      select: { id: true, podName: true, deployedByUserId: true },
+    });
+    const live: { id: string; deployedByUserId: string | null }[] = [];
+    const stale: string[] = [];
+    for (const row of rows) {
+      const pod = row.podName ? await this.k8s.getPodStatus(row.podName) : null;
+      if (isPodAlive(pod)) live.push({ id: row.id, deployedByUserId: row.deployedByUserId });
+      else stale.push(row.id);
+    }
+    return { live, stale };
+  }
+
   async stopAgent(id: string): Promise<any> {
     const agent = await this.prisma.agentInstance.findUnique({
       where: { id },
@@ -738,6 +788,8 @@ export class AgentsService {
       data: {
         status: AgentStatus.STOPPED,
         stoppedAt: new Date(),
+        // The pod is gone; its connector token must not outlive it.
+        connectorTokenHash: null,
         // Clear K8s resource names since they're deleted
         podName: null,
         secretName: null,
@@ -878,7 +930,7 @@ export class AgentsService {
           await this.cleanupK8sResources(agent).catch(() => {});
           await this.prisma.agentInstance.update({
             where: { id: agent.id },
-            data: { status: AgentStatus.STOPPED, stoppedAt: new Date() },
+            data: { status: AgentStatus.STOPPED, stoppedAt: new Date(), connectorTokenHash: null },
           }).catch(e => this.logger.error(`Failed to force-stop agent ${agent.id}: ${e.message}`));
           throw error;
         }
@@ -1004,11 +1056,12 @@ export class AgentsService {
 
     // Re-resolve env vars using the same code path as create() to guarantee the restarted pod
     // gets an identical secret to the original deployment.
-    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
+    const { merged: resolved } = await this.envVarTemplatesService.resolveEnvVars(
       agent.envVarTemplateId ?? undefined,
       projectMembership.userId,
       storedManualVars,
     );
+    const { env: merged } = withEnvDefaults(requirements.env, resolved);
     // The same check as a new deploy: a template that lost a required key, or
     // an agent type whose manifest now asks for more, fails here with a 400.
     assertDeployRequest(agentType, requirements, agentConfig, merged);
@@ -1059,7 +1112,11 @@ export class AgentsService {
 
     // Unlike the rest of the env, the platform playback default is read fresh:
     // a woken session is a new pipeline, so it takes the current default.
-    const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, id);
+    // A restarted (or woken) pod gets a new connector token; the old one stops working.
+    const resolvedEnvVars = await this.withConnectorToken(
+      id,
+      await this.platformSettings.applyToPodEnv(merged, id),
+    );
 
     // Recreate Kubernetes pod with SAME agent ID
     try {
@@ -1126,6 +1183,73 @@ export class AgentsService {
     // Delegate to centralized delete logic (handles stopping if needed)
     await this.deleteAgent(id);
     return { message: 'Agent deleted successfully' };
+  }
+
+  /**
+   * Check, without deploying, that `userId` could deploy this agent type with
+   * these connectors: the same rules as create() for who may deploy an
+   * unreviewed or unbuilt upload, and for connector bindings (each the user's
+   * own or shared with the project, declared slots, required slots bound).
+   * Used when a public project's setup is saved, so a setup that cannot run
+   * fails there and not when a visitor joins.
+   */
+  async checkDeployable(
+    agentTypeId: string,
+    userId: string,
+    projectId: string,
+    requests: BindingRequest[] | undefined,
+  ) {
+    const row = await this.prisma.agentType.findUnique({
+      where: { id: agentTypeId },
+      select: {
+        ...AGENT_TYPE_MANIFEST_SELECT,
+        isBuiltIn: true,
+        validationStatus: true,
+        imageUrl: true,
+        sdkVersion: true,
+        userId: true,
+        projectShares: { select: { projectId: true } },
+      },
+    });
+    if (!row) throw new NotFoundException(`Agent type with ID ${agentTypeId} not found`);
+    assertDeployableAgentType(row.slug, row, {
+      reviewRequired: await this.platformSettings.isAgentReviewRequired(),
+      deployerId: userId,
+      projectId,
+    });
+    const requirements = resolveAgentRequirements(manifestOfAgentType(row));
+    return this.connectorsService.resolveBindingsForDeploy(userId, projectId, requests, requirements.connectors);
+  }
+
+  /**
+   * Issue a fresh connector token for a pod about to be (re)created, when the
+   * instance has connector bindings. Only its hash is stored; the plaintext goes
+   * into the pod's Secret as STELLA_CONNECTOR_TOKEN and is what the SDK sends on
+   * ConnectorService calls. Without bindings the pod gets no token and any stale
+   * hash is cleared.
+   */
+  private async withConnectorToken(
+    agentId: string,
+    envVars: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const instance = await this.prisma.agentInstance.findUnique({
+      where: { id: agentId },
+      select: { connectorBindings: true },
+    });
+    if (readBindings(instance?.connectorBindings).length === 0) {
+      await this.prisma.agentInstance.update({
+        where: { id: agentId },
+        data: { connectorTokenHash: null },
+      });
+      const { [CONNECTOR_TOKEN_ENV]: _dropped, ...rest } = envVars;
+      return rest;
+    }
+    const { token, hash } = issueAgentConnectorToken();
+    await this.prisma.agentInstance.update({
+      where: { id: agentId },
+      data: { connectorTokenHash: hash },
+    });
+    return { ...envVars, [CONNECTOR_TOKEN_ENV]: token };
   }
 
   /**
@@ -1900,4 +2024,16 @@ function percentile(sorted: number[], p: number): number {
   const hi = Math.ceil(idx);
   if (lo === hi) return sorted[lo];
   return Math.round((sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)) * 100) / 100;
+}
+
+/**
+ * Whether a pod (KubernetesService.getPodStatus) still runs an agent: it exists,
+ * is Pending or Running, and has no container that has terminated.
+ */
+export function isPodAlive(
+  pod: { phase?: string; containerStatuses?: { state?: { terminated?: unknown } }[] } | null,
+): boolean {
+  if (!pod) return false;
+  if (pod.phase !== 'Pending' && pod.phase !== 'Running') return false;
+  return !(pod.containerStatuses ?? []).some((c) => c.state?.terminated);
 }

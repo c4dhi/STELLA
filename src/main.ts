@@ -53,15 +53,16 @@ async function bootstrap() {
   app.connectMicroservice<MicroserviceOptions>({
     transport: Transport.GRPC,
     options: {
-      package: ['stella.agent.v1', 'stella.statemachine.v1'],
+      package: ['stella.agent.v1', 'stella.statemachine.v1', 'stella.connectors.v1'],
       protoPath: [
         join(protoDir, 'agent.proto'),
         join(protoDir, 'state_machine.proto'),
+        join(protoDir, 'connectors.proto'),
       ],
       url: `0.0.0.0:${grpcPort}`,
     },
   });
-  logger.log(`🔌 gRPC server configured on port ${grpcPort} (AgentService + StateMachineService)`);
+  logger.log(`🔌 gRPC server configured on port ${grpcPort} (AgentService + StateMachineService + ConnectorService)`);
 
   // Global validation pipe
   app.useGlobalPipes(

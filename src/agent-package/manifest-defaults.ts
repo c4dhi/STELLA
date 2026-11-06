@@ -65,7 +65,7 @@ export const MIN_SUPPORTED_SDK_VERSION = '0.4.0'
  * agent whose manifest asks for a newer SDK cannot run here. A spec keeps it
  * equal to the SDK's pyproject.toml.
  */
-export const CURRENT_SDK_VERSION = '0.9.0'
+export const CURRENT_SDK_VERSION = '0.10.0'
 
 /** Experts that implement a mode rather than assess a turn, and the capability each rides on. */
 export const STRUCTURAL_EXPERT_CAPABILITY: Readonly<Record<string, Capability>> = {

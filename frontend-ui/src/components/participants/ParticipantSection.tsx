@@ -213,7 +213,7 @@ export default function ParticipantSection({
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4, delay: 0.1 }}
-        className="w-80 flex flex-col"
+        className="w-64 xl:w-80 flex flex-col"
       >
         {/* Participants Panel */}
         <div

@@ -4,6 +4,7 @@ import { PrismaModule } from '../prisma/prisma.module.js'
 import { StorageModule } from '../storage/storage.module.js'
 import { AgentPackageModule } from '../agent-package/agent-package.module.js'
 import { AgentBuildModule } from '../agent-build/agent-build.module.js'
+import { AgentsModule } from '../agents/agents.module.js'
 import { AgentUploadController } from './agent-upload.controller.js'
 import { AgentAdminController } from './agent-admin.controller.js'
 
@@ -18,6 +19,8 @@ import { AgentAdminController } from './agent-admin.controller.js'
     StorageModule,
     AgentPackageModule,
     AgentBuildModule,
+    // Deleting an agent stops its running agents.
+    AgentsModule,
   ],
   controllers: [AgentUploadController, AgentAdminController],
 })

@@ -2,6 +2,7 @@ import { builtSdkProblem } from '../agent-package/sdk-support.js'
 import {
   Controller,
   Post,
+  Put,
   Get,
   Param,
   Body,
@@ -27,6 +28,9 @@ import { DEFAULT_DOCKERFILE } from '../agent-package/manifest-defaults.js'
 import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js'
 
 import type { AuthUser } from '../auth/auth-user.loader.js'
+import { requirementsForListing } from '../agents/agent-requirements.js'
+import { AgentsService } from '../agents/agents.service.js'
+import { UpdateAgentSharesDto } from './dto/update-agent-shares.dto.js'
 
 interface AuthenticatedRequest extends Request {
   user?: AuthUser
@@ -58,6 +62,7 @@ export class AgentUploadController {
     private agentBuildService: AgentBuildService,
     private storageService: StorageService,
     private prisma: PrismaService,
+    private agentsService: AgentsService,
   ) {}
 
   /**
@@ -116,14 +121,21 @@ export class AgentUploadController {
       throw new BadRequestException((err as Error).message)
     }
 
-    // Check for existing agent with same slug
+    // The slug names an agent across STELLA. Uploading it again with a new
+    // version replaces the uploader's own agent in place (same id, so its
+    // templates, configurations and public projects keep pointing at it). An
+    // agent of another user, or a built-in one, is never replaced.
     const existing = await this.prisma.agentType.findUnique({
       where: { slug: manifest.metadata.slug },
     })
-
-    if (existing) {
+    if (existing && (existing.isBuiltIn || existing.userId !== userId)) {
       throw new BadRequestException(
-        `Agent with slug "${manifest.metadata.slug}" already exists`,
+        `Another agent already uses the slug "${manifest.metadata.slug}"; pick another metadata.slug`,
+      )
+    }
+    if (existing && existing.version === manifest.metadata.version) {
+      throw new BadRequestException(
+        `You already uploaded ${existing.name} ${existing.version}; raise metadata.version to replace it`,
       )
     }
 
@@ -136,21 +148,37 @@ export class AgentUploadController {
     // Same mapping as built-in agents (the seed): manifest → AgentType columns,
     // including the default experts from config/experts/*.json.
     const expertDefaults = this.agentPackageService.readExpertDefaults(file.buffer, manifest.capabilities)
-    const agentType = await this.prisma.agentType.create({
-      data: {
-        ...manifestToAgentTypeData(manifest, expertDefaults),
-        isBuiltIn: false,
-        userId,
-        packagePath: storageInfo.path,
-        packageSize: storageInfo.size,
-        packageHash: storageInfo.hash,
-        // Set only by a successful build (AgentBuildService), with sdkVersion.
-        imageUrl: null,
-        validationStatus: AgentValidationStatus.PENDING,
-      },
-    })
+    const data = {
+      ...manifestToAgentTypeData(manifest, expertDefaults),
+      isBuiltIn: false,
+      userId,
+      packagePath: storageInfo.path,
+      packageSize: storageInfo.size,
+      packageHash: storageInfo.hash,
+      // Set only by a successful build (AgentBuildService), with sdkVersion.
+      imageUrl: null,
+      sdkVersion: null,
+      // New code: built and reviewed again before anyone else can deploy it.
+      validationStatus: AgentValidationStatus.PENDING,
+      validationNotes: null,
+      validatedAt: null,
+      validatedBy: null,
+    }
+    const agentType = existing
+      ? await this.prisma.agentType.update({ where: { id: existing.id }, data })
+      : await this.prisma.agentType.create({ data })
 
-    this.logger.log(`Created agent type: ${agentType.slug} (${agentType.id})`)
+    // Agents already running keep their image (it is tagged with the old
+    // version); only the old package goes.
+    if (existing?.packagePath && existing.packagePath !== storageInfo.path) {
+      await this.storageService.delete(existing.packagePath)
+    }
+
+    this.logger.log(
+      existing
+        ? `Replaced agent type ${agentType.slug} ${existing.version} with ${agentType.version} (${agentType.id})`
+        : `Created agent type: ${agentType.slug} (${agentType.id})`,
+    )
 
     return {
       id: agentType.id,
@@ -158,6 +186,7 @@ export class AgentUploadController {
       name: agentType.name,
       version: agentType.version,
       validationStatus: agentType.validationStatus,
+      replacedVersion: existing?.version ?? null,
       warnings: validation.warnings,
     }
   }
@@ -178,6 +207,7 @@ export class AgentUploadController {
           orderBy: { startedAt: 'desc' },
           take: 1,
         },
+        projectShares: { select: { projectId: true } },
       },
     })
 
@@ -191,9 +221,16 @@ export class AgentUploadController {
       validationStatus: agent.validationStatus,
       capabilities: agent.capabilities,
       defaultConfig: agent.defaultConfig,
+      configSchema: agent.configSchema,
+      pipelineSchema: agent.pipelineSchema,
+      // What deploying it needs, as GET /agent-types gives it, so a deploy
+      // dialog can ask for its settings and connectors from this list too.
+      requirements: requirementsForListing(agent).requirements,
       createdAt: agent.createdAt,
       built: !!agent.imageUrl,
       sdkVersion: agent.sdkVersion,
+      // The projects whose members may deploy it.
+      sharedProjectIds: agent.projectShares.map((share) => share.projectId),
       // Set when the last build can't deploy on this STELLA: "Needs SDK update".
       sdkProblem: agent.imageUrl ? builtSdkProblem(agent.sdkVersion) : null,
       lastBuild: agent.buildLogs[0]
@@ -312,8 +349,74 @@ export class AgentUploadController {
   }
 
   /**
-   * Delete a custom agent.
-   * DELETE /agent-types/:id
+   * The projects this custom agent is shared with, and the projects its owner
+   * could share it with (the ones they are a member of).
+   * GET /agent-types/:id/shares
+   */
+  @Get(':id/shares')
+  async getShares(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    const agentType = await this.ownUpload(id, req)
+    const [shares, memberships] = await Promise.all([
+      this.prisma.agentTypeProjectShare.findMany({ where: { agentTypeId: id }, select: { projectId: true } }),
+      this.prisma.projectMembership.findMany({
+        where: { userId: agentType.userId! },
+        select: { project: { select: { id: true, name: true } } },
+        orderBy: { project: { name: 'asc' } },
+      }),
+    ])
+    return {
+      projectIds: shares.map((s) => s.projectId),
+      projects: memberships.map((m) => m.project),
+    }
+  }
+
+  /**
+   * Share this custom agent with exactly these projects. Their members see it
+   * and may deploy it there; they cannot change it. Only the owner shares, and
+   * only with projects they are a member of.
+   * PUT /agent-types/:id/shares
+   */
+  @Put(':id/shares')
+  async updateShares(@Param('id') id: string, @Body() dto: UpdateAgentSharesDto, @Req() req: AuthenticatedRequest) {
+    const agentType = await this.ownUpload(id, req)
+    const projectIds = [...new Set(dto.projectIds)]
+    const memberOf = await this.prisma.projectMembership.findMany({
+      where: { userId: agentType.userId!, projectId: { in: projectIds } },
+      select: { projectId: true },
+    })
+    if (memberOf.length !== projectIds.length) {
+      throw new ForbiddenException('You can only share an agent with projects you are a member of')
+    }
+    await this.prisma.$transaction([
+      this.prisma.agentTypeProjectShare.deleteMany({ where: { agentTypeId: id, projectId: { notIn: projectIds } } }),
+      ...projectIds.map((projectId) =>
+        this.prisma.agentTypeProjectShare.upsert({
+          where: { agentTypeId_projectId: { agentTypeId: id, projectId } },
+          create: { agentTypeId: id, projectId },
+          update: {},
+        }),
+      ),
+    ])
+    this.logger.log(`Agent type ${agentType.slug} shared with ${projectIds.length} project(s)`)
+    return { projectIds }
+  }
+
+  /** The caller's own upload: sharing is the owner's alone, not an admin's. */
+  private async ownUpload(id: string, req: AuthenticatedRequest) {
+    const userId = requireUserId(req)
+    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
+    if (!agentType) throw new NotFoundException('Agent type not found')
+    if (agentType.isBuiltIn || agentType.userId !== userId) {
+      throw new ForbiddenException('Only its owner can share this agent')
+    }
+    return agentType
+  }
+
+  /**
+   * Delete a custom agent. Its owner's running agents are stopped first, and
+   * rows left RUNNING after their pod died are cleaned up. Refused while a
+   * public project uses it or another user's agent of it still runs.
+   * POST /agent-types/:id/delete
    */
   @Post(':id/delete')
   async deleteAgent(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
@@ -331,17 +434,48 @@ export class AgentUploadController {
 
     assertOwnsAgent(agentType, req)
 
-    // Delete stored package
+    // A public project would lose its agent: refuse, and say where to change it.
+    const publicProjects = await this.prisma.project.count({ where: { publicAgentTypeId: id } })
+    if (publicProjects > 0) {
+      throw new BadRequestException(
+        `${publicProjects} public project${publicProjects === 1 ? ' uses' : 's use'} ${agentType.name}. Pick another agent there, then delete it`,
+      )
+    }
+
+    // Agents of this type that still run: a row whose pod is gone is only
+    // cleaned up; the owner's own live agents are stopped; another user's live
+    // agent blocks the delete (it is their session).
+    const { live, stale } = await this.agentsService.runningAgentsOfType(id)
+    const ownerId = agentType.userId
+    const others = live.filter((a) => !ownerId || a.deployedByUserId !== ownerId)
+    if (others.length > 0) {
+      throw new BadRequestException(
+        `${agentType.name} still runs in ${others.length} session${others.length === 1 ? '' : 's'} of other users. It can be deleted once ${others.length === 1 ? 'that agent stops' : 'those agents stop'}`,
+      )
+    }
+    const toStop = [...stale, ...live.map((a) => a.id)]
+    for (const agentId of toStop) {
+      await this.agentsService.stopAgent(agentId)
+    }
+
+    // Env-var templates and configurations are scoped to this one type, so
+    // they go with it. Stopped agents keep their record (and transcript) and
+    // only lose the link; build logs cascade.
+    await this.prisma.$transaction([
+      this.prisma.envVarTemplate.deleteMany({ where: { agentTypeId: id } }),
+      this.prisma.agentConfiguration.deleteMany({ where: { agentTypeId: id } }),
+      this.prisma.agentInstance.updateMany({ where: { agentTypeId: id }, data: { agentTypeId: null } }),
+      this.prisma.agentType.delete({ where: { id } }),
+    ])
+
+    // The package last: if the row could not be deleted, it is still there.
     if (agentType.packagePath) {
       await this.storageService.delete(agentType.packagePath)
     }
 
-    // Delete from database (cascades to build logs)
-    await this.prisma.agentType.delete({ where: { id } })
-
     this.logger.log(`Deleted agent type: ${agentType.slug}`)
 
-    return { success: true }
+    return { success: true, stoppedAgents: live.length }
   }
 }
 

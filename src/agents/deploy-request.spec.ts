@@ -1,7 +1,7 @@
 import { CURRENT_SDK_VERSION } from '../agent-package/manifest-defaults.js'
 import { parseAgentManifest } from '../agent-package/schemas/agent-manifest.schema.js'
 import { resolveAgentRequirements } from './agent-requirements.js'
-import { assertDeployRequest, withUserSettings } from './deploy-request.js'
+import { assertDeployRequest, withAgentDefaults, withEnvDefaults } from './deploy-request.js'
 
 // Whatever the manifest declares, a deployment must carry; whatever it does
 // not declare, a deployment may not bring.
@@ -95,48 +95,47 @@ describe('assertDeployRequest', () => {
   })
 })
 
-describe('withUserSettings', () => {
-  const r = requirements({
-    configSchema: {
-      type: 'object',
-      required: ['elias'],
-      properties: {
-        elias: {
-          type: 'object',
-          required: ['project_id'],
-          properties: { project_id: { type: 'string' }, tags: { type: 'array' } },
-        },
-        llm: { type: 'object', properties: { model: { type: 'string' }, temperature: { type: 'number' } } },
-      },
-    },
-    defaultConfig: { elias: { tags: ['a', 'b'] }, llm: { model: 'm', temperature: 0.7 } },
-  })
+describe('withAgentDefaults', () => {
+  const r = requirements({ defaultConfig: { elias: { tags: ['a', 'b'] }, llm: { model: 'm', temperature: 0.7 } } })
 
-  it('deep-merges user settings over defaultConfig; an array replaces the default', () => {
-    const config = withUserSettings('a-agent', r, { elias: { project_id: 'p1', tags: ['c'] }, llm: { temperature: 0.2 } })
-    expect(config).toEqual({ elias: { project_id: 'p1', tags: ['c'] }, llm: { model: 'm', temperature: 0.2 } })
-  })
-
-  it('refuses settings that do not fit configSchema', () => {
-    expect(() => withUserSettings('a-agent', r, {})).toThrow(
-      "Cannot deploy a-agent: its settings do not fit configSchema: must have required property 'project_id' at /elias",
-    )
-    expect(() => withUserSettings('a-agent', r, { elias: { project_id: 7 } })).toThrow('must be string at /elias/project_id')
-  })
-
-  it('leaves the platform keys alone and out of the schema check', () => {
+  it('gives the agent its defaultConfig plus the platform keys', () => {
     const plan = { id: 'p', states: [] }
-    const config = withUserSettings('a-agent', r, { elias: { project_id: 'p1' }, plan, persona: { name: 'Grace' } })
-    expect(config.plan).toBe(plan)
-    expect(config.persona).toEqual({ name: 'Grace' })
+    const config = withAgentDefaults('a-agent', r, { plan, persona: { name: 'Grace' } })
+    expect(config).toEqual({ elias: { tags: ['a', 'b'] }, llm: { model: 'm', temperature: 0.7 }, plan, persona: { name: 'Grace' } })
   })
 
-  it('gives the same config when run again, so a restart or wake can pass a saved one', () => {
-    const once = withUserSettings('a-agent', r, { elias: { project_id: 'p1' } })
-    expect(withUserSettings('a-agent', r, once)).toEqual(once)
+  it('refuses any setting a deployment tries to give the agent', () => {
+    expect(() => withAgentDefaults('a-agent', r, { elias: { project_id: 'p1' } })).toThrow(
+      'Cannot deploy a-agent: a deployment sets no agent settings (elias); pass them as env vars',
+    )
+    expect(() => withAgentDefaults('a-agent', r, { llm: { temperature: 0.2 } })).toThrow('(llm)')
+    expect(() => withAgentDefaults('a-agent', requirements(), { anything: 1 })).toThrow('(anything)')
   })
 
-  it('passes settings through when the agent declares no configSchema', () => {
-    expect(withUserSettings('a-agent', requirements(), { anything: 1 })).toEqual({ anything: 1 })
+  it('accepts a saved config again, so a restart or wake can pass it', () => {
+    const once = withAgentDefaults('a-agent', r, { mode: 'plan' })
+    expect(withAgentDefaults('a-agent', r, once)).toEqual(once)
+  })
+})
+
+describe('withEnvDefaults', () => {
+  const env = {
+    required: ['OPENAI_API_KEY'],
+    optional: [
+      { name: 'TTS_ENABLED', default: 'true' },
+      { name: 'TRANSCRIPT_DEBOUNCE_MS', default: '300' },
+      { name: 'STELLA_LANGUAGE' },
+    ],
+  }
+
+  it('fills in declared defaults the deployment left out or left empty; a provided value wins', () => {
+    const { env: out, appliedDefaults } = withEnvDefaults(env, { OPENAI_API_KEY: 'k', TTS_ENABLED: 'false', TRANSCRIPT_DEBOUNCE_MS: ' ' })
+    expect(out).toEqual({ OPENAI_API_KEY: 'k', TTS_ENABLED: 'false', TRANSCRIPT_DEBOUNCE_MS: '300' })
+    expect(appliedDefaults).toEqual(['TRANSCRIPT_DEBOUNCE_MS'])
+  })
+
+  it('gives the same env when run again, so restart and wake can pass it', () => {
+    const once = withEnvDefaults(env, { OPENAI_API_KEY: 'k' }).env
+    expect(withEnvDefaults(env, once).env).toEqual(once)
   })
 })

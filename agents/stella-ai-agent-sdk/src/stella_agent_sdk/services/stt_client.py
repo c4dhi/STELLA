@@ -22,6 +22,9 @@ class TranscriptEvent:
     confidence: float
     timestamp_ms: int
     speech_started: bool = False
+    # Typed in the chat (user_text), not heard. The gate never drops it: the
+    # chat already shows it as sent, so it is the participant's next turn.
+    typed: bool = False
     # VAD has heard enough CONTINUOUS speech to call this an interruption rather
     # than a backchannel. Emitted once per utterance, from VAD alone — no decode,
     # no text, so it does not carry transcription latency or language risk.

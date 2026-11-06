@@ -32,7 +32,6 @@ interface PublicAgentConfig {
   name?: string;
   icon?: string;
   plan?: Record<string, unknown>;
-  config?: Record<string, unknown>;
   pipelineConfig?: Record<string, unknown>;
   // Preferred: resolved by ID at spawn (type/version-checked). pipelineConfig is a
   // backward-compatible inline snapshot for public projects saved before this field.
@@ -43,6 +42,7 @@ interface PublicAgentConfig {
   personaId?: string;
   envVarTemplateId?: string;
   envVars?: Record<string, string>;
+  connectorBindings?: Array<{ connectorId: string; slot?: string; handle?: string }>;
 }
 
 @Injectable()
@@ -93,8 +93,8 @@ export class PublicProjectsService {
   private buildRuntimeAgentConfig(
     agentConfig: PublicAgentConfig | null,
   ): Record<string, unknown> {
+    // No agent settings: a deployment passes only platform keys (see withAgentDefaults).
     return {
-      ...(agentConfig?.config || {}),
       ...(agentConfig?.plan ? { plan: agentConfig.plan } : {}),
       ...(agentConfig?.pipelineConfig
         ? { pipeline_config: agentConfig.pipelineConfig }
@@ -231,6 +231,7 @@ export class PublicProjectsService {
         personaId: agentConfig?.personaId,
         envVarTemplateId: agentConfig?.envVarTemplateId,
         envVars: agentConfig?.envVars,
+        connectorBindings: agentConfig?.connectorBindings,
       },
       ownerId,
     );
@@ -297,6 +298,9 @@ export class PublicProjectsService {
       personaId: agentConfig?.personaId || null,
       envVarTemplateId: agentConfig?.envVarTemplateId || null,
       envVars: agentConfig?.envVars || {},
+      connectorBindings: agentConfig?.connectorBindings ?? [],
+      // Wake recreates it as this member: public agents run as the owner.
+      deployedByUserId: ownerId,
     };
 
     // Create session with on_demand mode - agent will be spawned when human joins
@@ -423,6 +427,7 @@ export class PublicProjectsService {
             personaId: agentConfig?.personaId,
             envVarTemplateId: agentConfig?.envVarTemplateId,
             envVars: agentConfig?.envVars,
+            connectorBindings: agentConfig?.connectorBindings,
           },
           ownerId,
         );

@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x61gent.proto\x12\x0fstella.agent.v1\"\xdb\x02\n\x0f\x41gentInputProto\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12(\n\x04type\x18\x02 \x01(\x0e\x32\x1a.stella.agent.v1.InputType\x12\x0c\n\x04text\x18\x03 \x01(\t\x12\x32\n\x07history\x18\x04 \x03(\x0b\x32!.stella.agent.v1.ConversationTurn\x12@\n\x08metadata\x18\x05 \x03(\x0b\x32..stella.agent.v1.AgentInputProto.MetadataEntry\x12\x14\n\x0ctimestamp_ms\x18\x06 \x01(\x03\x12?\n\x0chealth_check\x18\x07 \x01(\x0b\x32).stella.agent.v1.StreamHealthCheckRequest\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\".\n\x18StreamHealthCheckRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\"1\n\x10\x43onversationTurn\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"\xcd\x03\n\x10\x41gentOutputProto\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12)\n\x04type\x18\x02 \x01(\x0e\x32\x1b.stella.agent.v1.OutputType\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x10\n\x08is_final\x18\x04 \x01(\x08\x12\x15\n\rtranscript_id\x18\x05 \x01(\t\x12\x36\n\x0estatus_subtype\x18\x06 \x01(\x0e\x32\x1e.stella.agent.v1.StatusSubtype\x12:\n\x10metadata_subtype\x18\x07 \x01(\x0e\x32 .stella.agent.v1.MetadataSubtype\x12\x41\n\x08metadata\x18\x08 \x03(\x0b\x32/.stella.agent.v1.AgentOutputProto.MetadataEntry\x12\x14\n\x0ctimestamp_ms\x18\t \x01(\x03\x12\x42\n\rhealth_status\x18\n \x01(\x0b\x32+.stella.agent.v1.StreamHealthStatusResponse\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xe1\x02\n\x1aStreamHealthStatusResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12*\n\x05state\x18\x02 \x01(\x0e\x32\x1b.stella.agent.v1.AgentState\x12\x12\n\nsession_id\x18\x03 \x01(\t\x12\x12\n\nagent_type\x18\x04 \x01(\t\x12\x15\n\ragent_version\x18\x05 \x01(\t\x12\x16\n\x0euptime_seconds\x18\x06 \x01(\x03\x12\x1a\n\x12messages_processed\x18\x07 \x01(\x05\x12\x12\n\nlast_error\x18\x08 \x01(\t\x12K\n\x08metadata\x18\t \x03(\x0b\x32\x39.stella.agent.v1.StreamHealthStatusResponse.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xc5\x01\n\x14RegisterAgentRequest\x12\x12\n\nagent_type\x18\x01 \x01(\t\x12\x15\n\ragent_version\x18\x02 \x01(\t\x12M\n\x0c\x63\x61pabilities\x18\x03 \x03(\x0b\x32\x37.stella.agent.v1.RegisterAgentRequest.CapabilitiesEntry\x1a\x33\n\x11\x43\x61pabilitiesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xc0\x01\n\x15RegisterAgentResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x42\n\x06\x63onfig\x18\x04 \x03(\x0b\x32\x32.stella.agent.v1.RegisterAgentResponse.ConfigEntry\x1a-\n\x0b\x43onfigEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"6\n\x10InterruptRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"<\n\x11InterruptResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0ewas_processing\x18\x02 \x01(\x08\"\'\n\x11\x45ndSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\"\x9f\x01\n\x12\x45ndSessionResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x46\n\nfinal_data\x18\x02 \x03(\x0b\x32\x32.stella.agent.v1.EndSessionResponse.FinalDataEntry\x1a\x30\n\x0e\x46inalDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x14\n\x12HealthCheckRequest\"e\n\x13HealthCheckResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x12\n\nagent_type\x18\x02 \x01(\t\x12\x15\n\ragent_version\x18\x03 \x01(\t\x12\x12\n\nsession_id\x18\x04 \x01(\t*\xc9\x01\n\nAgentState\x12\x17\n\x13\x41GENT_STATE_UNKNOWN\x10\x00\x12\x1c\n\x18\x41GENT_STATE_INITIALIZING\x10\x01\x12\x15\n\x11\x41GENT_STATE_READY\x10\x02\x12\x1a\n\x16\x41GENT_STATE_PROCESSING\x10\x03\x12\x1b\n\x17\x41GENT_STATE_INTERRUPTED\x10\x04\x12\x15\n\x11\x41GENT_STATE_ERROR\x10\x05\x12\x1d\n\x19\x41GENT_STATE_SHUTTING_DOWN\x10\x06*\xc4\x01\n\tInputType\x12\x1a\n\x16INPUT_TYPE_UNSPECIFIED\x10\x00\x12\x13\n\x0fINPUT_TYPE_TEXT\x10\x01\x12\x18\n\x14INPUT_TYPE_INTERRUPT\x10\x02\x12\x1c\n\x18INPUT_TYPE_SESSION_START\x10\x03\x12\x1a\n\x16INPUT_TYPE_SESSION_END\x10\x04\x12\x15\n\x11INPUT_TYPE_CONFIG\x10\x05\x12\x1b\n\x17INPUT_TYPE_HEALTH_CHECK\x10\x06*\xc9\x01\n\nOutputType\x12\x1b\n\x17OUTPUT_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n\x16OUTPUT_TYPE_TEXT_CHUNK\x10\x01\x12\x1a\n\x16OUTPUT_TYPE_TEXT_FINAL\x10\x02\x12\x16\n\x12OUTPUT_TYPE_STATUS\x10\x03\x12\x18\n\x14OUTPUT_TYPE_METADATA\x10\x04\x12\x15\n\x11OUTPUT_TYPE_ERROR\x10\x05\x12\x1d\n\x19OUTPUT_TYPE_HEALTH_STATUS\x10\x06*\xd0\x01\n\rStatusSubtype\x12\x1e\n\x1aSTATUS_SUBTYPE_UNSPECIFIED\x10\x00\x12\x1d\n\x19STATUS_SUBTYPE_PROCESSING\x10\x01\x12\x1b\n\x17STATUS_SUBTYPE_THINKING\x10\x02\x12\x1f\n\x1bSTATUS_SUBTYPE_EXPERT_START\x10\x03\x12\"\n\x1eSTATUS_SUBTYPE_EXPERT_COMPLETE\x10\x04\x12\x1e\n\x1aSTATUS_SUBTYPE_AGGREGATING\x10\x05*\xdf\x01\n\x0fMetadataSubtype\x12 \n\x1cMETADATA_SUBTYPE_UNSPECIFIED\x10\x00\x12 \n\x1cMETADATA_SUBTYPE_PLAN_UPDATE\x10\x01\x12 \n\x1cMETADATA_SUBTYPE_TASK_UPDATE\x10\x02\x12 \n\x1cMETADATA_SUBTYPE_DELIVERABLE\x10\x03\x12\x1d\n\x19METADATA_SUBTYPE_PROGRESS\x10\x04\x12%\n!METADATA_SUBTYPE_STATE_TRANSITION\x10\x05\x32\xcf\x03\n\x0c\x41gentService\x12^\n\rRegisterAgent\x12%.stella.agent.v1.RegisterAgentRequest\x1a&.stella.agent.v1.RegisterAgentResponse\x12V\n\x0b\x41gentStream\x12!.stella.agent.v1.AgentOutputProto\x1a .stella.agent.v1.AgentInputProto(\x01\x30\x01\x12V\n\rSendInterrupt\x12!.stella.agent.v1.InterruptRequest\x1a\".stella.agent.v1.InterruptResponse\x12U\n\nEndSession\x12\".stella.agent.v1.EndSessionRequest\x1a#.stella.agent.v1.EndSessionResponse\x12X\n\x0bHealthCheck\x12#.stella.agent.v1.HealthCheckRequest\x1a$.stella.agent.v1.HealthCheckResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0b\x61gent.proto\x12\x0fstella.agent.v1\"\xdb\x02\n\x0f\x41gentInputProto\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12(\n\x04type\x18\x02 \x01(\x0e\x32\x1a.stella.agent.v1.InputType\x12\x0c\n\x04text\x18\x03 \x01(\t\x12\x32\n\x07history\x18\x04 \x03(\x0b\x32!.stella.agent.v1.ConversationTurn\x12@\n\x08metadata\x18\x05 \x03(\x0b\x32..stella.agent.v1.AgentInputProto.MetadataEntry\x12\x14\n\x0ctimestamp_ms\x18\x06 \x01(\x03\x12?\n\x0chealth_check\x18\x07 \x01(\x0b\x32).stella.agent.v1.StreamHealthCheckRequest\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\".\n\x18StreamHealthCheckRequest\x12\x12\n\nrequest_id\x18\x01 \x01(\t\"1\n\x10\x43onversationTurn\x12\x0c\n\x04role\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"\xcd\x03\n\x10\x41gentOutputProto\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12)\n\x04type\x18\x02 \x01(\x0e\x32\x1b.stella.agent.v1.OutputType\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x10\n\x08is_final\x18\x04 \x01(\x08\x12\x15\n\rtranscript_id\x18\x05 \x01(\t\x12\x36\n\x0estatus_subtype\x18\x06 \x01(\x0e\x32\x1e.stella.agent.v1.StatusSubtype\x12:\n\x10metadata_subtype\x18\x07 \x01(\x0e\x32 .stella.agent.v1.MetadataSubtype\x12\x41\n\x08metadata\x18\x08 \x03(\x0b\x32/.stella.agent.v1.AgentOutputProto.MetadataEntry\x12\x14\n\x0ctimestamp_ms\x18\t \x01(\x03\x12\x42\n\rhealth_status\x18\n \x01(\x0b\x32+.stella.agent.v1.StreamHealthStatusResponse\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xe1\x02\n\x1aStreamHealthStatusResponse\x12\x12\n\nrequest_id\x18\x01 \x01(\t\x12*\n\x05state\x18\x02 \x01(\x0e\x32\x1b.stella.agent.v1.AgentState\x12\x12\n\nsession_id\x18\x03 \x01(\t\x12\x12\n\nagent_type\x18\x04 \x01(\t\x12\x15\n\ragent_version\x18\x05 \x01(\t\x12\x16\n\x0euptime_seconds\x18\x06 \x01(\x03\x12\x1a\n\x12messages_processed\x18\x07 \x01(\x05\x12\x12\n\nlast_error\x18\x08 \x01(\t\x12K\n\x08metadata\x18\t \x03(\x0b\x32\x39.stella.agent.v1.StreamHealthStatusResponse.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xda\x01\n\x14RegisterAgentRequest\x12\x12\n\nagent_type\x18\x01 \x01(\t\x12\x15\n\ragent_version\x18\x02 \x01(\t\x12M\n\x0c\x63\x61pabilities\x18\x03 \x03(\x0b\x32\x37.stella.agent.v1.RegisterAgentRequest.CapabilitiesEntry\x12\x13\n\x0bsdk_version\x18\x04 \x01(\t\x1a\x33\n\x11\x43\x61pabilitiesEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xc0\x01\n\x15RegisterAgentResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x12\n\nsession_id\x18\x02 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x42\n\x06\x63onfig\x18\x04 \x03(\x0b\x32\x32.stella.agent.v1.RegisterAgentResponse.ConfigEntry\x1a-\n\x0b\x43onfigEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"6\n\x10InterruptRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06reason\x18\x02 \x01(\t\"<\n\x11InterruptResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0ewas_processing\x18\x02 \x01(\x08\"\'\n\x11\x45ndSessionRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\"\x9f\x01\n\x12\x45ndSessionResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x46\n\nfinal_data\x18\x02 \x03(\x0b\x32\x32.stella.agent.v1.EndSessionResponse.FinalDataEntry\x1a\x30\n\x0e\x46inalDataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x14\n\x12HealthCheckRequest\"e\n\x13HealthCheckResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x12\n\nagent_type\x18\x02 \x01(\t\x12\x15\n\ragent_version\x18\x03 \x01(\t\x12\x12\n\nsession_id\x18\x04 \x01(\t*\xc9\x01\n\nAgentState\x12\x17\n\x13\x41GENT_STATE_UNKNOWN\x10\x00\x12\x1c\n\x18\x41GENT_STATE_INITIALIZING\x10\x01\x12\x15\n\x11\x41GENT_STATE_READY\x10\x02\x12\x1a\n\x16\x41GENT_STATE_PROCESSING\x10\x03\x12\x1b\n\x17\x41GENT_STATE_INTERRUPTED\x10\x04\x12\x15\n\x11\x41GENT_STATE_ERROR\x10\x05\x12\x1d\n\x19\x41GENT_STATE_SHUTTING_DOWN\x10\x06*\xc4\x01\n\tInputType\x12\x1a\n\x16INPUT_TYPE_UNSPECIFIED\x10\x00\x12\x13\n\x0fINPUT_TYPE_TEXT\x10\x01\x12\x18\n\x14INPUT_TYPE_INTERRUPT\x10\x02\x12\x1c\n\x18INPUT_TYPE_SESSION_START\x10\x03\x12\x1a\n\x16INPUT_TYPE_SESSION_END\x10\x04\x12\x15\n\x11INPUT_TYPE_CONFIG\x10\x05\x12\x1b\n\x17INPUT_TYPE_HEALTH_CHECK\x10\x06*\xc9\x01\n\nOutputType\x12\x1b\n\x17OUTPUT_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n\x16OUTPUT_TYPE_TEXT_CHUNK\x10\x01\x12\x1a\n\x16OUTPUT_TYPE_TEXT_FINAL\x10\x02\x12\x16\n\x12OUTPUT_TYPE_STATUS\x10\x03\x12\x18\n\x14OUTPUT_TYPE_METADATA\x10\x04\x12\x15\n\x11OUTPUT_TYPE_ERROR\x10\x05\x12\x1d\n\x19OUTPUT_TYPE_HEALTH_STATUS\x10\x06*\xd0\x01\n\rStatusSubtype\x12\x1e\n\x1aSTATUS_SUBTYPE_UNSPECIFIED\x10\x00\x12\x1d\n\x19STATUS_SUBTYPE_PROCESSING\x10\x01\x12\x1b\n\x17STATUS_SUBTYPE_THINKING\x10\x02\x12\x1f\n\x1bSTATUS_SUBTYPE_EXPERT_START\x10\x03\x12\"\n\x1eSTATUS_SUBTYPE_EXPERT_COMPLETE\x10\x04\x12\x1e\n\x1aSTATUS_SUBTYPE_AGGREGATING\x10\x05*\xdf\x01\n\x0fMetadataSubtype\x12 \n\x1cMETADATA_SUBTYPE_UNSPECIFIED\x10\x00\x12 \n\x1cMETADATA_SUBTYPE_PLAN_UPDATE\x10\x01\x12 \n\x1cMETADATA_SUBTYPE_TASK_UPDATE\x10\x02\x12 \n\x1cMETADATA_SUBTYPE_DELIVERABLE\x10\x03\x12\x1d\n\x19METADATA_SUBTYPE_PROGRESS\x10\x04\x12%\n!METADATA_SUBTYPE_STATE_TRANSITION\x10\x05\x32\xcf\x03\n\x0c\x41gentService\x12^\n\rRegisterAgent\x12%.stella.agent.v1.RegisterAgentRequest\x1a&.stella.agent.v1.RegisterAgentResponse\x12V\n\x0b\x41gentStream\x12!.stella.agent.v1.AgentOutputProto\x1a .stella.agent.v1.AgentInputProto(\x01\x30\x01\x12V\n\rSendInterrupt\x12!.stella.agent.v1.InterruptRequest\x1a\".stella.agent.v1.InterruptResponse\x12U\n\nEndSession\x12\".stella.agent.v1.EndSessionRequest\x1a#.stella.agent.v1.EndSessionResponse\x12X\n\x0bHealthCheck\x12#.stella.agent.v1.HealthCheckRequest\x1a$.stella.agent.v1.HealthCheckResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -43,16 +43,16 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_REGISTERAGENTRESPONSE_CONFIGENTRY']._serialized_options = b'8\001'
   _globals['_ENDSESSIONRESPONSE_FINALDATAENTRY']._loaded_options = None
   _globals['_ENDSESSIONRESPONSE_FINALDATAENTRY']._serialized_options = b'8\001'
-  _globals['_AGENTSTATE']._serialized_start=2143
-  _globals['_AGENTSTATE']._serialized_end=2344
-  _globals['_INPUTTYPE']._serialized_start=2347
-  _globals['_INPUTTYPE']._serialized_end=2543
-  _globals['_OUTPUTTYPE']._serialized_start=2546
-  _globals['_OUTPUTTYPE']._serialized_end=2747
-  _globals['_STATUSSUBTYPE']._serialized_start=2750
-  _globals['_STATUSSUBTYPE']._serialized_end=2958
-  _globals['_METADATASUBTYPE']._serialized_start=2961
-  _globals['_METADATASUBTYPE']._serialized_end=3184
+  _globals['_AGENTSTATE']._serialized_start=2164
+  _globals['_AGENTSTATE']._serialized_end=2365
+  _globals['_INPUTTYPE']._serialized_start=2368
+  _globals['_INPUTTYPE']._serialized_end=2564
+  _globals['_OUTPUTTYPE']._serialized_start=2567
+  _globals['_OUTPUTTYPE']._serialized_end=2768
+  _globals['_STATUSSUBTYPE']._serialized_start=2771
+  _globals['_STATUSSUBTYPE']._serialized_end=2979
+  _globals['_METADATASUBTYPE']._serialized_start=2982
+  _globals['_METADATASUBTYPE']._serialized_end=3205
   _globals['_AGENTINPUTPROTO']._serialized_start=33
   _globals['_AGENTINPUTPROTO']._serialized_end=380
   _globals['_AGENTINPUTPROTO_METADATAENTRY']._serialized_start=333
@@ -70,27 +70,27 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_STREAMHEALTHSTATUSRESPONSE_METADATAENTRY']._serialized_start=333
   _globals['_STREAMHEALTHSTATUSRESPONSE_METADATAENTRY']._serialized_end=380
   _globals['_REGISTERAGENTREQUEST']._serialized_start=1302
-  _globals['_REGISTERAGENTREQUEST']._serialized_end=1499
-  _globals['_REGISTERAGENTREQUEST_CAPABILITIESENTRY']._serialized_start=1448
-  _globals['_REGISTERAGENTREQUEST_CAPABILITIESENTRY']._serialized_end=1499
-  _globals['_REGISTERAGENTRESPONSE']._serialized_start=1502
-  _globals['_REGISTERAGENTRESPONSE']._serialized_end=1694
-  _globals['_REGISTERAGENTRESPONSE_CONFIGENTRY']._serialized_start=1649
-  _globals['_REGISTERAGENTRESPONSE_CONFIGENTRY']._serialized_end=1694
-  _globals['_INTERRUPTREQUEST']._serialized_start=1696
-  _globals['_INTERRUPTREQUEST']._serialized_end=1750
-  _globals['_INTERRUPTRESPONSE']._serialized_start=1752
-  _globals['_INTERRUPTRESPONSE']._serialized_end=1812
-  _globals['_ENDSESSIONREQUEST']._serialized_start=1814
-  _globals['_ENDSESSIONREQUEST']._serialized_end=1853
-  _globals['_ENDSESSIONRESPONSE']._serialized_start=1856
-  _globals['_ENDSESSIONRESPONSE']._serialized_end=2015
-  _globals['_ENDSESSIONRESPONSE_FINALDATAENTRY']._serialized_start=1967
-  _globals['_ENDSESSIONRESPONSE_FINALDATAENTRY']._serialized_end=2015
-  _globals['_HEALTHCHECKREQUEST']._serialized_start=2017
-  _globals['_HEALTHCHECKREQUEST']._serialized_end=2037
-  _globals['_HEALTHCHECKRESPONSE']._serialized_start=2039
-  _globals['_HEALTHCHECKRESPONSE']._serialized_end=2140
-  _globals['_AGENTSERVICE']._serialized_start=3187
-  _globals['_AGENTSERVICE']._serialized_end=3650
+  _globals['_REGISTERAGENTREQUEST']._serialized_end=1520
+  _globals['_REGISTERAGENTREQUEST_CAPABILITIESENTRY']._serialized_start=1469
+  _globals['_REGISTERAGENTREQUEST_CAPABILITIESENTRY']._serialized_end=1520
+  _globals['_REGISTERAGENTRESPONSE']._serialized_start=1523
+  _globals['_REGISTERAGENTRESPONSE']._serialized_end=1715
+  _globals['_REGISTERAGENTRESPONSE_CONFIGENTRY']._serialized_start=1670
+  _globals['_REGISTERAGENTRESPONSE_CONFIGENTRY']._serialized_end=1715
+  _globals['_INTERRUPTREQUEST']._serialized_start=1717
+  _globals['_INTERRUPTREQUEST']._serialized_end=1771
+  _globals['_INTERRUPTRESPONSE']._serialized_start=1773
+  _globals['_INTERRUPTRESPONSE']._serialized_end=1833
+  _globals['_ENDSESSIONREQUEST']._serialized_start=1835
+  _globals['_ENDSESSIONREQUEST']._serialized_end=1874
+  _globals['_ENDSESSIONRESPONSE']._serialized_start=1877
+  _globals['_ENDSESSIONRESPONSE']._serialized_end=2036
+  _globals['_ENDSESSIONRESPONSE_FINALDATAENTRY']._serialized_start=1988
+  _globals['_ENDSESSIONRESPONSE_FINALDATAENTRY']._serialized_end=2036
+  _globals['_HEALTHCHECKREQUEST']._serialized_start=2038
+  _globals['_HEALTHCHECKREQUEST']._serialized_end=2058
+  _globals['_HEALTHCHECKRESPONSE']._serialized_start=2060
+  _globals['_HEALTHCHECKRESPONSE']._serialized_end=2161
+  _globals['_AGENTSERVICE']._serialized_start=3208
+  _globals['_AGENTSERVICE']._serialized_end=3671
 # @@protoc_insertion_point(module_scope)

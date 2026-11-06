@@ -4,6 +4,7 @@ import { AgentConfigurationsModule } from '../agent-configurations/agent-configu
 import { AgentImageModule } from '../agent-image/agent-image.module.js';
 import { AgentsModule } from '../agents/agents.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { ConnectorsModule } from '../connectors/connectors.module.js';
 import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
 import { InvitationsModule } from '../invitations/invitations.module.js';
 import { McpOAuthModule } from '../mcp-oauth/mcp-oauth.module.js';
@@ -23,6 +24,7 @@ import { MCP_TOOL_PROVIDERS } from './mcp.types.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
 import { CatalogTools } from './tools/catalog.tools.js';
+import { ConnectorsTools } from './tools/connectors.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
@@ -37,6 +39,7 @@ const TOOL_PROVIDERS = [
   SessionsTools,
   AgentsTools,
   PlatformSettingsTools,
+  ConnectorsTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
@@ -56,6 +59,7 @@ const TOOL_PROVIDERS = [
     InvitationsModule,
     AgentsModule,
     EnvVarTemplatesModule,
+    ConnectorsModule,
   ],
   controllers: [McpController],
   providers: [
