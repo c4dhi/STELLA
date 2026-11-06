@@ -13,6 +13,35 @@ export interface RecordMessageDto {
   timestamp: Date;
 }
 
+export const CLIENT_CHANNEL_MESSAGE_TYPES = ['client_event', 'client_event_reply', 'agent_command'] as const;
+
+/**
+ * How a client channel envelope is stored: a short readable line plus the
+ * envelope's data. Role 'system', so it never counts as an agent message.
+ */
+export function clientChannelRecord(
+  envelope: { type: string; data?: unknown },
+  participantId: string,
+): Omit<RecordMessageDto, 'sessionId' | 'timestamp'> | null {
+  if (!(CLIENT_CHANNEL_MESSAGE_TYPES as readonly string[]).includes(envelope.type)) return null;
+  const data = (envelope.data && typeof envelope.data === 'object' ? envelope.data : {}) as Record<string, unknown>;
+  const name = String(data.event ?? data.command ?? '');
+  if (!name) return null;
+  const content =
+    envelope.type === 'client_event'
+      ? `Screen event: ${name}`
+      : envelope.type === 'agent_command'
+        ? `Agent command: ${name}`
+        : `Reply to ${name}: ${data.ok ? 'ok' : `error: ${String(data.error ?? 'failed')}`}`;
+  return {
+    content,
+    messageType: envelope.type,
+    role: 'system',
+    status: 'final',
+    metadata: { ...data, participant_id: participantId },
+  };
+}
+
 @Injectable()
 export class MessageRecorderService {
   private readonly logger = new Logger(MessageRecorderService.name);
@@ -55,6 +84,21 @@ export class MessageRecorderService {
       this.logger.error(`Failed to record message: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * Record one message on the client channel (screen ↔ agent): an event the
+   * screen sent, the agent's reply to it, or a command the agent sent. For a
+   * study this is data: what the participant did, and when.
+   */
+  async recordClientChannelMessage(
+    sessionId: string,
+    participantId: string,
+    envelope: { type: string; data?: unknown },
+  ): Promise<Message | null> {
+    const record = clientChannelRecord(envelope, participantId);
+    if (!record) return null;
+    return this.recordMessage({ sessionId, ...record, timestamp: new Date() });
   }
 
   /**

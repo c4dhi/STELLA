@@ -152,6 +152,46 @@ const connectorsSchema = z.array(connectorSlotSchema).superRefine((slots, ctx) =
   })
 })
 
+/**
+ * One message on the channel between the user's screen and the agent: a name,
+ * what it is for, and the JSON Schema its data must fit. Names are lowercase
+ * with underscores; dotted names (``stella.interaction_mode``) are the
+ * platform's own, which every agent gets without declaring them.
+ */
+export const CLIENT_MESSAGE_NAME_REGEX = /^[a-z][a-z0-9_]{0,39}$/
+
+const clientMessageSchema = z
+  .object({
+    name: z
+      .string()
+      .regex(CLIENT_MESSAGE_NAME_REGEX, 'must start with a letter and use only lowercase letters, digits and underscores (max 40)'),
+    description: z.string().optional(),
+    /** JSON Schema for the message's data. Left out: the message carries no data. */
+    data: configSchemaSchema.optional(),
+  })
+  .strict()
+
+const uniqueNames = (what: string) => (messages: { name: string }[], ctx: z.RefinementCtx) => {
+  const seen = new Set<string>()
+  messages.forEach((m, i) => {
+    if (seen.has(m.name)) ctx.addIssue({ code: 'custom', path: [i, 'name'], message: `duplicate ${what} "${m.name}"` })
+    seen.add(m.name)
+  })
+}
+
+/**
+ * The channel between the user's screen and the agent (beyond speech and chat
+ * text). `events`: what the screen may send the agent, which can answer each
+ * one. `commands`: what the agent may tell the screen to do. Anything not
+ * declared here is refused.
+ */
+const clientSchema = z
+  .object({
+    events: z.array(clientMessageSchema).default([]).superRefine(uniqueNames('event')),
+    commands: z.array(clientMessageSchema).default([]).superRefine(uniqueNames('command')),
+  })
+  .strict()
+
 const pipelineSlotSchema = z
   .object({
     id: z.string().min(1),
@@ -407,6 +447,7 @@ export const agentManifestSchema = z
     features: featuresSchema.default({ persona: true }),
     env: envSchema.default({ required: [], optional: [] }),
     connectors: connectorsSchema.default([]),
+    client: clientSchema.default({ events: [], commands: [] }),
     image: z
       .object({
         dockerfile: z.string().min(1).optional(),
@@ -494,6 +535,7 @@ export const agentManifestSchema = z
 export type AgentManifest = z.output<typeof agentManifestSchema>
 export type ManifestConnectorSlot = AgentManifest['connectors'][number]
 export type ManifestOptionalEnvVar = AgentManifest['env']['optional'][number]
+export type ManifestClientChannel = AgentManifest['client']
 
 export interface ManifestSchemaParseResult {
   valid: boolean
@@ -553,6 +595,17 @@ export function parseAgentManifest(raw: unknown): ManifestSchemaParseResult {
       return { valid: false, errors: relevant.map((e) => `${label}: ${e}`), warnings }
     }
   }
+
+  // Each declared message's data schema is a JSON Schema the SDK checks events against.
+  const clientErrors: string[] = []
+  for (const [kind, list] of [['events', manifest.client.events], ['commands', manifest.client.commands]] as const) {
+    list.forEach((m, i) => {
+      if (!m.data) return
+      const problems = [...findRegexKeywords(m.data).map(regexKeywordError), ...validateJsonSchemaObject(m.data)]
+      clientErrors.push(...problems.map((e) => `client.${kind}.${i}.data (${m.name}): ${e}`))
+    })
+  }
+  if (clientErrors.length > 0) return { valid: false, errors: clientErrors, warnings }
 
   if (manifest.image.dockerfile && manifest.image.imageUrl) {
     warnings.push('Both dockerfile and imageUrl specified; dockerfile will be used')

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Voice and text interface for participants.** The face is the voice interface; opening the chat switches to the text interface, where the agent answers in text only, speaks nothing and does not wait for speech, and the microphone is off. Closing the chat switches back, and the microphone comes back if the switch took it. Speech-to-text and text-to-speech stay connected, so switching is instant.
+- **A declared channel between the screen and the agent.** `agent.yaml` lists the events the screen may send (`client.events`) and the commands the agent may send (`client.commands`), with a JSON Schema for each one's data. Anything else is refused. The screen can ask for an answer and gets the agent's reply. Every event, reply and command is kept in the session history. See *Agent SDK → The platform contract*.
 - **Agent manifest 2.0 (`agent.yaml`).** An agent now declares what it needs in its own blocks: `features` (persona, plans and their modes, configurator), `env` (required and optional env vars) and `connectors`. `configSchema` holds only the settings a user may give the agent. Manifest 1.0 still works and is upgraded on read, with a deprecation warning. A published JSON Schema (`docs-site/static/schemas/agent-manifest.v2.json`) gives editors completion and validation. See *Agent SDK → The agent manifest*.
 - **Deploy enforces what an agent's manifest declares.** One check runs on every deploy, restart and wake after auto-pause, and refuses the deployment with a 400 that lists every problem:
   - A required env var is missing or empty.

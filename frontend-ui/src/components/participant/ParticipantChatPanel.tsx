@@ -200,7 +200,7 @@ export default function ParticipantChatPanel({
               {messages.length === 0 && !isLoadingHistory ? (
                 <div className="text-center py-12">
                   <p className="text-white/30 text-sm">
-                    No messages yet. Start speaking or type a message below.
+                    No messages yet. Type a message below.
                   </p>
                 </div>
               ) : (

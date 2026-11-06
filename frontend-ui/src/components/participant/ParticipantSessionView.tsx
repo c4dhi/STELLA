@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Mic,
@@ -31,6 +31,7 @@ import { determineMessageRole, extractSpeakerInfo } from '../../lib/messageUtils
 import { useTeleprompter } from '../../hooks/useTeleprompter'
 import { usePersistedState } from '../../hooks/usePersistedState'
 import { applyAgentAudioSilencing } from '../../lib/agentAudio'
+import { announceInteractionMode, createClientChannel, type InteractionMode } from '../../lib/clientChannel'
 import type { DeliveryStatus } from '../../lib/types'
 
 // Message type for participant chat - extends basic message with delivery tracking
@@ -131,6 +132,20 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   )
   const [isGalleryOpen, setIsGalleryOpen] = useState(false)
   const [isChatOpen, setIsChatOpen] = useState(false)
+  // The face is the voice interface; the open chat is the text interface, where
+  // nothing is spoken and the microphone is off. The agent is told on each switch.
+  const interactionMode: InteractionMode = isChatOpen ? 'text' : 'voice'
+  const interactionModeRef = useRef<InteractionMode>('voice')
+
+  // The client channel to the agent (events out, replies in).
+  const roomRef = useRef<Room | null>(null)
+  useEffect(() => { roomRef.current = room }, [room])
+  const clientChannel = useMemo(() => createClientChannel((envelope) => {
+    const r = roomRef.current
+    if (!r || r.state !== 'connected') throw new Error('room not connected')
+    r.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(envelope)), { reliable: true })
+  }), [])
+  useEffect(() => () => clientChannel.close(), [clientChannel])
   const [isFullscreen, setIsFullscreen] = useState(false)
   // Transcript overlays (#343): two independent, persisted preferences instead
   // of one shared subtitles flag. Both default ON — same as the old single
@@ -558,6 +573,9 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         const decoder = new TextDecoder()
         const envelope = JSON.parse(decoder.decode(payload))
 
+        // An agent's reply to an event this screen sent.
+        if (clientChannel.handleEnvelope(envelope)) return
+
         // Terminal auto-end signal from the agent (#198): the agent has finished its
         // closing turn and is disconnecting. THIS is when the timeout overlay shows —
         // after the goodbye, not at the cap.
@@ -834,7 +852,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         console.error('Error parsing data:', error)
       }
     },
-    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, noteEmotionCues, clearTeleprompterText]
+    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, noteEmotionCues, clearTeleprompterText, clientChannel]
   )
 
   // Handle room disconnection
@@ -856,6 +874,11 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
 
   // Handle participant joined (for real-time notifications)
   const handleParticipantConnected = useCallback((participant: RemoteParticipant) => {
+    // An agent that joins (or restarts) while the text interface is open starts
+    // in voice: tell it, once it has had a moment to start listening.
+    if (participant.identity.startsWith('agent-') && interactionModeRef.current === 'text') {
+      setTimeout(() => void announceInteractionMode(clientChannel, 'text'), 1000)
+    }
     // Skip agents and the message recorder
     if (participant.identity.startsWith('agent-') || participant.identity === 'message-recorder') {
       return
@@ -870,7 +893,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       eventType: 'joined',
       participantName: participant.name || participant.identity,
     }])
-  }, [])
+  }, [clientChannel])
 
   // Handle participant left (for real-time notifications)
   const handleParticipantDisconnected = useCallback((participant: RemoteParticipant) => {
@@ -1105,13 +1128,31 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   // PeerTransport.sendClientEvent).
   const sendClientEvent = useCallback((event: string) => {
     if (!room || room.state !== 'connected') return
-    const envelope = { type: 'client_event', data: { event, timestamp: Date.now() } }
     try {
-      room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(envelope)), { reliable: true })
+      clientChannel.send(event)
     } catch (error) {
       console.error('[Participant] Error sending client event:', error)
     }
-  }, [room])
+  }, [room, clientChannel])
+
+  // Voice or text interface: tell the agent on every switch, and take the
+  // microphone away on the text side (give it back if that is what took it).
+  const mutedForTextRef = useRef(false)
+  useEffect(() => {
+    if (!room || room.state !== 'connected') return
+    if (interactionModeRef.current === interactionMode) return
+    interactionModeRef.current = interactionMode
+    void announceInteractionMode(clientChannel, interactionMode)
+    if (interactionMode === 'text' && !isMuted) {
+      mutedForTextRef.current = true
+      void toggleMicrophone()
+    } else if (interactionMode === 'voice' && mutedForTextRef.current) {
+      mutedForTextRef.current = false
+      if (isMuted) void toggleMicrophone()
+    }
+    // Only a switch acts; mic changes alone must not re-run it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interactionMode, room, clientChannel])
   useSleepEvents({ send: sendClientEvent, enabled: room?.state === 'connected' })
   // Captions go when she falls asleep: the last thing she said should not
   // stay on screen under a sleeping face.
@@ -1263,8 +1304,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   useEffect(() => {
     const handleSpacebar = (event: KeyboardEvent) => {
       if (event.key === ' ' || event.code === 'Space') {
-        // Don't toggle if typing in chat
-        if (isChatOpen && document.activeElement?.tagName === 'INPUT') return
+        // The text interface has no microphone: space is just a space there.
+        if (isChatOpen) return
 
         event.preventDefault()
 
@@ -1530,7 +1571,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         messages={messages}
         room={room}
         participantName={sessionData.participantName}
-        spokenTranscriptId={teleprompterTranscriptId}
+        // Nothing is spoken on the text interface, so nothing is dimmed.
+        spokenTranscriptId={isChatOpen ? undefined : teleprompterTranscriptId}
         spokenChar={teleprompterSpokenChar}
         frozenSpoken={frozenSpoken}
         isLoadingHistory={isLoadingHistory}

@@ -349,6 +349,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
         # 6. Inject audio pipeline and agent identity into agent
         agent._audio_pipeline = audio_pipeline
+        # Screen events reach the agent from the start, also for an agent that
+        # runs its own run_audio_loop (the SDK handles stella.* events itself).
+        audio_pipeline.on_client_event(agent._dispatch_client_event)
         agent._session_id = session_id
         agent._agent_name = agent_name
         agent._agent_id = agent_id

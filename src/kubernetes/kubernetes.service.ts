@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import * as k8s from '@kubernetes/client-node';
 import { AgentImageService } from '../agent-image/agent-image.service.js';
 import { buildPodEnvVars, buildSecretStringData } from './utils/agent-config-injection.util.js';
+import type { AgentRequirements } from '../agents/agent-requirements.js';
 import {
   clampCpuLimit,
   clampMemoryLimit,
@@ -34,6 +35,8 @@ export interface AgentPodConfig {
   // KubernetesService receives the final map and spreads it directly into the K8s Secret.
   resolvedEnvVars: Record<string, string>;
   /** Requests and limits from the agent type's manifest (see resolveAgentRequirements). Limits are clamped. */
+  /** requirements.client, passed to the pod as STELLA_CLIENT_CHANNEL. */
+  clientChannel?: AgentRequirements['client'];
   resources?: {
     memory?: { request?: string; limit?: string };
     cpu?: { request?: string; limit?: string };
@@ -226,6 +229,7 @@ export class KubernetesService {
               ttsServiceAddress: this.configService.get<string>('TTS_SERVICE_ADDRESS', 'tts-service:50052'),
               stateMachineAddress: this.configService.get<string>('STATE_MACHINE_ADDRESS', 'session-management-server:50051'),
               nodeEnv: process.env.NODE_ENV || 'local',
+              clientChannel: config.clientChannel,
             }),
             resources: {
               requests: {

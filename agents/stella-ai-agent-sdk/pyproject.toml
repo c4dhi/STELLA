@@ -30,6 +30,7 @@ dependencies = [
     "PyJWT>=2.0.0",
     "numpy>=1.24.0",
     "aiohttp>=3.9.0",
+    "jsonschema>=4.0.0",
 ]
 
 [project.optional-dependencies]

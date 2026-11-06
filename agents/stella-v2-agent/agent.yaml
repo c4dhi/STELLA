@@ -87,6 +87,28 @@ env:
 
 # Settings a user may give this agent at deploy. Platform flags live in
 # features/env above, never in here.
+# What the face and the agent send each other beyond speech and chat text.
+client:
+  events:
+    - name: wake
+      description: "The user tapped the sleeping face awake. In companion mode she greets them first."
+    - name: sleep
+      description: "The face fell asleep (its idle timer, or the agent's sleep command)."
+  commands:
+    - name: sleep
+      description: "Put the face to sleep, e.g. after a goodbye or a quiet stretch."
+      data:
+        type: object
+        properties:
+          reason: { type: string }
+    - name: sleep_allowed
+      description: "Whether the face may fall asleep on its own (not inside an activity)."
+      data:
+        type: object
+        properties:
+          allowed: { type: boolean }
+        required: [allowed]
+
 configSchema:
   type: object
   properties:

@@ -60,6 +60,27 @@ The address comes from `STATE_MACHINE_ADDRESS`, which STELLA sets on every pod. 
 | `await self.complete_session(reason)` | Waits for speech to finish, shows the completion overlay, and stops the loop |
 | `self.record_message_processed()` | Counts a handled message for health reporting |
 
+## The screen and the agent
+
+Beyond speech and chat text, the user's screen and the agent send each other named messages, declared in the manifest's [`client` block](./agent-manifest.md#the-client-channel). STELLA passes the declaration to the pod as `STELLA_CLIENT_CHANNEL`, and the SDK refuses anything else.
+
+| Direction | Envelope | In the agent |
+|------|------|------|
+| Screen → agent | `{"type": "client_event", "data": {"event": name, "request_id"?: id, ...data}}` | `on_client_event(session_id, event, data)`. `data` is checked against the declared schema first. What it returns is the reply; an exception is an error reply |
+| Agent → screen (reply) | `{"type": "client_event_reply", "data": {"request_id", "event", "ok", "data" or "error", "agent_id"}}` | Sent by the SDK, only for an event that carried a `request_id` |
+| Agent → screen | `{"type": "agent_command", "data": {"command": name, ...data}}` | `await self.send_client_command(name, **data)`, or yield `AgentOutput.client_command` inside a turn. An undeclared command raises `ValueError` |
+
+The SDK connects the channel itself, so an agent with its own `run_audio_loop` gets events too. Every event, reply and command is kept in the session history.
+
+### Voice or text: `stella.interaction_mode`
+
+The participant screen has two interfaces. The face is the voice interface, and the open chat is the text interface. On each switch the screen sends `stella.interaction_mode` with `{"mode": "voice" | "text"}`, and the SDK handles it for every agent:
+
+- **text:** replies are published as text only. Nothing is synthesised, nothing waits for playback, and anything still playing stops. Speech from the microphone is not a turn (the screen also turns the microphone off); typed messages are.
+- **voice:** the agent speaks and listens again. The text-to-speech and speech-to-text connections stay open the whole time, so the switch takes effect on the next line.
+
+No agent code is needed: `speak()`, `speak_line()` and the sentence queue all follow the mode. `self.audio.interaction_mode` tells an agent which one is on.
+
 ## When the session ends
 
 When the time cap runs out or the organiser ends the session, the SDK asks the agent what to do with `session_end_mode()`:

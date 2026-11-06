@@ -138,8 +138,8 @@ async def test_a_client_event_without_a_handler_or_a_name_is_dropped():
 @pytest.mark.asyncio
 async def test_the_agent_hook_gets_the_event_and_a_failure_in_it_is_contained():
     agent = _Agent()
-    await agent._dispatch_client_event("wake", {"event": "wake"})
-    assert agent.events == [("wake", {"event": "wake"})]
+    await agent._dispatch_client_event("wake", {"event": "wake", "timestamp": 1})
+    assert agent.events == [("wake", {})]  # the envelope keys are not the event's data
 
     async def broken(*_a):
         raise RuntimeError("agent bug")

@@ -109,12 +109,15 @@ describe('the manifest of a stored agent type', () => {
       const v1 = yaml.load(fs.readFileSync(path.join(ROOT, 'src/agent-package/__fixtures__', `${slug}.v1.yaml`), 'utf-8')) as any
       const legacy = resolveAgentRequirements(manifestOfAgentType({ ...storedRow(m, false), configSchema: v1.configSchema }))
       const current = resolveAgentRequirements(m)
-      // 1.0 columns cannot say that a configuration is required, nor carry requests.
-      expect({ ...legacy, configurator: null, resources: null }).toEqual({
+      // 1.0 columns cannot say that a configuration is required, nor carry
+      // requests or a client channel (the seed refreshes built-ins on start).
+      expect({ ...legacy, configurator: null, resources: null, client: null }).toEqual({
         ...current,
         configurator: null,
         resources: null,
+        client: null,
       })
+      expect(legacy.client).toEqual({ events: [], commands: [] })
       expect(legacy.configurator).toEqual({ required: false })
       expect(legacy.resources.memory.limit).toBe(current.resources.memory.limit)
     },
@@ -124,5 +127,42 @@ describe('the manifest of a stored agent type', () => {
     const row = storedRow(manifest(), false)
     row.version = 'not-a-version'
     expect(() => manifestOfAgentType(row)).toThrow(/a-agent has a manifest STELLA cannot read.*Upload it again/)
+  })
+})
+
+describe('the client channel', () => {
+  const client = (value: unknown) => parseAgentManifest({ ...base, client: value })
+
+  it('stella-v2 declares what its face sends and is told', () => {
+    const r = resolveAgentRequirements(builtIn('stella-v2-agent'))
+    expect(r.client.events.map((e) => e.name)).toEqual(['wake', 'sleep'])
+    expect(r.client.commands.map((c) => c.name)).toEqual(['sleep', 'sleep_allowed'])
+  })
+
+  it('declares nothing by default, also for a stored row without it', () => {
+    expect(resolveAgentRequirements(manifest()).client).toEqual({ events: [], commands: [] })
+    expect(resolveAgentRequirements(manifestOfAgentType(storedRow(manifest(), false))).client).toEqual({ events: [], commands: [] })
+  })
+
+  it('takes events and commands with a JSON Schema for their data', () => {
+    const result = client({
+      events: [{ name: 'rate', description: 'stars', data: { type: 'object', properties: { stars: { type: 'integer', minimum: 1 } } } }],
+      commands: [{ name: 'show_card' }],
+    })
+    expect(result.errors).toEqual([])
+    expect(result.manifest!.client.events[0].name).toBe('rate')
+  })
+
+  it.each([
+    [{ events: [{ name: 'stella.interaction_mode' }] }, /client.events.0.name/],
+    [{ events: [{ name: 'Wake' }] }, /client.events.0.name/],
+    [{ events: [{ name: 'wake' }, { name: 'wake' }] }, /duplicate event "wake"/],
+    [{ commands: [{ name: 'go', extra: true }] }, /client.commands.0/],
+    [{ events: [{ name: 'say', data: { type: 'object', properties: { t: { type: 'string', pattern: 'a+' } } } }] }, /client.events.0.data \(say\): pattern is not allowed/],
+    [{ events: [{ name: 'say', data: { type: 'nope' } }] }, /client.events.0.data/],
+  ])('refuses %j', (value, error) => {
+    const result = client(value)
+    expect(result.valid).toBe(false)
+    expect(result.errors.join('\n')).toMatch(error)
   })
 })
