@@ -10,7 +10,8 @@ from fakes import GUIDE, ConnectorError, FakeAudio, FakeConnectors, FakeStateMac
 CONFIG = {}  # the platform's session config; ELIAS's own settings are env vars
 
 ELIAS_ENV = ("ELIAS_PROJECT_ID", "ELIAS_MAX_ATTEMPTS", "ELIAS_OPENING", "ELIAS_REASK_PREFIX",
-             "ELIAS_CLOSING", "ELIAS_ERROR", "ANSWER_CHECK_MODEL")
+             "ELIAS_CLOSING", "ELIAS_ERROR", "ANSWER_CHECK_MODEL", "ANSWER_CHECK_TIMEOUT_S",
+             "SESSION_END_MODE")
 
 
 @pytest.fixture(autouse=True)
@@ -177,6 +178,29 @@ async def test_real_session_end_finalises_a_partial_interview():
     await agent.run_audio_loop()
     [o async for o in agent.on_session_ending("s", "session_end", 5000)]
     assert conn.tools("end_interview") == [{"transcript_id": "t-new"}]
+
+
+@pytest.mark.parametrize("platform_default", [None, "farewell", "silent"])
+def test_the_sdk_runs_the_wrap_up_hook_whatever_the_platform_default(elias_env, platform_default):
+    # The time cap or the organiser ending the session must reach
+    # on_session_ending (which closes the ELIAS interview). run.py calls it only
+    # in 'wrap_up' mode, so this goes through the SDK's own resolver.
+    from stella_agent_sdk.run import _resolve_session_end_mode
+
+    if platform_default:
+        elias_env.setenv("SESSION_END_MODE", platform_default)
+    agent = make_agent(FakeConnectors(), FakeAudio([]))
+    assert _resolve_session_end_mode(agent) == "wrap_up"
+
+
+@pytest.mark.asyncio
+async def test_answer_check_timeout_from_env_is_read_once_and_clamped(elias_env):
+    for raw, expected in (("3", 3.0), ("2.5", 2.5), ("0", 1.0), ("600", 60.0), ("soon", 8.0), ("", 8.0)):
+        elias_env.setenv("ANSWER_CHECK_TIMEOUT_S", raw)
+        agent = _TestAgent(sm_client=FakeStateMachine())  # no checker: the agent builds its own
+        agent.connectors = FakeConnectors()
+        await agent.on_session_start("s", CONFIG)
+        assert agent._checker._completer._timeout_s == expected, raw
 
 
 @pytest.mark.asyncio

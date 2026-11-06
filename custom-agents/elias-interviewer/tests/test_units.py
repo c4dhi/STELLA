@@ -40,6 +40,21 @@ def test_real_guide_becomes_seven_questions_in_three_stages():
     json.dumps(plan)  # must be plain JSON for the state machine
 
 
+def test_a_guide_that_returns_to_a_category_gets_a_state_per_run_in_question_order():
+    # A, B, A: one state per category would put the second A question in the
+    # first state, so completing it while the plan is in the third fails.
+    qs = parse_guide({"questions": [
+        {"question": "a1", "category": "A", "order": 1},
+        {"question": "b1", "category": "B", "order": 2},
+        {"question": "a2", "category": "A", "order": 3},
+        {"question": "a3", "category": "A", "order": 4},
+    ]})
+    plan = build_plan(qs, project_id="p")
+    assert [(s["id"], [t["id"] for t in s["tasks"]]) for s in plan["states"]] == [
+        ("s1_a", ["q1"]), ("s2_b", ["q2"]), ("s3_a", ["q3", "q4"])]
+    assert [s["transitions"][0]["target_state_id"] for s in plan["states"]] == ["s2_b", "s3_a", "__end__"]
+
+
 def test_guide_order_wins_over_list_order_and_blank_questions_are_dropped():
     qs = parse_guide({"questions": [
         {"question": "B", "category": "X", "order": 2},

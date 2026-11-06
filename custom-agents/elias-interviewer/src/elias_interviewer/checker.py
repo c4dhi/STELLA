@@ -57,8 +57,10 @@ class _Completer(Protocol):
 
 
 class AnswerChecker:
-    def __init__(self, completer: Optional[_Completer] = None, *, model: str = "gpt-4o-mini") -> None:
-        self._completer = completer or _OpenAICompleter(model)
+    def __init__(
+        self, completer: Optional[_Completer] = None, *, model: str = "gpt-4o-mini", timeout_s: float = 8.0
+    ) -> None:
+        self._completer = completer or _OpenAICompleter(model, timeout_s)
 
     async def check(self, question: str, replies: List[str], subquestions: Optional[List[str]] = None) -> Verdict:
         user = f"Question: {question}\n"
@@ -78,8 +80,9 @@ class AnswerChecker:
 
 
 class _OpenAICompleter:
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, timeout_s: float) -> None:
         self._model = model
+        self._timeout_s = timeout_s
         self._client = None
 
     async def __call__(self, system: str, user: str) -> str:
@@ -89,7 +92,10 @@ class _OpenAICompleter:
             self._client = AsyncOpenAI(
                 api_key=os.environ.get("OPENAI_API_KEY"),
                 base_url=os.environ.get("OPENAI_BASE_URL") or None,
-                timeout=float(os.environ.get("ANSWER_CHECK_TIMEOUT_S", "8")),
+                timeout=self._timeout_s,
+                # The participant waits on this check; a slow reply is accepted
+                # as is (fail open) rather than retried.
+                max_retries=0,
             )
         resp = await self._client.chat.completions.create(
             model=self._model,

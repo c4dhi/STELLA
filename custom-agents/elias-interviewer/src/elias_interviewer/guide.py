@@ -11,7 +11,9 @@ The plan mirrors the interview so STELLA shows progress, keeps the answers in
 the session's deliverables (exports, summaries), and can resume after an
 auto-pause:
 
-- one state per category, in the order categories first appear;
+- one state per run of questions in the same category, in question order (a
+  guide that comes back to a category, A B A, gets three states, so the
+  states follow the order the questions are asked in);
 - one task per question (``q<order>``) with one required deliverable
   (``q<order>_answer``);
 - states chain with ``all_tasks_complete``; the last goes to ``__end__``.
@@ -90,19 +92,20 @@ def _slug(text: str) -> str:
 
 
 def build_plan(questions: List[Question], *, project_id: str, title: str = "ELIAS interview") -> Dict[str, Any]:
-    categories: List[str] = []
+    # Consecutive questions with the same category form one state.
+    runs: List[List[Question]] = []
     for q in questions:
-        if q.category not in categories:
-            categories.append(q.category)
-
-    state_ids: Dict[str, str] = {}
-    for idx, cat in enumerate(categories, start=1):
-        state_ids[cat] = f"s{idx}_{_slug(cat)}"
+        if runs and runs[-1][0].category == q.category:
+            runs[-1].append(q)
+        else:
+            runs.append([q])
+    state_ids = [f"s{idx}_{_slug(run[0].category)}" for idx, run in enumerate(runs, start=1)]
 
     states: List[Dict[str, Any]] = []
-    for idx, cat in enumerate(categories):
+    for idx, run in enumerate(runs):
+        cat = run[0].category
         tasks = []
-        for q in (q for q in questions if q.category == cat):
+        for q in run:
             deliverables = [
                 {
                     "key": q.deliverable_key,
@@ -120,10 +123,10 @@ def build_plan(questions: List[Question], *, project_id: str, title: str = "ELIA
                     "deliverables": deliverables,
                 }
             )
-        next_id = state_ids[categories[idx + 1]] if idx + 1 < len(categories) else END_STATE_ID
+        next_id = state_ids[idx + 1] if idx + 1 < len(runs) else END_STATE_ID
         states.append(
             {
-                "id": state_ids[cat],
+                "id": state_ids[idx],
                 "title": cat,
                 "type": "strict",
                 "description": f"ELIAS questions: {cat}",

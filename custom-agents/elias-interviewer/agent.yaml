@@ -3,7 +3,7 @@ version: "2.0"
 metadata:
   name: "ELIAS-Interviewer"
   slug: "elias-interviewer"
-  version: "0.1.0"
+  version: "0.2.0"
   description: "Runs an ELIAS interview guide: asks every question word for word, re-asks unclear answers up to three times, and writes each turn back to ELIAS as it happens."
   icon: "🎙️"
   author:
@@ -56,7 +56,7 @@ env:
       description: "Model that checks whether a reply answers the question."
       default: "gpt-4o-mini"
     - name: ANSWER_CHECK_TIMEOUT_S
-      description: "Seconds the answer check may take before the reply is accepted as is."
+      description: "Seconds the answer check may take before the reply is accepted as is (1-60)."
       default: "8"
     - name: STELLA_LANGUAGE
       description: "Pin speech recognition and the voice to one language (ISO 639-1, e.g. 'de'). Set it to the language of the guide."

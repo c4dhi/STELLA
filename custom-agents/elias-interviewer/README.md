@@ -30,6 +30,10 @@ The answer check fails open: if the LLM check times out or errors, the reply is 
 
 When a session auto-pauses, the pod stops. On wake, the agent picks up at the next unanswered question **in the same ELIAS interview**: it doesn't open a second transcript and doesn't greet again. Only a real session end, or finishing the guide, closes the interview in ELIAS.
 
+A real session end is the time cap or the organiser ending the session. The agent's `session_end_mode()` returns `wrap_up`, so the SDK calls its `on_session_ending` then, which writes the last turns and closes the interview in ELIAS before the SDK says goodbye.
+
+STELLA's progress panel shows one stage per run of questions in the same ELIAS category, in the order the questions are asked.
+
 ## Setup
 
 **Connector.** The agent never sees the ELIAS token. It reaches ELIAS only through a STELLA connector:
@@ -46,7 +50,7 @@ When a session auto-pauses, the pod stops. On wake, the agent picks up at the ne
 | `ELIAS_MAX_ATTEMPTS` | `3` | Asks per question, the first one included, before it is skipped (1-5) |
 | `ELIAS_OPENING` / `ELIAS_CLOSING` / `ELIAS_REASK_PREFIX` / `ELIAS_ERROR` | English defaults | The fixed lines it says |
 | `ANSWER_CHECK_MODEL` | `gpt-4o-mini` | Model for the answer check |
-| `ANSWER_CHECK_TIMEOUT_S` | `8` | Seconds the answer check may take |
+| `ANSWER_CHECK_TIMEOUT_S` | `8` | Seconds the answer check may take (1-60), with no retry |
 | `STELLA_LANGUAGE` | detect | Pin speech to one language (e.g. `de`). If the guide isn't in English, set it and translate the fixed lines too |
 
 ## Requirements

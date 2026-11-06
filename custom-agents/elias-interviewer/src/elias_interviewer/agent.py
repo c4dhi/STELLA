@@ -76,6 +76,16 @@ def _int_between(raw: Optional[str], *, default: int, low: int, high: int) -> in
     return max(low, min(high, value))
 
 
+def _float_between(raw: Optional[str], *, default: float, low: float, high: float) -> float:
+    """A number env var, clamped to [low, high]; empty or unreadable gives ``default``."""
+    try:
+        value = float(str(raw).strip()) if raw is not None and str(raw).strip() else default
+    except ValueError:
+        logger.warning("ignoring %r, not a number; using %s", raw, default)
+        value = default
+    return max(low, min(high, value))
+
+
 class StartupError(Exception):
     """Why the interview cannot run. ``spoken`` is what the participant hears."""
 
@@ -138,7 +148,10 @@ class EliasInterviewerAgent(BaseAgent):
             )
 
         if self._checker is None:
-            self._checker = AnswerChecker(model=(env.get("ANSWER_CHECK_MODEL") or "").strip() or "gpt-4o-mini")
+            self._checker = AnswerChecker(
+                model=(env.get("ANSWER_CHECK_MODEL") or "").strip() or "gpt-4o-mini",
+                timeout_s=_float_between(env.get("ANSWER_CHECK_TIMEOUT_S"), default=8.0, low=1.0, high=60.0),
+            )
 
         self._elias = Elias(connectors, ELIAS_SLOT, project_id)
         try:
@@ -268,6 +281,12 @@ class EliasInterviewerAgent(BaseAgent):
         await self._finish_session("interview_complete")
 
     # ── session end ──────────────────────────────────────────────────────
+
+    def session_end_mode(self) -> str:
+        # 'wrap_up', so on_session_ending runs when the time cap or the organiser
+        # ends the session, and the ELIAS interview is closed then too. It yields
+        # nothing, so the SDK still speaks its farewell.
+        return "wrap_up"
 
     async def on_session_ending(self, session_id: str, reason: str, deadline_ms: int) -> AsyncIterator[AgentOutput]:
         # The session really ends (time cap, organiser ended it): finalise what we have.
