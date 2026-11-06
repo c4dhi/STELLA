@@ -72,6 +72,7 @@ export default function ConnectorsSection() {
   const [projects, setProjects] = useState<ProjectWithCounts[] | null>(null)
   const [sharing, setSharing] = useState<string | null>(null)
   const [shareSelection, setShareSelection] = useState<Set<string>>(new Set())
+  const [adding, setAdding] = useState(false)
 
   const load = () => {
     apiClient.listConnectors()
@@ -138,6 +139,7 @@ export default function ConnectorsSection() {
         token: form.authType === 'bearer' ? form.token.trim() : undefined,
       })
       setForm(emptyForm)
+      setAdding(false)
       setConnectors(prev => [...(prev ?? []), created])
       // Test right away: an untested connector is the usual source of confusion.
       void test(created)
@@ -209,7 +211,14 @@ export default function ConnectorsSection() {
       untested: isDark ? 'bg-surface-dark text-content-inverse-tertiary' : 'bg-white text-content-tertiary border border-neutral-200',
     }[c.status]
     const label = { ok: 'Connected', error: 'Failed', untested: 'Not tested' }[c.status]
-    return <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${styles}`}>{label}</span>
+    return (
+      <span
+        className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${styles}`}
+        title={c.lastCheckedAt ? `Checked ${formatDateTime(c.lastCheckedAt)}` : undefined}
+      >
+        {label}
+      </span>
+    )
   }
 
   return (
@@ -217,13 +226,8 @@ export default function ConnectorsSection() {
       <motion.div variants={itemVariants}>
         <h2 className={`text-heading-lg mb-2 ${strong}`}>Connectors</h2>
         <p className={`text-body-sm ${muted}`}>
-          Outside MCP servers your agents can use, such as an interview-question service or a study’s own API. When you
-          deploy an agent, you choose which connectors it may call. STELLA makes the calls for the agent, so your
-          token stays here and never reaches the agent. Share a connector with a project to let its members’ agents
-          use it too.
-        </p>
-        <p className={`text-caption mt-2 ${faint}`}>
-          This is the opposite of MCP Access, which lets Claude or ChatGPT reach STELLA.
+          Outside MCP servers your agents may call, chosen when you deploy them. STELLA makes the calls, so your token
+          never reaches the agent.
         </p>
       </motion.div>
 
@@ -235,7 +239,7 @@ export default function ConnectorsSection() {
       <motion.div variants={itemVariants} className={card}>
         <h3 className={heading}>Your connectors</h3>
         {connectors && connectors.length === 0 && (
-          <p className={`text-body-sm ${muted}`}>No connectors yet. Add one below.</p>
+          <p className={`text-body-sm ${muted}`}>No connectors yet.</p>
         )}
         {connectors && connectors.length > 0 && (
           <ul className="space-y-2 mt-3">
@@ -264,6 +268,12 @@ export default function ConnectorsSection() {
                     <div className="flex gap-2">
                       <button className="btn-primary" onClick={() => void saveEdit(c)}>Save</button>
                       <button className={secondaryButton} onClick={() => setEditing(null)}>Cancel</button>
+                      <button
+                        onClick={() => setDeleting(c)}
+                        className="ml-auto px-3 py-1.5 rounded-lg text-caption font-medium text-red-500 hover:bg-red-500/10"
+                      >
+                        Delete connector
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -278,31 +288,37 @@ export default function ConnectorsSection() {
                           {c.handle} · {c.url}
                         </div>
                         <div className={`text-caption mt-0.5 ${faint}`}>
-                          {c.authType === 'bearer' ? 'Bearer token saved' : 'No authentication'}
-                          {c.lastCheckedAt && ` · checked ${formatDateTime(c.lastCheckedAt)}`}
-                          {c.tools && ` · ${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}`}
-                        </div>
-                        <div className={`text-caption mt-0.5 ${faint}`}>
+                          {c.authType === 'bearer' ? 'Token saved' : 'No token'}
+                          {c.tools && c.tools.length > 0 && (
+                            <>
+                              {' · '}
+                              <button
+                                className={`underline-offset-2 hover:underline ${muted}`}
+                                aria-expanded={expanded === c.id}
+                                onClick={() => setExpanded(expanded === c.id ? null : c.id)}
+                              >
+                                {c.tools.length} tool{c.tools.length === 1 ? '' : 's'}
+                              </button>
+                            </>
+                          )}
+                          {' · '}
                           {c.sharedWith.length
-                            ? <>Shared with: <span className={muted}>{c.sharedWith.map(s => s.projectName).join(', ')}</span></>
-                            : 'Not shared: only your own agents can use it'}
+                            ? <span title={c.sharedWith.map(s => s.projectName).join(', ')}>
+                                Shared with {c.sharedWith.length === 1 ? c.sharedWith[0].projectName : `${c.sharedWith.length} projects`}
+                              </span>
+                            : 'Only your agents'}
                         </div>
                         {c.status === 'error' && c.lastError && (
                           <div className="text-caption mt-1 text-red-500">{c.lastError}</div>
                         )}
                       </div>
                       <div className="flex flex-shrink-0 gap-1">
-                        <button className={secondaryButton} disabled={testing === c.id} onClick={() => void test(c)}>
-                          {testing === c.id ? 'Testing…' : 'Test connection'}
+                        <button className={secondaryButton} disabled={testing === c.id} onClick={() => void test(c)}
+                          title="Connect and list its tools">
+                          {testing === c.id ? 'Testing…' : 'Test'}
                         </button>
                         <button className={secondaryButton} onClick={() => (sharing === c.id ? setSharing(null) : startShare(c))}>Share</button>
                         <button className={secondaryButton} onClick={() => startEdit(c)}>Edit</button>
-                        <button
-                          onClick={() => setDeleting(c)}
-                          className="px-3 py-1.5 rounded-lg text-caption font-medium text-red-500 hover:bg-red-500/10"
-                        >
-                          Delete
-                        </button>
                       </div>
                     </div>
                     {sharing === c.id && (
@@ -344,26 +360,15 @@ export default function ConnectorsSection() {
                         </div>
                       </div>
                     )}
-                    {c.tools && c.tools.length > 0 && (
-                      <div className="mt-2">
-                        <button
-                          className={`text-caption font-medium ${muted}`}
-                          aria-expanded={expanded === c.id}
-                          onClick={() => setExpanded(expanded === c.id ? null : c.id)}
-                        >
-                          {expanded === c.id ? 'Hide tools' : 'Show tools'}
-                        </button>
-                        {expanded === c.id && (
-                          <ul className="mt-2 space-y-1">
-                            {c.tools.map(t => (
-                              <li key={t.name} className="text-caption">
-                                <span className={`font-mono ${strong}`}>{t.name}</span>
-                                {t.description && <span className={faint}> · {t.description}</span>}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
+                    {c.tools && c.tools.length > 0 && expanded === c.id && (
+                      <ul className="mt-3 space-y-1">
+                        {c.tools.map(t => (
+                          <li key={t.name} className="text-caption">
+                            <span className={`font-mono ${strong}`}>{t.name}</span>
+                            {t.description && <span className={faint}> · {t.description}</span>}
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </>
                 )}
@@ -373,7 +378,12 @@ export default function ConnectorsSection() {
         )}
       </motion.div>
 
-      {/* Add */}
+      {/* Add: behind a button once there are connectors, so the list leads */}
+      {!(adding || (connectors !== null && connectors.length === 0)) ? (
+        <motion.div variants={itemVariants}>
+          <button className={secondaryButton} onClick={() => setAdding(true)}>+ Add a connector</button>
+        </motion.div>
+      ) : (
       <motion.div variants={itemVariants} className={card}>
         <h3 className={heading}>Add a connector</h3>
         <p className={`text-body-sm mb-5 ${muted}`}>
@@ -449,8 +459,14 @@ export default function ConnectorsSection() {
           <button className="btn-primary disabled:opacity-50" disabled={!canCreate} onClick={() => void create()}>
             {saving ? 'Adding…' : 'Add connector'}
           </button>
+          {connectors !== null && connectors.length > 0 && (
+            <button className={`${secondaryButton} ml-2`} onClick={() => { setAdding(false); setForm(emptyForm) }}>
+              Cancel
+            </button>
+          )}
         </div>
       </motion.div>
+      )}
 
       <ConfirmDialog
         isOpen={deleting !== null}
