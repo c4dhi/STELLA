@@ -10,13 +10,13 @@ describe('AgentTypeService agent list', () => {
     id: 'x', slug: 'x', name: 'X', description: '', icon: null, version: '1.0.0', deprecated: false,
     deprecationNote: null, capabilities: [], defaultConfig: {}, configSchema: null, pipelineSchema: null,
     expertDefaults: null, manifest: null, isBuiltIn: false, validationStatus: PENDING, userId: 'owner',
-    projectShares: [] as { projectId: string }[], user: { name: 'Olga', email: 'o@x' }, ...over,
+    projectShares: [] as { projectId: string; project?: { name: string } }[], user: { name: 'Olga', email: 'o@x' }, ...over,
   })
   const rows = [
     row({ id: 'builtin', isBuiltIn: true, validationStatus: APPROVED, userId: null, user: null }),
     row({ id: 'mine', userId: 'viewer', user: { name: 'Me', email: 'me@x' } }),
-    row({ id: 'shared-p1', projectShares: [{ projectId: 'p1' }] }),
-    row({ id: 'shared-p2', projectShares: [{ projectId: 'p2' }] }),
+    row({ id: 'shared-p1', projectShares: [{ projectId: 'p1', project: { name: 'Study A' } }, { projectId: 'p9', project: { name: 'Not yours' } }] }),
+    row({ id: 'shared-p2', projectShares: [{ projectId: 'p2', project: { name: 'Study B' } }] }),
     row({ id: 'rejected', validationStatus: REJECTED, projectShares: [{ projectId: 'p1' }] }),
   ]
 
@@ -40,6 +40,17 @@ describe('AgentTypeService agent list', () => {
     ])
     const where = (prisma.agentType.findMany.mock.calls[0][0] as any).where
     expect(where.OR[2]).toEqual({ isBuiltIn: false, projectShares: { some: { projectId: { in: ['p1', 'p2'] } } } })
+  })
+
+  it('names the viewer\'s projects a shared upload can be deployed in, and only those', async () => {
+    const { svc } = service()
+    const list = await svc.getAgentTypesForGallery({ userId: 'viewer' })
+    expect(Object.fromEntries(list.map((t) => [t.id, t.sharedInProjects]))).toEqual({
+      builtin: [],
+      mine: [],
+      'shared-p1': [{ id: 'p1', name: 'Study A' }],
+      'shared-p2': [{ id: 'p2', name: 'Study B' }],
+    })
   })
 
   it('narrows the shared ones to one project the viewer is in', async () => {

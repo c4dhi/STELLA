@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Agent Library: an agent someone else shared now says which of your projects you can deploy it in ("Shared by Olga · in Study A"). `GET /agent-types` returns `sharedInProjects` for it.
 - The deploy dialogs no longer upload agent packages. Upload in Settings → Agent Library; the dialogs' Custom section links there.
 - **Built-in and uploaded agents are stored by one mapping.** Before, the seed and the upload endpoint each turned agent.yaml into an AgentType their own way. Each had its own expert reader, and companion experts were handled differently in the two. Now both use one mapping, and each AgentType keeps its full manifest (new `manifest` column; the migration adds it and the next seed or re-upload fills it).
 - **Manifest mistakes are refused instead of ignored.** Unknown keys, unknown capabilities, a resource request above its limit, and a `defaultConfig` that doesn't fit `configSchema` now fail validation. Before, these were dropped or let through silently. Manifest 1.0 files keep the old leniency for unknown capabilities (a warning).

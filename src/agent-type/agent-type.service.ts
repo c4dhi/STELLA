@@ -41,6 +41,11 @@ export interface AgentTypeInfo {
    * deploy it, but not build, re-upload, share or delete it.
    */
   sharedWithYou: boolean
+  /**
+   * For a shared upload: the viewer's projects it is shared with, the only
+   * places they can deploy it. Empty for a built-in or the viewer's own upload.
+   */
+  sharedInProjects: { id: string; name: string }[]
 }
 
 @Injectable()
@@ -86,7 +91,9 @@ export class AgentTypeService {
    * that do not deploy (a deploy checks access itself).
    */
   async getAgentTypesForGallery(viewer?: AgentTypeViewer): Promise<AgentTypeInfo[]> {
-    const rows = viewer ? await this.visibleTo(viewer) : (await this.findAll()).map((t) => ({ ...t, user: null }))
+    const rows = viewer
+      ? await this.visibleTo(viewer)
+      : (await this.findAll()).map((t) => ({ ...t, user: null, sharedInProjects: [] }))
 
     return rows.map((t) => ({
       id: t.id,
@@ -106,6 +113,7 @@ export class AgentTypeService {
       requirements: this.requirementsOf(t),
       ownerName: t.isBuiltIn ? null : (t.user?.name || t.user?.email || null),
       sharedWithYou: !!viewer && !t.isBuiltIn && t.userId !== viewer.userId,
+      sharedInProjects: t.sharedInProjects,
     }))
   }
 
@@ -126,7 +134,7 @@ export class AgentTypeService {
         ],
       },
       include: {
-        projectShares: { select: { projectId: true } },
+        projectShares: { select: { projectId: true, project: { select: { name: true } } } },
         user: { select: { name: true, email: true } },
       },
       orderBy: [{ deprecated: 'asc' }, { isBuiltIn: 'desc' }, { name: 'asc' }],
@@ -134,11 +142,21 @@ export class AgentTypeService {
     const reviewRequired = await this.platformSettings.isAgentReviewRequired()
     // The deploy rule decides what is listed; the owner also sees their own
     // uploads that cannot deploy yet (pending, unbuilt), with their state.
-    return rows.filter(
+    const visible = rows.filter(
       (t) =>
         (!t.isBuiltIn && t.userId === viewer.userId && t.validationStatus !== AgentValidationStatus.REJECTED) ||
         !agentTypeAccessProblem(t, { userId: viewer.userId, projectId, memberOf: viewer.projectId ? [] : memberOf, reviewRequired }),
     )
+    return visible.map((t) => ({
+      ...t,
+      sharedInProjects:
+        t.isBuiltIn || t.userId === viewer.userId
+          ? []
+          : t.projectShares
+              .filter((s) => shareProjects.includes(s.projectId))
+              .map((s) => ({ id: s.projectId, name: s.project?.name ?? '' }))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+    }))
   }
 
   /** One unreadable row must not take the whole gallery down; deploying it still fails with the reason. */
