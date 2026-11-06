@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { createHash, Hash } from 'crypto';
 import { fileURLToPath } from 'url';
-import { AgentTypeService, type AgentTypeInfo } from '../agent-type/agent-type.service.js';
+import { AgentTypeService, type AgentTypeInfo, type AgentTypeViewer } from '../agent-type/agent-type.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -206,8 +206,8 @@ export class AgentImageService {
    * Get all registered agent types with metadata from database.
    * Throws error if database is not seeded - no fallback to prevent silent failures.
    */
-  async getAgentTypesWithInfo(): Promise<AgentTypeInfo[]> {
-    const dbTypes = await this.agentTypeService.getAgentTypesForGallery();
+  async getAgentTypesWithInfo(viewer?: AgentTypeViewer): Promise<AgentTypeInfo[]> {
+    const dbTypes = await this.agentTypeService.getAgentTypesForGallery(viewer);
 
     if (dbTypes.length === 0) {
       this.logger.error('No agent types found in database. Database must be seeded.');

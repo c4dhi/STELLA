@@ -283,14 +283,16 @@ export class AgentsService {
         imageUrl: true,
         sdkVersion: true,
         userId: true,
+        projectShares: { select: { projectId: true } },
       },
     });
 
-    // Security: see assertDeployableAgentType. Reviewed types deploy for anyone;
-    // an unreviewed upload only for its uploader, and only while review is off.
+    // Security: see assertDeployableAgentType. An upload deploys for its owner,
+    // and for others only in a project the owner shared it with.
     assertDeployableAgentType(agentType, agentTypeRecord, {
       reviewRequired: await this.platformSettings.isAgentReviewRequired(),
       deployerId: userId,
+      projectId: session.projectId,
     });
     const requirements = resolveAgentRequirements(manifestOfAgentType(agentTypeRecord!));
 
@@ -733,6 +735,29 @@ export class AgentsService {
    * Handles room disconnection, K8s resource cleanup, and DB status update.
    * @returns The updated agent instance
    */
+  /**
+   * The agents of one type that count as running (STARTING, RUNNING or
+   * STOPPING), split by whether their pod is really there. A row whose pod is
+   * gone or finished (OOMKilled, completed, never created) is `stale`.
+   */
+  async runningAgentsOfType(agentTypeId: string): Promise<{
+    live: { id: string; deployedByUserId: string | null }[];
+    stale: string[];
+  }> {
+    const rows = await this.prisma.agentInstance.findMany({
+      where: { agentTypeId, status: { in: [AgentStatus.STARTING, AgentStatus.RUNNING, AgentStatus.STOPPING] } },
+      select: { id: true, podName: true, deployedByUserId: true },
+    });
+    const live: { id: string; deployedByUserId: string | null }[] = [];
+    const stale: string[] = [];
+    for (const row of rows) {
+      const pod = row.podName ? await this.k8s.getPodStatus(row.podName) : null;
+      if (isPodAlive(pod)) live.push({ id: row.id, deployedByUserId: row.deployedByUserId });
+      else stale.push(row.id);
+    }
+    return { live, stale };
+  }
+
   async stopAgent(id: string): Promise<any> {
     const agent = await this.prisma.agentInstance.findUnique({
       where: { id },
@@ -1183,12 +1208,14 @@ export class AgentsService {
         imageUrl: true,
         sdkVersion: true,
         userId: true,
+        projectShares: { select: { projectId: true } },
       },
     });
     if (!row) throw new NotFoundException(`Agent type with ID ${agentTypeId} not found`);
     assertDeployableAgentType(row.slug, row, {
       reviewRequired: await this.platformSettings.isAgentReviewRequired(),
       deployerId: userId,
+      projectId,
     });
     const requirements = resolveAgentRequirements(manifestOfAgentType(row));
     return this.connectorsService.resolveBindingsForDeploy(userId, projectId, requests, requirements.connectors);
@@ -1997,4 +2024,16 @@ function percentile(sorted: number[], p: number): number {
   const hi = Math.ceil(idx);
   if (lo === hi) return sorted[lo];
   return Math.round((sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)) * 100) / 100;
+}
+
+/**
+ * Whether a pod (KubernetesService.getPodStatus) still runs an agent: it exists,
+ * is Pending or Running, and has no container that has terminated.
+ */
+export function isPodAlive(
+  pod: { phase?: string; containerStatuses?: { state?: { terminated?: unknown } }[] } | null,
+): boolean {
+  if (!pod) return false;
+  if (pod.phase !== 'Pending' && pod.phase !== 'Running') return false;
+  return !(pod.containerStatuses ?? []).some((c) => c.state?.terminated);
 }

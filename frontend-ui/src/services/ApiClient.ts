@@ -1,7 +1,7 @@
 // Centralized API client for Session Management Server
 // Based on session-management-server/docs/FRONTEND_INTEGRATION.md
 
-import type {
+import type { AgentShares,
   Project,
   ProjectWithCounts,
   ProjectWithSessions,
@@ -517,8 +517,23 @@ class SessionManagementClient {
   // Agents API
   // ============================================================================
 
-  async getAgentTypes(): Promise<AgentType[]> {
-    return this.get<AgentType[]>('/agent-types')
+  /**
+   * The agents you can deploy: built-ins, your uploads, and uploads shared
+   * with a project you are in (only with `projectId`, when given).
+   */
+  async getAgentTypes(projectId?: string): Promise<AgentType[]> {
+    return this.get<AgentType[]>(projectId ? `/agent-types?projectId=${encodeURIComponent(projectId)}` : '/agent-types')
+  }
+
+  async getAgentShares(agentTypeId: string): Promise<AgentShares> {
+    return this.get<AgentShares>(`/agent-types/${agentTypeId}/shares`)
+  }
+
+  async updateAgentShares(agentTypeId: string, projectIds: string[]): Promise<{ projectIds: string[] }> {
+    return this.request<{ projectIds: string[] }>(`/agent-types/${agentTypeId}/shares`, {
+      method: 'PUT',
+      body: JSON.stringify({ projectIds }),
+    })
   }
 
   /** Voices and languages the active TTS provider can synthesize. */

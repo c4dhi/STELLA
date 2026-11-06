@@ -140,6 +140,12 @@ export default function AgentGalleryCard({
         </div>
       )}
 
+      {agentType.sharedWithYou && agentType.ownerName && (
+        <div className={`mt-2 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+          Shared by {agentType.ownerName}
+        </div>
+      )}
+
       {/* Version badge */}
       <div
         className={`

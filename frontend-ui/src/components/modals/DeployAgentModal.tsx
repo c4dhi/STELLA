@@ -211,7 +211,7 @@ export default function DeployAgentModal({
 
       // Fetch agent types
       setIsLoadingTypes(true)
-      apiClient.getAgentTypes()
+      apiClient.getAgentTypes(projectId)
         .then((types) => {
           setAgentTypes(types)
         })

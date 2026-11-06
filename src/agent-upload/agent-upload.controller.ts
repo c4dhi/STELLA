@@ -2,6 +2,7 @@ import { builtSdkProblem } from '../agent-package/sdk-support.js'
 import {
   Controller,
   Post,
+  Put,
   Get,
   Param,
   Body,
@@ -29,6 +30,7 @@ import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js'
 import type { AuthUser } from '../auth/auth-user.loader.js'
 import { requirementsForListing } from '../agents/agent-requirements.js'
 import { AgentsService } from '../agents/agents.service.js'
+import { UpdateAgentSharesDto } from './dto/update-agent-shares.dto.js'
 
 interface AuthenticatedRequest extends Request {
   user?: AuthUser
@@ -205,6 +207,7 @@ export class AgentUploadController {
           orderBy: { startedAt: 'desc' },
           take: 1,
         },
+        projectShares: { select: { projectId: true } },
       },
     })
 
@@ -226,6 +229,8 @@ export class AgentUploadController {
       createdAt: agent.createdAt,
       built: !!agent.imageUrl,
       sdkVersion: agent.sdkVersion,
+      // The projects whose members may deploy it.
+      sharedProjectIds: agent.projectShares.map((share) => share.projectId),
       // Set when the last build can't deploy on this STELLA: "Needs SDK update".
       sdkProblem: agent.imageUrl ? builtSdkProblem(agent.sdkVersion) : null,
       lastBuild: agent.buildLogs[0]
@@ -344,7 +349,73 @@ export class AgentUploadController {
   }
 
   /**
-   * Delete a custom agent, stopping its agents first.
+   * The projects this custom agent is shared with, and the projects its owner
+   * could share it with (the ones they are a member of).
+   * GET /agent-types/:id/shares
+   */
+  @Get(':id/shares')
+  async getShares(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    const agentType = await this.ownUpload(id, req)
+    const [shares, memberships] = await Promise.all([
+      this.prisma.agentTypeProjectShare.findMany({ where: { agentTypeId: id }, select: { projectId: true } }),
+      this.prisma.projectMembership.findMany({
+        where: { userId: agentType.userId! },
+        select: { project: { select: { id: true, name: true } } },
+        orderBy: { project: { name: 'asc' } },
+      }),
+    ])
+    return {
+      projectIds: shares.map((s) => s.projectId),
+      projects: memberships.map((m) => m.project),
+    }
+  }
+
+  /**
+   * Share this custom agent with exactly these projects. Their members see it
+   * and may deploy it there; they cannot change it. Only the owner shares, and
+   * only with projects they are a member of.
+   * PUT /agent-types/:id/shares
+   */
+  @Put(':id/shares')
+  async updateShares(@Param('id') id: string, @Body() dto: UpdateAgentSharesDto, @Req() req: AuthenticatedRequest) {
+    const agentType = await this.ownUpload(id, req)
+    const projectIds = [...new Set(dto.projectIds)]
+    const memberOf = await this.prisma.projectMembership.findMany({
+      where: { userId: agentType.userId!, projectId: { in: projectIds } },
+      select: { projectId: true },
+    })
+    if (memberOf.length !== projectIds.length) {
+      throw new ForbiddenException('You can only share an agent with projects you are a member of')
+    }
+    await this.prisma.$transaction([
+      this.prisma.agentTypeProjectShare.deleteMany({ where: { agentTypeId: id, projectId: { notIn: projectIds } } }),
+      ...projectIds.map((projectId) =>
+        this.prisma.agentTypeProjectShare.upsert({
+          where: { agentTypeId_projectId: { agentTypeId: id, projectId } },
+          create: { agentTypeId: id, projectId },
+          update: {},
+        }),
+      ),
+    ])
+    this.logger.log(`Agent type ${agentType.slug} shared with ${projectIds.length} project(s)`)
+    return { projectIds }
+  }
+
+  /** The caller's own upload: sharing is the owner's alone, not an admin's. */
+  private async ownUpload(id: string, req: AuthenticatedRequest) {
+    const userId = requireUserId(req)
+    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
+    if (!agentType) throw new NotFoundException('Agent type not found')
+    if (agentType.isBuiltIn || agentType.userId !== userId) {
+      throw new ForbiddenException('Only its owner can share this agent')
+    }
+    return agentType
+  }
+
+  /**
+   * Delete a custom agent. Its owner's running agents are stopped first, and
+   * rows left RUNNING after their pod died are cleaned up. Refused while a
+   * public project uses it or another user's agent of it still runs.
    * POST /agent-types/:id/delete
    */
   @Post(':id/delete')
@@ -371,15 +442,20 @@ export class AgentUploadController {
       )
     }
 
-    // Deleting an agent stops its agents first: their pods go and they keep
-    // their transcript. A row left RUNNING after its pod died is stopped the
-    // same way, so it can no longer block the delete.
-    const live = await this.prisma.agentInstance.findMany({
-      where: { agentTypeId: id, status: { in: ['STARTING', 'RUNNING', 'STOPPING'] } },
-      select: { id: true },
-    })
-    for (const agent of live) {
-      await this.agentsService.stopAgent(agent.id)
+    // Agents of this type that still run: a row whose pod is gone is only
+    // cleaned up; the owner's own live agents are stopped; another user's live
+    // agent blocks the delete (it is their session).
+    const { live, stale } = await this.agentsService.runningAgentsOfType(id)
+    const ownerId = agentType.userId
+    const others = live.filter((a) => !ownerId || a.deployedByUserId !== ownerId)
+    if (others.length > 0) {
+      throw new BadRequestException(
+        `${agentType.name} still runs in ${others.length} session${others.length === 1 ? '' : 's'} of other users. It can be deleted once ${others.length === 1 ? 'that agent stops' : 'those agents stop'}`,
+      )
+    }
+    const toStop = [...stale, ...live.map((a) => a.id)]
+    for (const agentId of toStop) {
+      await this.agentsService.stopAgent(agentId)
     }
 
     // Env-var templates and configurations are scoped to this one type, so

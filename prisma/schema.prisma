@@ -82,6 +82,7 @@ model Project {
   // Project collaboration invitations
   projectInvitations ProjectInvitation[]
   connectorShares    ConnectorProjectShare[] // Connectors members may bind in this project
+  agentTypeShares    AgentTypeProjectShare[] // Custom agents members may deploy in this project
 
   @@index([publicToken])
   @@index([isPublic, publicEnabled])
@@ -221,8 +222,10 @@ model AgentType {
   deprecationNote String? // What to use instead, shown next to the badge
 
   // Ownership (for custom agents)
-  userId String? // Owner of custom agent (null for built-in)
-  user   User?   @relation(fields: [userId], references: [id])
+  userId        String? // Owner of custom agent (null for built-in)
+  user          User?                   @relation(fields: [userId], references: [id])
+  // Projects whose members may deploy this custom agent (the owner always may).
+  projectShares AgentTypeProjectShare[]
 
   // Package storage (for custom agents with uploaded zip)
   packagePath String? // Local filesystem path to stored zip
@@ -970,6 +973,21 @@ model Connector {
 
   @@unique([userId, handle])
   @@index([userId])
+}
+
+// A custom agent its owner shared with a project. Members of that project see
+// it and may deploy it there; only the owner builds, uploads a new version of,
+// shares or deletes it.
+model AgentTypeProjectShare {
+  id          String    @id @default(uuid())
+  agentTypeId String
+  agentType   AgentType @relation(fields: [agentTypeId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([agentTypeId, projectId])
+  @@index([projectId])
 }
 
 // A connector its owner shared with a project. Members of that project may bind

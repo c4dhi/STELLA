@@ -8,6 +8,8 @@ interface AgentTypeCardProps {
   onView: () => void
   onDelete?: () => void
   onBuild?: () => void
+  /** Only the owner shares an upload with projects. */
+  onShare?: () => void
 }
 
 export default function AgentTypeCard({
@@ -16,6 +18,7 @@ export default function AgentTypeCard({
   onView,
   onDelete,
   onBuild,
+  onShare,
 }: AgentTypeCardProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
@@ -218,7 +221,7 @@ export default function AgentTypeCard({
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                   <circle cx="12" cy="7" r="4" />
                 </svg>
-                Custom
+                {agent.sharedWithYou && agent.ownerName ? `Shared by ${agent.ownerName}` : 'Custom'}
               </span>
             )}
             <span className={`text-caption ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
@@ -256,6 +259,24 @@ export default function AgentTypeCard({
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
+              </motion.button>
+            )}
+            {isCustomAgent && onShare && (
+              <motion.button
+                onClick={onShare}
+                className={`p-2 rounded-lg transition-colors ${isDark
+                  ? 'text-content-inverse-secondary hover:text-primary hover:bg-primary/10'
+                  : 'text-content-secondary hover:text-primary hover:bg-primary/10'
+                }`}
+                title="Share with projects"
+                aria-label="Share with projects"
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+                  <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
                 </svg>
               </motion.button>
             )}

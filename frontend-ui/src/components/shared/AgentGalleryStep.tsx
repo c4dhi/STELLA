@@ -10,12 +10,18 @@ interface AgentGalleryStepProps {
   onSelectAgentType: (type: AgentType) => void
   showUpload?: boolean
   onUploadComplete?: (result: AgentUploadResponse) => void
+  /**
+   * The project the agent is for: lists the uploads shared with it. Null for a
+   * project not created yet, where only your own uploads can be picked.
+   */
+  projectId?: string | null
 }
 
 export default function AgentGalleryStep({
   selectedAgentType,
   onSelectAgentType,
   showUpload = true,
+  projectId,
   onUploadComplete,
 }: AgentGalleryStepProps) {
   const { resolvedTheme } = useThemeStore()
@@ -31,9 +37,9 @@ export default function AgentGalleryStep({
   // Fetch agent types on mount
   useEffect(() => {
     setIsLoadingTypes(true)
-    apiClient.getAgentTypes()
+    apiClient.getAgentTypes(projectId ?? undefined)
       .then((types) => {
-        setAgentTypes(types)
+        setAgentTypes(projectId === null ? types.filter((t) => !t.sharedWithYou) : types)
       })
       .catch((err) => {
         console.error('Failed to fetch agent types:', err)
@@ -41,7 +47,7 @@ export default function AgentGalleryStep({
         setLoadError('Could not load the agents. Close this dialog and try again.')
       })
       .finally(() => setIsLoadingTypes(false))
-  }, [])
+  }, [projectId])
 
   const handleSelectCustomAgent = (agent: CustomAgentType) => {
     onSelectAgentType(agent as AgentType)

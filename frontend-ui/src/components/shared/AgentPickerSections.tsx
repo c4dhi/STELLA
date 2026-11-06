@@ -33,7 +33,7 @@ export default function AgentPickerSections({
   isDark,
 }: AgentPickerSectionsProps) {
   // The user's own uploads are listed by MyAgentsSection, with their build and
-  // review state; approved uploads by others follow as plain cards.
+  // review state; uploads others shared with this project follow as plain cards.
   const [ownIds, setOwnIds] = useState<Set<string>>(new Set())
   const [ownLoaded, setOwnLoaded] = useState(false)
   const othersCustom = agentTypes.filter((t) => !t.isBuiltIn && !ownIds.has(t.id))

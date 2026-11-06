@@ -23,6 +23,12 @@ const manifest = (image: Record<string, unknown> = { dockerfile: 'Dockerfile' })
 
 function makeUpload(agentRecord: Record<string, unknown> | null = null, m = manifest()) {
   const prisma = {
+    agentTypeProjectShare: {
+      findMany: jest.fn().mockResolvedValue([] as { projectId: string }[]),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      upsert: jest.fn().mockResolvedValue({}),
+    },
+    projectMembership: { findMany: jest.fn().mockResolvedValue([] as unknown[]) },
     agentType: {
       findUnique: jest.fn().mockResolvedValue(agentRecord),
       findMany: jest.fn().mockResolvedValue([]),
@@ -46,7 +52,13 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
   }
   const build = { startBuild: jest.fn().mockResolvedValue({ buildLogId: 'b1' }) }
   const storage = { delete: jest.fn().mockResolvedValue(undefined) }
-  const agents = { stopAgent: jest.fn().mockResolvedValue({}) }
+  const agents = {
+    stopAgent: jest.fn().mockResolvedValue({}),
+    runningAgentsOfType: jest.fn().mockResolvedValue({ live: [], stale: [] } as {
+      live: { id: string; deployedByUserId: string | null }[]
+      stale: string[]
+    }),
+  }
   const controller = new AgentUploadController(pkg as any, build as any, storage as any, prisma as any, agents as any)
   return { controller, prisma, pkg, build, storage, agents }
 }
@@ -128,10 +140,10 @@ describe('AgentUploadController identity and ownership', () => {
     expect(order).toEqual(['db', 'package'])
   })
 
-  it('delete stops the type\'s agents first, stale ones included, then deletes it', async () => {
+  it('delete cleans up dead rows and stops the owner\'s own agents, then deletes it', async () => {
     const { controller, prisma, agents } = makeUpload(upload)
     const order: string[] = []
-    prisma.agentInstance.findMany.mockResolvedValue([{ id: 'live' }, { id: 'pod-gone' }])
+    agents.runningAgentsOfType.mockResolvedValue({ live: [{ id: 'mine', deployedByUserId: 'owner' }], stale: ['pod-gone'] })
     agents.stopAgent.mockImplementation(async (id: unknown) => {
       order.push(`stop ${id}`)
       return {}
@@ -140,18 +152,27 @@ describe('AgentUploadController identity and ownership', () => {
       order.push('db')
       return Promise.all(ops as Promise<unknown>[])
     })
-    await expect(controller.deleteAgent('a1', user('owner') as any)).resolves.toEqual({ success: true, stoppedAgents: 2 })
-    expect(prisma.agentInstance.findMany.mock.calls[0][0].where).toEqual({
-      agentTypeId: 'a1',
-      status: { in: ['STARTING', 'RUNNING', 'STOPPING'] },
+    await expect(controller.deleteAgent('a1', user('owner') as any)).resolves.toEqual({ success: true, stoppedAgents: 1 })
+    expect(agents.runningAgentsOfType).toHaveBeenCalledWith('a1')
+    expect(order).toEqual(['stop pod-gone', 'stop mine', 'db'])
+  })
+
+  it('delete refuses while another user\'s agent of it still runs, and stops nothing', async () => {
+    const { controller, prisma, agents, storage } = makeUpload(upload)
+    agents.runningAgentsOfType.mockResolvedValue({
+      live: [{ id: 'mine', deployedByUserId: 'owner' }, { id: 'theirs', deployedByUserId: 'member' }, { id: 'old', deployedByUserId: null }],
+      stale: ['pod-gone'],
     })
-    expect(order).toEqual(['stop live', 'stop pod-gone', 'db'])
+    await expect(controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('still runs in 2 sessions of other users')
+    expect(agents.stopAgent).not.toHaveBeenCalled()
+    expect(prisma.agentType.delete).not.toHaveBeenCalled()
+    expect(storage.delete).not.toHaveBeenCalled()
   })
 
   it('delete refuses a type a public project uses, before stopping anything, and keeps its package', async () => {
     const shared = makeUpload(upload)
     shared.prisma.project.count.mockResolvedValue(2)
-    shared.prisma.agentInstance.findMany.mockResolvedValue([{ id: 'live' }])
+    shared.agents.runningAgentsOfType.mockResolvedValue({ live: [{ id: 'live', deployedByUserId: 'owner' }], stale: [] })
     await expect(shared.controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('2 public projects use My agent')
     expect(shared.agents.stopAgent).not.toHaveBeenCalled()
     expect(shared.prisma.agentType.delete).not.toHaveBeenCalled()
@@ -225,5 +246,45 @@ describe('uploading an agent again', () => {
     await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow('Another agent already uses the slug')
     expect(pkg.storePackage).not.toHaveBeenCalled()
     expect(prisma.agentType.update).not.toHaveBeenCalled()
+  })
+})
+
+describe('sharing an agent with projects', () => {
+  const mine = { id: 'a1', slug: 'my-agent', name: 'My agent', isBuiltIn: false, userId: 'owner' }
+
+  it('replaces the shared set with projects the owner is a member of', async () => {
+    const { controller, prisma } = makeUpload(mine)
+    prisma.projectMembership.findMany.mockResolvedValue([{ projectId: 'p1' }, { projectId: 'p2' }])
+    await expect(
+      controller.updateShares('a1', { projectIds: ['p1', 'p2', 'p1'] }, user('owner') as any),
+    ).resolves.toEqual({ projectIds: ['p1', 'p2'] })
+    expect(prisma.agentTypeProjectShare.deleteMany).toHaveBeenCalledWith({
+      where: { agentTypeId: 'a1', projectId: { notIn: ['p1', 'p2'] } },
+    })
+    expect(prisma.agentTypeProjectShare.upsert).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses a project the owner is not in', async () => {
+    const { controller, prisma } = makeUpload(mine)
+    prisma.projectMembership.findMany.mockResolvedValue([{ projectId: 'p1' }])
+    await expect(controller.updateShares('a1', { projectIds: ['p1', 'not-mine'] }, user('owner') as any)).rejects.toThrow(
+      'projects you are a member of',
+    )
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a member it is shared with', user('member')],
+    ['a system admin', user('admin', true)],
+  ])('is the owner\'s alone, not %s\'s', async (_who, req) => {
+    const { controller, prisma } = makeUpload(mine)
+    await expect(controller.updateShares('a1', { projectIds: [] }, req as any)).rejects.toThrow(ForbiddenException)
+    await expect(controller.getShares('a1', req as any)).rejects.toThrow(ForbiddenException)
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  it('never shares a built-in agent', async () => {
+    const { controller } = makeUpload({ ...mine, isBuiltIn: true, userId: null })
+    await expect(controller.updateShares('a1', { projectIds: [] }, user('owner') as any)).rejects.toThrow(ForbiddenException)
   })
 })

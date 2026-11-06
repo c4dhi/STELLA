@@ -7,6 +7,7 @@ import type { AgentType, CustomAgentType } from '../../lib/api-types'
 import AgentTypeCard from './AgentTypeCard'
 import AgentDetailModal from './AgentDetailModal'
 import ConfirmDialog from '../modals/ConfirmDialog'
+import ShareAgentDialog from '../modals/ShareAgentDialog'
 import { apiErrorMessage } from '../../lib/apiErrorMessage'
 
 const containerVariants = {
@@ -47,6 +48,7 @@ export default function AgentLibrarySection() {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [agentToDelete, setAgentToDelete] = useState<AgentType | null>(null)
+  const [agentToShare, setAgentToShare] = useState<AgentType | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState<string | null>(null)
 
@@ -74,7 +76,8 @@ export default function AgentLibrarySection() {
   }, [])
 
   // Two sections: custom (uploaded) agents first, then the built-in ones. The
-  // custom list is every approved upload plus the user's own, whatever their state.
+  // custom list is the user's own uploads, whatever their state, plus the ones
+  // others shared with a project the user is in.
   const matches = (a: AgentType | CustomAgentType) => {
     const query = searchQuery.trim().toLowerCase()
     return !query ||
@@ -173,7 +176,7 @@ export default function AgentLibrarySection() {
 
       addToast({
         message: response.replacedVersion
-          ? `"${response.name}" ${response.version} replaces ${response.replacedVersion}. Build it to deploy the new version`
+          ? `"${response.name}" ${response.version} replaces ${response.replacedVersion}. Build it to deploy it; until then, its paused agents can't wake`
           : `"${response.name}" uploaded successfully`,
         type: 'success',
       })
@@ -212,7 +215,7 @@ export default function AgentLibrarySection() {
               Agent Library
             </h2>
             <p className={`text-body-sm mt-1.5 max-w-lg ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
-              Browse available agents or upload your own custom agent packages
+              Your uploads, agents shared with your projects, and the built-in agents
             </p>
           </div>
 
@@ -488,6 +491,7 @@ export default function AgentLibrarySection() {
                             // Only the uploader manages an upload; others can view and deploy it.
                             onDelete={ownIds.has(agent.id) ? () => handleDelete(agent) : undefined}
                             onBuild={ownIds.has(agent.id) ? () => handleBuild(agent) : undefined}
+                            onShare={ownIds.has(agent.id) ? () => setAgentToShare(agent) : undefined}
                           />
                         ))}
                       </AnimatePresence>
@@ -511,11 +515,27 @@ export default function AgentLibrarySection() {
         onBuildTriggered={loadAgents}
       />
 
+      <ShareAgentDialog
+        agent={agentToShare}
+        onClose={() => setAgentToShare(null)}
+        onSaved={(projectIds) => {
+          const shared = agentToShare
+          if (!shared) return
+          setCustomAgents(prev => prev.map(a => (a.id === shared.id ? { ...a, sharedProjectIds: projectIds } : a)))
+          addToast({
+            message: projectIds.length
+              ? `"${shared.name}" is shared with ${projectIds.length} project${projectIds.length === 1 ? '' : 's'}`
+              : `"${shared.name}" is no longer shared`,
+            type: 'success',
+          })
+        }}
+      />
+
       {/* Delete Confirmation */}
       <ConfirmDialog
         isOpen={deleteConfirmOpen}
         title="Delete Custom Agent"
-        message={`Delete "${agentToDelete?.name}"? Its running agents are stopped, and the agent and its builds are removed. This cannot be undone.`}
+        message={`Delete "${agentToDelete?.name}"? Your running agents of it are stopped, and the agent and its builds are removed. If it still runs in someone else's session, it can't be deleted yet. This cannot be undone.`}
         confirmText="Delete"
         cancelText="Cancel"
         confirmVariant="danger"

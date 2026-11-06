@@ -953,6 +953,7 @@ export default function ProjectModal({
                     selectedAgentType={selectedAgentType}
                     onSelectAgentType={setSelectedAgentType}
                     showUpload={false}
+                    projectId={project?.id ?? null}
                   />
                 </motion.div>
               )}

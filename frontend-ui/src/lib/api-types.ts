@@ -308,6 +308,10 @@ export interface AgentType {
   authorEmail?: string | null
   tags?: string[]
   createdAt?: string
+  /** Who uploaded it. Null for a built-in. */
+  ownerName?: string | null
+  /** Another user's upload, shared with a project you are in: deploy only. */
+  sharedWithYou?: boolean
 }
 
 /** A {{placeholder}} the agent's prompt compiler can resolve (manifest-declared). */
@@ -332,6 +336,8 @@ export interface CustomAgentType extends AgentType {
     startedAt: string
     completedAt: string | null
   } | null
+  /** The projects whose members may deploy it. */
+  sharedProjectIds?: string[]
 }
 
 // Agent package upload response
@@ -1967,4 +1973,10 @@ export interface CreateAccessTokenResponse {
   /** The secret. Shown once; the server keeps only its hash. */
   token: string
   accessToken: AccessToken
+}
+
+/** A custom agent's project shares, and the projects its owner could share it with. */
+export interface AgentShares {
+  projectIds: string[]
+  projects: { id: string; name: string }[]
 }
