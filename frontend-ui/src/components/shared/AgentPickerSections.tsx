@@ -1,6 +1,6 @@
 /**
- * The agent picker in both deploy dialogs: one list in two sections, custom
- * (uploaded) agents first, then the built-in ones. Every agent follows the same
+ * The agent picker in both deploy dialogs: one list in two sections, the
+ * built-in agents first, then the custom (uploaded) ones. Every agent follows the same
  * interface, so none gets its own tab or screen. Uploading happens in
  * Settings → Agent Library; the picker links there.
  */
@@ -57,6 +57,22 @@ export default function AgentPickerSections({
   return (
     <div className="space-y-6">
       <section>
+        <h3 className={heading}>Built-in</h3>
+        {isLoading ? (
+          <div className={`flex items-center gap-3 py-6 ${quiet}`}>
+            <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            Loading agents...
+          </div>
+        ) : loadError ? (
+          <p className={quiet}>{loadError}</p>
+        ) : builtIn.length === 0 ? (
+          <p className={quiet}>No built-in agents</p>
+        ) : (
+          cards(builtIn)
+        )}
+      </section>
+
+      <section>
         <div className="flex items-baseline justify-between gap-3 mb-3">
           <h3 className={`${heading} mb-0`}>Custom</h3>
           <Link
@@ -81,22 +97,6 @@ export default function AgentPickerSections({
             <p className={quiet}>No custom agents shared with this project.</p>
           )}
         </div>
-      </section>
-
-      <section>
-        <h3 className={heading}>Built-in</h3>
-        {isLoading ? (
-          <div className={`flex items-center gap-3 py-6 ${quiet}`}>
-            <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            Loading agents...
-          </div>
-        ) : loadError ? (
-          <p className={quiet}>{loadError}</p>
-        ) : builtIn.length === 0 ? (
-          <p className={quiet}>No built-in agents</p>
-        ) : (
-          cards(builtIn)
-        )}
       </section>
     </div>
   )
