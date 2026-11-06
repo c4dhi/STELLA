@@ -62,67 +62,96 @@ describe('public project setup', () => {
     expect(prisma.project.update).not.toHaveBeenCalled();
   });
 
-  describe('which connectors a member may bind', () => {
-    // Connectors in the database: the owner's private one, the owner's one
-    // shared with the project, and a member's private one.
-    const CONNECTORS = [
-      { id: 'owner-private', userId: 'owner-1', sharedWith: [] as string[] },
-      { id: 'owner-shared', userId: 'owner-1', sharedWith: ['proj'] },
-      { id: 'member-private', userId: 'member-1', sharedWith: [] as string[] },
-    ];
-    const setup = () => {
+  describe('only the owner binds connectors to the public agent', () => {
+    // A stored project row; `connector.findMany` must never be needed.
+    const setup = (row: { publicAgentTypeId: string | null; publicAgentConfig?: unknown }) => {
+      let stored: any = { id: 'proj', publicAgentConfig: null, ...row };
       const prisma: any = {
         project: {
-          findUnique: jest.fn(async () => ({ id: 'proj', publicAgentTypeId: 'type-1' })),
-          update: jest.fn(async ({ data }: any) => ({ id: 'proj', ...data })),
+          findUnique: jest.fn(async () => stored),
+          update: jest.fn(async ({ data }: any) => {
+            stored = {
+              ...stored,
+              ...(data.publicAgentTypeId !== undefined && { publicAgentTypeId: data.publicAgentTypeId }),
+              ...(data.publicAgentConfig !== undefined && { publicAgentConfig: data.publicAgentConfig }),
+            };
+            return stored;
+          }),
         },
-        agentType: { findUnique: jest.fn(async () => ({ id: 'type-1' })) },
+        agentType: { findUnique: jest.fn(async ({ where }: any) => ({ id: where.id })) },
         projectMembership: { findFirst: jest.fn(async () => ({ userId: 'owner-1' })) },
-        // A small evaluator for the where clause the service builds.
-        connector: {
-          findMany: jest.fn(async ({ where }: any) =>
-            CONNECTORS.filter(
-              (c) =>
-                where.id.in.includes(c.id) &&
-                where.OR.some((o: any) =>
-                  o.userId ? c.userId === o.userId : c.sharedWith.includes(o.shares.some.projectId),
-                ),
-            ).map(({ id }) => ({ id })),
-          ),
-        },
       };
       const agents: any = { checkDeployable: jest.fn(async () => undefined) };
-      return { prisma, agents, service: new ProjectsService(prisma, agents) };
+      return { prisma, agents, service: new ProjectsService(prisma, agents), stored: () => stored };
     };
-    const save = (service: ProjectsService, callerId: string, connectorId: string) =>
-      service.updatePublicConfig(
-        'proj',
-        { isPublic: true, agentConfig: { name: 'ELIAS', connectorBindings: [{ connectorId, slot: 'elias' }] } } as UpdatePublicConfigDto,
-        callerId,
-      );
+    const bind = (connectorId: string) => ({ connectorBindings: [{ connectorId, slot: 'elias' }] });
+    const save = (service: ProjectsService, callerId: string, dto: object) =>
+      service.updatePublicConfig('proj', { isPublic: true, ...dto } as UpdatePublicConfigDto, callerId);
 
-    it("refuses a member binding the owner's unshared connector", async () => {
-      const { prisma, agents, service } = setup();
-      await expect(save(service, 'member-1', 'owner-private')).rejects.toBeInstanceOf(ForbiddenException);
+    it('refuses a member binding any connector, the owner\'s or a shared one', async () => {
+      const { prisma, agents, service } = setup({ publicAgentTypeId: 'type-1' });
+      for (const id of ['owner-private', 'owner-shared', 'member-private']) {
+        await expect(save(service, 'member-1', { agentConfig: { name: 'ELIAS', ...bind(id) } })).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+      }
       expect(agents.checkDeployable).not.toHaveBeenCalled();
       expect(prisma.project.update).not.toHaveBeenCalled();
     });
 
-    it('refuses a member binding their own connector, since the agent runs as the owner', async () => {
-      const { service } = setup();
-      await expect(save(service, 'member-1', 'member-private')).rejects.toBeInstanceOf(ForbiddenException);
+    it('refuses the two-call bypass: bindings with no agent type, then the type alone', async () => {
+      const { prisma, service } = setup({ publicAgentTypeId: null });
+      // 1. No agent type yet: the bindings are still refused.
+      await expect(
+        save(service, 'member-1', { agentConfig: { name: 'ELIAS', ...bind('owner-private') } }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.project.update).not.toHaveBeenCalled();
     });
 
-    it('lets a member bind a connector shared with the project', async () => {
-      const { prisma, service } = setup();
-      await save(service, 'member-1', 'owner-shared');
+    it('refuses a member moving the owner\'s bindings to another agent type', async () => {
+      const { prisma, agents, service } = setup({
+        publicAgentTypeId: 'type-1',
+        publicAgentConfig: { name: 'ELIAS', ...bind('owner-private') },
+      });
+      await expect(save(service, 'member-1', { agentTypeId: 'type-2' })).rejects.toBeInstanceOf(ForbiddenException);
+      expect(agents.checkDeployable).not.toHaveBeenCalled();
+      expect(prisma.project.update).not.toHaveBeenCalled();
+    });
+
+    it('re-checks the stored bindings against the new type when the owner changes only the type', async () => {
+      const { agents, service } = setup({ publicAgentTypeId: null, publicAgentConfig: { name: 'ELIAS', ...bind('owner-private') } });
+      await save(service, 'owner-1', { agentTypeId: 'type-2' });
+      expect(agents.checkDeployable).toHaveBeenCalledWith('type-2', 'owner-1', 'proj', [
+        { connectorId: 'owner-private', slot: 'elias' },
+      ]);
+    });
+
+    it('lets the owner bind connectors, and checks them as the owner', async () => {
+      const { prisma, agents, service } = setup({ publicAgentTypeId: 'type-1' });
+      await save(service, 'owner-1', { agentConfig: { name: 'ELIAS', ...bind('owner-private') } });
+      expect(agents.checkDeployable).toHaveBeenCalledWith('type-1', 'owner-1', 'proj', [
+        { connectorId: 'owner-private', slot: 'elias' },
+      ]);
       expect(prisma.project.update).toHaveBeenCalled();
     });
 
-    it('lets the owner bind their own connector', async () => {
-      const { prisma, service } = setup();
-      await save(service, 'owner-1', 'owner-private');
-      expect(prisma.project.update).toHaveBeenCalled();
+    it('lets a member save a setup without bindings, which clears the owner\'s bindings', async () => {
+      const { service, stored } = setup({
+        publicAgentTypeId: 'type-1',
+        publicAgentConfig: { name: 'ELIAS', ...bind('owner-private') },
+      });
+      await save(service, 'member-1', { agentConfig: { name: 'Other setup' } });
+      expect(stored().publicAgentConfig).toEqual({ name: 'Other setup' });
+    });
+
+    it('lets a member change other fields without touching the bindings', async () => {
+      const { agents, service, stored } = setup({
+        publicAgentTypeId: 'type-1',
+        publicAgentConfig: { name: 'ELIAS', ...bind('owner-private') },
+      });
+      await save(service, 'member-1', { agentTypeId: 'type-1', enabled: true });
+      expect(agents.checkDeployable).not.toHaveBeenCalled();
+      expect(stored().publicAgentConfig).toEqual({ name: 'ELIAS', ...bind('owner-private') });
     });
   });
 });

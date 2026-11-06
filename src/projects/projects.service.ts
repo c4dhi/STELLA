@@ -274,8 +274,8 @@ export class ProjectsService {
   /**
    * Update public project configuration
    * Allows configuring a project as public with agent, visualizer, and expiration settings.
-   * `callerId` is the member saving it: only they decide which connectors the
-   * public agent may use (see assertMayBindForPublic).
+   * `callerId` is the member saving it; only the owner may bind connectors
+   * (see checkPublicBindings).
    */
   async updatePublicConfig(id: string, dto: UpdatePublicConfigDto, callerId: string) {
     const project = await this.prisma.project.findUnique({
@@ -324,29 +324,7 @@ export class ProjectsService {
       if (dto.maxSessionDurationSeconds !== undefined) {
         updateData.publicMaxSessionDurationSeconds = dto.maxSessionDurationSeconds;
       }
-      // Public agents are deployed as the owner: check now that the owner may
-      // deploy this type with these connectors, so a setup that cannot run fails here, not when a visitor joins.
-      const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
-      if (dto.agentConfig !== undefined && agentTypeId) {
-        const owner = await this.prisma.projectMembership.findFirst({
-          where: { projectId: id, role: 'OWNER' },
-          select: { userId: true },
-        });
-        await this.assertMayBindForPublic(
-          id,
-          callerId,
-          owner?.userId ?? null,
-          dto.agentConfig.connectorBindings,
-        );
-        if (owner) {
-          await this.agentsService.checkDeployable(
-            agentTypeId,
-            owner.userId,
-            id,
-            dto.agentConfig.connectorBindings,
-          );
-        }
-      }
+      await this.checkPublicBindings(project, dto, callerId);
     } else {
       // When making private, optionally clear public config
       // Keep the publicToken so it can be re-enabled without losing the link
@@ -376,35 +354,44 @@ export class ProjectsService {
   }
 
   /**
-   * The public agent runs as the owner, so the deploy check alone would let any
-   * member bind the owner's private connectors. A binding is allowed only for a
-   * connector shared with the project, or one of the caller's own connectors
-   * when the caller is the owner.
+   * Public agents run as the owner, with the owner's connectors. So only the
+   * owner may bind connectors to the public setup, whatever the agent type, and
+   * only the owner may move existing bindings to another agent type. Then the
+   * owner's deploy check runs, so a setup that cannot run fails here, not when
+   * a visitor joins.
+   *
+   * A member may still save a setup without bindings. That replaces the stored
+   * setup, so the owner's bindings are cleared, not carried over to a setup the
+   * owner didn't choose.
    */
-  private async assertMayBindForPublic(
-    projectId: string,
+  private async checkPublicBindings(
+    project: { id: string; publicAgentTypeId: string | null; publicAgentConfig: unknown },
+    dto: UpdatePublicConfigDto,
     callerId: string,
-    ownerId: string | null,
-    bindings: { connectorId: string }[] | undefined,
   ): Promise<void> {
-    const ids = [...new Set((bindings ?? []).map((b) => b.connectorId))];
-    if (ids.length === 0) return;
-    const ownAllowed = ownerId !== null && callerId === ownerId;
-    const allowed = await this.prisma.connector.findMany({
-      where: {
-        id: { in: ids },
-        OR: [
-          { shares: { some: { projectId } } },
-          ...(ownAllowed ? [{ userId: callerId }] : []),
-        ],
-      },
-      select: { id: true },
+    const owner = await this.prisma.projectMembership.findFirst({
+      where: { projectId: project.id, role: 'OWNER' },
+      select: { userId: true },
     });
-    const ok = new Set(allowed.map((c) => c.id));
-    if (ids.some((connectorId) => !ok.has(connectorId))) {
-      throw new ForbiddenException(
-        'A public setup can only use connectors shared with this project, or the owner\'s own connectors when the owner saves it',
-      );
+    const ownerId = owner?.userId ?? null;
+    const isOwner = ownerId !== null && callerId === ownerId;
+
+    const stored =
+      ((project.publicAgentConfig as { connectorBindings?: { connectorId: string; slot?: string }[] } | null)
+        ?.connectorBindings) ?? [];
+    const typeChanged =
+      dto.agentTypeId !== undefined && dto.agentTypeId !== project.publicAgentTypeId;
+    const bindings = dto.agentConfig !== undefined ? dto.agentConfig.connectorBindings : stored;
+
+    const bindsNow = dto.agentConfig !== undefined && (bindings?.length ?? 0) > 0;
+    const movesStored = dto.agentConfig === undefined && typeChanged && stored.length > 0;
+    if ((bindsNow || movesStored) && !isOwner) {
+      throw new ForbiddenException('Only the project owner can bind connectors to the public agent');
+    }
+
+    const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
+    if (ownerId && agentTypeId && (dto.agentConfig !== undefined || typeChanged)) {
+      await this.agentsService.checkDeployable(agentTypeId, ownerId, project.id, bindings);
     }
   }
 
