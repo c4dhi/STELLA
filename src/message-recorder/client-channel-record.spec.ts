@@ -1,4 +1,4 @@
-import { clientChannelRecord } from './message-recorder.service.js'
+import { clientChannelRecord } from './client-channel-record.js'
 
 // Screen events, the agent's replies and its commands are kept in the session
 // history: for a study, what the participant did and when is data.
