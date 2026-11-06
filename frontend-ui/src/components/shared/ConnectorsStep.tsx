@@ -75,7 +75,7 @@ export default function ConnectorsStep({ slots, available, loading, loadError, s
               : !c.tools
                 ? { text: 'Not tested yet', tone: 'warn' as const }
                 : fitting
-                  ? { text: 'Has what the agent needs', tone: 'ok' as const }
+                  ? { text: slots.length > 1 ? `Fits ${fitting.label}` : 'Has what the agent needs', tone: 'ok' as const }
                   : lacking && lacking.length > 0
                     ? { text: `Missing ${lacking.join(', ')}`, tone: 'info' as const }
                     : null
@@ -124,9 +124,11 @@ export default function ConnectorsStep({ slots, available, loading, loadError, s
 
       <Link
         to="/settings/connectors"
+        target="_blank"
+        rel="noopener noreferrer"
         className={`inline-block text-xs ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-900'} underline-offset-2 hover:underline`}
       >
-        Add or test connectors in Settings → Connectors →
+        Add or test connectors in Settings → Connectors (opens in a new tab) ↗
       </Link>
     </div>
   )

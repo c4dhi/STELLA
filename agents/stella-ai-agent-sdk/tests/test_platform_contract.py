@@ -231,6 +231,9 @@ class FakePipeline:
     def participant_identities(self) -> List[str]:
         return list(self.identities)
 
+    def take_waiting_input(self):
+        return None
+
     async def publish_data(self, payload):
         self.published.append(payload)
 

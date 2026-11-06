@@ -35,22 +35,43 @@ export function initialSelection(slots: ConnectorSlot[], available: AvailableCon
 }
 
 /**
- * Which ticked connector fills each slot. A slot takes the first ticked
- * connector, in the order they were ticked, that covers its tools and fills no
- * other slot; failing that, one whose tools are unknown (never tested). A slot
- * nothing fits stays ''.
+ * Which ticked connector fills each slot, one connector per slot at most.
+ * Connectors that cover a slot's tools are matched first, so that as many slots
+ * as possible get one that covers them: a connector that fits two slots moves
+ * to the one nothing else fits (a maximum matching, trying candidates in the
+ * order they were ticked). Slots still empty then take a ticked connector whose
+ * tools are unknown (never tested). A slot nothing fits stays ''.
  */
 export function assignSlots(slots: ConnectorSlot[], available: AvailableConnector[], selected: string[]): SlotChoices {
   const byId = new Map(available.map((c) => [c.id, c]))
   const ticked = selected.map((id) => byId.get(id)).filter((c): c is AvailableConnector => !!c)
-  const used = new Set<string>()
-  const choices: SlotChoices = {}
-  for (const slot of slots) {
-    const free = ticked.filter((c) => !used.has(c.id) && c.kind === slot.kind)
-    const pick = free.find((c) => covers(slot, c)) ?? free.find((c) => missingTools(slot, c) === null)
-    choices[slot.slot] = pick?.id ?? ''
-    if (pick) used.add(pick.id)
+  const covering = slots.map((slot) => ticked.filter((c) => covers(slot, c)))
+  const holder = new Map<string, number>()  // connector id → index of the slot it fills
+
+  const place = (slotIndex: number, seen: Set<string>): boolean => {
+    for (const c of covering[slotIndex]) {
+      if (seen.has(c.id)) continue
+      seen.add(c.id)
+      const other = holder.get(c.id)
+      if (other === undefined || place(other, seen)) {
+        holder.set(c.id, slotIndex)
+        return true
+      }
+    }
+    return false
   }
+  slots.forEach((_, i) => place(i, new Set()))
+
+  const choices: SlotChoices = Object.fromEntries(slots.map((slot) => [slot.slot, '']))
+  for (const [id, i] of holder) choices[slots[i].slot] = id
+  slots.forEach((slot) => {
+    if (choices[slot.slot]) return
+    const untested = ticked.find((c) => !holder.has(c.id) && c.kind === slot.kind && missingTools(slot, c) === null)
+    if (untested) {
+      choices[slot.slot] = untested.id
+      holder.set(untested.id, -1)
+    }
+  })
   return choices
 }
 

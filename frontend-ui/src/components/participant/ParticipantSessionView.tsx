@@ -1779,7 +1779,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       <SessionCompletedOverlay isVisible={showCompletedScreen} />
 
       {/* Session Timeout Overlay */}
-      <SessionTimeoutOverlay isVisible={sessionTimedOut && !sessionCompleted} failureCode={`f-${sessionData.participantName}`} />
+      <SessionTimeoutOverlay isVisible={sessionTimedOut && !sessionCompleted} />
 
       </div>{/* End fullscreen container wrapper */}
     </motion.div>

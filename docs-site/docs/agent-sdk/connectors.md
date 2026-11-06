@@ -21,7 +21,7 @@ agent pod ──gRPC ConnectorService──▶ STELLA backend ──MCP (Streama
 
 ## Declaring connectors in `agent.yaml`
 
-An agent that needs a connector declares a **slot** for it in the top-level `connectors:` list of `agent.yaml`. The deploy wizard asks the user to fill each slot with one of their connectors, or one shared with the project:
+An agent that needs a connector declares a **slot** for it in the top-level `connectors:` list of `agent.yaml`. The deploy wizard's **Connectors** step shows one list of the user's connectors and those shared with the project, to tick, and STELLA fills the agent's slots from the ticked ones (see [How ticked connectors fill the slots](#how-ticked-connectors-fill-the-slots)):
 
 ```yaml
 connectors:
@@ -46,7 +46,31 @@ connectors:
 | `description` | no | Help text for the wizard. |
 | `requiredTools` | no | Tools the connector must offer. Checked against the tool list from the user's last *Test connection*. |
 
-Users may always offer **extra connectors** the agent did not declare. These show up in `self.connectors.list()` with `slot=None`, under the connector's own handle, so a general-purpose agent can discover and use whatever it is given.
+### How ticked connectors fill the slots
+
+The user ticks connectors in one list; the wizard does not ask slot by slot. Above the list, a line per slot says what the agent needs and which ticked connector fills it. STELLA assigns them like this:
+
+1. Connectors whose last test shows every `requiredTools` entry are matched first. As many slots as possible get such a connector: a connector that fits two slots goes to the one no other ticked connector fits. Otherwise candidates are tried in the order they were ticked.
+2. A slot still empty then takes a ticked connector that was never tested, so its tools are unknown.
+3. One connector never fills two slots.
+
+**Continue** stays off while a required slot is empty. A slot is preselected when exactly one of the user's connectors covers it.
+
+Every other ticked connector is bound as an **extra connector** the agent did not declare. These show up in `self.connectors.list()` with `slot=None`, under the connector's own handle, so a general-purpose agent can discover and use whatever it is given.
+
+## Managing connectors in Settings
+
+**Settings → Connectors** shows the user's connectors, and those shared with their projects, as a grid of cards. Each connector has:
+
+- **An emoji and a description** (up to 32 and 500 characters), shown on its card and in the deploy wizard. An empty description clears it.
+- **A detail page** (click the card) with:
+  - **Tools**: what the server offered at the last *Test connection*, with each tool's parameters read from its input schema.
+  - **Try it**: a form per tool that calls it for real, with the owner's token, and shows the result. A tool that writes data writes it. Every call is recorded in the audit log like an agent's call. Only the connector's owner can use it.
+  - **Connection**: the URL, authentication and last test.
+  - **Sharing**: the projects it is shared with.
+  - **Recent calls**: the last calls through the connector, with the agent that made them (or "A deleted agent"). Arguments are never shown. On a connector shared with a project, the owner sees the names of other users' agents that called it, just as those calls are in the audit.
+
+A new connector is tested as soon as it is saved.
 
 ## Using connectors from an agent
 

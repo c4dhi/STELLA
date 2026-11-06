@@ -1059,6 +1059,20 @@ class AudioPipeline:
         envelope) to everyone in the room."""
         await self._room.publish_data(payload)
 
+    def take_waiting_input(self) -> Optional[TranscriptEvent]:
+        """A message waiting for the agent (typed, or a final transcript), taken
+        off the queue; ``None`` when nothing is waiting.
+
+        For ``wait_for_participant``: an organiser who writes or speaks before
+        any participant joined starts an agent that speaks first. The message
+        that starts it is the trigger, so it is not handed to ``audio_in()``
+        afterwards as a reply.
+        """
+        try:
+            return self._transcript_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
     def participant_identities(self) -> List[str]:
         """Identities of everyone else in the room right now (people, other
         agents and services alike; see ``stella_agent_sdk.participants``)."""

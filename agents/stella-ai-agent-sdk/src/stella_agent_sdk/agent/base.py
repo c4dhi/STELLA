@@ -939,17 +939,30 @@ class BaseAgent(ABC):
     async def wait_for_participant(
         self, *, timeout: Optional[float] = None, poll_interval: float = 0.3
     ) -> str:
-        """Wait until a session participant is in the room and return their identity.
+        """Wait until the session should start and return who started it.
 
-        For agents that speak first: they start when the participant joins, not
-        when an organiser opens the session page. Raises ``asyncio.TimeoutError``
-        after ``timeout`` seconds (``None``: wait as long as it takes).
+        For agents that speak first. Two things start it:
+
+        - a session participant joins (``participant-*``: an invitation link, a
+          public project or a manual registration): returns their identity;
+        - anyone else in the room, such as an organiser testing from the session
+          page, sends a chat message or says something: returns the message's
+          participant id. That message is the trigger, so it is taken off the
+          queue and not handed to ``audio_in()`` as a reply.
+
+        An organiser who only opens the session page does not start it. Raises
+        ``asyncio.TimeoutError`` after ``timeout`` seconds (``None``: wait as
+        long as it takes).
         """
         async def _poll() -> str:
             while True:
                 people = self.session_participants()
                 if people:
                     return people[0]
+                if self.has_audio:
+                    message = self.audio.take_waiting_input()
+                    if message is not None and (message.text or "").strip():
+                        return message.participant_id or "human"
                 await asyncio.sleep(poll_interval)
 
         if timeout is None:

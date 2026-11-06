@@ -57,6 +57,16 @@ describe('connector picker', () => {
     expect(assignSlots([slot, twin], [full], ['elias'])).toEqual({ elias: 'elias', twin: '' })
   })
 
+  it('moves a connector that fits two slots to the one nothing else fits', () => {
+    // X covers both slots, Y only the first. Ticked X then Y: Y takes the first
+    // slot and X the second, so both are filled.
+    const first: ConnectorSlot = { ...slot, slot: 'first', requiredTools: ['a'] }
+    const second: ConnectorSlot = { ...slot, slot: 'second', requiredTools: ['b'] }
+    const x = { ...full, id: 'x', tools: [{ name: 'a' }, { name: 'b' }] }
+    const y = { ...full, id: 'y', tools: [{ name: 'a' }] }
+    expect(assignSlots([first, second], [x, y], ['x', 'y'])).toEqual({ first: 'y', second: 'x' })
+  })
+
   it('is complete once every required slot is bound', () => {
     expect(unboundRequiredSlots([slot, optional], { elias: '', notes: '' }).map((s) => s.slot)).toEqual(['elias'])
     expect(unboundRequiredSlots([slot, optional], { elias: 'x', notes: '' })).toEqual([])
