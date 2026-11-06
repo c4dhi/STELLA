@@ -275,7 +275,7 @@ export interface DeployRequirements {
   configurator: { required: boolean } | null
   env: { required: string[]; optional: { name: string; description?: string; default?: string }[] }
   connectors: ConnectorSlot[]
-  /** The settings a user may give the agent (JSON Schema), or null for none. */
+  /** Describes the agent's own defaultConfig; never set by a deployment. */
   configSchema: Record<string, unknown> | null
   defaultConfig: Record<string, unknown>
   sdkMinVersion: string | null
@@ -1051,74 +1051,6 @@ export interface UpdateEnvVarTemplateDto {
   // secrets you keep).
   removeKeys?: string[]
   // agentTypeId is immutable post-create; duplicate the template to rebind.
-}
-
-// ============================================================================
-// Agent Requirements (parsed from configSchema)
-// ============================================================================
-
-export interface AgentRequirements {
-  requiresPlan: boolean
-  requiredEnvVars: string[]
-  supportsConfigurator: boolean
-}
-
-/**
- * Parse agent requirements from configSchema
- * Looks for:
- * - x-stella-requires-plan: true on any property
- * - x-stella-env-vars: ["VAR1", "VAR2"] at root level
- */
-export function parseAgentRequirements(
-  configSchema: Record<string, unknown> | null | undefined
-): AgentRequirements {
-  if (!configSchema) {
-    return { requiresPlan: false, requiredEnvVars: [], supportsConfigurator: false }
-  }
-
-  const properties = (configSchema.properties as Record<string, any>) || {}
-  const requiresPlan = Object.values(properties).some(
-    (prop: any) => prop?.['x-stella-requires-plan'] === true
-  )
-
-  const requiredEnvVars = (configSchema['x-stella-env-vars'] as string[]) || []
-  const supportsConfigurator = configSchema['x-stella-supports-configurator'] === true
-
-  return { requiresPlan, requiredEnvVars, supportsConfigurator }
-}
-
-/** Declared env var keys an agent type exposes, split by requiredness. */
-export interface DeclaredEnvVars {
-  required: string[]
-  optional: string[]
-}
-
-/**
- * Parse the env var keys an agent type declares in its configSchema. Mirrors the
- * backend extractors in src/kubernetes/utils/agent-config-injection.util.ts
- * (extractRequiredEnvVars / extractOptionalEnvVars):
- * - `x-stella-env-vars`          → required keys (string[])
- * - `x-stella-optional-env-vars` → optional specs ({ name, ... }[]) → names
- * Malformed entries are ignored defensively.
- */
-export function parseDeclaredEnvVars(
-  configSchema: Record<string, unknown> | null | undefined
-): DeclaredEnvVars {
-  if (!configSchema) return { required: [], optional: [] }
-
-  const rawRequired = configSchema['x-stella-env-vars']
-  const required = Array.isArray(rawRequired)
-    ? rawRequired.filter((v): v is string => typeof v === 'string')
-    : []
-
-  const rawOptional = configSchema['x-stella-optional-env-vars']
-  const optional = Array.isArray(rawOptional)
-    ? rawOptional
-        .filter((v): v is { name: string } => typeof v === 'object' && v !== null && typeof (v as { name?: unknown }).name === 'string')
-        .map((v) => v.name)
-    : []
-
-  return { required, optional }
 }
 
 // ============================================================================
@@ -1955,7 +1887,7 @@ export interface AvailableConnector {
   ownerName: string | null
 }
 
-/** A connector slot an agent declares in configSchema['x-stella-connectors']. */
+/** A connector slot an agent declares in agent.yaml (`connectors`). */
 export interface ConnectorSlot {
   slot: string
   kind: 'mcp'
@@ -1963,22 +1895,6 @@ export interface ConnectorSlot {
   label: string
   description?: string
   requiredTools: string[]
-}
-
-/** The connector slots an agent type declares. Malformed entries are ignored. */
-export function parseConnectorSlots(configSchema: Record<string, unknown> | null | undefined): ConnectorSlot[] {
-  const raw = configSchema?.['x-stella-connectors']
-  if (!Array.isArray(raw)) return []
-  return raw
-    .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object' && typeof s.slot === 'string' && typeof s.label === 'string')
-    .map(s => ({
-      slot: s.slot as string,
-      kind: 'mcp' as const,
-      required: s.required === true,
-      label: s.label as string,
-      description: typeof s.description === 'string' ? s.description : undefined,
-      requiredTools: Array.isArray(s.requiredTools) ? s.requiredTools.filter((t): t is string => typeof t === 'string') : [],
-    }))
 }
 
 export interface CreateConnectorRequest {

@@ -23,8 +23,6 @@ describe('deployNeeds', () => {
         configurator: { required: false },
         env: { required: ['OPENAI_API_KEY'], optional: [{ name: 'STELLA_LANGUAGE', description: 'Spoken language', default: 'de' }] },
       },
-      // Legacy flags that disagree are ignored once requirements are there.
-      configSchema: { 'x-stella-env-vars': ['OTHER'] },
     })
     expect(needs).toEqual({
       persona: false,
@@ -45,23 +43,8 @@ describe('deployNeeds', () => {
     expect(effectiveMode(two, 'companion')).toBe('companion')
   })
 
-  it('falls back to the configSchema flags for a type sent without requirements', () => {
-    const needs = deployNeeds({
-      configSchema: {
-        'x-stella-env-vars': ['OPENAI_API_KEY'],
-        'x-stella-optional-env-vars': [{ name: 'TTS_VOICE' }],
-        'x-stella-supports-configurator': true,
-        properties: { plan: { 'x-stella-requires-plan': true } },
-      },
-    })
-    expect(needs).toMatchObject({
-      persona: true,
-      modes: ['plan', 'companion'],
-      planRequired: true,
-      configurator: true,
-      requiredEnvVars: ['OPENAI_API_KEY'],
-      optionalEnvVars: [{ name: 'TTS_VOICE' }],
-    })
+  it('asks for nothing when the server sent no requirements (the server refuses that deploy)', () => {
+    expect(deployNeeds({ requirements: null })).toMatchObject({ modes: [], planRequired: false, requiredEnvVars: [] })
   })
 
   it('needs nothing without a type', () => {

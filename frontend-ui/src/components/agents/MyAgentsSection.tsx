@@ -10,9 +10,13 @@ import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
 interface MyAgentsSectionProps {
   onSelectAgent?: (agent: CustomAgentType) => void
   refreshTrigger?: number
+  /** Called with the user's uploads each time they load. */
+  onAgentsLoaded?: (agents: CustomAgentType[]) => void
+  /** Render nothing when the user has no uploads (the parent says so itself). */
+  hideEmpty?: boolean
 }
 
-export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSectionProps) {
+export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded, hideEmpty }: MyAgentsSectionProps) {
   const { addToast } = useToastStore()
   const [agents, setAgents] = useState<CustomAgentType[]>([])
   const [loading, setLoading] = useState(true)
@@ -28,6 +32,7 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSecti
       setError('')
       const data = await apiClient.getMyAgents()
       setAgents(data)
+      onAgentsLoaded?.(data)
     } catch (err: any) {
       setError(err?.message || 'Failed to load custom agents')
     } finally {
@@ -171,6 +176,7 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger }: MyAgentsSecti
   }
 
   if (agents.length === 0) {
+    if (hideEmpty) return null
     return (
       <div className="text-center py-8 px-4">
         <Package className="w-12 h-12 mx-auto text-gray-300 mb-3" />

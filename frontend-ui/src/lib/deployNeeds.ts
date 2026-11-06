@@ -2,11 +2,10 @@
  * What a deploy dialog must ask for, from the `requirements` the server
  * resolved from the agent's agent.yaml (GET /agent-types). Shared by the
  * session deploy dialog and the public-project setup, so both ask for the
- * same things. The legacy `configSchema` flags are read only for a type the
- * server sent without `requirements`.
+ * same things. A type without `requirements` (its manifest could not be read)
+ * asks for nothing; deploying it is refused by the server with the reason.
  */
 import type { DeployRequirements } from './api-types'
-import { parseAgentRequirements, parseDeclaredEnvVars } from './api-types'
 
 export type AgentMode = 'plan' | 'companion'
 
@@ -39,7 +38,7 @@ const NONE: DeployNeeds = {
 }
 
 export function deployNeeds(
-  type: { requirements?: DeployRequirements; configSchema?: Record<string, unknown> | null } | null | undefined,
+  type: { requirements?: DeployRequirements | null } | null | undefined,
 ): DeployNeeds {
   if (!type) return NONE
   const r = type.requirements
@@ -53,16 +52,7 @@ export function deployNeeds(
       optionalEnvVars: r.env.optional.map((v) => ({ ...v })),
     }
   }
-  const legacy = parseAgentRequirements(type.configSchema)
-  const declared = parseDeclaredEnvVars(type.configSchema)
-  return {
-    ...NONE,
-    modes: legacy.requiresPlan ? ['plan', 'companion'] : [],
-    planRequired: legacy.requiresPlan,
-    configurator: legacy.supportsConfigurator,
-    requiredEnvVars: legacy.requiredEnvVars,
-    optionalEnvVars: declared.optional.map((name) => ({ name })),
-  }
+  return NONE
 }
 
 /** Ask which mode only when the agent can run in more than one. */

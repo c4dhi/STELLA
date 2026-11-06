@@ -29,8 +29,6 @@ const itemVariants = {
   }
 }
 
-type FilterType = 'all' | 'built-in' | 'custom'
-
 export default function AgentLibrarySection() {
   const { resolvedTheme } = useThemeStore()
   const { addToast } = useToastStore()
@@ -41,7 +39,6 @@ export default function AgentLibrarySection() {
   const [customAgents, setCustomAgents] = useState<CustomAgentType[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
 
   // Modal states
@@ -75,36 +72,27 @@ export default function AgentLibrarySection() {
     loadAgents()
   }, [])
 
-  // Combined and filtered agents
-  const filteredAgents = (() => {
-    let agents: (AgentType | CustomAgentType)[] = []
-
-    if (filter === 'all') {
-      // Merge all agents and custom agents, avoiding duplicates
-      const customIds = new Set(customAgents.map(a => a.id))
-      agents = [
-        ...customAgents,
-        ...allAgents.filter(a => !customIds.has(a.id)),
-      ]
-    } else if (filter === 'built-in') {
-      agents = allAgents.filter(a => a.isBuiltIn)
-    } else if (filter === 'custom') {
-      agents = customAgents
-    }
-
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase()
-      agents = agents.filter(a =>
-        a.name.toLowerCase().includes(query) ||
-        a.description?.toLowerCase().includes(query) ||
-        a.capabilities?.some(c => c.toLowerCase().includes(query)) ||
-        a.tags?.some(t => t.toLowerCase().includes(query))
-      )
-    }
-
-    return agents
-  })()
+  // Two sections: custom (uploaded) agents first, then the built-in ones. The
+  // custom list is every approved upload plus the user's own, whatever their state.
+  const matches = (a: AgentType | CustomAgentType) => {
+    const query = searchQuery.trim().toLowerCase()
+    return !query ||
+      a.name.toLowerCase().includes(query) ||
+      !!a.description?.toLowerCase().includes(query) ||
+      !!a.capabilities?.some(c => c.toLowerCase().includes(query)) ||
+      !!a.tags?.some(t => t.toLowerCase().includes(query))
+  }
+  const ownIds = new Set(customAgents.map(a => a.id))
+  const allCustom: (AgentType | CustomAgentType)[] = [
+    ...customAgents,
+    ...allAgents.filter(a => !a.isBuiltIn && !ownIds.has(a.id)),
+  ]
+  const allBuiltIn = allAgents.filter(a => a.isBuiltIn)
+  const sections = [
+    { id: 'custom', title: 'Custom', total: allCustom.length, agents: allCustom.filter(matches) },
+    { id: 'built-in', title: 'Built-in', total: allBuiltIn.length, agents: allBuiltIn.filter(matches) },
+  ]
+  const filteredAgents = sections.flatMap(sec => sec.agents)
 
   const handleView = (agent: AgentType | CustomAgentType) => {
     setSelectedAgent(agent)
@@ -200,9 +188,6 @@ export default function AgentLibrarySection() {
       }
     }
   }
-
-  const builtInCount = allAgents.filter(a => a.isBuiltIn).length
-  const customCount = customAgents.length
 
   return (
     <>
@@ -302,40 +287,6 @@ export default function AgentLibrarySection() {
                 }
               `}
             />
-          </div>
-
-          {/* Filter Tabs */}
-          <div className={`flex rounded-xl p-1 ${isDark ? 'bg-zinc-700/50' : 'bg-neutral-100'}`}>
-            {[
-              { id: 'all', label: 'All', count: builtInCount + customCount },
-              { id: 'built-in', label: 'Built-in', count: builtInCount },
-              { id: 'custom', label: 'Custom', count: customCount },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setFilter(tab.id as FilterType)}
-                className={`
-                  px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 flex items-center gap-2
-                  ${filter === tab.id
-                    ? isDark
-                      ? 'bg-zinc-600 text-zinc-100'
-                      : 'bg-white text-neutral-900 shadow-sm'
-                    : isDark
-                      ? 'text-zinc-400 hover:text-zinc-200'
-                      : 'text-neutral-500 hover:text-neutral-700'
-                  }
-                `}
-              >
-                {tab.label}
-                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${
-                  filter === tab.id
-                    ? isDark ? 'bg-zinc-500 text-zinc-200' : 'bg-neutral-100 text-neutral-600'
-                    : isDark ? 'bg-zinc-600 text-zinc-400' : 'bg-neutral-200 text-neutral-500'
-                }`}>
-                  {tab.count}
-                </span>
-              </button>
-            ))}
           </div>
         </motion.div>
 
@@ -470,7 +421,7 @@ export default function AgentLibrarySection() {
                     Clear Search
                   </motion.button>
                 </>
-              ) : filter === 'custom' ? (
+              ) : allCustom.length === 0 ? (
                 <>
                   <h3 className={`text-heading font-semibold mb-2 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
                     No custom agents yet
@@ -505,27 +456,40 @@ export default function AgentLibrarySection() {
             </motion.div>
           )}
 
-          {/* Agents Grid */}
+          {/* Agent sections: custom first, then built-in */}
           {!isLoading && !error && filteredAgents.length > 0 && (
-            <motion.div
-              key="agents"
-              className="grid grid-cols-1 lg:grid-cols-2 gap-5"
-              variants={containerVariants}
-              initial="hidden"
-              animate="visible"
-            >
-              <AnimatePresence mode="popLayout">
-                {filteredAgents.map((agent, index) => (
-                  <AgentTypeCard
-                    key={agent.id}
-                    agent={agent}
-                    index={index}
-                    onView={() => handleView(agent)}
-                    onDelete={!agent.isBuiltIn ? () => handleDelete(agent) : undefined}
-                    onBuild={!agent.isBuiltIn ? () => handleBuild(agent) : undefined}
-                  />
-                ))}
-              </AnimatePresence>
+            <motion.div key="agents" className="space-y-8" variants={containerVariants} initial="hidden" animate="visible">
+              {sections.filter(sec => sec.agents.length > 0 || (!searchQuery.trim() && sec.id === 'custom')).map((sec) => (
+                <section key={sec.id}>
+                  <h3 className={`flex items-center gap-2 text-xs font-medium tracking-wider uppercase mb-3 ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>
+                    {sec.title}
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold normal-case ${isDark ? 'bg-zinc-700 text-zinc-400' : 'bg-neutral-200 text-neutral-500'}`}>
+                      {searchQuery.trim() ? `${sec.agents.length} of ${sec.total}` : sec.total}
+                    </span>
+                  </h3>
+                  {sec.agents.length === 0 ? (
+                    <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+                      No custom agents yet. Upload an agent package to add one.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                      <AnimatePresence mode="popLayout">
+                        {sec.agents.map((agent, index) => (
+                          <AgentTypeCard
+                            key={agent.id}
+                            agent={agent}
+                            index={index}
+                            onView={() => handleView(agent)}
+                            // Only the uploader manages an upload; others can view and deploy it.
+                            onDelete={ownIds.has(agent.id) ? () => handleDelete(agent) : undefined}
+                            onBuild={ownIds.has(agent.id) ? () => handleBuild(agent) : undefined}
+                          />
+                        ))}
+                      </AnimatePresence>
+                    </div>
+                  )}
+                </section>
+              ))}
             </motion.div>
           )}
         </AnimatePresence>
