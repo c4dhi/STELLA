@@ -73,7 +73,9 @@ import type { AgentShares,
   AccessToken,
   AvailableConnector,
   Connector,
+  ConnectorCallLogEntry,
   ConnectorTestResult,
+  ConnectorToolCallResult,
   CreateConnectorRequest,
   UpdateConnectorRequest,
   CreateAccessTokenRequest,
@@ -1865,6 +1867,19 @@ class SessionManagementClient {
   /** MCP initialize + tools/list against the server; stores the tool list. */
   async testConnector(id: string): Promise<ConnectorTestResult> {
     return this.post<ConnectorTestResult>(`/me/connectors/${id}/test`)
+  }
+
+  /** Run one tool as the owner ("Try it"). A failure comes back in the result, not as an error. */
+  async callConnectorTool(id: string, tool: string, args: Record<string, unknown>): Promise<ConnectorToolCallResult> {
+    return this.post<ConnectorToolCallResult>(
+      `/me/connectors/${id}/tools/${encodeURIComponent(tool)}/call`,
+      { arguments: args },
+    )
+  }
+
+  /** The connector's latest calls, newest first. */
+  async listConnectorCalls(id: string, limit = 20): Promise<ConnectorCallLogEntry[]> {
+    return this.get<ConnectorCallLogEntry[]>(`/me/connectors/${id}/calls?limit=${limit}`)
   }
 
   // ============================================================================

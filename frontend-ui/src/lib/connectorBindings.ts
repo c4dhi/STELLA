@@ -1,8 +1,9 @@
 /**
- * The deploy wizard's "Connectors" step: which of the user's connectors may fill
- * each slot the agent declares (requirements.connectors), and the bindings sent
- * as `connectorBindings`. The server checks the bindings again on deploy; this
- * only decides what to offer and when the step is complete.
+ * The deploy wizard's "Connectors" step: one list of the user's connectors to
+ * tick. Each slot the agent declares (requirements.connectors) is filled from
+ * the ticked ones, and the bindings are sent as `connectorBindings`. The server
+ * checks the bindings again on deploy; this only decides what is bound and
+ * when the step is complete.
  */
 import type { AvailableConnector, ConnectorSlot } from './api-types'
 
@@ -19,21 +20,36 @@ export function missingTools(slot: ConnectorSlot, connector: AvailableConnector)
   return slot.requiredTools.filter((tool) => !offered.has(tool))
 }
 
-/** Connectors of the slot's kind, the ones known to cover its tools first. */
-export function connectorsForSlot(slot: ConnectorSlot, available: AvailableConnector[]): AvailableConnector[] {
-  const rank = (c: AvailableConnector) => {
-    const missing = missingTools(slot, c)
-    return missing === null ? 1 : missing.length === 0 ? 0 : 2
-  }
-  return available.filter((c) => c.kind === slot.kind).sort((a, b) => rank(a) - rank(b))
+function covers(slot: ConnectorSlot, c: AvailableConnector): boolean {
+  return c.kind === slot.kind && missingTools(slot, c)?.length === 0
 }
 
-/** Preselect a slot's connector when exactly one is known to cover its tools. */
-export function initialSlotChoices(slots: ConnectorSlot[], available: AvailableConnector[]): SlotChoices {
+/** Preselect, for each slot, the one connector known to cover its tools, if exactly one does. */
+export function initialSelection(slots: ConnectorSlot[], available: AvailableConnector[]): string[] {
+  const picked: string[] = []
+  for (const slot of slots) {
+    const covering = available.filter((c) => covers(slot, c))
+    if (covering.length === 1 && !picked.includes(covering[0].id)) picked.push(covering[0].id)
+  }
+  return picked
+}
+
+/**
+ * Which ticked connector fills each slot. A slot takes the first ticked
+ * connector, in the order they were ticked, that covers its tools and fills no
+ * other slot; failing that, one whose tools are unknown (never tested). A slot
+ * nothing fits stays ''.
+ */
+export function assignSlots(slots: ConnectorSlot[], available: AvailableConnector[], selected: string[]): SlotChoices {
+  const byId = new Map(available.map((c) => [c.id, c]))
+  const ticked = selected.map((id) => byId.get(id)).filter((c): c is AvailableConnector => !!c)
+  const used = new Set<string>()
   const choices: SlotChoices = {}
   for (const slot of slots) {
-    const covering = connectorsForSlot(slot, available).filter((c) => missingTools(slot, c)?.length === 0)
-    choices[slot.slot] = covering.length === 1 ? covering[0].id : ''
+    const free = ticked.filter((c) => !used.has(c.id) && c.kind === slot.kind)
+    const pick = free.find((c) => covers(slot, c)) ?? free.find((c) => missingTools(slot, c) === null)
+    choices[slot.slot] = pick?.id ?? ''
+    if (pick) used.add(pick.id)
   }
   return choices
 }
@@ -43,20 +59,11 @@ export function unboundRequiredSlots(slots: ConnectorSlot[], choices: SlotChoice
   return slots.filter((slot) => slot.required && !choices[slot.slot])
 }
 
-/**
- * Connectors the user may offer on top of the declared slots: any not already
- * chosen for a slot. The agent finds them with `connectors.list()`.
- */
-export function extraCandidates(available: AvailableConnector[], choices: SlotChoices): AvailableConnector[] {
-  const chosen = new Set(Object.values(choices).filter(Boolean))
-  return available.filter((c) => !chosen.has(c.id))
-}
-
-/** What the deploy request sends: the bound slots, then each extra connector without a slot. */
+/** What the deploy request sends: the bound slots, then every other ticked connector without a slot. */
 export function bindingsFromChoices(
   slots: ConnectorSlot[],
   choices: SlotChoices,
-  extras: string[] = [],
+  selected: string[] = [],
 ): { connectorId: string; slot?: string }[] {
   const chosen = new Set<string>()
   const bindings: { connectorId: string; slot?: string }[] = []
@@ -66,7 +73,7 @@ export function bindingsFromChoices(
     chosen.add(id)
     bindings.push({ connectorId: id, slot: slot.slot })
   }
-  for (const id of extras) {
+  for (const id of selected) {
     if (chosen.has(id)) continue
     chosen.add(id)
     bindings.push({ connectorId: id })

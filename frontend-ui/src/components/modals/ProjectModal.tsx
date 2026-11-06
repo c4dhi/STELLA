@@ -19,7 +19,7 @@ import type {
   AvailableConnector,
 } from '../../lib/api-types'
 import { deployNeeds } from '../../lib/deployNeeds'
-import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
+import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import WizardProgress from '../shared/WizardProgress'
@@ -160,12 +160,15 @@ export default function ProjectModal({
   const [ownConnectors, setOwnConnectors] = useState<AvailableConnector[]>([])
   const [connectorsLoading, setConnectorsLoading] = useState(false)
   const [connectorsError, setConnectorsError] = useState<string | null>(null)
-  const [slotChoices, setSlotChoices] = useState<SlotChoices>({})
-  const [extraConnectors, setExtraConnectors] = useState<string[]>([])
+  // Ticked connectors, in ticking order; the agent's slots are filled from them.
+  const [selectedConnectors, setSelectedConnectors] = useState<string[]>([])
   useEffect(() => {
-    setSlotChoices(initialSlotChoices(connectorSlots, ownConnectors))
-    setExtraConnectors([])
+    setSelectedConnectors(initialSelection(connectorSlots, ownConnectors))
   }, [connectorSlots, ownConnectors])
+  const slotChoices = useMemo(
+    () => assignSlots(connectorSlots, ownConnectors, selectedConnectors),
+    [connectorSlots, ownConnectors, selectedConnectors],
+  )
   const showConnectorsStep = connectorSlots.length > 0 || ownConnectors.length > 0
 
   // The language the selected plan declares, if it declares one. A plan written
@@ -250,6 +253,8 @@ export default function ProjectModal({
               list.map((c) => ({
                 id: c.id,
                 name: c.name,
+                icon: c.icon,
+                description: c.description,
                 handle: c.handle,
                 kind: c.kind,
                 url: c.url,
@@ -397,10 +402,7 @@ export default function ProjectModal({
       case 'plan':
         return selectedPlan !== null || !needs.planRequired
       case 'connectors':
-        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0 && connectorSlots.every((slot) => {
-          const chosen = ownConnectors.find((c) => c.id === slotChoices[slot.slot])
-          return !chosen || !missingTools(slot, chosen)?.length
-        })
+        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0
       case 'configuration':
         return selectedConfiguration !== null
       case 'persona':
@@ -474,7 +476,7 @@ export default function ProjectModal({
           }
 
           if (showConnectorsStep) {
-            const bindings = bindingsFromChoices(connectorSlots, slotChoices, extraConnectors)
+            const bindings = bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors)
             if (bindings.length > 0) agentConfig.connectorBindings = bindings
           }
 
@@ -1142,12 +1144,11 @@ export default function ProjectModal({
                     available={ownConnectors}
                     loading={connectorsLoading}
                     loadError={connectorsError}
-                    choices={slotChoices}
-                    onChoose={(slot, connectorId) => setSlotChoices((prev) => ({ ...prev, [slot]: connectorId }))}
-                    extras={extraConnectors}
-                    onToggleExtra={(connectorId, on) =>
-                      setExtraConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
+                    selected={selectedConnectors}
+                    onToggle={(connectorId, on) =>
+                      setSelectedConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
                     }
+                    choices={slotChoices}
                   />
                 </motion.div>
               )}

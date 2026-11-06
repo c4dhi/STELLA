@@ -24,7 +24,7 @@ import EnvVarNeedsSummary from '../shared/EnvVarNeedsSummary'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import type { AvailableConnector } from '../../lib/api-types'
-import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
+import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
 import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
 
 interface DeployAgentModalProps {
@@ -94,8 +94,8 @@ export default function DeployAgentModal({
   const [availableConnectors, setAvailableConnectors] = useState<AvailableConnector[]>([])
   const [connectorsLoading, setConnectorsLoading] = useState(false)
   const [connectorsError, setConnectorsError] = useState<string | null>(null)
-  const [slotChoices, setSlotChoices] = useState<SlotChoices>({})
-  const [extraConnectors, setExtraConnectors] = useState<string[]>([])
+  // Ticked connectors, in ticking order; the agent's slots are filled from them.
+  const [selectedConnectors, setSelectedConnectors] = useState<string[]>([])
   // The connectors this user may bind here: their own and those shared with
   // the session's project. Loaded once per opening, for every agent type,
   // because any agent may be offered extra connectors.
@@ -113,10 +113,13 @@ export default function DeployAgentModal({
   }, [isOpen, projectId])
   // A new agent type starts from its own preselection and no extras.
   useEffect(() => {
-    setSlotChoices(initialSlotChoices(connectorSlots, availableConnectors))
-    setExtraConnectors([])
+    setSelectedConnectors(initialSelection(connectorSlots, availableConnectors))
   }, [connectorSlots, availableConnectors])
   const slotsNeedProject = connectorSlots.length > 0 && !projectId
+  const slotChoices = useMemo(
+    () => assignSlots(connectorSlots, availableConnectors, selectedConnectors),
+    [connectorSlots, availableConnectors, selectedConnectors],
+  )
   const showConnectorsStep = connectorSlots.length > 0 || availableConnectors.length > 0
 
   // Shared env-var editor (manual entry). Required keys must be filled; values are
@@ -326,10 +329,7 @@ export default function DeployAgentModal({
       case 'plan':
         return !!selectedPlan || !needs.planRequired
       case 'connectors':
-        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0 && connectorSlots.every((slot) => {
-          const chosen = availableConnectors.find((c) => c.id === slotChoices[slot.slot])
-          return !chosen || !missingTools(slot, chosen)?.length
-        })
+        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0
       case 'envvars':
         // In select view: can always continue (template selection is optional)
         if (envVarsView === 'select') {
@@ -414,7 +414,7 @@ export default function DeployAgentModal({
         needs.persona ? selectedPersona?.id : undefined,
         runsPlans ? runMode : undefined,
         runsPlans && runMode === 'companion' ? activityPlanIds : undefined,
-        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, extraConnectors) : undefined,
+        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors) : undefined,
       )
       onClose()
     } catch (err) {
@@ -688,12 +688,11 @@ export default function DeployAgentModal({
                     available={availableConnectors}
                     loading={connectorsLoading}
                     loadError={slotsNeedProject ? 'this session has no project' : connectorsError}
-                    choices={slotChoices}
-                    onChoose={(slot, connectorId) => setSlotChoices((prev) => ({ ...prev, [slot]: connectorId }))}
-                    extras={extraConnectors}
-                    onToggleExtra={(connectorId, on) =>
-                      setExtraConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
+                    selected={selectedConnectors}
+                    onToggle={(connectorId, on) =>
+                      setSelectedConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
                     }
+                    choices={slotChoices}
                   />
                 </motion.div>
               ) : step === 'voice' ? (
