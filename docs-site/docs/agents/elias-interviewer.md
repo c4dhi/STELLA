@@ -1,0 +1,31 @@
+---
+title: "🎙️ ELIAS-Interviewer"
+---
+
+# 🎙️ ELIAS-Interviewer
+
+An uploadable agent (`custom-agents/elias-interviewer`) that runs an ELIAS interview guide in a voice session. It asks every question word for word, asks an unclear answer again up to three times, and writes each turn to ELIAS as it happens. It is the reference for an agent that is only `agent.yaml` plus a `BaseAgent` subclass.
+
+## What it declares
+
+| `agent.yaml` | Value |
+|---|---|
+| `features.persona` | `false`: it reads the guide verbatim, so a persona has nothing to change |
+| `features.plans` | none: it builds its plan from the ELIAS guide itself |
+| `env.required` | `OPENAI_API_KEY` (the answer check), `ELIAS_PROJECT_ID` |
+| `env.optional` | `ELIAS_MAX_ATTEMPTS` (3), `ELIAS_OPENING`, `ELIAS_REASK_PREFIX`, `ELIAS_CLOSING`, `ELIAS_ERROR`, `ANSWER_CHECK_MODEL` (`gpt-4o-mini`), `ANSWER_CHECK_TIMEOUT_S` (8), `STELLA_LANGUAGE` |
+| `connectors` | slot `elias`, required, with `get_interview_guide`, `start_interview`, `record_interview_message` and `end_interview` |
+
+The ELIAS token never reaches the pod: the agent calls ELIAS only through the connector the deployer binds to the `elias` slot (see [Connectors](../agent-sdk/connectors.md)).
+
+## Session end
+
+- **Auto-pause** stops the pod but leaves the ELIAS interview open. On wake the agent continues at the next unanswered question in the same interview.
+- **The time cap or the organiser** ending the session: the agent's `session_end_mode()` returns `wrap_up`, so its `on_session_ending` writes the last turns and closes the interview in ELIAS (see [When the session ends](../agent-sdk/platform-contract.md#when-the-session-ends)).
+- **The last question** done: it says its closing line and closes the interview.
+
+## Deploying it
+
+Upload the package from Settings → Agent Library, build it, and share it with the projects that should use it. Then deploy it like any other agent: pick the ELIAS connector and set `ELIAS_PROJECT_ID`.
+
+The package README has the full behaviour, the failure cases and how to run its tests.

@@ -388,7 +388,7 @@ The platform-wide switches in Settings → Platform Defaults. Only a system admi
 
 ### `platform_settings_update` · `mcp:write`
 
-Turn **Review uploaded agents** on or off. While it is on (the default), no uploaded agent deploys until a system admin approves it, and unreviewed agents stop coming back on restart or wake. While it is off, a user can deploy their own upload as soon as it is built. The MCP switch and the TTS playback default can only be changed in the UI.
+Turn **Review uploaded agents** on or off. While it is on (the default), no uploaded agent deploys until a system admin approves it, and unreviewed agents stop coming back on restart or wake. While it is off, a user can deploy their own upload as soon as it is built, and members of the projects they share it with can deploy it there. The MCP switch and the TTS playback default can only be changed in the UI.
 
 **Inputs:**
 

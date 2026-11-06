@@ -125,14 +125,14 @@ STELLA reads the manifest again on every deploy, restart and wake after auto-pau
 - `features.plans.required` is set and the deployment has neither a plan nor, for agents with the `companion` mode, a companion session;
 - the deployment brings a plan, a companion session or a Configurator configuration that the manifest doesn't declare;
 - `features.configurator.required` is set and no configuration was picked;
-- the user's settings, merged over `defaultConfig`, don't fit `configSchema`;
+- the deployment sets any other config key to something other than the agent's `defaultConfig` (a deployment has no per-agent settings; anything the deployer should choose is an env var);
 - `sdk.minVersion` is newer than the SDK this STELLA ships (`GET /agent-types/sdk-support`).
 
-The agent receives its settings at the top level of `AGENT_CONFIG`. A setting the user leaves out takes its value from `defaultConfig`. Objects merge key by key, and an array replaces the default. Next to the settings, STELLA puts the keys it sets itself: `persona`, `mode`, `plan`, `available_plans` and `pipeline_config`. Don't use these names for settings.
+The agent receives its `defaultConfig` at the top level of `AGENT_CONFIG`, unchanged. Next to it, STELLA puts the keys it sets itself: `persona`, `mode`, `plan`, `available_plans` and `pipeline_config`. A deployment sets only those keys; a request that tries to change anything else gets a 400 that points at env vars. Don't use these names in `defaultConfig`.
 
 `GET /agent-types` returns these resolved `requirements` for every agent type, so a client never needs to read the manifest itself.
 
-`env.optional` defaults are shown to the user when deploying. They are not injected into the pod, so the agent's own fallback still applies when a variable is unset. Keep the two in agreement.
+`env.optional` defaults are shown to the user when deploying and are set on the pod for every variable the deployer leaves empty, on deploy and on restart. A value the deployer enters wins. Keep the agent's own fallback the same as the declared default, for runs outside STELLA.
 
 ## SDK versions
 

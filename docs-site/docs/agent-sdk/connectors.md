@@ -21,22 +21,20 @@ agent pod ──gRPC ConnectorService──▶ STELLA backend ──MCP (Streama
 
 ## Declaring connectors in `agent.yaml`
 
-An agent that needs a connector declares a **slot** for it in `configSchema`, next to `x-stella-env-vars`. The deploy wizard asks the user to fill each slot with one of their connectors, or one shared with the project:
+An agent that needs a connector declares a **slot** for it in the top-level `connectors:` list of `agent.yaml`. The deploy wizard asks the user to fill each slot with one of their connectors, or one shared with the project:
 
 ```yaml
-configSchema:
-  type: object
-  x-stella-connectors:
-    - slot: interview          # the handle the agent calls it by
-      kind: mcp                # only "mcp" for now
-      required: true           # deploy is refused without it
-      label: ELIAS interview server
-      description: Supplies the interview guide and records answers.
-      requiredTools:           # checked against the connector's last test
-        - get_interview_guide
-        - start_interview
-        - record_interview_message
-        - end_interview
+connectors:
+  - slot: interview          # the handle the agent calls it by
+    kind: mcp                # only "mcp" for now
+    required: true           # deploy is refused without it
+    label: ELIAS interview server
+    description: Supplies the interview guide and records answers.
+    requiredTools:           # checked against the connector's last test
+      - get_interview_guide
+      - start_interview
+      - record_interview_message
+      - end_interview
 ```
 
 | Field | Required | Meaning |

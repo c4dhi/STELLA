@@ -298,7 +298,7 @@ STELLA_AI_TEMP_DIR=/mnt/stella-ai-temp
 
 ## Agent SDK (Pod-Level)
 
-These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. For how the audio pipeline actually works and why the timing constants are what they are, see [TTS & Audio Pipeline](./tts-pipeline.md). Agents declare them in their `agent.yaml` manifest under `x-stella-optional-env-vars` so the frontend deploy modal can expose them.
+These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. For how the audio pipeline actually works and why the timing constants are what they are, see [TTS & Audio Pipeline](./tts-pipeline.md). The SDK declares them itself (`stella_agent_sdk.platform_env`, exported as `contracts/sdk-platform-env.json`), so an agent's `agent.yaml` doesn't need to repeat them. An agent may still list one under `env.optional` to show it with its own description or default.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -313,6 +313,7 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `TTS_VOICE` | No | provider default | Seed TTS voice, overridable per stream. Honored by voice-selecting providers, ignored by others |
 | `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
 | `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
+| `SESSION_END_MODE` | No | `farewell` | What the agent does when the time cap or the organiser ends the session: `farewell`, `wrap_up` (calls `on_session_ending`) or `silent`. An agent may decide this itself by overriding `session_end_mode()`; see [Platform contract](../agent-sdk/platform-contract.md#when-the-session-ends) |
 
 The SDK also reads two timing settings that neither built-in agent declares in `agent.yaml`: `BARGE_IN_DUCK_TIMEOUT_MS` (default `1200`), after which a duck that was never confirmed as an interruption lifts by itself, so background noise cannot keep the agent quiet; and `STELLA_MUTE_SILENCE_MS` (default `3000`), the silence fed to speech recognition when a participant mutes the microphone, so the sentence in flight is finalized like any pause.
 
@@ -340,15 +341,13 @@ When `TTS_ENABLED=false`, the gate still discards finals during processing but a
 
 ### Manifest Declaration
 
-Agents declare these in `agent.yaml` so the frontend deploy modal can display them:
+An agent's own optional variables go under `env.optional` in `agent.yaml` (manifest 2.0). The deploy dialog lists them with their descriptions, and STELLA sets the default on the pod when the deployer leaves one empty:
 
 ```yaml
-configSchema:
-  # ...
-  x-stella-optional-env-vars:
-    - name: TTS_ENABLED
-      description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
-      default: "true"
+env:
+  required:
+    - OPENAI_API_KEY
+  optional:
     - name: INTERRUPT_MODE
       description: "Transcript interrupt behavior: 'none' (turn-based gating) or 'smart' (barge-in)"
       default: "none"
