@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import type { Persona } from '../../lib/api-types'
+import { WIZARD_CARD_GRID } from './wizardLayout'
 
 /** The built-in persona for companion deployments (prisma/seed.ts). */
 export const COMPANION_DEFAULT_PERSONA_ID = '00000000-0000-4000-8000-000000000002'
@@ -219,7 +220,7 @@ export default function PersonaSelectionStep({
 
   if (editingId && draft) {
     return (
-      <div className="space-y-3 max-h-[350px] overflow-y-auto pr-2">
+      <div className="space-y-3 pr-2">
         <div className="flex gap-3">
           <input
             type="text"
@@ -315,7 +316,7 @@ export default function PersonaSelectionStep({
   return (
     <div className="space-y-3">
       {error && <p className="text-xs text-red-500">{error}</p>}
-      <div className="grid grid-cols-2 gap-3 max-h-[350px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
+      <div className={`${WIZARD_CARD_GRID} pr-2 pt-1 -mt-1`}>
         {personas.map((persona, index) => {
           const style = CARD_STYLES[index % CARD_STYLES.length]
           const isSelected = selectedPersona?.id === persona.id

@@ -4,6 +4,7 @@ import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import { usePlanBuilderStore } from '../../store/planBuilderStore'
 import type { PlanTemplate } from '../../lib/api-types'
+import { WIZARD_CARD_GRID } from './wizardLayout'
 
 interface PlanSelectionStepProps {
   selectedPlan: PlanTemplate | null
@@ -129,7 +130,7 @@ export default function PlanSelectionStep({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-3 max-h-[350px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
+    <div className={`${WIZARD_CARD_GRID} pr-2 pt-1 -mt-1`}>
       {planTemplates.map((plan, index) => {
         const style = getPlanCardStyle(index)
         const stateCount = plan.content.states?.length || 0

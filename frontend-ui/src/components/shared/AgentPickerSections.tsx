@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom'
 import AgentGalleryCard from '../agents/AgentGalleryCard'
 import { MyAgentsSection } from '../agents'
 import type { AgentType, CustomAgentType } from '../../lib/api-types'
+import { WIZARD_CARD_GRID } from './wizardLayout'
 
 interface AgentPickerSectionsProps {
   agentTypes: AgentType[]
@@ -41,7 +42,7 @@ export default function AgentPickerSections({
   const quiet = `text-sm ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`
 
   const cards = (types: AgentType[]) => (
-    <div className="grid grid-cols-2 gap-3 pt-1">
+    <div className={`${WIZARD_CARD_GRID} pt-1`}>
       {types.map((type) => (
         <AgentGalleryCard
           key={type.id}

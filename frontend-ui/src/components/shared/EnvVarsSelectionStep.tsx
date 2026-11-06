@@ -7,6 +7,7 @@ import { useEnvVarListEditor } from './EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from './EnvVarListEditor/EnvVarListEditor'
 import EnvVarNeedsSummary from './EnvVarNeedsSummary'
 import { envVarHints, type OptionalEnvVar } from '../../lib/deployNeeds'
+import { WIZARD_CARD_GRID } from './wizardLayout'
 
 type EnvVarsView = 'select' | 'edit'
 
@@ -160,7 +161,7 @@ export default function EnvVarsSelectionStep({
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-3 max-h-[300px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
+              <div className={`${WIZARD_CARD_GRID} pr-2 pt-1 -mt-1`}>
                 {/* Template cards */}
                 {envVarTemplates.map((template, index) => {
                   const style = getEnvVarCardStyle(index)
@@ -340,7 +341,7 @@ export default function EnvVarsSelectionStep({
               </div>
             )}
 
-            <div className="max-h-[300px] overflow-y-auto pr-2">
+            <div className="pr-2">
               <EnvVarListEditor editor={editor} isDark={isDark} hints={envVarHints(optionalEnvVars)} />
             </div>
           </motion.div>

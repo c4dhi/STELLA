@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import type { PlanTemplate } from '../../lib/api-types'
+import { WIZARD_CARD_GRID } from './wizardLayout'
 
 interface ActivitySelectionStepProps {
   selectedPlanIds: string[]
@@ -60,7 +61,7 @@ export default function ActivitySelectionStep({
           : `${selectedPlanIds.length} activit${selectedPlanIds.length === 1 ? 'y' : 'ies'} the user can choose from.`}
       </p>
 
-      <div className="grid grid-cols-2 gap-3 max-h-[320px] overflow-y-auto pr-2 pt-1">
+      <div className={`${WIZARD_CARD_GRID} pr-2 pt-1`}>
         {plans.map((plan) => {
           const selected = selectedPlanIds.includes(plan.id)
           const stateCount = plan.content.states?.length || 0

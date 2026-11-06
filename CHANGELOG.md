@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The deploy wizards ("Deploy agent" and the public project setup) are sized by the screen, not by the step: the same box on every step, a bit larger on full HD and 4K, with the step scrolling inside it.
 - Agent Library: an agent someone else shared now says which of your projects you can deploy it in ("Shared by Olga · in Study A"). `GET /agent-types` returns `sharedInProjects` for it.
 - The deploy dialogs no longer upload agent packages. Upload in Settings → Agent Library; the dialogs' Custom section links there.
 - **Built-in and uploaded agents are stored by one mapping.** Before, the seed and the upload endpoint each turned agent.yaml into an AgentType their own way. Each had its own expert reader, and companion experts were handled differently in the two. Now both use one mapping, and each AgentType keeps its full manifest (new `manifest` column; the migration adds it and the next seed or re-upload fills it).
