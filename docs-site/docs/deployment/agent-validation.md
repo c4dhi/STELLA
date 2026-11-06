@@ -23,6 +23,14 @@ Custom agents are validated individually when they are packaged, uploaded, or bu
 
 This means a custom agent does not need to be part of the built-in agent set to be validated before deployment.
 
+### A new version, and deleting
+
+- **A new version replaces your old one.** Upload the package again with the same `metadata.slug` and a higher `metadata.version`. STELLA replaces your agent in place, so its env var templates, configurations and public projects keep pointing at it.
+  - The new version must be built (and reviewed, if review is on) before it can be deployed.
+  - Agents that are already running keep the old image until they stop.
+- **Some uploads are refused.** This happens when the version is unchanged, or when the slug belongs to another user's agent or a built-in one. Another user's agent is never replaced.
+- **Deleting an agent stops its running agents first.** They keep their transcripts. The delete is refused while a public project uses the agent.
+
 ## Recommended Workflow
 
 If you are building your own agent, follow the deployment-test checklist in [Build Your Own Agent](../guides/build-your-own-agent.md#run-deployment-tests).

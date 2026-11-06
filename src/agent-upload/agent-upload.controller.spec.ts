@@ -27,10 +27,11 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
       findUnique: jest.fn().mockResolvedValue(agentRecord),
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'new', ...data })),
+      update: jest.fn().mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data })),
       delete: jest.fn().mockResolvedValue({}),
     },
     agentInstance: {
-      count: jest.fn().mockResolvedValue(0),
+      findMany: jest.fn().mockResolvedValue([] as { id: string }[]),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     project: { count: jest.fn().mockResolvedValue(0) },
@@ -45,8 +46,9 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
   }
   const build = { startBuild: jest.fn().mockResolvedValue({ buildLogId: 'b1' }) }
   const storage = { delete: jest.fn().mockResolvedValue(undefined) }
-  const controller = new AgentUploadController(pkg as any, build as any, storage as any, prisma as any)
-  return { controller, prisma, pkg, build, storage }
+  const agents = { stopAgent: jest.fn().mockResolvedValue({}) }
+  const controller = new AgentUploadController(pkg as any, build as any, storage as any, prisma as any, agents as any)
+  return { controller, prisma, pkg, build, storage, agents }
 }
 
 const zip = { originalname: 'a.zip', size: 1, buffer: Buffer.from('x') } as Express.Multer.File
@@ -104,7 +106,7 @@ describe('AgentUploadController identity and ownership', () => {
   ])('delete: %s', async (_who, req, allowed) => {
     const { controller, prisma } = makeUpload(upload)
     const run = controller.deleteAgent('a1', req as any)
-    if (allowed) await expect(run).resolves.toEqual({ success: true })
+    if (allowed) await expect(run).resolves.toEqual({ success: true, stoppedAgents: 0 })
     else await expect(run).rejects.toThrow(ForbiddenException)
     expect(prisma.agentType.delete).toHaveBeenCalledTimes(allowed ? 1 : 0)
   })
@@ -126,16 +128,33 @@ describe('AgentUploadController identity and ownership', () => {
     expect(order).toEqual(['db', 'package'])
   })
 
-  it('delete refuses a type with a running agent or a public project, and keeps its package', async () => {
-    const running = makeUpload(upload)
-    running.prisma.agentInstance.count.mockResolvedValue(1)
-    await expect(running.controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('still has 1 running agent')
-    expect(running.prisma.agentType.delete).not.toHaveBeenCalled()
-    expect(running.storage.delete).not.toHaveBeenCalled()
+  it('delete stops the type\'s agents first, stale ones included, then deletes it', async () => {
+    const { controller, prisma, agents } = makeUpload(upload)
+    const order: string[] = []
+    prisma.agentInstance.findMany.mockResolvedValue([{ id: 'live' }, { id: 'pod-gone' }])
+    agents.stopAgent.mockImplementation(async (id: unknown) => {
+      order.push(`stop ${id}`)
+      return {}
+    })
+    prisma.$transaction.mockImplementation(async (ops: unknown) => {
+      order.push('db')
+      return Promise.all(ops as Promise<unknown>[])
+    })
+    await expect(controller.deleteAgent('a1', user('owner') as any)).resolves.toEqual({ success: true, stoppedAgents: 2 })
+    expect(prisma.agentInstance.findMany.mock.calls[0][0].where).toEqual({
+      agentTypeId: 'a1',
+      status: { in: ['STARTING', 'RUNNING', 'STOPPING'] },
+    })
+    expect(order).toEqual(['stop live', 'stop pod-gone', 'db'])
+  })
 
+  it('delete refuses a type a public project uses, before stopping anything, and keeps its package', async () => {
     const shared = makeUpload(upload)
     shared.prisma.project.count.mockResolvedValue(2)
+    shared.prisma.agentInstance.findMany.mockResolvedValue([{ id: 'live' }])
     await expect(shared.controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('2 public projects use My agent')
+    expect(shared.agents.stopAgent).not.toHaveBeenCalled()
+    expect(shared.prisma.agentType.delete).not.toHaveBeenCalled()
     expect(shared.storage.delete).not.toHaveBeenCalled()
   })
 
@@ -168,5 +187,43 @@ describe('AgentAdminController records the reviewing admin', () => {
     const { controller, prisma } = make()
     await controller.rejectAgent('a1', { reason: 'no' }, user('admin', true) as any)
     expect(prisma.agentType.update.mock.calls[0][0].data.validatedBy).toBe('admin')
+  })
+})
+
+describe('uploading an agent again', () => {
+  const mine = {
+    id: 'a1', slug: 'my-agent', name: 'My agent', version: '0.0.9', isBuiltIn: false, userId: 'u1',
+    packagePath: 'old.zip', imageUrl: 'img:0.0.9', validationStatus: 'APPROVED',
+  }
+
+  it('with a new version replaces the uploader\'s own agent in place', async () => {
+    const { controller, prisma, storage } = makeUpload(mine)
+    const res = await controller.uploadPackage(zip, user('u1') as any)
+    expect(prisma.agentType.create).not.toHaveBeenCalled()
+    const call = prisma.agentType.update.mock.calls[0][0]
+    expect(call.where).toEqual({ id: 'a1' })
+    expect(call.data).toMatchObject({
+      version: '0.1.0', userId: 'u1', packagePath: 'p', imageUrl: null, sdkVersion: null,
+      validationStatus: 'PENDING', validatedAt: null, validatedBy: null,
+    })
+    expect(storage.delete).toHaveBeenCalledWith('old.zip')
+    expect(res).toMatchObject({ id: 'a1', version: '0.1.0', replacedVersion: '0.0.9' })
+  })
+
+  it('with the same version is refused, and stores nothing', async () => {
+    const { controller, prisma, pkg } = makeUpload({ ...mine, version: '0.1.0' })
+    await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow('raise metadata.version')
+    expect(pkg.storePackage).not.toHaveBeenCalled()
+    expect(prisma.agentType.update).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['another user\'s agent', { ...mine, userId: 'u2' }],
+    ['a built-in agent', { ...mine, userId: null, isBuiltIn: true }],
+  ])('never replaces %s', async (_what, row) => {
+    const { controller, prisma, pkg } = makeUpload(row)
+    await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow('Another agent already uses the slug')
+    expect(pkg.storePackage).not.toHaveBeenCalled()
+    expect(prisma.agentType.update).not.toHaveBeenCalled()
   })
 })

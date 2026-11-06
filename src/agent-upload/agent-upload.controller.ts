@@ -28,6 +28,7 @@ import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js'
 
 import type { AuthUser } from '../auth/auth-user.loader.js'
 import { requirementsForListing } from '../agents/agent-requirements.js'
+import { AgentsService } from '../agents/agents.service.js'
 
 interface AuthenticatedRequest extends Request {
   user?: AuthUser
@@ -59,6 +60,7 @@ export class AgentUploadController {
     private agentBuildService: AgentBuildService,
     private storageService: StorageService,
     private prisma: PrismaService,
+    private agentsService: AgentsService,
   ) {}
 
   /**
@@ -117,14 +119,21 @@ export class AgentUploadController {
       throw new BadRequestException((err as Error).message)
     }
 
-    // Check for existing agent with same slug
+    // The slug names an agent across STELLA. Uploading it again with a new
+    // version replaces the uploader's own agent in place (same id, so its
+    // templates, configurations and public projects keep pointing at it). An
+    // agent of another user, or a built-in one, is never replaced.
     const existing = await this.prisma.agentType.findUnique({
       where: { slug: manifest.metadata.slug },
     })
-
-    if (existing) {
+    if (existing && (existing.isBuiltIn || existing.userId !== userId)) {
       throw new BadRequestException(
-        `Agent with slug "${manifest.metadata.slug}" already exists`,
+        `Another agent already uses the slug "${manifest.metadata.slug}"; pick another metadata.slug`,
+      )
+    }
+    if (existing && existing.version === manifest.metadata.version) {
+      throw new BadRequestException(
+        `You already uploaded ${existing.name} ${existing.version}; raise metadata.version to replace it`,
       )
     }
 
@@ -137,21 +146,37 @@ export class AgentUploadController {
     // Same mapping as built-in agents (the seed): manifest → AgentType columns,
     // including the default experts from config/experts/*.json.
     const expertDefaults = this.agentPackageService.readExpertDefaults(file.buffer, manifest.capabilities)
-    const agentType = await this.prisma.agentType.create({
-      data: {
-        ...manifestToAgentTypeData(manifest, expertDefaults),
-        isBuiltIn: false,
-        userId,
-        packagePath: storageInfo.path,
-        packageSize: storageInfo.size,
-        packageHash: storageInfo.hash,
-        // Set only by a successful build (AgentBuildService), with sdkVersion.
-        imageUrl: null,
-        validationStatus: AgentValidationStatus.PENDING,
-      },
-    })
+    const data = {
+      ...manifestToAgentTypeData(manifest, expertDefaults),
+      isBuiltIn: false,
+      userId,
+      packagePath: storageInfo.path,
+      packageSize: storageInfo.size,
+      packageHash: storageInfo.hash,
+      // Set only by a successful build (AgentBuildService), with sdkVersion.
+      imageUrl: null,
+      sdkVersion: null,
+      // New code: built and reviewed again before anyone else can deploy it.
+      validationStatus: AgentValidationStatus.PENDING,
+      validationNotes: null,
+      validatedAt: null,
+      validatedBy: null,
+    }
+    const agentType = existing
+      ? await this.prisma.agentType.update({ where: { id: existing.id }, data })
+      : await this.prisma.agentType.create({ data })
 
-    this.logger.log(`Created agent type: ${agentType.slug} (${agentType.id})`)
+    // Agents already running keep their image (it is tagged with the old
+    // version); only the old package goes.
+    if (existing?.packagePath && existing.packagePath !== storageInfo.path) {
+      await this.storageService.delete(existing.packagePath)
+    }
+
+    this.logger.log(
+      existing
+        ? `Replaced agent type ${agentType.slug} ${existing.version} with ${agentType.version} (${agentType.id})`
+        : `Created agent type: ${agentType.slug} (${agentType.id})`,
+    )
 
     return {
       id: agentType.id,
@@ -159,6 +184,7 @@ export class AgentUploadController {
       name: agentType.name,
       version: agentType.version,
       validationStatus: agentType.validationStatus,
+      replacedVersion: existing?.version ?? null,
       warnings: validation.warnings,
     }
   }
@@ -318,8 +344,8 @@ export class AgentUploadController {
   }
 
   /**
-   * Delete a custom agent.
-   * DELETE /agent-types/:id
+   * Delete a custom agent, stopping its agents first.
+   * POST /agent-types/:id/delete
    */
   @Post(':id/delete')
   async deleteAgent(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
@@ -337,22 +363,23 @@ export class AgentUploadController {
 
     assertOwnsAgent(agentType, req)
 
-    // Refuse while it is in use, rather than failing on a foreign key (a 500).
-    const [running, publicProjects] = await Promise.all([
-      this.prisma.agentInstance.count({
-        where: { agentTypeId: id, status: { in: ['STARTING', 'RUNNING'] } },
-      }),
-      this.prisma.project.count({ where: { publicAgentTypeId: id } }),
-    ])
-    if (running > 0) {
-      throw new BadRequestException(
-        `${agentType.name} still has ${running} running agent${running === 1 ? '' : 's'}. Stop ${running === 1 ? 'it' : 'them'}, then delete it`,
-      )
-    }
+    // A public project would lose its agent: refuse, and say where to change it.
+    const publicProjects = await this.prisma.project.count({ where: { publicAgentTypeId: id } })
     if (publicProjects > 0) {
       throw new BadRequestException(
         `${publicProjects} public project${publicProjects === 1 ? ' uses' : 's use'} ${agentType.name}. Pick another agent there, then delete it`,
       )
+    }
+
+    // Deleting an agent stops its agents first: their pods go and they keep
+    // their transcript. A row left RUNNING after its pod died is stopped the
+    // same way, so it can no longer block the delete.
+    const live = await this.prisma.agentInstance.findMany({
+      where: { agentTypeId: id, status: { in: ['STARTING', 'RUNNING', 'STOPPING'] } },
+      select: { id: true },
+    })
+    for (const agent of live) {
+      await this.agentsService.stopAgent(agent.id)
     }
 
     // Env-var templates and configurations are scoped to this one type, so
@@ -372,7 +399,7 @@ export class AgentUploadController {
 
     this.logger.log(`Deleted agent type: ${agentType.slug}`)
 
-    return { success: true }
+    return { success: true, stoppedAgents: live.length }
   }
 }
 

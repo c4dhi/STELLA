@@ -341,6 +341,8 @@ export interface AgentUploadResponse {
   name: string
   version: string
   validationStatus: AgentValidationStatus
+  /** Set when this upload replaced the user's own older version of the agent. */
+  replacedVersion: string | null
   warnings: string[]
 }
 

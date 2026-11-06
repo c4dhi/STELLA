@@ -7,6 +7,7 @@ import type { AgentType, CustomAgentType } from '../../lib/api-types'
 import AgentTypeCard from './AgentTypeCard'
 import AgentDetailModal from './AgentDetailModal'
 import ConfirmDialog from '../modals/ConfirmDialog'
+import { apiErrorMessage } from '../../lib/apiErrorMessage'
 
 const containerVariants = {
   hidden: {},
@@ -62,7 +63,7 @@ export default function AgentLibrarySection() {
       setAllAgents(builtIn)
       setCustomAgents(custom)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load agents')
+      setError(apiErrorMessage(err, 'Failed to load agents'))
     } finally {
       setIsLoading(false)
     }
@@ -107,12 +108,14 @@ export default function AgentLibrarySection() {
   const confirmDeleteAgent = async () => {
     if (!agentToDelete) return
     try {
-      await apiClient.deleteCustomAgent(agentToDelete.id)
+      const { stoppedAgents } = await apiClient.deleteCustomAgent(agentToDelete.id)
       setCustomAgents(prev => prev.filter(a => a.id !== agentToDelete.id))
-      addToast({ message: `"${agentToDelete.name}" deleted`, type: 'success' })
+      setAllAgents(prev => prev.filter(a => a.id !== agentToDelete.id))
+      const stopped = stoppedAgents ? ` and ${stoppedAgents} agent${stoppedAgents === 1 ? '' : 's'} stopped` : ''
+      addToast({ message: `"${agentToDelete.name}" deleted${stopped}`, type: 'success' })
     } catch (err) {
       addToast({
-        message: err instanceof Error ? err.message : 'Failed to delete agent',
+        message: apiErrorMessage(err, 'Failed to delete agent'),
         type: 'error',
       })
     } finally {
@@ -129,7 +132,7 @@ export default function AgentLibrarySection() {
       loadAgents()
     } catch (err) {
       addToast({
-        message: err instanceof Error ? err.message : 'Failed to start build',
+        message: apiErrorMessage(err, 'Failed to start build'),
         type: 'error',
       })
     }
@@ -169,7 +172,9 @@ export default function AgentLibrarySection() {
       }
 
       addToast({
-        message: `"${response.name}" uploaded successfully`,
+        message: response.replacedVersion
+          ? `"${response.name}" ${response.version} replaces ${response.replacedVersion}. Build it to deploy the new version`
+          : `"${response.name}" uploaded successfully`,
         type: 'success',
       })
 
@@ -177,7 +182,7 @@ export default function AgentLibrarySection() {
       await loadAgents()
 
     } catch (err: any) {
-      const message = err?.message || 'Failed to upload agent'
+      const message = apiErrorMessage(err, 'Failed to upload agent')
       addToast({ message, type: 'error' })
     } finally {
       setIsUploading(false)
@@ -510,7 +515,7 @@ export default function AgentLibrarySection() {
       <ConfirmDialog
         isOpen={deleteConfirmOpen}
         title="Delete Custom Agent"
-        message={`Delete "${agentToDelete?.name}"? This will remove the agent and all associated builds. This cannot be undone.`}
+        message={`Delete "${agentToDelete?.name}"? Its running agents are stopped, and the agent and its builds are removed. This cannot be undone.`}
         confirmText="Delete"
         cancelText="Cancel"
         confirmVariant="danger"

@@ -1232,8 +1232,8 @@ class SessionManagementClient {
   /**
    * Delete a custom agent.
    */
-  async deleteCustomAgent(agentTypeId: string): Promise<{ success: boolean }> {
-    return this.post<{ success: boolean }>(`/agent-types/${agentTypeId}/delete`)
+  async deleteCustomAgent(agentTypeId: string): Promise<{ success: boolean; stoppedAgents: number }> {
+    return this.post<{ success: boolean; stoppedAgents: number }>(`/agent-types/${agentTypeId}/delete`)
   }
 
   /**
