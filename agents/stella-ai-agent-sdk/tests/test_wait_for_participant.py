@@ -13,6 +13,7 @@ import pytest
 
 from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent
 from stella_agent_sdk.audio.pipeline import AudioPipeline
+from stella_agent_sdk.services.stt_client import TranscriptEvent
 
 
 class _Participants:
@@ -109,3 +110,35 @@ async def test_an_empty_message_does_not_start_it():
     await _settle()
     with pytest.raises(asyncio.TimeoutError):
         await agent.wait_for_participant(timeout=0.05, poll_interval=0.01)
+
+
+def _event(text: str, participant_id: str = "human") -> TranscriptEvent:
+    return TranscriptEvent(
+        text=text, is_final=True, transcript_id="t", participant_id=participant_id,
+        confidence=1.0, timestamp_ms=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_what_is_not_a_trigger_stays_on_the_queue_in_order():
+    agent, pipe, _ = _agent(["agent-me", "human"])
+    turn = _event("")  # an agent-initiated turn, queued before anyone wrote
+    pipe._transcript_queue.put_nowait(turn)
+    pipe._transcript_queue.put_nowait(_event("hello"))
+    later = _event("second")
+    pipe._transcript_queue.put_nowait(later)
+
+    assert await agent.wait_for_participant(timeout=1, poll_interval=0.01) == "human"
+    assert pipe._transcript_queue.get_nowait() is turn
+    assert pipe._transcript_queue.get_nowait() is later
+    assert pipe._transcript_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_an_empty_event_alone_stays_and_does_not_start_it():
+    agent, pipe, _ = _agent(["agent-me", "human"])
+    turn = _event("")
+    pipe._transcript_queue.put_nowait(turn)
+    with pytest.raises(asyncio.TimeoutError):
+        await agent.wait_for_participant(timeout=0.05, poll_interval=0.01)
+    assert pipe._transcript_queue.get_nowait() is turn

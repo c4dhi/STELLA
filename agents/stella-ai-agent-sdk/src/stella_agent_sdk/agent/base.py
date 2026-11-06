@@ -961,7 +961,7 @@ class BaseAgent(ABC):
                     return people[0]
                 if self.has_audio:
                     message = self.audio.take_waiting_input()
-                    if message is not None and (message.text or "").strip():
+                    if message is not None:
                         return message.participant_id or "human"
                 await asyncio.sleep(poll_interval)
 

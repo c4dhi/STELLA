@@ -1060,18 +1060,29 @@ class AudioPipeline:
         await self._room.publish_data(payload)
 
     def take_waiting_input(self) -> Optional[TranscriptEvent]:
-        """A message waiting for the agent (typed, or a final transcript), taken
-        off the queue; ``None`` when nothing is waiting.
+        """The first message waiting for the agent (typed, or a final
+        transcript) that has text, taken off the queue; ``None`` when there is
+        none.
 
         For ``wait_for_participant``: an organiser who writes or speaks before
         any participant joined starts an agent that speaks first. The message
         that starts it is the trigger, so it is not handed to ``audio_in()``
-        afterwards as a reply.
+        afterwards as a reply. Anything else waiting (an empty event, an
+        agent-initiated turn) stays on the queue, in order.
         """
-        try:
-            return self._transcript_queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return None
+        waiting: List[TranscriptEvent] = []
+        while True:
+            try:
+                waiting.append(self._transcript_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        taken: Optional[TranscriptEvent] = None
+        for event in waiting:
+            if taken is None and (event.text or "").strip():
+                taken = event
+            else:
+                self._transcript_queue.put_nowait(event)
+        return taken
 
     def participant_identities(self) -> List[str]:
         """Identities of everyone else in the room right now (people, other
