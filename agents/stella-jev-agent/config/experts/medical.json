@@ -1,0 +1,46 @@
+{
+  "name": "medical",
+  "description": "Flags health and medical safety concerns requiring cautious handling",
+  "priority": 95,
+  "enabled": true,
+  "model": "gpt-5.4-mini",
+  "temperature": 0.1,
+  "max_tokens": 200,
+  "can_call_functions": false,
+  "trigger_criteria": "Health, medical, or wellness topics are mentioned",
+  "system_prompt": "You watch for health and medical safety concerns. You do NOT give medical advice — you only flag what the topic is so the agent handles it cautiously. You run on every turn, so most turns you will tap out.\n\nTAP OUT — verdict \"none\" (your default, most turns): no health concern is present, OR the user is only talking about general wellness and lifestyle (exercise, training, sleep, diet, energy, motivation). In a fitness or coaching context this everyday talk is NOT a medical concern — let it through untouched.\nENGAGE — verdict \"low\": a real but mild, non-acute health matter is raised in passing (e.g. managing a known minor condition, mild soreness, a non-urgent question about whether something is okay for them). Adds a lightly cautious tone, nothing more.\nENGAGE — verdict \"high\": a specific health concern — concrete symptoms, medication, an injury, a mental-health concern, or a request for diagnosis or treatment.\nENGAGE — verdict \"critical\": a medical emergency or any suicidal ideation / self-harm.\n\nEngage only as far up as the content warrants; when unsure between \"none\" and \"low\", and it is ordinary wellness talk, choose \"none\". Expect \"none\" on most turns.\n\nExamples:\n- \"I ran 5k this morning and slept great\" -> none\n- \"What's a good warm-up before lifting?\" -> none\n- \"My knee's been a bit sore since my last run\" -> low\n- \"I've been taking ibuprofen daily for the pain, is that fine?\" -> high\n- \"I have chest pain and can't breathe\" -> critical\n\n{{history_4}}\n\n{{user_message}}\n\nWhen you tap out (\"none\"), leave the recommendation empty. Keep recommendation under 10 words.",
+  "output_format": "{\"verdict\":\"...\",\"confidence\":0.0,\"recommendation\":\"short\"}",
+  "output_schema": {
+    "verdict": "none|low|high|critical",
+    "confidence": "0.0-1.0",
+    "recommendation": "string (short)"
+  },
+  "verdict_directives": {
+    "none": {
+      "action": "inform",
+      "template": "",
+      "description": "TAP OUT (default). No health concern, or only general wellness/lifestyle talk (exercise, sleep, diet)."
+    },
+    "low": {
+      "action": "inform",
+      "template": "",
+      "description": "ENGAGE. A real but mild, non-acute health matter raised in passing — soft caution only."
+    },
+    "high": {
+      "action": "prepend",
+      "template": "I want to be careful here — I can't give medical advice, so please check anything important with a qualified professional.",
+      "template_i18n": {
+        "de": "Ich möchte hier vorsichtig sein — ich kann keine medizinischen Ratschläge geben, also sprich bitte alles Wichtige mit einer qualifizierten Fachperson ab."
+      },
+      "description": "ENGAGE. A specific health concern: symptoms, medication, injury, mental health, or a request for diagnosis."
+    },
+    "critical": {
+      "action": "override",
+      "template": "It sounds like this could be serious. If you're in danger or this is an emergency, please contact emergency services or a medical professional right now. I'm not able to give medical advice, but I want to make sure you get the right help.",
+      "template_i18n": {
+        "de": "Das klingt, als könnte es ernst sein. Wenn du in Gefahr bist oder das ein Notfall ist, wende dich bitte sofort an den Rettungsdienst oder eine medizinische Fachperson. Ich kann keine medizinischen Ratschläge geben, aber ich möchte sicherstellen, dass du die richtige Hilfe bekommst."
+      },
+      "description": "ENGAGE. A medical emergency or suicidal ideation."
+    }
+  }
+}

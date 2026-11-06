@@ -40,7 +40,7 @@ jobs:
         run: |
           uv pip install --system -U pytest pytest-asyncio
           uv pip install --system -e agents/stella-ai-agent-sdk
-          uv pip install --system -e agents/stella-light-agent -e agents/stella-v2-agent
+          uv pip install --system -e agents/stella-light-agent -e agents/stella-v2-agent -e agents/stella-jev-agent
 
       - name: Run agent startup smoke tests
         run: |
@@ -49,4 +49,5 @@ jobs:
             agents/stella-ai-agent-sdk/tests/test_version.py \
             agents/stella-ai-agent-sdk/tests/test_platform_contract.py \
             agents/stella-light-agent/tests/test_startup_config.py \
-            agents/stella-v2-agent/tests/test_startup_config.py
+            agents/stella-v2-agent/tests/test_startup_config.py \
+            agents/stella-jev-agent/tests/test_startup_config.py
