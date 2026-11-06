@@ -3,7 +3,7 @@ version: "2.0"
 metadata:
   name: "ELIAS-Interviewer"
   slug: "elias-interviewer"
-  version: "0.2.0"
+  version: "0.2.1"
   description: "Runs an ELIAS interview guide: asks every question word for word, re-asks unclear answers up to three times, and writes each turn back to ELIAS as it happens."
   icon: "🎙️"
   author:

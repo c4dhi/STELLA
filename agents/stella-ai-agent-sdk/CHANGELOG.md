@@ -24,6 +24,10 @@ Releases as 0.10.0 (`pyproject.toml` is already bumped). The platform contract: 
 - `python -m stella_agent_sdk.contracts` regenerates both contract files; a test fails when they are stale or when the SDK reads a tuning env var that is not declared
 - `self.connectors` on `BaseAgent`: call outside MCP servers the user bound to the deployment ("connectors") through STELLA's backend, which keeps the credentials. `await self.connectors.list()`, `list_tools(handle)` and `call_tool(handle, tool, args)`. `call_tool` returns the tool's structured content (or its parsed text). Failures raise `ConnectorError`, whose `code` says what went wrong and whose `retryable` says whether trying again can help. `run_agent` wires it from `STELLA_CONNECTOR_TOKEN`; without connectors, `list()` is `[]`. New gRPC contract `proto/connectors.proto` (`ConnectorService`). See docs: Agent SDK → Connectors
 
+### Fixed
+
+- **A typed message sent while the agent speaks is no longer lost.** With barge-in off, a `user_text` message queued behind the closed transcript gate was dropped as "stale" when the gate reopened, although the chat had already shown it as sent. Typed events (`TranscriptEvent.typed`) now survive the gate; speech heard while the agent talked is still dropped.
+
 ## [0.9.0] - 2026-10-28
 
 Ships with STELLA 1.5.0. What changes for agent authors:

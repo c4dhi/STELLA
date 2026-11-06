@@ -129,6 +129,9 @@ class EliasInterviewerAgent(BaseAgent):
         self._session_started_at: Optional[str] = None
         self._participant_poll_s = 0.3
         self._completion_delay_s = 1.0  # lets the session_completed frame reach the client before teardown
+        self._debug_queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
+        self._debug_worker: Optional[asyncio.Task] = None
+        self._debug_live = False
 
     # ── startup ──────────────────────────────────────────────────────────
 
@@ -138,6 +141,7 @@ class EliasInterviewerAgent(BaseAgent):
         try:
             await self._prepare(session_id, os.environ)
         except Exception as e:  # never raise out of startup, see module docstring
+            self._debug("error", f"Startup failed: {e}", {})
             self._startup_error = str(e) or e.__class__.__name__
             self.record_error(self._startup_error)
             logger.error("[STARTUP] interview cannot run: %s", self._startup_error)
@@ -164,13 +168,15 @@ class EliasInterviewerAgent(BaseAgent):
                 timeout_s=_float_between(env.get("ANSWER_CHECK_TIMEOUT_S"), default=8.0, low=1.0, high=60.0),
             )
 
-        self._elias = Elias(connectors, ELIAS_SLOT, project_id)
+        self._elias = Elias(connectors, ELIAS_SLOT, project_id, on_event=self._debug)
+        self._debug("info", f"Connecting to ELIAS project {project_id}", {"project_id": project_id})
         try:
             guide = await self._elias.get_guide()
             self._questions = parse_guide(guide)
         except (EliasUnavailable, GuideError) as e:
             raise StartupError(f"Could not load the ELIAS interview guide: {e}") from e
         logger.info("[STARTUP] %d questions from ELIAS project %s", len(self._questions), project_id)
+        self._debug("info", f"Interview guide loaded: {len(self._questions)} questions", {"questions": len(self._questions)})
 
         self._plan = build_plan(self._questions, project_id=project_id)
         start_index = 0
@@ -183,6 +189,8 @@ class EliasInterviewerAgent(BaseAgent):
         self._interview = Interview(self._questions, max_attempts=max_attempts, index=start_index)
         if self._resumed:
             logger.info("[STARTUP] resuming at question %d of %d", start_index + 1, len(self._questions))
+            self._debug("info", f"Resuming ELIAS interview {self._transcript_id} at question {start_index + 1} of {len(self._questions)}",
+                        {"transcript_id": self._transcript_id, "question": start_index + 1})
 
     async def _connect_state_machine(self, session_id: str) -> bool:
         """Progress and stored answers are a mirror, not the source of truth for
@@ -220,6 +228,7 @@ class EliasInterviewerAgent(BaseAgent):
 
     async def run_audio_loop(self) -> None:
         participant = await self.wait_for_participant(poll_interval=self._participant_poll_s)
+        self._start_debug()
 
         if self._startup_error or self._interview is None:
             await self._say(self._messages["error"], record=False)
@@ -236,6 +245,7 @@ class EliasInterviewerAgent(BaseAgent):
                 await self._finish_session("startup_error")
                 return
             await self._set_deliverable(TRANSCRIPT_ID_KEY, self._transcript_id, "ELIAS start_interview")
+            self._debug("info", f"ELIAS interview {self._transcript_id} started", {"transcript_id": self._transcript_id})
         self._recorder = Recorder(self._elias, self._transcript_id)
 
         if not self._resumed and self._messages.get("opening"):
@@ -258,8 +268,17 @@ class EliasInterviewerAgent(BaseAgent):
         iv.add_reply(text)
         q = iv.current
         verdict = await self._checker.check(q.text, iv.replies, q.subquestions)
+        attempt, position = iv.attempts, iv.index + 1
         step = iv.resolve(verdict)
         logger.info("[INTERVIEW] %s: %s (%s)", q.task_id, step.kind, step.reason)
+        where = f"Question {position} of {len(self._questions)}"
+        meta = {"task_id": q.task_id, "step": step.kind, "attempt": attempt, "max_attempts": iv.max_attempts, "reason": step.reason}
+        if step.kind == REASK:
+            self._debug("warn", f"{where}: not accepted, re-asking (ask {attempt + 1} of {iv.max_attempts}). {step.reason}".strip(), meta)
+        elif step.kind == SKIP:
+            self._debug("warn", f"{where}: skipped. {step.reason}".strip(), meta)
+        else:
+            self._debug("info", f"{where}: answer accepted. {step.reason}".strip(), meta)
 
         if step.kind == REASK:
             await self._ask_current(reask=True)
@@ -283,6 +302,9 @@ class EliasInterviewerAgent(BaseAgent):
         if reask and self._messages.get("reask_prefix"):
             await self._say(self._messages["reask_prefix"])
         self._interview.mark_asked()
+        self._debug("info", f"Asking question {self._interview.index + 1} of {len(self._questions)}"
+                    + (f" again (ask {self._interview.attempts} of {self._interview.max_attempts})" if reask else ""),
+                    {"task_id": q.task_id, "attempt": self._interview.attempts})
         await self._say(q.text)  # verbatim
 
     async def _close_interview(self) -> None:
@@ -315,6 +337,7 @@ class EliasInterviewerAgent(BaseAgent):
         # Teardown also happens on auto-pause: flush, but leave the ELIAS interview open.
         if self._recorder is not None:
             await self._recorder.close()
+        await self._close_debug()
         if self._sm is not None and hasattr(self._sm, "disconnect"):
             try:
                 await self._sm.disconnect()
@@ -339,6 +362,7 @@ class EliasInterviewerAgent(BaseAgent):
         try:
             await self._elias.end_interview(self._transcript_id)
             logger.info("[ELIAS] interview %s ended", self._transcript_id)
+            self._debug("info", f"ELIAS interview {self._transcript_id} ended", {"transcript_id": self._transcript_id})
         except EliasUnavailable as e:
             logger.error("[ELIAS] could not end interview %s: %s", self._transcript_id, e)
 
@@ -347,6 +371,49 @@ class EliasInterviewerAgent(BaseAgent):
         await self.complete_session(reason, delay_s=self._completion_delay_s)
 
     # ── helpers ──────────────────────────────────────────────────────────
+
+    def _debug(self, level: str, message: str, metadata: Dict[str, Any]) -> None:
+        """Queue one line for the session's debug feed (the chat's processing
+        view). Sent in order by one worker, so a slow data channel never holds
+        up the interview."""
+        self._debug_queue.put_nowait(
+            {"type": "debug", "data": {"content": message, "component": "elias", "level": level, "metadata": metadata}}
+        )
+        if self._debug_live:
+            self._start_debug()
+
+    def _start_debug(self) -> None:
+        """Startup lines wait in the queue until someone is in the room (nobody
+        would receive them, and the session history would miss them)."""
+        self._debug_live = True
+        if self._debug_worker is None:
+            self._debug_worker = asyncio.get_running_loop().create_task(self._run_debug())
+
+    async def _run_debug(self) -> None:
+        while True:
+            payload = await self._debug_queue.get()
+            try:
+                await self.audio.publish_data(payload)
+            except Exception as e:
+                logger.debug("[DEBUG] could not publish: %s", e)
+            finally:
+                self._debug_queue.task_done()
+
+    async def _close_debug(self, timeout_s: float = 2.0) -> None:
+        if self._debug_worker is None:
+            if self._debug_queue.empty():
+                return
+            self._start_debug()  # nobody joined: send what startup queued anyway
+        try:
+            await asyncio.wait_for(self._debug_queue.join(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            pass
+        self._debug_worker.cancel()
+        try:
+            await self._debug_worker
+        except (asyncio.CancelledError, Exception):
+            pass
+        self._debug_worker = None
 
     async def _say(self, text: str, *, record: bool = True) -> None:
         if not text.strip():

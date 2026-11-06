@@ -1217,15 +1217,26 @@ class AudioPipeline:
         # even if the un-duck signal never arrived (STT hiccup, reconnect).
         self.unduck_speech()
         if self._transcript_gate_closed:
+            # Speech heard while the agent talked is stale (echo, overlap) and
+            # goes. A typed message stays: the chat shows it as sent, so it is
+            # the participant's next turn (with barge-in off it waits here).
             drained = 0
+            kept = []
             while not self._transcript_queue.empty():
                 try:
-                    self._transcript_queue.get_nowait()
-                    drained += 1
+                    event = self._transcript_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+                if getattr(event, "typed", False):
+                    kept.append(event)
+                else:
+                    drained += 1
+            for event in kept:
+                self._transcript_queue.put_nowait(event)
             if drained > 0:
                 logger.info(f"[GATE] Drained {drained} stale transcript(s)")
+            if kept:
+                logger.info(f"[GATE] Kept {len(kept)} typed message(s) sent while the agent spoke")
 
             self._room.flush_audio_queue()
 
@@ -2167,6 +2178,7 @@ class AudioPipeline:
                         confidence=1.0,
                         timestamp_ms=int(time.time() * 1000),
                         speech_started=False,
+                        typed=True,
                     )
 
                     # Echo the received text back to LiveKit so the frontend

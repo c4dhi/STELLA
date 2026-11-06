@@ -268,3 +268,72 @@ async def test_real_session_end_never_outlives_its_deadline(monkeypatch):
     start = time.monotonic()
     [o async for o in agent.on_session_ending("s", "session_end", 1500)]
     assert time.monotonic() - start < 3
+
+
+def _debug_lines(audio):
+    return [p["data"] for p in audio.published if p.get("type") == "debug" and p["data"]["component"] == "elias"]
+
+
+@pytest.mark.asyncio
+async def test_debug_feed_follows_the_elias_calls_and_each_decision():
+    conn = FakeConnectors()
+    audio = FakeAudio(["hm", "I was shocked.", "pass", "My sister."])
+    await run(make_agent(conn, audio))
+    text = [d["content"] for d in _debug_lines(audio)]
+
+    def first(prefix):
+        return next(i for i, t in enumerate(text) if t.startswith(prefix))
+
+    assert first("Connecting to ELIAS project") < first("ELIAS get_interview_guide ok") < first("Interview guide loaded: 3 questions")
+    assert first("ELIAS start_interview ok") < first("ELIAS interview t-new started") < first("Asking question 1 of 3")
+    assert any(t.startswith("Question 1 of 3: not accepted, re-asking (ask 2 of 3)") for t in text)
+    assert any(t.startswith("Asking question 1 of 3 again (ask 2 of 3)") for t in text)
+    assert any(t.startswith("Question 1 of 3: answer accepted") for t in text)
+    assert any(t.startswith("Question 2 of 3: skipped") for t in text)
+    assert any(t.startswith("ELIAS record_interview_message ok (participant turn)") for t in text)
+    assert any(t.startswith("ELIAS record_interview_message ok (interviewer turn)") for t in text)
+    assert "ELIAS interview t-new ended" in text
+    by_text = {d["content"]: d["level"] for d in _debug_lines(audio)}
+    assert {lvl for t, lvl in by_text.items() if "re-asking" in t or "skipped" in t} == {"warn"}
+    # Ids and counts only: never what the participant said.
+    assert not any("shocked" in str(d) or "sister" in str(d) for d in _debug_lines(audio))
+
+
+@pytest.mark.asyncio
+async def test_debug_feed_reports_retries_and_failures():
+    conn = FakeConnectors(fail={"get_interview_guide": ConnectorError("ELIAS down", retryable=True)})
+    audio = FakeAudio([])
+    agent = make_agent(conn, audio)
+    import elias_interviewer.elias as elias_mod
+
+    async def no_sleep(_s):
+        return None
+
+    orig = elias_mod.asyncio.sleep
+    elias_mod.asyncio.sleep = no_sleep
+    try:
+        await agent.on_session_start("s", CONFIG)
+    finally:
+        elias_mod.asyncio.sleep = orig
+    await agent._close_debug()
+    lines = _debug_lines(audio)
+    assert [d["level"] for d in lines if "retry" in d["content"]] == ["warn", "warn"]
+    assert any(d["level"] == "error" and d["content"].startswith("ELIAS get_interview_guide failed after") for d in lines)
+    assert any(d["level"] == "error" and d["content"].startswith("Startup failed") for d in lines)
+
+
+@pytest.mark.asyncio
+async def test_startup_debug_lines_wait_for_the_participant():
+    audio = FakeAudio(["I was shocked."], identities=["agent-x"])  # nobody in the room yet
+    agent = make_agent(FakeConnectors(), audio)
+    await agent.on_session_start("s", CONFIG)
+    import asyncio
+
+    await asyncio.sleep(0.05)
+    assert _debug_lines(audio) == []  # held back
+    audio.identities.append("participant-42")
+    await agent.run_audio_loop()
+    await agent.on_session_end("s")
+    text = [d["content"] for d in _debug_lines(audio)]
+    assert text[0].startswith("Connecting to ELIAS project")
+    assert text.index("Interview guide loaded: 3 questions") < text.index("ELIAS interview t-new started")

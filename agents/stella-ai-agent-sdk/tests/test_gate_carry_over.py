@@ -343,3 +343,27 @@ async def test_turn_based_mode_also_shows_and_logs_a_short_reply_during_the_wait
     assert queued(pipe) == [] and pipe._pending_barge_in is None
     assert [(t["text"], t["discarded"]) for t in final_transcripts(pipe)] == [("Okay.", True)]
     assert any("[GATE] Not taken as a turn" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_message_typed_while_the_agent_speaks_survives_the_gate_with_barge_in_off():
+    # ELIAS (barge-in off): the participant types the answer while the question
+    # is still being read out. The chat shows it as sent, so the gate opening at
+    # the end of the question must not drop it as stale; voice heard meanwhile
+    # still goes.
+    import json
+
+    pipe = talking_pipeline()
+    pipe._barge_in_enabled = False
+    pipe._transcript_queue.put_nowait(ev("echo of the question", is_final=True, tid="voice"))
+    pipe._handle_data_message(
+        "human", json.dumps({"type": "user_text", "data": {"text": "I was scared."}, "participant_id": "p1"}).encode()
+    )
+    await asyncio.sleep(0)
+    stop_speaking(pipe)
+    pipe.open_transcript_gate()
+
+    left = []
+    while not pipe._transcript_queue.empty():
+        left.append(pipe._transcript_queue.get_nowait())
+    assert [(e.text, e.typed) for e in left] == [("I was scared.", True)]

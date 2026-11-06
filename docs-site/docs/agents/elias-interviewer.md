@@ -24,6 +24,10 @@ The ELIAS token never reaches the pod: the agent calls ELIAS only through the co
 - **The time cap or the organiser** ending the session: the agent's `session_end_mode()` returns `wrap_up`, so its `on_session_ending` writes the last turns and closes the interview in ELIAS (see [When the session ends](../agent-sdk/platform-contract.md#when-the-session-ends)).
 - **The last question** done: it says its closing line and closes the interview.
 
+## Debug feed
+
+With the chat's processing toggle on, the agent's 🔧 lines show each step: the connection to ELIAS, the guide loaded, every ELIAS call (with its time), each question asked, an answer accepted, re-asked (with the reason) or skipped, and the interview ended. Retries are warnings and failures are errors. The lines are kept in the session history and never contain what the participant said. See the agent's README for the full list.
+
 ## Deploying it
 
 Upload the package from Settings → Agent Library, build it, and share it with the projects that should use it. Then deploy it like any other agent: pick the ELIAS connector and set `ELIAS_PROJECT_ID`.

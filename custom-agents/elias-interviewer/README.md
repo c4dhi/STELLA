@@ -34,6 +34,16 @@ A real session end is the time cap or the organiser ending the session. The agen
 
 STELLA's progress panel shows one stage per run of questions in the same ELIAS category, in the order the questions are asked.
 
+## Debug feed
+
+The agent reports each step to the session's debug feed: the 🔧 lines in the chat, shown with the processing toggle on, and kept in the session history. Each line has `component: "elias"` and a level:
+
+- **info:** connecting to the ELIAS project, the guide loaded (with the question count), the interview started or resumed, each question asked, each answer accepted, and every ELIAS call that worked, with its time in ms (`record_interview_message` says whose turn it saved).
+- **warn:** a reply that wasn't accepted and is re-asked (which ask of how many, and the checker's reason), a skipped question, and a retried ELIAS call.
+- **error:** an ELIAS call that failed, turns still unwritten at the end, and a startup failure.
+
+Lines from before anyone joins wait until the participant is in the room. The metadata holds ids, counts and timings, never the participant's words.
+
 ## Setup
 
 **Connector.** The agent never sees the ELIAS token. It reaches ELIAS only through a STELLA connector:
