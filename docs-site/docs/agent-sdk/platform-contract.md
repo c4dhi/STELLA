@@ -74,7 +74,7 @@ The SDK connects the channel itself, so an agent with its own `run_audio_loop` g
 
 ### Voice or text: `stella.interaction_mode`
 
-The participant screen has two interfaces. The face is the voice interface, and the open chat is the text interface. On each switch the screen sends `stella.interaction_mode` with `{"mode": "voice" | "text"}`, and the SDK handles it for every agent:
+The participant picks a face in the face gallery. The Text face is the text interface; every other face is voice (their chat drawer is only a fallback for typing next to speech). On each switch, and when an agent joins while the Text face shows, the screen sends `stella.interaction_mode` with `{"mode": "voice" | "text"}`, and the SDK handles it for every agent. Organisers set it per invitation; see [Text sessions](../guides/text-sessions.md).
 
 - **text:** replies are published as text only. Nothing is synthesised, nothing waits for playback, and anything still playing stops. Speech from the microphone is not a turn (the screen also turns the microphone off); typed messages are.
 - **voice:** the agent speaks and listens again. The text-to-speech and speech-to-text connections stay open the whole time, so the switch takes effect on the next line.

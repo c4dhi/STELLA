@@ -11,7 +11,7 @@ import VisualizerGallery from './VisualizerGallery';
 import VisualizerRenderer from './VisualizerRenderer';
 import { useSleepMicrophone } from './hooks/useSleepMicrophone';
 import { useSleepEvents } from './hooks/useSleepEvents';
-import { VisualizerType } from './types';
+import { VisualizerType, TEXT_FACE } from './types';
 import { useStore } from '../../store';
 import { startMicWithVu } from '../../services/audio/capture';
 
@@ -405,6 +405,7 @@ const StellaFaceModal: React.FC<StellaFaceModalProps> = ({
             onClose={() => setIsGalleryOpen(false)}
             currentVisualizer={currentVisualizer}
             onSelect={setCurrentVisualizer}
+            exclude={[TEXT_FACE]}
           />
 
           {/* Transcript Overlay (works with all themes) */}

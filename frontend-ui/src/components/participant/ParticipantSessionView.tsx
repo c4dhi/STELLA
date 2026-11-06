@@ -25,7 +25,9 @@ import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
 import SessionTimeoutOverlay from './SessionTimeoutOverlay'
-import { VisualizerType } from '../face/types'
+import { VisualizerType, isTextFace } from '../face/types'
+import TextFace from './TextFace'
+import { mergeHistory, liveIdOf, correlationIdOf } from '../../lib/chatHistory'
 import { apiClient } from '../../services/ApiClient'
 import { determineMessageRole, extractSpeakerInfo } from '../../lib/messageUtils'
 import { useTeleprompter } from '../../hooks/useTeleprompter'
@@ -48,6 +50,7 @@ export interface ParticipantMessage {
   speakerName?: string  // Display name of the speaker (for other_user messages)
   deliveryStatus?: DeliveryStatus
   correlationId?: string
+  isStreaming?: boolean  // An agent reply still coming in
 }
 
 interface ConnectionInfo {
@@ -132,9 +135,11 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   )
   const [isGalleryOpen, setIsGalleryOpen] = useState(false)
   const [isChatOpen, setIsChatOpen] = useState(false)
-  // The face is the voice interface; the open chat is the text interface, where
-  // nothing is spoken and the microphone is off. The agent is told on each switch.
-  const interactionMode: InteractionMode = isChatOpen ? 'text' : 'voice'
+  // The Text face is the text interface (nothing spoken, microphone off); every
+  // other face is voice. The chat drawer on a voice face is only a fallback for
+  // typing, the voice carries on. The agent is told on each switch.
+  const textFace = isTextFace(currentVisualizer)
+  const interactionMode: InteractionMode = textFace ? 'text' : 'voice'
   const interactionModeRef = useRef<InteractionMode>('voice')
 
   // The client channel to the agent (events out, replies in).
@@ -391,23 +396,24 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           sessionData.participantName
         )
 
+        const agentName = metadata.envelope?.data?.agent_name
         return {
-          id: msg.id,
+          // An agent reply keeps the id it had on screen while it streamed.
+          id: (role === 'assistant' && liveIdOf(metadata)) || msg.id,
           role,
           text: msg.content,
           timestamp: new Date(msg.createdAt),
           messageType: 'message' as const,
           deliveryStatus: 'confirmed' as const, // History messages are always confirmed
-          speakerName: role === 'other_user' ? (speakerDisplayName || 'Organizer') : undefined,
+          correlationId: correlationIdOf(metadata),
+          speakerName: role === 'other_user'
+            ? (speakerDisplayName || 'Organizer')
+            : role === 'assistant' && typeof agentName === 'string' ? agentName : undefined,
         }
       })
 
-      // Prepend history (oldest first) to existing messages, avoiding duplicates
-      setMessages(prev => {
-        const existingIds = new Set(prev.map(m => m.id))
-        const newMessages = historyMessages.filter(m => !existingIds.has(m.id))
-        return [...newMessages, ...prev]
-      })
+      // Prepend history (oldest first) without repeating what is already shown
+      setMessages(prev => mergeHistory(prev, historyMessages))
 
       // Track if there are more messages to load
       setHasMoreMessages(response.hasMore)
@@ -497,12 +503,17 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     }
   }, [sessionData.sessionId, sessionData.authToken, sessionData.identity, sessionData.participantName, isLoadingMore, hasMoreMessages, messages])
 
-  // Load message history when chat is opened
+  // Load message history when a chat shows (the drawer or the Text face)
   useEffect(() => {
-    if (isChatOpen && !historyLoaded) {
+    if ((isChatOpen || textFace) && !historyLoaded) {
       loadMessageHistory()
     }
-  }, [isChatOpen, historyLoaded, loadMessageHistory])
+  }, [isChatOpen, textFace, historyLoaded, loadMessageHistory])
+
+  // The drawer belongs to the voice faces.
+  useEffect(() => {
+    if (textFace) setIsChatOpen(false)
+  }, [textFace])
 
   // Ref to store the remote audio track for analysis
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null)
@@ -826,6 +837,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
               noteTeleprompterText(transcriptId, text)
             }
 
+            const agentName = typeof msgData.agent_name === 'string' ? msgData.agent_name : undefined
             setMessages(prev => {
               const existingIdx = prev.findIndex(m => m.id === transcriptId)
               if (existingIdx >= 0) {
@@ -834,6 +846,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
                 updated[existingIdx] = {
                   ...updated[existingIdx],
                   text,
+                  isStreaming: !isFinal,
                 }
                 return updated
               } else {
@@ -843,6 +856,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
                   role: 'assistant',
                   text,
                   timestamp: new Date(),
+                  isStreaming: !isFinal,
+                  speakerName: agentName,
                 }]
               }
             })
@@ -1304,8 +1319,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   useEffect(() => {
     const handleSpacebar = (event: KeyboardEvent) => {
       if (event.key === ' ' || event.code === 'Space') {
-        // The text interface has no microphone: space is just a space there.
-        if (isChatOpen) return
+        // While typing (drawer or Text face) space is just a space.
+        if (isChatOpen || textFace) return
 
         event.preventDefault()
 
@@ -1330,9 +1345,21 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     return () => {
       document.removeEventListener('keydown', handleSpacebar)
     }
-  }, [toggleMicrophone, isChatOpen, isMuted])
+  }, [toggleMicrophone, isChatOpen, textFace, isMuted])
 
   // Loading state
+  // A typed message shows straight away, as "sending" until the agent echoes it.
+  const addOptimisticMessage = useCallback((message: ParticipantMessage) => {
+    setMessages(prev => [...prev, message])
+    if (message.correlationId) {
+      setPendingCorrelationIds(prev => {
+        const next = new Set(prev)
+        next.add(message.correlationId!)
+        return next
+      })
+    }
+  }, [])
+
   if (isConnecting) {
     return (
       <motion.div
@@ -1396,9 +1423,28 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         />
       </div>
 
-      {/* Audio Enable Overlay - shown until user clicks to enable audio */}
+      {/* The Text face: the whole conversation in writing (#92) */}
+      {textFace && (
+        <TextFace
+          messages={messages}
+          room={room}
+          participantName={sessionData.participantName}
+          isLoadingHistory={isLoadingHistory}
+          hasMoreMessages={hasMoreMessages}
+          isLoadingMore={isLoadingMore}
+          onLoadMore={loadMoreMessages}
+          onSendOptimisticMessage={addOptimisticMessage}
+          onOpenGallery={sessionData.visualizerLocked ? undefined : () => setIsGalleryOpen(true)}
+          onOpenSupport={() => setIsSupportOpen(true)}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullscreen}
+        />
+      )}
+
+      {/* Audio Enable Overlay - shown until user clicks to enable audio
+          (not on the Text face: nothing is played there) */}
       <AnimatePresence>
-        {!audioEnabled && (
+        {!audioEnabled && !textFace && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -1431,7 +1477,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       {/* Top-right control buttons */}
       <motion.div
         className={`absolute top-6 right-6 flex gap-3 z-50 transition-opacity duration-300 ${
-          showControls && !isGalleryOpen && !isChatOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls && !isGalleryOpen && !isChatOpen && !textFace ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         {/* Microphone Button */}
@@ -1571,24 +1617,14 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         messages={messages}
         room={room}
         participantName={sessionData.participantName}
-        // Nothing is spoken on the text interface, so nothing is dimmed.
-        spokenTranscriptId={isChatOpen ? undefined : teleprompterTranscriptId}
+        spokenTranscriptId={teleprompterTranscriptId}
         spokenChar={teleprompterSpokenChar}
         frozenSpoken={frozenSpoken}
         isLoadingHistory={isLoadingHistory}
         hasMoreMessages={hasMoreMessages}
         isLoadingMore={isLoadingMore}
         onLoadMore={loadMoreMessages}
-        onSendOptimisticMessage={(message) => {
-          setMessages(prev => [...prev, message])
-          if (message.correlationId) {
-            setPendingCorrelationIds(prev => {
-              const next = new Set(prev)
-              next.add(message.correlationId!)
-              return next
-            })
-          }
-        }}
+        onSendOptimisticMessage={addOptimisticMessage}
       />
 
       {/* Teleprompter Overlay (#241): agent speech, word-by-word highlight.
@@ -1600,20 +1636,20 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         text={teleprompterText}
         spokenChar={teleprompterSpokenChar}
         theme={currentVisualizer}
-        isVisible={showAgentTranscript && !isChatOpen && !isAsleep && (sessionTimeUp || !userTranscript.trim())}
+        isVisible={showAgentTranscript && !isChatOpen && !textFace && !isAsleep && (sessionTimeUp || !userTranscript.trim())}
       />
 
       {/* Transcript Overlay — hidden once time is up so it can't mask the farewell. */}
       <TranscriptOverlay
         transcript={userTranscript}
         theme={currentVisualizer}
-        isVisible={showUserTranscript && !sessionTimeUp && !isAsleep}
+        isVisible={showUserTranscript && !textFace && !sessionTimeUp && !isAsleep}
       />
 
       {/* Bottom hint */}
       <motion.div
         className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-40 transition-opacity duration-300 ${
-          showControls && !isGalleryOpen && !isChatOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls && !isGalleryOpen && !isChatOpen && !textFace ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div className="text-white/40 text-sm flex items-center gap-2">
@@ -1626,7 +1662,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       {/* Participant name badge with session timer */}
       <motion.div
         className={`absolute bottom-4 right-6 z-40 transition-opacity duration-300 ${
-          showControls && !isGalleryOpen && !isChatOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls && !isGalleryOpen && !isChatOpen && !textFace ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-full px-4 py-2 text-white/70 text-sm flex items-center gap-2">
