@@ -34,9 +34,9 @@ export interface AgentPodConfig {
   // Pre-resolved env vars: template vars decrypted and merged with manual overrides by the caller.
   // KubernetesService receives the final map and spreads it directly into the K8s Secret.
   resolvedEnvVars: Record<string, string>;
-  /** Requests and limits from the agent type's manifest (see resolveAgentRequirements). Limits are clamped. */
   /** requirements.client, passed to the pod as STELLA_CLIENT_CHANNEL. */
   clientChannel?: AgentRequirements['client'];
+  /** Requests and limits from the agent type's manifest (see resolveAgentRequirements). Limits are clamped. */
   resources?: {
     memory?: { request?: string; limit?: string };
     cpu?: { request?: string; limit?: string };

@@ -12,12 +12,34 @@ describe('mergeHistory', () => {
 
   it('drops stored copies of live messages: agent by transcript id, typed by correlation id, spoken by text', () => {
     const history = [
-      { id: 'db-1', role: 'assistant', text: 'Hello, thank you for taking part.' },
       { id: 'tr-1', role: 'assistant', text: 'Hello, thank you for taking part.' },
       { id: 'db-2', role: 'user', text: 'I was scared at first.', correlationId: 'c-1' },
       { id: 'db-3', role: 'user', text: 'Spoken answer' },
     ]
     expect(mergeHistory(live, history)).toEqual(live)
+  })
+
+  it('matches a stored agent reply without a live id by its text', () => {
+    const history = [{ id: 'db-1', role: 'assistant', text: 'Hello, thank you for taking part.' }]
+    expect(mergeHistory(live.slice(0, 1), history)).toEqual(live.slice(0, 1))
+  })
+
+  it('keeps the same words said before a reload: one live line stands for one stored copy', () => {
+    const liveYes = [{ id: 'local-1', role: 'user', text: 'Yes.' }]
+    const history = [
+      { id: 'db-a', role: 'user', text: 'Yes.' },
+      { id: 'db-b', role: 'assistant', text: 'And then?' },
+      { id: 'db-c', role: 'user', text: 'Yes.' },
+    ]
+    expect(mergeHistory(liveYes, history).map(m => m.id)).toEqual(['db-a', 'db-b', 'local-1'])
+  })
+
+  it('a live message found by its id does not also hide an older line with the same text', () => {
+    const history = [
+      { id: 'db-0', role: 'assistant', text: 'Hello, thank you for taking part.' },
+      { id: 'tr-1', role: 'assistant', text: 'Hello, thank you for taking part.' },
+    ]
+    expect(mergeHistory(live.slice(0, 1), history).map(m => m.id)).toEqual(['db-0', 'tr-1'])
   })
 
   it('keeps older messages the screen never saw, oldest first', () => {

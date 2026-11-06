@@ -1386,7 +1386,12 @@ class BaseAgent(ABC):
                     if client_commands and not self.audio.is_turn_aborted:
                         await self.audio.wait_for_playout_drain()
                         for command in client_commands:
-                            await self.send_client_command(command.content, **command.metadata)
+                            # A command the manifest doesn't declare is an
+                            # author's mistake: log it, don't end the turn loop.
+                            try:
+                                await self.send_client_command(command.content, **command.metadata)
+                            except ValueError as e:
+                                logger.error(f"[CLIENT] Not sent: {e}")
                     self._sentence_buffer = ""
                     self._is_processing = False
                     self._note_activity()

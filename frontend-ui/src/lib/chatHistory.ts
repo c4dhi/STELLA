@@ -40,16 +40,36 @@ export function correlationIdOf(metadata: unknown): string | undefined {
   return undefined
 }
 
-/** History first (oldest first), then what is already on screen, without repeats. */
+/**
+ * History first (oldest first), then what is already on screen, without repeats.
+ *
+ * A line matched by text stands for one stored copy only, taken from the newest
+ * end of the history: a "Yes." said before a reload and again after it keeps
+ * the older one.
+ */
 export function mergeHistory<T extends HistoryMergeMessage>(live: T[], history: T[]): T[] {
   const ids = new Set(live.map(m => m.id))
   const correlationIds = new Set(live.map(m => m.correlationId).filter((c): c is string => !!c))
-  const lines = new Set(live.map(m => `${m.role}\u0000${m.text}`))
-  const older = history.filter(m => {
-    if (ids.has(m.id)) return false
-    if (m.correlationId && correlationIds.has(m.correlationId)) return false
-    if (m.messageType !== 'participant_event' && lines.has(`${m.role}\u0000${m.text}`)) return false
-    return true
-  })
+  // Live lines left for matching by text: not already found by id or correlation id.
+  const storedIds = new Set(history.map(m => m.id))
+  const storedCorrelationIds = new Set(history.map(m => m.correlationId).filter((c): c is string => !!c))
+  const unmatched = new Map<string, number>()
+  for (const m of live) {
+    if (storedIds.has(m.id) || (m.correlationId && storedCorrelationIds.has(m.correlationId))) continue
+    const key = `${m.role}\u0000${m.text}`
+    unmatched.set(key, (unmatched.get(key) ?? 0) + 1)
+  }
+  const older: T[] = []
+  for (const m of [...history].reverse()) {
+    if (ids.has(m.id)) continue
+    if (m.correlationId && correlationIds.has(m.correlationId)) continue
+    const key = `${m.role}\u0000${m.text}`
+    const left = unmatched.get(key) ?? 0
+    if (m.messageType !== 'participant_event' && left > 0) {
+      unmatched.set(key, left - 1)
+      continue
+    }
+    older.unshift(m)
+  }
   return [...older, ...live]
 }
