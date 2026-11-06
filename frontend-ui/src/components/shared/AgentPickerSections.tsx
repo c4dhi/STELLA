@@ -78,11 +78,7 @@ export default function AgentPickerSections({
           />
           {othersCustom.length > 0 && cards(othersCustom)}
           {ownLoaded && ownIds.size === 0 && othersCustom.length === 0 && !isLoading && (
-            <p className={quiet}>
-              No custom agents available here. This list shows your own uploads and the
-              agents others have shared with this project; the Agent Library also lists
-              agents shared with your other projects.
-            </p>
+            <p className={quiet}>No custom agents shared with this project.</p>
           )}
         </div>
       </section>
