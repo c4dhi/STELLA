@@ -24,6 +24,7 @@ import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredS
 import SettingsStep from '../shared/SettingsStep'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
+import WizardProgress from '../shared/WizardProgress'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import {
   AgentGalleryStep,
@@ -668,31 +669,8 @@ export default function ProjectModal({
                     </svg>
                   </button>
 
-                  {/* Step indicator - only for public wizard steps */}
                   {isPublicWizard && (
-                    // The lines between the numbers shrink when space runs out, so any
-                    // number of steps fits the panel and clears the close button.
-                    <div className="flex items-center mb-2 pr-10">
-                      {visibleStepConfigs.map((s, idx) => (
-                        <div key={s.id} className="flex items-center min-w-0">
-                          <div className={`
-                            shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
-                            ${getStepNumber(step) >= s.number
-                              ? isDark ? 'bg-violet-500 text-white' : 'bg-neutral-900 text-white'
-                              : isDark ? 'bg-zinc-600 text-zinc-300' : 'bg-neutral-200 text-neutral-600'
-                            }
-                          `}>
-                            {s.number}
-                          </div>
-                          {idx < visibleStepConfigs.length - 1 && (
-                            <div className={`w-8 min-w-1 shrink h-0.5 mx-2 ${getStepNumber(step) > s.number
-                              ? isDark ? 'bg-violet-500' : 'bg-neutral-900'
-                              : isDark ? 'bg-zinc-600' : 'bg-neutral-200'
-                            }`} />
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                    <WizardProgress current={getStepNumber(step)} total={getTotalSteps()} isDark={isDark} />
                   )}
 
                   <h2 className={`text-2xl font-light tracking-wide ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
@@ -1226,7 +1204,7 @@ export default function ProjectModal({
                   <EnvVarsSelectionStep
                     agentTypeId={selectedAgentType?.id ?? ''}
                     requiredEnvVars={needs.requiredEnvVars}
-                    optionalEnvVars={needs.optionalEnvVars.map((v) => v.name)}
+                    optionalEnvVars={needs.optionalEnvVars}
                     selectedEnvVarTemplate={selectedEnvVarTemplate}
                     onSelectEnvVarTemplate={setSelectedEnvVarTemplate}
                     envVars={envVars}

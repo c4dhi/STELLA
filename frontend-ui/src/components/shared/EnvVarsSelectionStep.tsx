@@ -5,6 +5,8 @@ import { apiClient } from '../../services/ApiClient'
 import type { EnvVarTemplate } from '../../lib/api-types'
 import { useEnvVarListEditor } from './EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from './EnvVarListEditor/EnvVarListEditor'
+import EnvVarNeedsSummary from './EnvVarNeedsSummary'
+import { envVarHints, type OptionalEnvVar } from '../../lib/deployNeeds'
 
 type EnvVarsView = 'select' | 'edit'
 
@@ -34,7 +36,7 @@ interface EnvVarsSelectionStepProps {
   agentTypeId: string
   requiredEnvVars: string[]
   /** Env vars the agent reads when set; offered as rows that may stay empty. */
-  optionalEnvVars?: string[]
+  optionalEnvVars?: OptionalEnvVar[]
   selectedEnvVarTemplate: EnvVarTemplate | null
   onSelectEnvVarTemplate: (template: EnvVarTemplate | null) => void
   envVars: Record<string, string>
@@ -56,6 +58,7 @@ export default function EnvVarsSelectionStep({
 }: EnvVarsSelectionStepProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
+  const optionalNames = optionalEnvVars.map((v) => v.name)
 
   const [envVarTemplates, setEnvVarTemplates] = useState<EnvVarTemplate[]>([])
   const [isLoadingEnvVars, setIsLoadingEnvVars] = useState(false)
@@ -82,7 +85,7 @@ export default function EnvVarsSelectionStep({
         const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
         const templateKeySet = new Set(templateKeys)
         const requiredToFill = requiredEnvVars.filter((key) => !templateKeySet.has(key))
-        const optionalToOffer = optionalEnvVars.filter((key) => !templateKeySet.has(key))
+        const optionalToOffer = optionalNames.filter((key) => !templateKeySet.has(key))
         editor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: envVars })
       }
     }
@@ -109,33 +112,15 @@ export default function EnvVarsSelectionStep({
     const templateKeys = template?.variableKeys ?? []
     const templateKeySet = new Set(templateKeys)
     const requiredToFill = requiredEnvVars.filter((key) => !templateKeySet.has(key))
-    const optionalToOffer = optionalEnvVars.filter((key) => !templateKeySet.has(key))
+    const optionalToOffer = optionalNames.filter((key) => !templateKeySet.has(key))
     editor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: {} })
     onEnvVarsViewChange('edit')
   }
 
   return (
     <div>
-      {/* Required env vars info banner */}
-      {requiredEnvVars.length > 0 && (
-        <div className={`
-          p-3 rounded-xl mb-4
-          ${isDark ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-amber-50 border border-amber-200'}
-        `}>
-          <div className={`text-xs font-medium mb-1 ${isDark ? 'text-amber-400' : 'text-amber-700'}`}>
-            Required Environment Variables
-          </div>
-          <div className={`flex flex-wrap gap-1.5`}>
-            {requiredEnvVars.map(key => (
-              <span key={key} className={`
-                px-2 py-0.5 rounded text-xs font-mono
-                ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}
-              `}>
-                {key}
-              </span>
-            ))}
-          </div>
-        </div>
+      {envVarsView === 'select' && (
+        <EnvVarNeedsSummary required={requiredEnvVars} optional={optionalNames} isDark={isDark} />
       )}
 
       <AnimatePresence mode="wait">
@@ -336,7 +321,7 @@ export default function EnvVarsSelectionStep({
             )}
 
             <div className="max-h-[300px] overflow-y-auto pr-2">
-              <EnvVarListEditor editor={editor} isDark={isDark} />
+              <EnvVarListEditor editor={editor} isDark={isDark} hints={envVarHints(optionalEnvVars)} />
             </div>
           </motion.div>
         )}

@@ -17,11 +17,13 @@ import type {
   TtsCapabilities,
   Persona,
 } from '../../lib/api-types'
-import { asksForMode, deployNeeds, effectiveMode } from '../../lib/deployNeeds'
+import { asksForMode, deployNeeds, effectiveMode, envVarHints } from '../../lib/deployNeeds'
 import ConfigurationSelectionStep from '../shared/ConfigurationSelectionStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import { useEnvVarListEditor } from '../shared/EnvVarListEditor/useEnvVarListEditor'
+import WizardProgress from '../shared/WizardProgress'
+import EnvVarNeedsSummary from '../shared/EnvVarNeedsSummary'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
 import SettingsStep from '../shared/SettingsStep'
 import ConnectorsStep from '../shared/ConnectorsStep'
@@ -600,28 +602,7 @@ export default function DeployAgentModal({
                   </svg>
                 </button>
 
-                {/* Step indicator */}
-                <div className="flex items-center gap-3 mb-2">
-                  {Array.from({ length: getTotalSteps() }, (_, idx) => idx + 1).map((num, idx) => (
-                    <div key={num} className="flex items-center">
-                      <div className={`
-                        w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
-                        ${getCurrentStepNumber() >= num
-                          ? isDark ? 'bg-primary-500 text-white' : 'bg-primary-500 text-neutral-900'
-                          : isDark ? 'bg-zinc-600 text-zinc-300' : 'bg-neutral-200 text-neutral-600'
-                        }
-                      `}>
-                        {num}
-                      </div>
-                      {idx < getTotalSteps() - 1 && (
-                        <div className={`w-8 h-0.5 ml-3 ${getCurrentStepNumber() > num
-                            ? 'bg-primary-500'
-                            : isDark ? 'bg-zinc-600' : 'bg-neutral-200'
-                          }`} />
-                      )}
-                    </div>
-                  ))}
-                </div>
+                <WizardProgress current={getCurrentStepNumber()} total={getTotalSteps()} isDark={isDark} />
 
                 <h2 className={`text-2xl font-light tracking-wide ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
                   {getStepTitle()}
@@ -992,44 +973,12 @@ export default function DeployAgentModal({
                   transition={{ duration: 0.2 }}
                   className="p-6"
                 >
-                  {/* Required env vars info banner */}
-                  {needs.requiredEnvVars.length > 0 && (
-                    <div className={`
-                      p-3 rounded-xl mb-4
-                      ${isDark ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-amber-50 border border-amber-200'}
-                    `}>
-                      <div className={`text-xs font-medium mb-1 ${isDark ? 'text-amber-400' : 'text-amber-700'}`}>
-                        Required Environment Variables
-                      </div>
-                      <div className={`flex flex-wrap gap-1.5`}>
-                        {needs.requiredEnvVars.map(key => (
-                          <span key={key} className={`
-                            px-2 py-0.5 rounded text-xs font-mono
-                            ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}
-                          `}>
-                            {key}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Optional env vars the agent reads, with what it does without them */}
-                  {needs.optionalEnvVars.length > 0 && (
-                    <div className={`p-3 rounded-xl mb-4 ${isDark ? 'bg-zinc-800/60 border border-zinc-700' : 'bg-neutral-50 border border-neutral-200'}`}>
-                      <div className={`text-xs font-medium mb-1.5 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
-                        Optional Environment Variables
-                      </div>
-                      <ul className="space-y-1">
-                        {needs.optionalEnvVars.map((v) => (
-                          <li key={v.name} className={`text-xs font-light ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
-                            <span className="font-mono">{v.name}</span>
-                            {v.description ? ` — ${v.description}` : ''}
-                            {v.default !== undefined ? ` (default ${v.default})` : ''}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                  {envVarsView === 'select' && (
+                    <EnvVarNeedsSummary
+                      required={needs.requiredEnvVars}
+                      optional={needs.optionalEnvVars.map((v) => v.name)}
+                      isDark={isDark}
+                    />
                   )}
 
                   <AnimatePresence mode="wait">
@@ -1230,7 +1179,7 @@ export default function DeployAgentModal({
                         )}
 
                         <div className="max-h-[300px] overflow-y-auto pr-2">
-                          <EnvVarListEditor editor={envVarEditor} isDark={isDark} />
+                          <EnvVarListEditor editor={envVarEditor} isDark={isDark} hints={envVarHints(needs.optionalEnvVars)} />
                         </div>
                       </motion.div>
                     )}

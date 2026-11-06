@@ -74,3 +74,15 @@ export function asksForMode(needs: DeployNeeds): boolean {
 export function effectiveMode(needs: DeployNeeds, picked: AgentMode): AgentMode {
   return needs.modes.includes(picked) || needs.modes.length === 0 ? picked : needs.modes[0]
 }
+
+/** The line shown under an env-var row: what it does, and its default. */
+export function envVarHints(vars: OptionalEnvVar[]): Record<string, string> {
+  const hints: Record<string, string> = {}
+  for (const v of vars) {
+    const parts = [v.description?.trim(), v.default !== undefined && v.default !== '' ? `Default ${v.default}.` : '']
+      .filter(Boolean)
+      .map((p) => (p!.endsWith('.') ? p : `${p}.`))
+    if (parts.length > 0) hints[v.name] = parts.join(' ')
+  }
+  return hints
+}
