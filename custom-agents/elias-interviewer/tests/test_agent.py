@@ -295,7 +295,7 @@ async def test_debug_feed_follows_the_elias_calls_and_each_decision():
     assert "ELIAS interview t-new ended" in text
     by_text = {d["content"]: d["level"] for d in _debug_lines(audio)}
     assert {lvl for t, lvl in by_text.items() if "re-asking" in t or "skipped" in t} == {"warn"}
-    # Ids and counts only: never what the participant said.
+    # The reply itself is never copied (the checker's reason may paraphrase it).
     assert not any("shocked" in str(d) or "sister" in str(d) for d in _debug_lines(audio))
 
 
