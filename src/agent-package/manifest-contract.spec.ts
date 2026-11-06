@@ -47,7 +47,6 @@ describe('built-in agents on manifest 2.0', () => {
     expect(SHIPPED_ON_V1).toEqual(expect.arrayContaining(['stella-v2-agent', 'stella-light-agent']))
   })
 
-
   it.each(SHIPPED_ON_V1)('%s: the 1.0 file upgrades to exactly the 2.0 file', (slug) => {
     const v1 = parse(read(path.join(FIXTURES, `${slug}.v1.yaml`)))
     const v2 = parse(read(path.join(ROOT, 'agents', slug, 'agent.yaml')))

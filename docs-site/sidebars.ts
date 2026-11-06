@@ -82,6 +82,7 @@ const sidebars: SidebarsConfig = {
             'agents/stella-agent/custom-experts',
           ],
         },
+        'agents/stella-jev',
         'agents/echo-agent',
         'agents/elias-interviewer',
         // Deprecated — kept in the sidebar so existing links resolve and the

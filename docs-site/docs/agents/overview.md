@@ -12,7 +12,7 @@ STELLA supports multiple agent types, each designed for different use cases. All
 | Agent | Description | Best For |
 |-------|-------------|----------|
 | **stella-v2** | Streamlined 5-stage pipeline with deterministic arbitration and configurable pipeline | Configurable deployments, lower latency, predictable behavior |
-| **stella-jev-agent** | stella-v2 without the bridge: one Jev call decides the experts and barge-in, and asks back when what was heard isn't believable. Sends conversation text to TypeSafe | Research use. Needs `TYPESAFE_API_KEY` |
+| **[stella-jev-agent](./stella-jev.md)** | stella-v2 without the bridge: one Jev call decides the experts and barge-in, and asks back when what was heard isn't believable. Sends conversation text to TypeSafe | Research use. Needs `TYPESAFE_API_KEY` |
 | **stella-agent** | Full-featured agent with LLM-based aggregation pipeline | Production conversations requiring high quality |
 | **stella-light-agent** | ⚠️ **Deprecated** — superseded by stella-v2 | Nothing new. Use stella-v2 with a lean expert configuration |
 | **echo-agent** | Simple test agent that echoes back messages | Testing and development |
@@ -79,8 +79,8 @@ All agents support these common environment variables:
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `LIVEKIT_URL` | LiveKit server URL | Yes |
-| `LIVEKIT_API_KEY` | LiveKit API key | Yes |
-| `LIVEKIT_API_SECRET` | LiveKit API secret | Yes |
+| `LIVEKIT_API_KEY` | LiveKit API key | Built-in agents (uploaded agents get `LIVEKIT_TOKEN` instead, from SDK 0.10.0) |
+| `LIVEKIT_API_SECRET` | LiveKit API secret | Built-in agents |
 | `OPENAI_API_KEY` | OpenAI API key for LLM | Yes |
 | `TYPESAFE_API_KEY` | TypeSafe API key for Jev | stella-jev-agent only |
 | `ROOM_NAME` | LiveKit room to join | Yes |

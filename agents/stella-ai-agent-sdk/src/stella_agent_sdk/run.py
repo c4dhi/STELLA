@@ -182,6 +182,33 @@ def _is_registered_participant_identity(identity: str) -> bool:
     return isinstance(identity, str) and identity.startswith("participant-")
 
 
+
+def wire_turn_taking(agent: BaseAgent, audio_pipeline: AudioPipeline, session_id: str) -> None:
+    """Barge-in and take-back, from what the agent declares.
+
+    Barge-in: an agent with ``supports_barge_in`` gets it (unless
+    BARGE_IN_ENABLED=false), and ``on_barge_in`` judges each interruption.
+    Take-back is separate: only an agent with a ``take_back_window_ms`` turns
+    it on, and it never changes how barge-in is wired.
+    """
+    if getattr(agent, "supports_barge_in", False):
+        audio_pipeline.enable_barge_in()
+        if audio_pipeline.barge_in_enabled:
+            audio_pipeline.set_barge_in_decider(
+                lambda transcript: agent.on_barge_in(session_id, transcript)
+            )
+            logger.info(
+                "Barge-in enabled: VAD duration yields the floor, on_barge_in "
+                "judges the transcript"
+            )
+        else:
+            logger.info(
+                "Agent supports barge-in but BARGE_IN_ENABLED=false override "
+                "is set — running in turn-based mode"
+            )
+    if getattr(agent, "take_back_window_ms", 0):
+        audio_pipeline.enable_take_back(agent.take_back_window_ms)
+
 async def run_agent_from_env(agent: BaseAgent) -> None:
     """
     Run an agent using environment variables for configuration.
@@ -365,23 +392,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         # pipeline's cheap filters have already fired (duck on first sound,
         # go silent at BARGE_IN_MIN_SPEECH_MS); the hook then judges the final
         # transcript. Text has no acoustic signal, so it goes straight there.
-        if getattr(agent, "supports_barge_in", False):
-            audio_pipeline.enable_barge_in()
-        if getattr(agent, "take_back_window_ms", 0):
-            audio_pipeline.enable_take_back(agent.take_back_window_ms)
-            if audio_pipeline.barge_in_enabled:
-                audio_pipeline.set_barge_in_decider(
-                    lambda transcript: agent.on_barge_in(session_id, transcript)
-                )
-                logger.info(
-                    "Barge-in enabled: VAD duration yields the floor, on_barge_in "
-                    "judges the transcript"
-                )
-            else:
-                logger.info(
-                    "Agent supports barge-in but BARGE_IN_ENABLED=false override "
-                    "is set — running in turn-based mode"
-                )
+        wire_turn_taking(agent, audio_pipeline, session_id)
 
         # 6b. Wire the teleprompter (#241): the agent declares whether it wants
         # word-by-word speech-progress emitted (honoring any explicit

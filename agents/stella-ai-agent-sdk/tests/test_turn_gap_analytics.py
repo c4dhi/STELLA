@@ -249,5 +249,5 @@ async def test_it_fires_once_per_final(clock):
     assert len(analytics(pipe, "user_resumed_after_final")) == 1
 
 
-def test_the_window_is_six_seconds():
-    assert RESUMED_AFTER_FINAL_WINDOW_MS == 6000
+def test_the_window_is_three_seconds():
+    assert RESUMED_AFTER_FINAL_WINDOW_MS == 3000

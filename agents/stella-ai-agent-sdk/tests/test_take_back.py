@@ -227,6 +227,19 @@ async def test_off_means_no_wait():
     assert await asyncio.wait_for(pipe.wait_until_turn_is_final(), 0.05) is True
 
 
+@pytest.mark.asyncio
+async def test_the_text_interface_means_no_wait_and_no_hold():
+    # Nothing is played on the Text face, so no reply can go unheard (PR 878 review).
+    pipe = _pipe()
+    pipe.set_interaction_mode("text")
+    pipe.begin_turn()
+    assert await asyncio.wait_for(pipe.wait_until_turn_is_final(), 0.05) is True
+    pipe = _pipe()
+    pipe.set_interaction_mode("text")
+    await drive(pipe, FIRST + [_agent_starts(pipe), ev(started=True, tid="B")])
+    assert not pipe.is_turn_suspended and pipe._take_back_tid is None
+
+
 class _Agent(BaseAgent):
     def __init__(self):
         super().__init__()

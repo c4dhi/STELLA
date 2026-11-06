@@ -370,7 +370,7 @@ _DEFAULT_MS_PER_CHAR = 70.0
 #: Speech starting this soon after a final is the early-cutoff signal (#92):
 #: the turn was ended while the user still had more to say. Logged as
 #: `user_resumed_after_final`; nothing acts on it.
-RESUMED_AFTER_FINAL_WINDOW_MS = 6000
+RESUMED_AFTER_FINAL_WINDOW_MS = 3000
 # Longest wait for a reply's first sound before its turn is saved anyway.
 TURN_FINAL_TIMEOUT_S = 15.0
 
@@ -1873,6 +1873,12 @@ class AudioPipeline:
         else:
             self._deliver_barge_in_turn(text)
 
+    def _take_back_possible(self) -> bool:
+        """Whether a turn has to wait for its reply to be heard: take-back is on
+        and the reply is played. With TTS off or on the text interface nothing
+        is played, so the turn is final at once."""
+        return bool(self._take_back_window_ms) and self._tts_enabled and self._interaction_mode != "text"
+
     def _hold_for_take_back(self, event: TranscriptEvent) -> None:
         """The user started again and none of the reply was heard: hold the reply.
 
@@ -1886,6 +1892,7 @@ class AudioPipeline:
             source is None
             or not event.speech_started
             or not self._take_back_window_ms
+            or self._interaction_mode == "text"
             or not self._turn_active
             or self._audible_this_turn
             or self._barge_in_committed_tid is not None
@@ -1916,7 +1923,7 @@ class AudioPipeline:
         never starts: saving then beats losing what was said, and it is logged.
         A hold does not use it up, since a person is talking through that.
         """
-        if not self._take_back_window_ms or not self._tts_enabled:
+        if not self._take_back_possible():
             return not self.is_turn_aborted
         waited = 0.0
         while not self._reply_settled.is_set() and not self.is_turn_aborted:
