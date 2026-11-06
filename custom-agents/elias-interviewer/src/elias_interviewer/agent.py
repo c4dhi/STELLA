@@ -11,8 +11,8 @@ Lifecycle:
   and end, or run the interview (see interview.py) and write every turn to
   ELIAS as it happens.
 
-Only public SDK APIs (stella-ai-agent-sdk 0.10): ``self.session`` for the
-settings, ``self.plan_runtime`` for the state machine, ``wait_for_participant``,
+Everything a deployment sets arrives as an env var (see agent.yaml). Only
+public SDK APIs (stella-ai-agent-sdk 0.10): ``self.plan_runtime`` for the state machine, ``wait_for_participant``,
 ``publish_progress`` and ``complete_session``. The agent registers under the
 ``AGENT_TYPE``/``AGENT_VERSION`` the platform injects.
 - ``on_session_ending`` (the session is really ending, e.g. time cap):
@@ -25,8 +25,9 @@ settings, ``self.plan_runtime`` for the state machine, ``wait_for_participant``,
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Mapping, Optional
 
 from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent
 from stella_agent_sdk.progress import progress_from_full_state
@@ -48,12 +49,32 @@ logger = logging.getLogger(__name__)
 AGENT_NAME = "elias-interviewer"
 AGENT_ICON = "🎙️"
 
+ELIAS_SLOT = "elias"  # the connector slot in agent.yaml; the SDK calls it by this name
+
+# Env var for each fixed line the agent says.
+MESSAGE_ENV = {
+    "opening": "ELIAS_OPENING",
+    "reask_prefix": "ELIAS_REASK_PREFIX",
+    "closing": "ELIAS_CLOSING",
+    "error": "ELIAS_ERROR",
+}
+
 DEFAULT_MESSAGES = {
     "opening": "Hello, and thank you for taking part. I will ask you a few questions. Take all the time you need.",
     "reask_prefix": "Let me ask that again.",
     "closing": "Those were all my questions. Thank you very much for your time.",
     "error": "I'm sorry, I can't start the interview right now. Please try again later.",
 }
+
+def _int_between(raw: Optional[str], *, default: int, low: int, high: int) -> int:
+    """An int env var, clamped to [low, high]; empty or unreadable gives ``default``."""
+    try:
+        value = int(str(raw).strip()) if raw is not None and str(raw).strip() else default
+    except ValueError:
+        logger.warning("ignoring %r, not a whole number; using %d", raw, default)
+        value = default
+    return max(low, min(high, value))
+
 
 class StartupError(Exception):
     """Why the interview cannot run. ``spoken`` is what the participant hears."""
@@ -94,20 +115,21 @@ class EliasInterviewerAgent(BaseAgent):
         await super().on_session_start(session_id, config)
         self._session_started_at = datetime.now(timezone.utc).isoformat()
         try:
-            await self._prepare(session_id, self.session.config)
+            await self._prepare(session_id, os.environ)
         except Exception as e:  # never raise out of startup, see module docstring
             self._startup_error = str(e) or e.__class__.__name__
             self.record_error(self._startup_error)
             logger.error("[STARTUP] interview cannot run: %s", self._startup_error)
 
-    async def _prepare(self, session_id: str, config: Dict[str, Any]) -> None:
-        """``config`` is the user's settings (configSchema in agent.yaml)."""
-        elias_cfg = config.get("elias") or {}
-        self._messages.update({k: v for k, v in (config.get("messages") or {}).items() if isinstance(v, str)})
-        project_id = str(elias_cfg.get("project_id") or "").strip()
-        handle = str(elias_cfg.get("connector") or "elias").strip()
+    async def _prepare(self, session_id: str, env: Mapping[str, str]) -> None:
+        """``env`` is the pod's environment; agent.yaml declares what it may hold."""
+        for key, name in MESSAGE_ENV.items():
+            if (env.get(name) or "").strip():
+                self._messages[key] = env[name].strip()
+        project_id = (env.get("ELIAS_PROJECT_ID") or "").strip()
         if not project_id:
-            raise StartupError("No ELIAS project id configured (elias.project_id)")
+            raise StartupError("No ELIAS project id configured (ELIAS_PROJECT_ID)")
+        max_attempts = _int_between(env.get("ELIAS_MAX_ATTEMPTS"), default=3, low=1, high=5)
 
         connectors = getattr(self, "connectors", None)
         if connectors is None:
@@ -116,9 +138,9 @@ class EliasInterviewerAgent(BaseAgent):
             )
 
         if self._checker is None:
-            self._checker = AnswerChecker(model=str((config.get("llm") or {}).get("model") or "gpt-4o-mini"))
+            self._checker = AnswerChecker(model=(env.get("ANSWER_CHECK_MODEL") or "").strip() or "gpt-4o-mini")
 
-        self._elias = Elias(connectors, handle, project_id)
+        self._elias = Elias(connectors, ELIAS_SLOT, project_id)
         try:
             guide = await self._elias.get_guide()
             self._questions = parse_guide(guide)
@@ -134,7 +156,6 @@ class EliasInterviewerAgent(BaseAgent):
             start_index = point["next_index"]
             self._transcript_id = point["transcript_id"]
             self._resumed = start_index > 0 or bool(self._transcript_id)
-        max_attempts = int(elias_cfg.get("max_attempts") or 3)
         self._interview = Interview(self._questions, max_attempts=max_attempts, index=start_index)
         if self._resumed:
             logger.info("[STARTUP] resuming at question %d of %d", start_index + 1, len(self._questions))

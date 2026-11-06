@@ -1,4 +1,4 @@
-version: "1.0"
+version: "2.0"
 
 metadata:
   name: "ELIAS-Interviewer"
@@ -29,65 +29,48 @@ resources:
     request: "100m"
     limit: "500m"
 
-configSchema:
-  type: object
-  properties:
-    elias:
-      type: object
-      description: "Which ELIAS project to interview for"
-      required: [project_id]
-      properties:
-        project_id:
-          type: string
-          description: "ELIAS project id (the guide's questions are asked in order)"
-        connector:
-          type: string
-          description: "Connector handle to reach ELIAS through"
-          default: "elias"
-        max_attempts:
-          type: integer
-          description: "How many times a question is asked in total before it is skipped"
-          default: 3
-          minimum: 1
-          maximum: 5
-    messages:
-      type: object
-      description: "Fixed lines the agent says. Questions themselves always come from ELIAS, word for word."
-      properties:
-        opening: { type: string }
-        reask_prefix: { type: string }
-        closing: { type: string }
-        error: { type: string }
-    llm:
-      type: object
-      description: "Model that checks whether a reply answers the question"
-      properties:
-        model:
-          type: string
-          default: "gpt-4o-mini"
-  # Connectors this agent needs. The user picks one of their own (or one shared
-  # with the project) for each slot at deploy time, and may offer more.
-  x-stella-connectors:
-    - slot: elias
-      kind: mcp
-      required: true
-      label: "ELIAS"
-      description: "ELIAS interview-questions server (https://elias.apps.c4dhi.org/mcp)"
-      requiredTools:
-        - get_interview_guide
-        - start_interview
-        - record_interview_message
-        - end_interview
-  x-stella-env-vars:
+# It asks the guide word for word, so it takes no persona and no plan; it
+# builds its own state-machine plan from the guide.
+features:
+  persona: false
+
+# Everything a deployment sets is an env var. The questions themselves always
+# come from ELIAS, word for word.
+env:
+  required:
     - OPENAI_API_KEY
-  x-stella-optional-env-vars:
-    - name: STELLA_LANGUAGE
-      description: "Pin speech recognition and the voice to one language (ISO 639-1, e.g. 'de'). Set it to the language of the guide."
+    - ELIAS_PROJECT_ID
+  optional:
+    - name: ELIAS_MAX_ATTEMPTS
+      description: "How many times a question is asked in total before it is skipped (1-5)."
+      default: "3"
+    - name: ELIAS_OPENING
+      description: "What the agent says before the first question."
+    - name: ELIAS_REASK_PREFIX
+      description: "What the agent says before asking a question again."
+    - name: ELIAS_CLOSING
+      description: "What the agent says after the last question."
+    - name: ELIAS_ERROR
+      description: "What the agent says when the interview cannot start."
+    - name: ANSWER_CHECK_MODEL
+      description: "Model that checks whether a reply answers the question."
+      default: "gpt-4o-mini"
     - name: ANSWER_CHECK_TIMEOUT_S
       description: "Seconds the answer check may take before the reply is accepted as is."
       default: "8"
+    - name: STELLA_LANGUAGE
+      description: "Pin speech recognition and the voice to one language (ISO 639-1, e.g. 'de'). Set it to the language of the guide."
 
-defaultConfig:
-  elias:
-    connector: "elias"
-    max_attempts: 3
+# The ELIAS server. The user binds one of their own connectors (or one shared
+# with the project) to this slot at deploy; the agent calls it as "elias".
+connectors:
+  - slot: elias
+    kind: mcp
+    required: true
+    label: "ELIAS"
+    description: "ELIAS interview-questions server (https://elias.apps.c4dhi.org/mcp)"
+    requiredTools:
+      - get_interview_guide
+      - start_interview
+      - record_interview_message
+      - end_interview

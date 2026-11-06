@@ -37,17 +37,17 @@ When a session auto-pauses, the pod stops. On wake, the agent picks up at the ne
 1. In Settings → Connectors, add an MCP connector for `https://elias.apps.c4dhi.org/mcp` with your ELIAS MCP token. You can share it with a project so its other members can use it too.
 2. When you deploy the agent, pick that connector for the **ELIAS** slot.
 
-**Config** (set at deploy time):
+**Env vars** (set at deploy time, like any other agent's):
 
-| Field | Default | Meaning |
+| Variable | Default | Meaning |
 |---|---|---|
-| `elias.project_id` | (required) | The ELIAS project whose guide is asked |
-| `elias.connector` | `elias` | Connector handle, if the slot is bound under another name |
-| `elias.max_attempts` | `3` | Asks per question, the first one included, before it is skipped |
-| `messages.opening` / `closing` / `reask_prefix` / `error` | English defaults | The fixed lines it says. Set `opening` to `""` to start straight with question 1 |
-| `llm.model` | `gpt-4o-mini` | Model for the answer check |
-
-**Environment:** `OPENAI_API_KEY` is required (answer check). If the guide isn't in English, set `STELLA_LANGUAGE` (e.g. `de`), and translate the `messages` lines too.
+| `OPENAI_API_KEY` | (required) | For the answer check |
+| `ELIAS_PROJECT_ID` | (required) | The ELIAS project whose guide is asked |
+| `ELIAS_MAX_ATTEMPTS` | `3` | Asks per question, the first one included, before it is skipped (1-5) |
+| `ELIAS_OPENING` / `ELIAS_CLOSING` / `ELIAS_REASK_PREFIX` / `ELIAS_ERROR` | English defaults | The fixed lines it says |
+| `ANSWER_CHECK_MODEL` | `gpt-4o-mini` | Model for the answer check |
+| `ANSWER_CHECK_TIMEOUT_S` | `8` | Seconds the answer check may take |
+| `STELLA_LANGUAGE` | detect | Pin speech to one language (e.g. `de`). If the guide isn't in English, set it and translate the fixed lines too |
 
 ## Requirements
 

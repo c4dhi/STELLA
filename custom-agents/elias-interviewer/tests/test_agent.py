@@ -7,7 +7,19 @@ from elias_interviewer.guide import TRANSCRIPT_ID_KEY
 
 from fakes import GUIDE, ConnectorError, FakeAudio, FakeConnectors, FakeStateMachine, ScriptedChecker
 
-CONFIG = {"elias": {"project_id": "p1"}}
+CONFIG = {}  # the platform's session config; ELIAS's own settings are env vars
+
+ELIAS_ENV = ("ELIAS_PROJECT_ID", "ELIAS_MAX_ATTEMPTS", "ELIAS_OPENING", "ELIAS_REASK_PREFIX",
+             "ELIAS_CLOSING", "ELIAS_ERROR", "ANSWER_CHECK_MODEL")
+
+
+@pytest.fixture(autouse=True)
+def elias_env(monkeypatch):
+    """Each test starts from a deployment that set only the project id."""
+    for name in ELIAS_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ELIAS_PROJECT_ID", "p1")
+    return monkeypatch
 Q1, Q2, Q3 = (q["question"] for q in GUIDE["questions"])
 
 
@@ -112,10 +124,12 @@ async def test_guide_failure_says_the_error_line_and_opens_no_interview():
 
 
 @pytest.mark.asyncio
-async def test_missing_project_id_and_missing_connectors_are_startup_errors():
+async def test_missing_project_id_and_missing_connectors_are_startup_errors(elias_env):
+    elias_env.delenv("ELIAS_PROJECT_ID")
     agent = make_agent(FakeConnectors(), FakeAudio([]))
-    await agent.on_session_start("s", {"elias": {}})
-    assert "project id" in agent._startup_error
+    await agent.on_session_start("s", CONFIG)
+    assert "ELIAS_PROJECT_ID" in agent._startup_error
+    elias_env.setenv("ELIAS_PROJECT_ID", "p1")
 
     agent = _TestAgent(checker=ScriptedChecker(), sm_client=FakeStateMachine())  # SDK without connectors
     await agent.on_session_start("s", CONFIG)
@@ -166,13 +180,23 @@ async def test_real_session_end_finalises_a_partial_interview():
 
 
 @pytest.mark.asyncio
-async def test_custom_lines_and_connector_handle():
+async def test_custom_lines_from_env_and_calls_through_the_elias_slot(elias_env):
+    elias_env.setenv("ELIAS_CLOSING", "Bye.")
+    elias_env.setenv("ELIAS_OPENING", "Welcome.")
     conn = FakeConnectors()
     audio = FakeAudio(["a", "b", "c"])
-    cfg = {"elias": {"project_id": "p1", "connector": "elias-prod"}, "messages": {"opening": "", "closing": "Bye."}}
-    await run(make_agent(conn, audio), config=cfg)
-    assert audio.spoken == [Q1, Q2, Q3, "Bye."]
-    assert {h for (h, _, _) in conn.calls} == {"elias-prod"}
+    await run(make_agent(conn, audio))
+    assert audio.spoken == ["Welcome.", Q1, Q2, Q3, "Bye."]
+    assert {h for (h, _, _) in conn.calls} == {"elias"}
+
+
+@pytest.mark.asyncio
+async def test_max_attempts_from_env_is_clamped(elias_env):
+    for raw, expected in (("1", 1), ("9", 5), ("0", 1), ("lots", 3), ("", 3)):
+        elias_env.setenv("ELIAS_MAX_ATTEMPTS", raw)
+        agent = make_agent(FakeConnectors(), FakeAudio([]))
+        await agent.on_session_start("s", CONFIG)
+        assert agent._interview.max_attempts == expected, raw
 
 
 @pytest.mark.asyncio
