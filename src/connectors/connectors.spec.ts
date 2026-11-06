@@ -32,7 +32,6 @@ import {
   GatewayError,
 } from './connector-gateway.service.js';
 import { ConnectorsGrpcController } from './connectors-grpc.controller.js';
-import { connectorSlotsOf } from './connector-bindings.util.js';
 import { parseAgentManifestYaml } from '../agent-package/schemas/agent-manifest.schema.js';
 
 describe('normalizeConnectorUrl', () => {

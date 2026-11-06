@@ -1,5 +1,7 @@
 import { Prisma } from '@prisma/client'
+import * as fs from 'fs'
 import * as path from 'path'
+import * as yaml from 'js-yaml'
 import { loadAgentDirectory } from '../agent-package/agent-directory.js'
 import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js'
 import { parseAgentManifest } from '../agent-package/schemas/agent-manifest.schema.js'
@@ -103,7 +105,9 @@ describe('the manifest of a stored agent type', () => {
     '%s: a row from before the manifest column gives the same requirements',
     (slug) => {
       const m = builtIn(slug)
-      const legacy = resolveAgentRequirements(manifestOfAgentType(storedRow(m, false)))
+      // Such a row's configSchema column carries the 1.0 x-stella-* flags.
+      const v1 = yaml.load(fs.readFileSync(path.join(ROOT, 'src/agent-package/__fixtures__', `${slug}.v1.yaml`), 'utf-8')) as any
+      const legacy = resolveAgentRequirements(manifestOfAgentType({ ...storedRow(m, false), configSchema: v1.configSchema }))
       const current = resolveAgentRequirements(m)
       // 1.0 columns cannot say that a configuration is required, nor carry requests.
       expect({ ...legacy, configurator: null, resources: null }).toEqual({

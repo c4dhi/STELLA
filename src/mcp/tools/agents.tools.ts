@@ -132,7 +132,7 @@ export class AgentsTools implements McpToolProvider {
                   .string()
                   .optional()
                   .describe(
-                    "A slot from the agent type's configSchema x-stella-connectors",
+                    "A connector slot the agent type declares in agent.yaml (connectors)",
                   ),
                 handle: z
                   .string()

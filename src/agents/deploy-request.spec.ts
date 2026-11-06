@@ -1,7 +1,7 @@
 import { CURRENT_SDK_VERSION } from '../agent-package/manifest-defaults.js'
 import { parseAgentManifest } from '../agent-package/schemas/agent-manifest.schema.js'
 import { resolveAgentRequirements } from './agent-requirements.js'
-import { assertDeployRequest, withAgentDefaults } from './deploy-request.js'
+import { assertDeployRequest, withAgentDefaults, withEnvDefaults } from './deploy-request.js'
 
 // Whatever the manifest declares, a deployment must carry; whatever it does
 // not declare, a deployment may not bring.
@@ -115,5 +115,27 @@ describe('withAgentDefaults', () => {
   it('accepts a saved config again, so a restart or wake can pass it', () => {
     const once = withAgentDefaults('a-agent', r, { mode: 'plan' })
     expect(withAgentDefaults('a-agent', r, once)).toEqual(once)
+  })
+})
+
+describe('withEnvDefaults', () => {
+  const env = {
+    required: ['OPENAI_API_KEY'],
+    optional: [
+      { name: 'TTS_ENABLED', default: 'true' },
+      { name: 'TRANSCRIPT_DEBOUNCE_MS', default: '300' },
+      { name: 'STELLA_LANGUAGE' },
+    ],
+  }
+
+  it('fills in declared defaults the deployment left out or left empty; a provided value wins', () => {
+    const { env: out, appliedDefaults } = withEnvDefaults(env, { OPENAI_API_KEY: 'k', TTS_ENABLED: 'false', TRANSCRIPT_DEBOUNCE_MS: ' ' })
+    expect(out).toEqual({ OPENAI_API_KEY: 'k', TTS_ENABLED: 'false', TRANSCRIPT_DEBOUNCE_MS: '300' })
+    expect(appliedDefaults).toEqual(['TRANSCRIPT_DEBOUNCE_MS'])
+  })
+
+  it('gives the same env when run again, so restart and wake can pass it', () => {
+    const once = withEnvDefaults(env, { OPENAI_API_KEY: 'k' }).env
+    expect(withEnvDefaults(env, once).env).toEqual(once)
   })
 })

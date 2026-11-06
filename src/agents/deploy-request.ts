@@ -65,6 +65,26 @@ function configuratorProblems({ configurator }: AgentRequirements, config: Recor
   return configurator.required && !present ? ['it needs a configuration from the Configurator'] : []
 }
 
+/**
+ * The env vars a pod gets: what the deployment provides, plus the `default` of
+ * every optional variable the agent declares and the deployment left out.
+ * A provided value always wins. Idempotent, so restart and wake can run it again.
+ */
+export function withEnvDefaults(
+  env: AgentRequirements['env'],
+  provided: Record<string, string>,
+): { env: Record<string, string>; appliedDefaults: string[] } {
+  const out = { ...provided }
+  const appliedDefaults: string[] = []
+  for (const v of env.optional) {
+    if (v.default !== undefined && !out[v.name]?.trim()) {
+      out[v.name] = v.default
+      appliedDefaults.push(v.name)
+    }
+  }
+  return { env: out, appliedDefaults }
+}
+
 function envProblems({ env }: AgentRequirements, provided: Record<string, string>): string[] {
   // An empty value never reaches the pod (see buildSecretStringData), so it counts as missing.
   const missing = env.required.filter((name) => !provided[name]?.trim())

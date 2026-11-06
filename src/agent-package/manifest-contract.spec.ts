@@ -6,7 +6,7 @@ import * as os from 'os'
 import { builtInDockerfilePath, loadAgentDirectory } from './agent-directory.js'
 import { AgentPackageService } from './agent-package.service.js'
 import { DEFAULT_DOCKERFILE, RESOURCE_DEFAULTS } from './manifest-defaults.js'
-import { manifestToAgentTypeData, toLegacyConfigSchema } from './manifest-mapper.js'
+import { manifestToAgentTypeData } from './manifest-mapper.js'
 import {
   MANIFEST_JSON_SCHEMA_PATH,
   manifestJsonSchema,
@@ -49,13 +49,12 @@ describe('built-in agents on manifest 2.0', () => {
     expect(v1.manifest).toEqual({ ...v2.manifest, features: v2Features, image: v2Image })
   })
 
-  it.each(BUILTIN)('%s: the configSchema column stays what readers of 1.0 flags expect', (slug) => {
-    // The deploy wizard and env injection still read x-stella-* from this column.
-    const old = (yaml.load(read(path.join(FIXTURES, `${slug}.v1.yaml`))) as Record<string, unknown>).configSchema
-    const column = toLegacyConfigSchema(parse(read(path.join(ROOT, 'agents', slug, 'agent.yaml'))).manifest!)
-    const { 'x-stella-connectors': connectors, ...rest } = column
-    expect(connectors).toEqual([])
-    expect(rest).toEqual(old)
+  it.each(BUILTIN)('%s: the configSchema column holds the agent\'s configSchema and no platform flags', (slug) => {
+    // Requirements are read from the manifest column; nothing reads x-stella-* any more.
+    const manifest = parse(read(path.join(ROOT, 'agents', slug, 'agent.yaml'))).manifest!
+    const column = manifestToAgentTypeData(manifest, null).configSchema
+    expect(column).toEqual(manifest.configSchema)
+    expect(JSON.stringify(column)).not.toContain('x-stella-')
   })
 })
 

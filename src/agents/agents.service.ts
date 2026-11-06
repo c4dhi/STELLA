@@ -1,6 +1,6 @@
 import { AGENT_TYPE_MANIFEST_SELECT, manifestOfAgentType, resolveAgentRequirements, type AgentRequirements } from './agent-requirements.js';
 import { agentTypeOrDefault } from './default-agent-type.js';
-import { assertDeployRequest, withAgentDefaults } from './deploy-request.js';
+import { assertDeployRequest, withAgentDefaults, withEnvDefaults } from './deploy-request.js';
 import { Injectable, NotFoundException, BadRequestException, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -312,11 +312,13 @@ export class AgentsService {
 
     // Env vars are resolved now, not in the background pod creation, so a
     // missing required one is a 400 here instead of a FAILED agent later.
-    const { merged: envVars } = await this.envVarTemplatesService.resolveEnvVars(
+    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
       createAgentDto.envVarTemplateId,
       userId,
       createAgentDto.envVars,
     );
+    // Optional vars the agent declares with a default get it when left out.
+    const { env: envVars } = withEnvDefaults(requirements.env, merged);
     // One check for every path (wizard, public projects, wake): what the
     // manifest declares is what the deployment must carry.
     assertDeployRequest(agentType, requirements, agentConfig, envVars);
@@ -1029,11 +1031,12 @@ export class AgentsService {
 
     // Re-resolve env vars using the same code path as create() to guarantee the restarted pod
     // gets an identical secret to the original deployment.
-    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
+    const { merged: resolved } = await this.envVarTemplatesService.resolveEnvVars(
       agent.envVarTemplateId ?? undefined,
       projectMembership.userId,
       storedManualVars,
     );
+    const { env: merged } = withEnvDefaults(requirements.env, resolved);
     // The same check as a new deploy: a template that lost a required key, or
     // an agent type whose manifest now asks for more, fails here with a 400.
     assertDeployRequest(agentType, requirements, agentConfig, merged);

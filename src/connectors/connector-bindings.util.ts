@@ -6,7 +6,7 @@
 
 export const CONNECTOR_HANDLE_REGEX = /^[a-z][a-z0-9-]{0,39}$/;
 
-/** One slot an agent declares in agent.yaml (x-stella-connectors). */
+/** One slot an agent declares in agent.yaml (`connectors`). */
 export interface ConnectorSlot {
   slot: string;
   kind: 'mcp';
@@ -107,22 +107,6 @@ export function resolveConnectorBindings(
     );
   }
   return bindings;
-}
-
-/**
- * The connector slots an agent type declares: configSchema['x-stella-connectors'],
- * validated by the manifest parser at upload/seed. Read defensively anyway.
- */
-export function connectorSlotsOf(configSchema: unknown): ConnectorSlot[] {
-  const raw =
-    configSchema && typeof configSchema === 'object'
-      ? (configSchema as Record<string, unknown>)['x-stella-connectors']
-      : undefined;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (s): s is ConnectorSlot =>
-      !!s && typeof s === 'object' && typeof (s as any).slot === 'string' && typeof (s as any).label === 'string',
-  );
 }
 
 /** Read stored bindings defensively: the column is plain Json. */

@@ -34,7 +34,8 @@ export function manifestToAgentTypeData(
     resourceMemory: manifest.resources?.memory?.limit ?? RESOURCE_DEFAULTS.memory.limit,
     resourceCpu: manifest.resources?.cpu?.limit ?? RESOURCE_DEFAULTS.cpu.limit,
     resourceGpu: manifest.resources?.gpu ?? false,
-    configSchema: toLegacyConfigSchema(manifest) as Prisma.InputJsonValue,
+    // The agent's own config description only; requirements come from the manifest column.
+    configSchema: manifest.configSchema ? (manifest.configSchema as Prisma.InputJsonValue) : Prisma.JsonNull,
     defaultConfig: manifest.defaultConfig ? (manifest.defaultConfig as Prisma.InputJsonValue) : Prisma.JsonNull,
     pipelineSchema: manifest.pipelineSchema ? (manifest.pipelineSchema as Prisma.InputJsonValue) : Prisma.DbNull,
     pipelineSchemaHash: hashPipelineSchema((manifest.pipelineSchema as Record<string, unknown>) ?? null),
@@ -46,31 +47,4 @@ export function manifestToAgentTypeData(
     sdkMinVersion: manifest.sdk?.minVersion ?? null,
     expertDefaults: expertDefaults ? (expertDefaults as Prisma.InputJsonValue) : Prisma.DbNull,
   } satisfies Omit<Prisma.AgentTypeCreateInput, 'isBuiltIn'>
-}
-
-/**
- * The AgentType.configSchema column in the 1.0 shape (user settings plus the
- * `x-stella-*` flags), derived from the manifest.
- *
- * Transitional: the deploy wizard, the env-var injection and the connector
- * bindings still read the flags from this column. Once they read the resolved
- * requirements instead, this goes away and the column holds `manifest.configSchema`.
- */
-export function toLegacyConfigSchema(manifest: AgentManifest): Record<string, unknown> {
-  const base = structuredClone(manifest.configSchema ?? { type: 'object' }) as Record<string, unknown>
-  const properties = { ...((base.properties as Record<string, unknown>) ?? {}) }
-
-  if (manifest.features.plans?.required) {
-    properties.plan = { type: 'object', description: 'Plan configuration with states, tasks, and deliverables', 'x-stella-requires-plan': true }
-  }
-
-  return {
-    ...base,
-    type: 'object',
-    properties,
-    'x-stella-env-vars': manifest.env.required,
-    'x-stella-optional-env-vars': manifest.env.optional,
-    'x-stella-supports-configurator': !!manifest.features.configurator,
-    'x-stella-connectors': manifest.connectors,
-  }
 }
