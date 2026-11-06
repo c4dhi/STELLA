@@ -26,7 +26,7 @@ The ELIAS token never reaches the pod: the agent calls ELIAS only through the co
 
 ## Debug feed
 
-With the chat's processing toggle on, the agent's 🔧 lines show each step: the connection to ELIAS, the guide loaded, every ELIAS call (with its time), each question asked, an answer accepted, re-asked (with the reason) or skipped, and the interview ended. Retries are warnings and failures are errors. The lines are kept in the session history and never contain what the participant said. See the agent's README for the full list.
+With the chat's processing toggle on, the agent's 🔧 lines show each step: the connection to ELIAS, the guide loaded, every ELIAS call (with its time), each question asked, an answer accepted, re-asked (with the reason) or skipped, and the interview ended. Retries are warnings and failures are errors. The lines are kept in the session history. They do not copy the participant's reply, but the checker's short reason on an accepted, re-asked or skipped answer can paraphrase it. See the agent's README for the full list.
 
 ## Deploying it
 

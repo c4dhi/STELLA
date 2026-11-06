@@ -42,7 +42,7 @@ The agent reports each step to the session's debug feed: the 🔧 lines in the c
 - **warn:** a reply that wasn't accepted and is re-asked (which ask of how many, and the checker's reason), a skipped question, and a retried ELIAS call.
 - **error:** an ELIAS call that failed, turns still unwritten at the end, and a startup failure.
 
-Lines from before anyone joins wait until the participant is in the room. The metadata holds ids, counts and timings, never the participant's words.
+Lines from before anyone joins wait until the participant is in the room. The lines hold ids, counts and timings, not the participant's reply itself. A line for an accepted, re-asked or skipped answer also carries the checker's short reason, which can paraphrase what the participant said.
 
 ## Setup
 
