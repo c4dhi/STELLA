@@ -113,8 +113,8 @@ describe('agent-config-injection util', () => {
       roomName: 'room-a',
       ttsProvider: 'opensource',
       agentConfig: {},
-      // Even a template that carries them must not put them back.
-      customEnvVars: { LIVEKIT_API_KEY: 'lk-key', LIVEKIT_API_SECRET: 'lk-secret', EXTRA: '1' },
+      // Even a template that carries them must not put them back, or swap the token.
+      customEnvVars: { LIVEKIT_API_KEY: 'lk-key', LIVEKIT_API_SECRET: 'lk-secret', LIVEKIT_TOKEN: 'other.room.token', EXTRA: '1' },
     })
 
     expect(secret).toEqual({

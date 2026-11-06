@@ -99,6 +99,7 @@ export function buildSecretStringData(input: SecretDataBuildInput): Record<strin
     const custom = filterNonEmptyEnvVars(input.customEnvVars)
     delete custom.LIVEKIT_API_KEY
     delete custom.LIVEKIT_API_SECRET
+    delete custom.LIVEKIT_TOKEN
     return {
       LIVEKIT_URL: input.livekitUrl,
       LIVEKIT_TOKEN: input.livekitToken,

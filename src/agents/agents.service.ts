@@ -386,7 +386,7 @@ export class AgentsService {
     // 4. Create K8s pod asynchronously (don't block response)
     // NOTE: In the new architecture, agents connect directly to LiveKit rooms via SDK
     // No need for session-management-server to join rooms
-    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, envVars, agentConfig, requirements, agentTypeRecord?.isBuiltIn ?? true);
+    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, envVars, agentConfig, requirements, agentTypeRecord?.isBuiltIn ?? false);
 
     return agent;
   }
@@ -1140,7 +1140,7 @@ export class AgentsService {
         livekitUrl,
         // A restart is a new pod, so an uploaded agent gets a freshly signed token (issue 856).
         ...(await agentLiveKitCredentials({
-          isBuiltIn: agentTypeRecord?.isBuiltIn ?? true,
+          isBuiltIn: agentTypeRecord?.isBuiltIn ?? false,
           apiKey: livekitApiKey,
           apiSecret: livekitApiSecret,
           roomName: agent.session.room.livekitRoomName,

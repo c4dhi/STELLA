@@ -25,6 +25,11 @@ describe('SDK support window', () => {
     expect(builtSdkProblem('99.0.0')).toBeNull()
   })
 
+  it('refuses SDKs older than 0.10.0, which cannot read LIVEKIT_TOKEN (issue 856)', () => {
+    expect(MIN_SUPPORTED_SDK_VERSION).toBe('0.10.0')
+    expect(builtSdkProblem('0.9.0')).toMatch(/older than the oldest this STELLA supports/)
+  })
+
   it('a manifest may not ask for an SDK newer than this STELLA ships', () => {
     expect(requestedSdkProblem(undefined)).toBeNull()
     expect(requestedSdkProblem(CURRENT_SDK_VERSION)).toBeNull()
