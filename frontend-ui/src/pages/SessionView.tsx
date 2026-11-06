@@ -806,7 +806,7 @@ export default function SessionView() {
         </div>
 
         {/* Main Content Area */}
-        <div className={`flex flex-col gap-3 transition-all duration-300 ${showTaskPanel ? 'flex-1' : 'w-full max-w-3xl mx-auto'}`}>
+        <div className={`flex flex-col gap-3 transition-all duration-300 ${showTaskPanel ? 'flex-1 min-w-0' : 'w-full min-w-0 max-w-3xl mx-auto'}`}>
           <ConnectPanel roomName={session?.room.livekitRoomName} />
 
           <div className={`flex-1 backdrop-blur-xl rounded-xl shadow-sm flex flex-col overflow-hidden transition-colors duration-300 ${isDark

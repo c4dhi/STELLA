@@ -27,6 +27,7 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
   const taskUpdateHistory = useStore(s => s.taskUpdateHistory)
   const [agents, setAgents] = useState<AgentInstance[]>(initialAgents)
   const [selectedAgent, setSelectedAgent] = useState<AgentWithPodStatus | null>(null)
+  const [showStopped, setShowStopped] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [logs, setLogs] = useState<string>('')
   const [expandedLogs, setExpandedLogs] = useState<Set<string>>(new Set())
@@ -496,13 +497,340 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
     }
   }
 
+  // Running agents first; stopped and failed ones fold away so a long-lived
+  // session does not bury the agents that matter.
+  const isStopped = (a: AgentInstance) => a.status === 'STOPPED' || a.status === 'FAILED'
+  const activeAgents = agents.filter((a) => !isStopped(a))
+  const stoppedAgents = agents.filter(isStopped)
+
+  const renderAgentCard = (agent: AgentInstance) => (
+    <motion.div
+      key={agent.id}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`
+        p-4 rounded-xl transition-[color,background-color,border-color,box-shadow] duration-200
+        ${isDark
+          ? 'bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20'
+          : 'bg-white border border-neutral-200 hover:border-neutral-300 shadow-sm'
+        }
+      `}
+    >
+      {/* Agent Name */}
+      <div className="flex items-start justify-between mb-2">
+        <div className={`text-sm font-light flex items-center gap-2 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+          <span>{agent.icon || '🤖'}</span>
+          <span>{agent.name}</span>
+        </div>
+        <div
+          className={`
+            px-2 py-0.5 rounded text-[10px] font-light tracking-wider uppercase border
+            ${getStatusColor(agent.status)}
+          `}
+        >
+          {agent.status}
+        </div>
+      </div>
+
+      {/* What this agent was deployed WITH — its identity and its plan.
+          This used to be JSON.stringify(agent.agentConfig) in a truncate
+          div, which rendered as a bare "..." because the config is many
+          thousands of characters (pipeline config, prompts, and now the
+          persona snapshot). It read as a menu and carried no information. */}
+      {(() => {
+        const cfg = (agent.agentConfig || {}) as {
+          persona?: { name?: string; icon?: string }
+          plan?: { title?: string }
+          mode?: string
+          available_plans?: Array<{ title?: string }>
+        }
+        const personaName = cfg.persona?.name
+
+        // A companion has no plan at deploy time and picks one up (or
+        // drops it) mid-session, so the deploy snapshot cannot answer
+        // "what is running right now" — only the live progress stream can.
+        const companion = findLiveTaskList(agent)?.companion
+        const isCompanion = !!companion || cfg.mode === 'companion'
+        const activePlan = isCompanion
+          ? companion?.active_activity || null
+          : cfg.plan?.title || null
+
+        // Nothing running: show what the user can actually pick. Falls
+        // back to the deploy snapshot for the window between deploy and
+        // the agent's first progress update, when there is no live state.
+        const options = isCompanion && !activePlan
+          ? (companion?.activities ?? cfg.available_plans ?? [])
+              .map(a => a.title)
+              .filter((t): t is string => !!t)
+          : []
+
+        if (!personaName && !activePlan && options.length === 0) return null
+        return (
+          <div className={`text-xs font-light mb-3 min-w-0 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
+            <div className="flex items-center gap-1.5 min-w-0">
+              {personaName && (
+                <span className="truncate" title={`Persona: ${personaName}`}>
+                  {cfg.persona?.icon || '🎭'} {personaName}
+                </span>
+              )}
+              {personaName && activePlan && <span className="opacity-40">·</span>}
+              {activePlan && (
+                <span className="truncate" title={`Running: ${activePlan}`}>
+                  {isCompanion && '▶️ '}{activePlan}
+                </span>
+              )}
+              {personaName && !activePlan && isCompanion && (
+                <>
+                  <span className="opacity-40">·</span>
+                  <span className="truncate opacity-70">Free conversation</span>
+                </>
+              )}
+            </div>
+            {options.length > 0 && (
+              <div className="mt-1.5">
+                <div className={`text-[10px] tracking-wider uppercase mb-1 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
+                  Can offer
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {options.map(title => (
+                    <span
+                      key={title}
+                      className={`px-1.5 py-0.5 rounded border max-w-full truncate ${isDark ? 'border-zinc-700 bg-zinc-800/60' : 'border-border bg-surface-secondary'}`}
+                      title={title}
+                    >
+                      {title}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* Created Date */}
+      <div className={`text-[10px] font-light tracking-wider uppercase mb-3 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
+        Started {new Date(agent.createdAt).toLocaleTimeString()}
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => handleViewAgent(agent.id)}
+          className={`
+            flex-1 py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
+            ${isDark
+              ? 'bg-white/10 border border-white/10 text-content-inverse-secondary hover:text-content-inverse hover:border-white/20'
+              : 'bg-white border border-border text-content-secondary hover:text-content hover:border-border-secondary'
+            }
+          `}
+        >
+          Details
+        </button>
+        {(agent.status === 'RUNNING' || agent.status === 'STARTING') && (
+          <button
+            onClick={() => toggleLiveLogs(agent.id)}
+            className={`
+              flex-1 py-1.5 px-2 rounded-lg text-xs font-light
+              border transition-all duration-200
+              flex items-center justify-center gap-1
+              ${expandedLogs.has(agent.id)
+                ? isDark
+                  ? 'bg-white/20 border-white/20 text-content-inverse'
+                  : 'bg-content border-content text-white'
+                : isDark
+                  ? 'bg-white/10 border-white/10 text-content-inverse-secondary hover:text-content-inverse hover:border-white/20'
+                  : 'bg-white border-border text-content-secondary hover:text-content hover:border-border-secondary'
+              }
+            `}
+          >
+            {expandedLogs.has(agent.id) ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                Console
+              </>
+            ) : (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+                Console
+              </>
+            )}
+          </button>
+        )}
+        {(agent.status === 'STOPPED' || agent.status === 'FAILED') && (
+          <>
+            <button
+              onClick={() => handleRestartAgent(agent.id)}
+              className={`
+                py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
+                ${isDark
+                  ? 'text-green-400 hover:bg-green-500/20'
+                  : 'text-green-600 hover:bg-green-50'
+                }
+              `}
+              title="Restart agent"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+              </svg>
+            </button>
+            <button
+              onClick={() => handleDeleteAgent(agent.id)}
+              className={`
+                py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
+                ${isDark
+                  ? 'text-red-400 hover:bg-red-500/20'
+                  : 'text-red-500 hover:bg-red-50'
+                }
+              `}
+              title="Delete agent permanently"
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" />
+              </svg>
+            </button>
+          </>
+        )}
+        {(agent.status === 'RUNNING' || agent.status === 'STARTING' || agent.status === 'STOPPING') && (
+          <button
+            onClick={() => agent.status !== 'STOPPING' && handleStopAgent(agent.id)}
+            disabled={agent.status === 'STOPPING'}
+            className={`
+              py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
+              ${agent.status === 'STOPPING'
+                ? isDark
+                  ? 'text-content-inverse-tertiary cursor-not-allowed opacity-50'
+                  : 'text-content-tertiary cursor-not-allowed opacity-50'
+                : isDark
+                  ? 'text-red-400 hover:bg-red-500/20 cursor-pointer'
+                  : 'text-red-500 hover:bg-red-50 cursor-pointer'
+              }
+            `}
+            title={agent.status === 'STOPPING' ? 'Stopping...' : 'Stop agent'}
+          >
+            {agent.status === 'STOPPING' ? (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                className="animate-spin"
+              >
+                <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" />
+              </svg>
+            ) : (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <rect x="6" y="6" width="12" height="12" rx="1" />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* Console Logs Panel */}
+      <AnimatePresence>
+        {expandedLogs.has(agent.id) && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="mt-3 overflow-hidden"
+          >
+            {/* Console Container with integrated header */}
+            <div className="relative bg-neutral-900 rounded-lg border border-neutral-700 overflow-hidden">
+              {/* Console Header */}
+              <div className="flex items-center justify-between px-3 py-2 bg-neutral-800/50 border-b border-neutral-700">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                  <span className="text-[10px] text-neutral-400 font-light tracking-wider uppercase">
+                    Console Output
+                  </span>
+                </div>
+                <button
+                  onClick={() => setMaximizedLogAgent(agent.id)}
+                  className="
+                    p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-700
+                    transition-all duration-200 flex items-center gap-1
+                  "
+                  title="Open in fullscreen"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                  >
+                    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                  </svg>
+                </button>
+              </div>
+              {/* Console Content */}
+              <div
+                ref={(el) => { inlineLogRefs.current.set(agent.id, el) }}
+                onScroll={(e) => handleLogScroll(agent.id, e)}
+                className="
+                  text-neutral-100 p-3
+                  font-mono text-[10px] leading-relaxed
+                  h-32 overflow-y-auto
+                "
+              >
+                {liveLogsMap.get(agent.id) ? (
+                  <pre className="whitespace-pre-wrap break-words">
+                    {liveLogsMap.get(agent.id)}
+                  </pre>
+                ) : (
+                  <div className="text-neutral-500 italic flex items-center gap-2">
+                    <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Connecting to log stream...
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  )
+
   return (
     <>
       <motion.div
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="w-80 flex flex-col"
+        className="w-64 xl:w-80 flex flex-col"
       >
         {/* Agents Panel */}
         <div
@@ -520,7 +848,7 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
               Agents
             </h2>
             <p className={`text-[10px] font-light tracking-wider uppercase ${isDark ? 'text-content-inverse-secondary' : 'text-content-tertiary'}`}>
-              {agents.length} {agents.length === 1 ? 'agent' : 'agents'} deployed
+              {agents.length === 0 ? 'None deployed' : `${activeAgents.length} active${stoppedAgents.length > 0 ? ` · ${stoppedAgents.length} stopped` : ''}`}
             </p>
           </div>
 
@@ -558,326 +886,29 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
                 No agents deployed yet
               </div>
             ) : (
-              agents.map(agent => (
-                <motion.div
-                  key={agent.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`
-                    p-4 rounded-xl transition-[color,background-color,border-color,box-shadow] duration-200
-                    ${isDark
-                      ? 'bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20'
-                      : 'bg-white border border-neutral-200 hover:border-neutral-300 shadow-sm'
-                    }
-                  `}
-                >
-                  {/* Agent Name */}
-                  <div className="flex items-start justify-between mb-2">
-                    <div className={`text-sm font-light flex items-center gap-2 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
-                      <span>{agent.icon || '🤖'}</span>
-                      <span>{agent.name}</span>
-                    </div>
-                    <div
-                      className={`
-                        px-2 py-0.5 rounded text-[10px] font-light tracking-wider uppercase border
-                        ${getStatusColor(agent.status)}
-                      `}
-                    >
-                      {agent.status}
-                    </div>
-                  </div>
-
-                  {/* What this agent was deployed WITH — its identity and its plan.
-                      This used to be JSON.stringify(agent.agentConfig) in a truncate
-                      div, which rendered as a bare "..." because the config is many
-                      thousands of characters (pipeline config, prompts, and now the
-                      persona snapshot). It read as a menu and carried no information. */}
-                  {(() => {
-                    const cfg = (agent.agentConfig || {}) as {
-                      persona?: { name?: string; icon?: string }
-                      plan?: { title?: string }
-                      mode?: string
-                      available_plans?: Array<{ title?: string }>
-                    }
-                    const personaName = cfg.persona?.name
-
-                    // A companion has no plan at deploy time and picks one up (or
-                    // drops it) mid-session, so the deploy snapshot cannot answer
-                    // "what is running right now" — only the live progress stream can.
-                    const companion = findLiveTaskList(agent)?.companion
-                    const isCompanion = !!companion || cfg.mode === 'companion'
-                    const activePlan = isCompanion
-                      ? companion?.active_activity || null
-                      : cfg.plan?.title || null
-
-                    // Nothing running: show what the user can actually pick. Falls
-                    // back to the deploy snapshot for the window between deploy and
-                    // the agent's first progress update, when there is no live state.
-                    const options = isCompanion && !activePlan
-                      ? (companion?.activities ?? cfg.available_plans ?? [])
-                          .map(a => a.title)
-                          .filter((t): t is string => !!t)
-                      : []
-
-                    if (!personaName && !activePlan && options.length === 0) return null
-                    return (
-                      <div className={`text-xs font-light mb-3 min-w-0 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          {personaName && (
-                            <span className="truncate" title={`Persona: ${personaName}`}>
-                              {cfg.persona?.icon || '🎭'} {personaName}
-                            </span>
-                          )}
-                          {personaName && activePlan && <span className="opacity-40">·</span>}
-                          {activePlan && (
-                            <span className="truncate" title={`Running: ${activePlan}`}>
-                              {isCompanion && '▶️ '}{activePlan}
-                            </span>
-                          )}
-                          {personaName && !activePlan && isCompanion && (
-                            <>
-                              <span className="opacity-40">·</span>
-                              <span className="truncate opacity-70">Free conversation</span>
-                            </>
-                          )}
-                        </div>
-                        {options.length > 0 && (
-                          <div className="mt-1.5">
-                            <div className={`text-[10px] tracking-wider uppercase mb-1 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
-                              Can offer
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              {options.map(title => (
-                                <span
-                                  key={title}
-                                  className={`px-1.5 py-0.5 rounded border max-w-full truncate ${isDark ? 'border-zinc-700 bg-zinc-800/60' : 'border-border bg-surface-secondary'}`}
-                                  title={title}
-                                >
-                                  {title}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()}
-
-                  {/* Created Date */}
-                  <div className={`text-[10px] font-light tracking-wider uppercase mb-3 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
-                    Started {new Date(agent.createdAt).toLocaleTimeString()}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex gap-2">
+              <>
+                {activeAgents.map(renderAgentCard)}
+                {stoppedAgents.length > 0 && (
+                  <div className={activeAgents.length > 0 ? 'pt-1' : ''}>
                     <button
-                      onClick={() => handleViewAgent(agent.id)}
+                      type="button"
+                      onClick={() => setShowStopped((v) => !v)}
+                      aria-expanded={showStopped}
                       className={`
-                        flex-1 py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
-                        ${isDark
-                          ? 'bg-white/10 border border-white/10 text-content-inverse-secondary hover:text-content-inverse hover:border-white/20'
-                          : 'bg-white border border-border text-content-secondary hover:text-content hover:border-border-secondary'
-                        }
+                        w-full flex items-center justify-between px-1 py-1.5 text-xs font-light tracking-wide
+                        ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-800'}
                       `}
                     >
-                      Details
+                      <span>Stopped ({stoppedAgents.length})</span>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                        className={`transition-transform duration-200 ${showStopped ? 'rotate-180' : ''}`}>
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
                     </button>
-                    {(agent.status === 'RUNNING' || agent.status === 'STARTING') && (
-                      <button
-                        onClick={() => toggleLiveLogs(agent.id)}
-                        className={`
-                          flex-1 py-1.5 px-2 rounded-lg text-xs font-light
-                          border transition-all duration-200
-                          flex items-center justify-center gap-1
-                          ${expandedLogs.has(agent.id)
-                            ? isDark
-                              ? 'bg-white/20 border-white/20 text-content-inverse'
-                              : 'bg-content border-content text-white'
-                            : isDark
-                              ? 'bg-white/10 border-white/10 text-content-inverse-secondary hover:text-content-inverse hover:border-white/20'
-                              : 'bg-white border-border text-content-secondary hover:text-content hover:border-border-secondary'
-                          }
-                        `}
-                      >
-                        {expandedLogs.has(agent.id) ? (
-                          <>
-                            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                            Console
-                          </>
-                        ) : (
-                          <>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                              <polyline points="4 17 10 11 4 5" />
-                              <line x1="12" y1="19" x2="20" y2="19" />
-                            </svg>
-                            Console
-                          </>
-                        )}
-                      </button>
-                    )}
-                    {(agent.status === 'STOPPED' || agent.status === 'FAILED') && (
-                      <>
-                        <button
-                          onClick={() => handleRestartAgent(agent.id)}
-                          className={`
-                            py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
-                            ${isDark
-                              ? 'text-green-400 hover:bg-green-500/20'
-                              : 'text-green-600 hover:bg-green-50'
-                            }
-                          `}
-                          title="Restart agent"
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                          >
-                            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
-                          </svg>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAgent(agent.id)}
-                          className={`
-                            py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
-                            ${isDark
-                              ? 'text-red-400 hover:bg-red-500/20'
-                              : 'text-red-500 hover:bg-red-50'
-                            }
-                          `}
-                          title="Delete agent permanently"
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                          >
-                            <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" />
-                          </svg>
-                        </button>
-                      </>
-                    )}
-                    {(agent.status === 'RUNNING' || agent.status === 'STARTING' || agent.status === 'STOPPING') && (
-                      <button
-                        onClick={() => agent.status !== 'STOPPING' && handleStopAgent(agent.id)}
-                        disabled={agent.status === 'STOPPING'}
-                        className={`
-                          py-1.5 px-2 rounded-lg text-xs font-light transition-all duration-200
-                          ${agent.status === 'STOPPING'
-                            ? isDark
-                              ? 'text-content-inverse-tertiary cursor-not-allowed opacity-50'
-                              : 'text-content-tertiary cursor-not-allowed opacity-50'
-                            : isDark
-                              ? 'text-red-400 hover:bg-red-500/20 cursor-pointer'
-                              : 'text-red-500 hover:bg-red-50 cursor-pointer'
-                          }
-                        `}
-                        title={agent.status === 'STOPPING' ? 'Stopping...' : 'Stop agent'}
-                      >
-                        {agent.status === 'STOPPING' ? (
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            className="animate-spin"
-                          >
-                            <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" />
-                          </svg>
-                        ) : (
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                          >
-                            <rect x="6" y="6" width="12" height="12" rx="1" />
-                          </svg>
-                        )}
-                      </button>
-                    )}
+                    {showStopped && <div className="space-y-3 mt-2">{stoppedAgents.map(renderAgentCard)}</div>}
                   </div>
-
-                  {/* Console Logs Panel */}
-                  <AnimatePresence>
-                    {expandedLogs.has(agent.id) && (
-                      <motion.div
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: 'auto' }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.2 }}
-                        className="mt-3 overflow-hidden"
-                      >
-                        {/* Console Container with integrated header */}
-                        <div className="relative bg-neutral-900 rounded-lg border border-neutral-700 overflow-hidden">
-                          {/* Console Header */}
-                          <div className="flex items-center justify-between px-3 py-2 bg-neutral-800/50 border-b border-neutral-700">
-                            <div className="flex items-center gap-2">
-                              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                              <span className="text-[10px] text-neutral-400 font-light tracking-wider uppercase">
-                                Console Output
-                              </span>
-                            </div>
-                            <button
-                              onClick={() => setMaximizedLogAgent(agent.id)}
-                              className="
-                                p-1.5 rounded-md text-neutral-400 hover:text-white hover:bg-neutral-700
-                                transition-all duration-200 flex items-center gap-1
-                              "
-                              title="Open in fullscreen"
-                            >
-                              <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="1.5"
-                              >
-                                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
-                              </svg>
-                            </button>
-                          </div>
-                          {/* Console Content */}
-                          <div
-                            ref={(el) => { inlineLogRefs.current.set(agent.id, el) }}
-                            onScroll={(e) => handleLogScroll(agent.id, e)}
-                            className="
-                              text-neutral-100 p-3
-                              font-mono text-[10px] leading-relaxed
-                              h-32 overflow-y-auto
-                            "
-                          >
-                            {liveLogsMap.get(agent.id) ? (
-                              <pre className="whitespace-pre-wrap break-words">
-                                {liveLogsMap.get(agent.id)}
-                              </pre>
-                            ) : (
-                              <div className="text-neutral-500 italic flex items-center gap-2">
-                                <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                                </svg>
-                                Connecting to log stream...
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
-              ))
+                )}
+              </>
             )}
           </div>
         </div>
