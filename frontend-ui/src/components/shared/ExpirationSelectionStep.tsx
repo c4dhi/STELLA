@@ -1,5 +1,5 @@
-import { Check } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
+import { CHOICE_CARD, SelectedBadge } from './wizardChoice'
 
 export interface ExpirationOption {
   value: number | undefined
@@ -49,11 +49,11 @@ export default function ExpirationSelectionStep({
             w-full p-4 rounded-xl flex items-center justify-between transition-all
             ${expiresInHours === option.value
               ? isDark
-                ? 'bg-primary-500/20 border-2 border-primary-500'
-                : 'bg-neutral-100 border-2 border-neutral-900'
+                ? CHOICE_CARD.selected.dark
+                : CHOICE_CARD.selected.light
               : isDark
-                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
+                ? CHOICE_CARD.idle.dark
+                : CHOICE_CARD.idle.light
             }
           `}
         >
@@ -66,9 +66,7 @@ export default function ExpirationSelectionStep({
             </p>
           </div>
           {expiresInHours === option.value && (
-            <div className={`w-5 h-5 rounded-full flex items-center justify-center ${isDark ? 'bg-primary-500' : 'bg-neutral-900'}`}>
-              <Check className="w-3 h-3 text-white" />
-            </div>
+            <SelectedBadge isDark={isDark} />
           )}
         </button>
       ))}

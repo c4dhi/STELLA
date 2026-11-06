@@ -36,6 +36,7 @@ import {
   SessionDurationSelectionStep,
 } from '../shared'
 import { WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
+import { choiceCardClass } from '../shared/wizardChoice'
 
 interface ProjectModalProps {
   isOpen: boolean
@@ -726,14 +727,7 @@ export default function ProjectModal({
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
                             disabled:opacity-60 disabled:cursor-not-allowed
-                            ${projectType === 'private'
-                              ? isDark
-                                ? 'bg-violet-500/20 border-2 border-violet-500'
-                                : 'bg-neutral-100 border-2 border-neutral-900'
-                              : isDark
-                                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                            }
+                            ${choiceCardClass(projectType === 'private', isDark)}
                           `}
                         >
                           <div className="flex items-start gap-3">
@@ -764,14 +758,7 @@ export default function ProjectModal({
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
                             disabled:opacity-60 disabled:cursor-not-allowed
-                            ${projectType === 'public'
-                              ? isDark
-                                ? 'bg-violet-500/20 border-2 border-violet-500'
-                                : 'bg-neutral-100 border-2 border-neutral-900'
-                              : isDark
-                                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                            }
+                            ${choiceCardClass(projectType === 'public', isDark)}
                           `}
                         >
                           <div className="flex items-start gap-3">
@@ -829,14 +816,7 @@ export default function ProjectModal({
                           className={`
                             p-3 rounded-xl text-left transition-all duration-200
                             disabled:opacity-60 disabled:cursor-not-allowed
-                            ${agentInactivityTimeout === option.value && !showCustomInput
-                              ? isDark
-                                ? 'bg-violet-500/20 border-2 border-violet-500'
-                                : 'bg-neutral-100 border-2 border-neutral-900'
-                              : isDark
-                                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                            }
+                            ${choiceCardClass(agentInactivityTimeout === option.value && !showCustomInput, isDark)}
                           `}
                         >
                           <div className="flex items-center gap-2">
@@ -872,14 +852,7 @@ export default function ProjectModal({
                         className={`
                           p-3 rounded-xl text-left transition-all duration-200 col-span-2
                           disabled:opacity-60 disabled:cursor-not-allowed
-                          ${showCustomInput
-                            ? isDark
-                              ? 'bg-violet-500/20 border-2 border-violet-500'
-                              : 'bg-neutral-100 border-2 border-neutral-900'
-                            : isDark
-                              ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                              : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                          }
+                          ${choiceCardClass(showCustomInput, isDark)}
                         `}
                       >
                         <div className="flex items-center justify-between">

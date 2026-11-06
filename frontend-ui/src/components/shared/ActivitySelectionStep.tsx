@@ -4,6 +4,7 @@ import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import type { PlanTemplate } from '../../lib/api-types'
 import { WIZARD_CARD_GRID } from './wizardLayout'
+import { choiceCardClass } from './wizardChoice'
 
 interface ActivitySelectionStepProps {
   selectedPlanIds: string[]
@@ -73,14 +74,7 @@ export default function ActivitySelectionStep({
               whileHover={{ y: -2 }}
               className={`
                 relative p-4 rounded-xl text-left transition-all duration-200
-                ${selected
-                  ? isDark
-                    ? 'bg-primary-500/20 border-2 border-primary-500'
-                    : 'bg-neutral-100 border-2 border-neutral-900'
-                  : isDark
-                    ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                    : 'bg-white border border-neutral-200 hover:border-neutral-300'
-                }
+                ${choiceCardClass(selected, isDark)}
               `}
             >
               <div

@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Check } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
+import { CHOICE_CARD, SelectedBadge } from './wizardChoice'
 
 export interface SessionDurationOption {
   value: number | null
@@ -49,17 +49,13 @@ export default function SessionDurationSelectionStep({
   )
 
   const selectedClasses = isDark
-    ? 'bg-primary-500/20 border-2 border-primary-500'
-    : 'bg-neutral-100 border-2 border-neutral-900'
+    ? CHOICE_CARD.selected.dark
+    : CHOICE_CARD.selected.light
   const unselectedClasses = isDark
-    ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-    : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
+    ? CHOICE_CARD.idle.dark
+    : CHOICE_CARD.idle.light
 
-  const checkBadge = (
-    <div className={`w-5 h-5 rounded-full flex items-center justify-center ${isDark ? 'bg-primary-500' : 'bg-neutral-900'}`}>
-      <Check className="w-3 h-3 text-white" />
-    </div>
-  )
+  const checkBadge = <SelectedBadge isDark={isDark} />
 
   return (
     <div className="space-y-3">

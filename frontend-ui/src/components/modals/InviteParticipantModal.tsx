@@ -7,6 +7,8 @@ import { apiClient } from '../../services/ApiClient'
 import type { CreateInvitationDto, CreateInvitationResponse } from '../../lib/api-types'
 import type { VisualizerType } from '../face/types'
 import { VisualizerSelectionStep, ExpirationSelectionStep, INVITATION_EXPIRATION_OPTIONS, SessionDurationSelectionStep } from '../shared'
+import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
+import WizardProgress from '../shared/WizardProgress'
 
 interface InviteParticipantModalProps {
   isOpen: boolean
@@ -264,25 +266,7 @@ export default function InviteParticipantModal({
                     </svg>
                   </button>
 
-                  {/* Step indicator */}
-                  <div className="flex items-center gap-3 mb-2">
-                    {STEPS.map((s, idx) => (
-                      <div key={s.id} className="flex items-center">
-                        <div className={`
-                          w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
-                          ${getStepNumber(step) >= s.number
-                            ? 'bg-primary-500 text-white'
-                            : isDark ? 'bg-zinc-600 text-zinc-300' : 'bg-neutral-200 text-neutral-600'
-                          }
-                        `}>
-                          {s.number}
-                        </div>
-                        {idx < STEPS.length - 1 && (
-                          <div className={`w-8 h-0.5 ml-3 ${isDark ? 'bg-zinc-600' : 'bg-neutral-200'}`} />
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                  <WizardProgress current={getStepNumber(step)} total={STEPS.length} isDark={isDark} />
 
                   <h2 className={`text-2xl font-light tracking-wide ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
                     {getStepTitle()}
@@ -316,14 +300,7 @@ export default function InviteParticipantModal({
                         className={`
                           relative p-4 rounded-xl text-left transition-all duration-200
                           ${!type.available ? 'opacity-60 cursor-not-allowed' : ''}
-                          ${invitationType === type.id && type.available
-                            ? isDark
-                              ? 'bg-primary-500/20 border-2 border-primary-500'
-                              : 'bg-primary-50 border-2 border-primary-500'
-                            : isDark
-                              ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                              : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                          }
+                          ${choiceCardClass(invitationType === type.id && type.available, isDark)}
                         `}
                       >
                         {type.comingSoon && (
@@ -338,7 +315,7 @@ export default function InviteParticipantModal({
                           <div className={`
                             w-12 h-12 rounded-xl flex items-center justify-center
                             ${invitationType === type.id && type.available
-                              ? 'bg-primary-500 text-white'
+                              ? isDark ? 'bg-primary-500 text-white' : 'bg-neutral-900 text-white'
                               : isDark ? 'bg-zinc-600 text-zinc-300' : 'bg-neutral-100 text-neutral-500'
                             }
                           `}>
@@ -355,9 +332,7 @@ export default function InviteParticipantModal({
                         </div>
                         {invitationType === type.id && type.available && (
                           <div className="absolute top-4 right-4">
-                            <div className="w-5 h-5 rounded-full bg-primary-500 flex items-center justify-center">
-                              <Check className="w-3 h-3 text-white" />
-                            </div>
+                            <SelectedBadge isDark={isDark} />
                           </div>
                         )}
                       </button>

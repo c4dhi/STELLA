@@ -3,6 +3,7 @@ import { useThemeStore } from '../../store/themeStore'
 import type { AvailableConnector, ConnectorSlot } from '../../lib/api-types'
 import { missingTools, type SlotChoices } from '../../lib/connectorBindings'
 import { WIZARD_CARD_GRID } from './wizardLayout'
+import { choiceCardClass } from './wizardChoice'
 import { IconTile, toolCountLabel } from '../settings/connectors/connectorUi'
 
 interface ConnectorsStepProps {
@@ -89,11 +90,7 @@ export default function ConnectorsStep({ slots, available, loading, loadError, s
                 type="button"
                 aria-pressed={on}
                 onClick={() => onToggle(c.id, !on)}
-                className={`relative min-h-[128px] p-3 rounded-xl border-2 text-left flex flex-col gap-1.5 transition-[background-color,border-color] duration-200 ${
-                  on
-                    ? isDark ? 'bg-primary-500/20 border-primary-500' : 'bg-neutral-100 border-neutral-900'
-                    : isDark ? 'bg-zinc-800/50 border-zinc-700/50 hover:border-zinc-600' : 'bg-white border-neutral-200/60 hover:border-neutral-300 shadow-sm'
-                }`}
+                className={`relative min-h-[128px] p-3 rounded-xl text-left flex flex-col gap-1.5 transition-all duration-200 ${choiceCardClass(on, isDark)}`}
               >
                 <span
                   aria-hidden="true"
