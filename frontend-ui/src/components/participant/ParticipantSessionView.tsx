@@ -24,6 +24,7 @@ import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
+import { COMPLETION_SCREEN_CAP_MS, completionReadingTimeMs } from '../../lib/completionScreen'
 import SessionTimeoutOverlay from './SessionTimeoutOverlay'
 import { TEXT_FACE, VisualizerType, isTextFace } from '../face/types'
 import PermissionsModal from './PermissionsModal'
@@ -1245,6 +1246,25 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     }
   }, [sessionCompleted, sessionTimedOut, isMuted, room])
 
+  // The completion screen waits until the agent's last message has been heard
+  // and read (lib/completionScreen.ts); the microphone above stops at once.
+  const [showCompletedScreen, setShowCompletedScreen] = useState(false)
+  const lastAgentMessage = useMemo(
+    () => [...messages].reverse().find((m) => m.role === 'assistant'),
+    [messages],
+  )
+  useEffect(() => {
+    if (!sessionCompleted || showCompletedScreen) return
+    const cap = setTimeout(() => setShowCompletedScreen(true), COMPLETION_SCREEN_CAP_MS)
+    return () => clearTimeout(cap)
+  }, [sessionCompleted, showCompletedScreen])
+  useEffect(() => {
+    if (!sessionCompleted || showCompletedScreen) return
+    if (isRemoteSpeaking || lastAgentMessage?.isStreaming) return
+    const read = setTimeout(() => setShowCompletedScreen(true), completionReadingTimeMs(lastAgentMessage?.text))
+    return () => clearTimeout(read)
+  }, [sessionCompleted, showCompletedScreen, isRemoteSpeaking, lastAgentMessage?.isStreaming, lastAgentMessage?.text])
+
   // Handle mouse movement to show/hide controls
   useEffect(() => {
     const handleMouseMove = () => {
@@ -1756,7 +1776,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       )}
 
       {/* Session Completed Overlay */}
-      <SessionCompletedOverlay isVisible={sessionCompleted} participantName={sessionData.participantName} />
+      <SessionCompletedOverlay isVisible={showCompletedScreen} />
 
       {/* Session Timeout Overlay */}
       <SessionTimeoutOverlay isVisible={sessionTimedOut && !sessionCompleted} failureCode={`f-${sessionData.participantName}`} />

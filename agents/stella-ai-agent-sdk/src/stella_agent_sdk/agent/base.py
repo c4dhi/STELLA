@@ -23,7 +23,7 @@ from stella_agent_sdk.language import turn_language_record
 from stella_agent_sdk.messages.input import AgentInput
 from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.services.connectors_client import ConnectorsClient
-from stella_agent_sdk.participants import human_identities
+from stella_agent_sdk.participants import human_identities, session_participants
 from stella_agent_sdk.plan.runtime import PlanRuntime
 from stella_agent_sdk.session_config import PersonaConfig, SessionConfig
 from stella_agent_sdk.messages.types import (
@@ -926,17 +926,28 @@ class BaseAgent(ABC):
             return []
         return human_identities(self.audio.participant_identities())
 
+    def session_participants(self) -> List[str]:
+        """Identities of the session's participants in the room now.
+
+        People who joined through an invitation, a public project or a manual
+        registration; not an organiser watching from the session page.
+        """
+        if not self.has_audio:
+            return []
+        return session_participants(self.audio.participant_identities())
+
     async def wait_for_participant(
         self, *, timeout: Optional[float] = None, poll_interval: float = 0.3
     ) -> str:
-        """Wait until a person is in the room and return their identity.
+        """Wait until a session participant is in the room and return their identity.
 
-        For agents that speak first. Raises ``asyncio.TimeoutError`` after
-        ``timeout`` seconds (``None``: wait as long as it takes).
+        For agents that speak first: they start when the participant joins, not
+        when an organiser opens the session page. Raises ``asyncio.TimeoutError``
+        after ``timeout`` seconds (``None``: wait as long as it takes).
         """
         async def _poll() -> str:
             while True:
-                people = self.human_participants()
+                people = self.session_participants()
                 if people:
                     return people[0]
                 await asyncio.sleep(poll_interval)

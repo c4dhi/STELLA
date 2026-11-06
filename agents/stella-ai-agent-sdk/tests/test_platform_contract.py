@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator, Dict, List
 import pytest
 
 from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent, SessionConfig
-from stella_agent_sdk.participants import is_human_participant
+from stella_agent_sdk.participants import is_human_participant, is_session_participant
 from stella_agent_sdk.session_config import PLATFORM_KEYS
 from stella_agent_sdk.plan.runtime import DEFAULT_STATE_MACHINE_ADDRESS, PlanRuntime
 from stella_agent_sdk.contracts import render
@@ -257,6 +257,28 @@ async def test_wait_for_participant_returns_the_first_person():
     asyncio.ensure_future(someone_joins())
     assert await agent.wait_for_participant(timeout=2, poll_interval=0.01) == "participant-42"
     assert agent.human_participants() == ["participant-42"]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_participant_ignores_an_organiser_watching():
+    # The admin on the session page joins as "human": a person, not the
+    # session's participant. An agent that speaks first must keep waiting.
+    agent = MyAgent()
+    audio = FakePipeline(["agent-me", "human"])
+    agent._audio_pipeline = audio
+    with pytest.raises(asyncio.TimeoutError):
+        await agent.wait_for_participant(timeout=0.05, poll_interval=0.01)
+
+    audio.identities.append("participant-7")
+    assert await agent.wait_for_participant(timeout=2, poll_interval=0.01) == "participant-7"
+    assert agent.human_participants() == ["human", "participant-7"]
+    assert agent.session_participants() == ["participant-7"]
+
+
+def test_is_session_participant():
+    assert is_session_participant("participant-1")
+    for other in ("human", "agent-abc", "message-recorder", "system-x", ""):
+        assert not is_session_participant(other)
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,7 @@ Releases as 0.10.0 (`pyproject.toml` is already bumped). The platform contract: 
 
 ### Fixed
 
+- **`wait_for_participant()` waits for the session's participant, not an organiser watching.** It counted anyone who is not an agent or service, so an agent that speaks first (ELIAS) started as soon as the admin opened the session page. It now waits for a `participant-*` identity (invitation link, public project or manual registration), the same rule the plan's join and leave messages already used. New: `self.session_participants()`, `is_session_participant()` and `SESSION_PARTICIPANT_PREFIX`; `human_participants()` is unchanged
 - `enqueue_sentence` with `TTS_ENABLED=false` no longer starts a speech worker that tries to synthesise.
 - **A typed message sent while the agent speaks is no longer lost.** With barge-in off, a `user_text` message queued behind the closed transcript gate was dropped as "stale" when the gate reopened, although the chat had already shown it as sent. Typed events (`TranscriptEvent.typed`) now survive the gate; speech heard while the agent talked is still dropped.
 
