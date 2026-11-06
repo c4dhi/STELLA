@@ -24,6 +24,7 @@ public SDK APIs (stella-ai-agent-sdk 0.10): ``self.plan_runtime`` for the state 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -65,6 +66,16 @@ DEFAULT_MESSAGES = {
     "closing": "Those were all my questions. Thank you very much for your time.",
     "error": "I'm sorry, I can't start the interview right now. Please try again later.",
 }
+
+# The SDK keeps ~13 s of the end deadline for playout and disconnect, and its
+# farewell line needs a few seconds more. What is left goes to the ELIAS writes.
+_SDK_END_RESERVE_S = 17.0
+
+
+def wrap_up_budget_s(deadline_ms: int) -> float:
+    """Seconds the ELIAS wrap-up may take inside the SDK's end deadline (at least 1)."""
+    return max(1.0, deadline_ms / 1000.0 - _SDK_END_RESERVE_S)
+
 
 def _int_between(raw: Optional[str], *, default: int, low: int, high: int) -> int:
     """An int env var, clamped to [low, high]; empty or unreadable gives ``default``."""
@@ -290,7 +301,13 @@ class EliasInterviewerAgent(BaseAgent):
 
     async def on_session_ending(self, session_id: str, reason: str, deadline_ms: int) -> AsyncIterator[AgentOutput]:
         # The session really ends (time cap, organiser ended it): finalise what we have.
-        await self._end_elias_interview()
+        # The SDK still has to speak its farewell inside deadline_ms, so the writes
+        # and end_interview get what is left after that (wrap_up_budget_s).
+        budget = wrap_up_budget_s(deadline_ms)
+        try:
+            await asyncio.wait_for(self._end_elias_interview(flush_timeout_s=budget / 2), timeout=budget)
+        except asyncio.TimeoutError:
+            logger.error("[ELIAS] ending interview %s did not finish in %.1fs", self._transcript_id, budget)
         return
         yield
 
@@ -313,12 +330,12 @@ class EliasInterviewerAgent(BaseAgent):
         await super().on_session_end(session_id)
         return summary
 
-    async def _end_elias_interview(self) -> None:
+    async def _end_elias_interview(self, flush_timeout_s: float = 20.0) -> None:
         if self._finished or not self._transcript_id or self._elias is None:
             return
         self._finished = True
         if self._recorder is not None:
-            await self._recorder.flush()
+            await self._recorder.flush(timeout_s=flush_timeout_s)
         try:
             await self._elias.end_interview(self._transcript_id)
             logger.info("[ELIAS] interview %s ended", self._transcript_id)

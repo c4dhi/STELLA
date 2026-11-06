@@ -238,3 +238,33 @@ def test_registers_under_the_type_the_platform_injects(monkeypatch):
     monkeypatch.setenv("AGENT_VERSION", "0.1.0")
     agent = _TestAgent(checker=ScriptedChecker(), sm_client=FakeStateMachine())
     assert (agent.agent_type, agent.agent_version) == ("elias-interviewer", "0.1.0")
+
+
+def test_wrap_up_budget_leaves_room_for_the_sdk_farewell():
+    from elias_interviewer.agent import wrap_up_budget_s
+
+    assert wrap_up_budget_s(30_000) == 13.0
+    assert wrap_up_budget_s(5_000) == 1.0  # never zero
+    assert wrap_up_budget_s(0) == 1.0
+
+
+@pytest.mark.asyncio
+async def test_real_session_end_never_outlives_its_deadline(monkeypatch):
+    import asyncio
+    import time
+
+    import elias_interviewer.agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "_SDK_END_RESERVE_S", 0.0)
+    conn = FakeConnectors()
+    agent = make_agent(conn, FakeAudio(["I was shocked."]))
+    await agent.on_session_start("s", CONFIG)
+    await agent.run_audio_loop()
+
+    async def hang(_tid):
+        await asyncio.sleep(30)
+
+    agent._elias.end_interview = hang
+    start = time.monotonic()
+    [o async for o in agent.on_session_ending("s", "session_end", 1500)]
+    assert time.monotonic() - start < 3

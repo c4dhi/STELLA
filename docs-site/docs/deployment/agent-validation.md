@@ -27,6 +27,8 @@ This means a custom agent does not need to be part of the built-in agent set to 
 
 - **An upload is its owner's.** Nobody else sees it or can deploy it until the owner shares it.
 - **Sharing is per project.** In Settings → Agent Library, the owner picks the projects to share it with. It is listed for those projects' members, marked "Shared by …", and they can deploy it in those projects only. Only the owner can build it, upload a new version, change its sharing or delete it, as with connectors.
+- **Unsharing only stops new deploys.** Agents that are already running in that project keep running, and a paused one can still wake or restart, because that runs as the owner. Stop them from the session if they must go.
+- **Upgrading.** Before this change, every approved upload was listed for everyone. The upgrade shares each upload with the projects that use it as their public agent, and with the projects where another user has it running or paused. Every other upload starts private to its owner.
 - **Review.** While **Review uploaded agents** is on (the default), an upload needs an admin's approval before anyone can deploy it, its owner included, and before it is listed for the projects it is shared with. With review off, the owner can deploy it once it is built, and sharing is what lets others use it.
 
 ### A new version, and deleting
