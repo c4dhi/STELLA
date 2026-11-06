@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateProjectDto } from './dto/create-project.dto.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
@@ -273,9 +273,11 @@ export class ProjectsService {
 
   /**
    * Update public project configuration
-   * Allows configuring a project as public with agent, visualizer, and expiration settings
+   * Allows configuring a project as public with agent, visualizer, and expiration settings.
+   * `callerId` is the member saving it: only they decide which connectors the
+   * public agent may use (see assertMayBindForPublic).
    */
-  async updatePublicConfig(id: string, dto: UpdatePublicConfigDto) {
+  async updatePublicConfig(id: string, dto: UpdatePublicConfigDto, callerId: string) {
     const project = await this.prisma.project.findUnique({
       where: { id },
     });
@@ -330,6 +332,12 @@ export class ProjectsService {
           where: { projectId: id, role: 'OWNER' },
           select: { userId: true },
         });
+        await this.assertMayBindForPublic(
+          id,
+          callerId,
+          owner?.userId ?? null,
+          dto.agentConfig.connectorBindings,
+        );
         if (owner) {
           await this.agentsService.checkDeployable(
             agentTypeId,
@@ -365,6 +373,39 @@ export class ProjectsService {
     );
 
     return updatedProject;
+  }
+
+  /**
+   * The public agent runs as the owner, so the deploy check alone would let any
+   * member bind the owner's private connectors. A binding is allowed only for a
+   * connector shared with the project, or one of the caller's own connectors
+   * when the caller is the owner.
+   */
+  private async assertMayBindForPublic(
+    projectId: string,
+    callerId: string,
+    ownerId: string | null,
+    bindings: { connectorId: string }[] | undefined,
+  ): Promise<void> {
+    const ids = [...new Set((bindings ?? []).map((b) => b.connectorId))];
+    if (ids.length === 0) return;
+    const ownAllowed = ownerId !== null && callerId === ownerId;
+    const allowed = await this.prisma.connector.findMany({
+      where: {
+        id: { in: ids },
+        OR: [
+          { shares: { some: { projectId } } },
+          ...(ownAllowed ? [{ userId: callerId }] : []),
+        ],
+      },
+      select: { id: true },
+    });
+    const ok = new Set(allowed.map((c) => c.id));
+    if (ids.some((connectorId) => !ok.has(connectorId))) {
+      throw new ForbiddenException(
+        'A public setup can only use connectors shared with this project, or the owner\'s own connectors when the owner saves it',
+      );
+    }
   }
 
   /**
