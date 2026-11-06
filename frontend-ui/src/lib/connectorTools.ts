@@ -105,19 +105,36 @@ export function argumentsFromForm(params: ToolParameter[], values: Record<string
   return args
 }
 
+/** JSON that a server sent as a string (`{"result": "{\\"a\\":1}"}`) unwrapped, at any depth. */
+function unwrapJson(value: unknown): unknown {
+  if (typeof value === 'string') {
+    const t = value.trim()
+    if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+      try {
+        return unwrapJson(JSON.parse(t))
+      } catch {
+        return value
+      }
+    }
+    return value
+  }
+  if (Array.isArray(value)) return value.map(unwrapJson)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unwrapJson(v)]))
+  }
+  return value
+}
+
 /** What the tool returned, as text for the result box: structured content if any, else the text parts. */
 export function resultText(result: { structuredContent?: unknown; content: unknown[] }): string {
   if (result.structuredContent !== undefined && result.structuredContent !== null) {
-    return JSON.stringify(result.structuredContent, null, 2)
+    return JSON.stringify(unwrapJson(result.structuredContent), null, 2)
   }
   const parts = result.content.map((c) => {
     const part = c as { type?: string; text?: string }
     if (part?.type === 'text' && typeof part.text === 'string') {
-      try {
-        return JSON.stringify(JSON.parse(part.text), null, 2)
-      } catch {
-        return part.text
-      }
+      const unwrapped = unwrapJson(part.text)
+      return typeof unwrapped === 'string' ? unwrapped : JSON.stringify(unwrapped, null, 2)
     }
     return JSON.stringify(c, null, 2)
   })

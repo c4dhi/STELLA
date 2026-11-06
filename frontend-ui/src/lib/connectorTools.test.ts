@@ -55,4 +55,11 @@ describe('resultText', () => {
     expect(resultText({ content: [{ type: 'text', text: '{"b":2}' }, { type: 'text', text: 'done' }] })).toBe('{\n  "b": 2\n}\n\ndone')
     expect(resultText({ content: [] })).toBe('(no content)')
   })
+
+  it('unwraps JSON a server sent as a string', () => {
+    expect(resultText({ structuredContent: { result: '{"projects":[{"id":"p1"}]}' }, content: [] })).toBe(
+      JSON.stringify({ result: { projects: [{ id: 'p1' }] } }, null, 2),
+    )
+    expect(resultText({ structuredContent: { note: 'not {json' }, content: [] })).toContain('"not {json"')
+  })
 })

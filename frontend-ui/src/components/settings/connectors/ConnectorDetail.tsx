@@ -249,11 +249,10 @@ function ToolRow({
                       </span>
                       <span className={styles.faint}>{p.type === 'unknown' ? 'any' : p.type}</span>
                     </dt>
-                    {(p.description || p.options || p.defaultText) && (
-                      <dd className={`mt-0.5 ${styles.muted}`}>
-                        {p.description}
-                        {p.options && <span className={styles.faint}> {p.description ? '· ' : ''}{p.options.join(' · ')}</span>}
-                        {p.defaultText && <span className={styles.faint}> · default {p.defaultText}</span>}
+                    {p.description && <dd className={`mt-0.5 ${styles.muted}`}>{p.description}</dd>}
+                    {(p.options || p.defaultText) && (
+                      <dd className={`mt-0.5 ${styles.faint}`}>
+                        {[p.options && `One of ${p.options.join(', ')}`, p.defaultText && `default ${p.defaultText}`].filter(Boolean).join(' · ')}
                       </dd>
                     )}
                   </div>

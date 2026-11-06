@@ -37,7 +37,6 @@ export default function ConnectorsStep({ slots, available, loading, loadError, s
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <h3 className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-neutral-800'}`}>Connectors</h3>
         <p className={muted}>
           {slots.length === 0
             ? 'Optional. Choose the connectors this agent may use, if its code looks for them.'
