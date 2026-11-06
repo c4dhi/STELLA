@@ -32,7 +32,6 @@ interface PublicAgentConfig {
   name?: string;
   icon?: string;
   plan?: Record<string, unknown>;
-  config?: Record<string, unknown>;
   pipelineConfig?: Record<string, unknown>;
   // Preferred: resolved by ID at spawn (type/version-checked). pipelineConfig is a
   // backward-compatible inline snapshot for public projects saved before this field.
@@ -94,8 +93,8 @@ export class PublicProjectsService {
   private buildRuntimeAgentConfig(
     agentConfig: PublicAgentConfig | null,
   ): Record<string, unknown> {
+    // No agent settings: a deployment passes only platform keys (see withAgentDefaults).
     return {
-      ...(agentConfig?.config || {}),
       ...(agentConfig?.plan ? { plan: agentConfig.plan } : {}),
       ...(agentConfig?.pipelineConfig
         ? { pipeline_config: agentConfig.pipelineConfig }

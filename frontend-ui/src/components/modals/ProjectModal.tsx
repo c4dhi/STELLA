@@ -19,9 +19,7 @@ import type {
   AvailableConnector,
 } from '../../lib/api-types'
 import { deployNeeds } from '../../lib/deployNeeds'
-import { initialSettingValues, missingSettings, settingFields, settingsFromValues, type SettingValues } from '../../lib/settingsForm'
 import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
-import SettingsStep from '../shared/SettingsStep'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import WizardProgress from '../shared/WizardProgress'
@@ -46,7 +44,7 @@ interface ProjectModalProps {
   onProjectUpdated?: (project: Project) => void
 }
 
-type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'settings' | 'connectors' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
+type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'connectors' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
 type ProjectType = 'private' | 'public'
 type EnvVarsView = 'select' | 'edit'
 
@@ -66,7 +64,6 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'configuration', number: 3, label: 'Configuration' },
   { id: 'persona', number: 4, label: 'Persona' },
   { id: 'plan', number: 5, label: 'Plan' },
-  { id: 'settings', number: 6, label: 'Settings' },
   { id: 'connectors', number: 7, label: 'Connectors' },
   { id: 'voice', number: 8, label: 'Voice & Language' },
   { id: 'envvars', number: 7, label: 'Env Vars' },
@@ -153,20 +150,7 @@ export default function ProjectModal({
   const needs = useMemo(() => deployNeeds(selectedAgentType), [selectedAgentType])
   const runsPlan = needs.modes.includes('plan')
 
-  // Its own settings (configSchema), as in the deploy dialog.
   const requirements = selectedAgentType?.requirements
-  const settingsFields = useMemo(
-    () => settingFields(requirements?.configSchema, requirements?.defaultConfig ?? {}),
-    [requirements],
-  )
-  const initialSettings = useMemo(
-    () => initialSettingValues(settingsFields, requirements?.configSchema, requirements?.defaultConfig ?? {}),
-    [settingsFields, requirements],
-  )
-  const [settingValues, setSettingValues] = useState<SettingValues>({})
-  useEffect(() => setSettingValues(initialSettings), [initialSettings])
-  const showSettingsStep =
-    settingsFields.some((f) => f.required) || (settingsFields.length > 0 && !needs.configurator)
 
   // Connectors. The project does not exist yet while this wizard runs, so
   // nothing is shared with it: the owner's own connectors are offered. Public
@@ -210,9 +194,6 @@ export default function ProjectModal({
     if (runsPlan) {
       s.push('plan')
     }
-    if (showSettingsStep) {
-      s.push('settings')
-    }
     if (showConnectorsStep) {
       s.push('connectors')
     }
@@ -221,7 +202,7 @@ export default function ProjectModal({
     }
     s.push('envvars', 'visualizer', 'duration', 'expiration')
     return s
-  }, [needs, runsPlan, showSettingsStep, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
+  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
 
   // Get visible step configs (filtered based on requirements)
   const visibleStepConfigs = useMemo(() => {
@@ -401,8 +382,6 @@ export default function ProjectModal({
         return agentName.trim().length > 0
       case 'plan':
         return selectedPlan !== null || !needs.planRequired
-      case 'settings':
-        return missingSettings(settingsFields, settingValues).length === 0
       case 'connectors':
         return unboundRequiredSlots(connectorSlots, slotChoices).length === 0 && connectorSlots.every((slot) => {
           const chosen = ownConnectors.find((c) => c.id === slotChoices[slot.slot])
@@ -437,7 +416,7 @@ export default function ProjectModal({
       default:
         return false
     }
-  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, selectedEnvVarTemplate, needs.requiredEnvVars, envVars, isEditMode, project, agentInactivityTimeout, needs, settingsFields, settingValues, connectorSlots, slotChoices, ownConnectors])
+  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, selectedEnvVarTemplate, needs.requiredEnvVars, envVars, isEditMode, project, agentInactivityTimeout, needs, connectorSlots, slotChoices, ownConnectors])
 
   const handleSubmit = async () => {
     if (!name.trim()) {
@@ -482,12 +461,6 @@ export default function ProjectModal({
 
           if (selectedPlan && runsPlan) {
             agentConfig.plan = selectedPlan.content as unknown as Record<string, unknown>
-          }
-
-          // The agent's own settings; the server merges them over its defaultConfig.
-          if (showSettingsStep) {
-            const settings = settingsFromValues(settingsFields, settingValues, initialSettings)
-            if (Object.keys(settings).length > 0) agentConfig.config = settings
           }
 
           if (showConnectorsStep) {
@@ -585,7 +558,6 @@ export default function ProjectModal({
       case 'configuration': return 'Pipeline Configuration'
       case 'voice': return 'Voice & Language'
       case 'plan': return 'Select Plan'
-      case 'settings': return 'Settings'
       case 'connectors': return 'Connectors'
       case 'envvars': return 'Environment Variables'
       case 'visualizer': return 'Choose Visualizer'
@@ -604,7 +576,6 @@ export default function ProjectModal({
       case 'configure': return 'Customize the agent appearance and settings'
       case 'voice': return 'Choose the voice and language every participant\'s agent uses'
       case 'plan': return 'Select a conversation plan for this agent'
-      case 'settings': return `What ${selectedAgentType?.name || 'the agent'} needs to run`
       case 'connectors': return 'Outside tools every participant\'s agent may use, with your credentials'
       case 'envvars': return 'Configure API keys and secrets for this agent'
       case 'visualizer': return 'Set a default visualizer for participants'
@@ -1143,25 +1114,6 @@ export default function ProjectModal({
                     onSelectPlan={setSelectedPlan}
                     planTemplates={planTemplates}
                     onPlanTemplatesChange={setPlanTemplates}
-                  />
-                </motion.div>
-              )}
-
-              {/* Settings Step: the agent's own configSchema */}
-              {step === 'settings' && (
-                <motion.div
-                  key="settings"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  transition={{ duration: 0.2 }}
-                  className="p-6"
-                >
-                  <SettingsStep
-                    agentName={selectedAgentType?.name ?? 'This agent'}
-                    fields={settingsFields}
-                    values={settingValues}
-                    onChange={(path, value) => setSettingValues((prev) => ({ ...prev, [path]: value }))}
                   />
                 </motion.div>
               )}

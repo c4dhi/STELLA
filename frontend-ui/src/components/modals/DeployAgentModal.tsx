@@ -25,10 +25,8 @@ import { useEnvVarListEditor } from '../shared/EnvVarListEditor/useEnvVarListEdi
 import WizardProgress from '../shared/WizardProgress'
 import EnvVarNeedsSummary from '../shared/EnvVarNeedsSummary'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
-import SettingsStep from '../shared/SettingsStep'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import type { AvailableConnector } from '../../lib/api-types'
-import { initialSettingValues, missingSettings, settingFields, settingsFromValues, type SettingValues } from '../../lib/settingsForm'
 import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
 
 interface DeployAgentModalProps {
@@ -39,7 +37,7 @@ interface DeployAgentModalProps {
   projectId?: string
 }
 
-type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'settings' | 'connectors' | 'voice' | 'plan' | 'envvars'
+type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'connectors' | 'voice' | 'plan' | 'envvars'
 type GalleryTab = 'builtin' | 'myagents'
 type EnvVarsView = 'select' | 'edit'  // select=choose template, edit=manual entry
 
@@ -95,27 +93,8 @@ export default function DeployAgentModal({
   // An agent that runs only one mode is not asked; it simply runs in it.
   const runMode = effectiveMode(needs, mode)
 
-  // The agent's own settings and connector slots, as the server resolved them
-  // from its agent.yaml.
+  // The agent's connector slots, as the server resolved them from its agent.yaml.
   const requirements = selectedType?.requirements
-  const settingsFields = useMemo(
-    () => settingFields(requirements?.configSchema, requirements?.defaultConfig ?? {}),
-    [requirements],
-  )
-  const initialSettings = useMemo(
-    () => initialSettingValues(settingsFields, requirements?.configSchema, requirements?.defaultConfig ?? {}),
-    [settingsFields, requirements],
-  )
-  const [settingValues, setSettingValues] = useState<SettingValues>({})
-  useEffect(() => {
-    setSettingValues(initialSettings)
-  }, [initialSettings])
-  // Shown when the agent needs a setting, or when it has optional ones and no
-  // Configurator to set them (an agent with one, like the built-ins, is tuned
-  // there, so its schema defaults are left alone).
-  const showSettingsStep =
-    settingsFields.some((f) => f.required) || (settingsFields.length > 0 && !needs.configurator)
-
   const connectorSlots = useMemo(() => requirements?.connectors ?? [], [requirements])
   const [availableConnectors, setAvailableConnectors] = useState<AvailableConnector[]>([])
   const [connectorsLoading, setConnectorsLoading] = useState(false)
@@ -190,9 +169,6 @@ export default function DeployAgentModal({
     if (runsPlans) {
       steps.push(runMode === 'companion' ? 'activities' : 'plan')
     }
-    if (showSettingsStep) {
-      steps.push('settings')
-    }
     if (showConnectorsStep) {
       steps.push('connectors')
     }
@@ -202,7 +178,7 @@ export default function DeployAgentModal({
     // Always show env vars step (templates or manual entry)
     steps.push('envvars')
     return steps
-  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showSettingsStep, showConnectorsStep])
+  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep])
 
   // Reset state when modal opens
   useEffect(() => {
@@ -290,7 +266,7 @@ export default function DeployAgentModal({
   const handleSelectCustomAgent = (agent: CustomAgentType) => {
     // "My Agents" lists the user's uploads from their own endpoint, without what
     // deploying them takes. The gallery entry of the same type carries the
-    // server-resolved requirements (settings, connectors), so deploy from that.
+    // server-resolved requirements (connectors, env vars), so deploy from that.
     setSelectedType(agentTypes.find((t) => t.id === agent.id) ?? (agent as AgentType))
   }
 
@@ -376,8 +352,6 @@ export default function DeployAgentModal({
         return !!selectedConfiguration
       case 'plan':
         return !!selectedPlan || !needs.planRequired
-      case 'settings':
-        return missingSettings(settingsFields, settingValues).length === 0
       case 'connectors':
         return unboundRequiredSlots(connectorSlots, slotChoices).length === 0 && connectorSlots.every((slot) => {
           const chosen = availableConnectors.find((c) => c.id === slotChoices[slot.slot])
@@ -426,12 +400,6 @@ export default function DeployAgentModal({
           ...selectedPlan.content,
         },
       }
-    }
-
-    // The agent's own settings. The server merges them over its defaultConfig
-    // and checks them against its configSchema.
-    if (showSettingsStep) {
-      config = { ...settingsFromValues(settingsFields, settingValues, initialSettings), ...config }
     }
 
     // A selected pipeline configuration is applied server-side by ID (see below):
@@ -496,7 +464,6 @@ export default function DeployAgentModal({
       case 'upload': return 'Upload Agent'
       case 'configure': return 'Customize Agent'
       case 'configuration': return 'Pipeline Configuration'
-      case 'settings': return 'Settings'
       case 'connectors': return 'Connectors'
       case 'voice': return 'Voice & Language'
       case 'persona': return 'Choose a Persona'
@@ -513,7 +480,6 @@ export default function DeployAgentModal({
       case 'upload': return 'Upload a custom agent package (.zip)'
       case 'configure': return `Set a name and icon for your ${selectedType?.name || 'agent'}`
       case 'configuration': return `Customize the pipeline configuration for ${selectedType?.name || 'the agent'}`
-      case 'settings': return `What ${selectedType?.name || 'the agent'} needs to run`
       case 'connectors': return `Which of your connectors ${selectedType?.name || 'the agent'} may use`
       case 'voice': return `Choose the voice and language for ${selectedType?.name || 'the agent'}`
       case 'persona': return 'Who the agent is — its character and voice, independent of the plan'
@@ -844,22 +810,6 @@ export default function DeployAgentModal({
                       onSelectConfiguration={setSelectedConfiguration}
                     />
                   )}
-                </motion.div>
-              ) : step === 'settings' ? (
-                <motion.div
-                  key="settings"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                  transition={{ duration: 0.2 }}
-                  className="p-6"
-                >
-                  <SettingsStep
-                    agentName={selectedType?.name ?? 'This agent'}
-                    fields={settingsFields}
-                    values={settingValues}
-                    onChange={(path, value) => setSettingValues((prev) => ({ ...prev, [path]: value }))}
-                  />
                 </motion.div>
               ) : step === 'connectors' ? (
                 <motion.div

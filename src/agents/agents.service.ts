@@ -1,6 +1,6 @@
 import { AGENT_TYPE_MANIFEST_SELECT, manifestOfAgentType, resolveAgentRequirements, type AgentRequirements } from './agent-requirements.js';
 import { agentTypeOrDefault } from './default-agent-type.js';
-import { assertDeployRequest, withUserSettings } from './deploy-request.js';
+import { assertDeployRequest, withAgentDefaults } from './deploy-request.js';
 import { Injectable, NotFoundException, BadRequestException, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -308,7 +308,7 @@ export class AgentsService {
     // `pipeline_config` before the requirements check looks for it
     // (the deploy modal passes only the id and intentionally does not inline it).
     await this.applyScopedConfiguration(createAgentDto, userId, agentTypeRecord, requestedConfig, requirements);
-    const agentConfig = withUserSettings(agentType, requirements, requestedConfig);
+    const agentConfig = withAgentDefaults(agentType, requirements, requestedConfig);
 
     // Env vars are resolved now, not in the background pod creation, so a
     // missing required one is a 400 here instead of a FAILED agent later.

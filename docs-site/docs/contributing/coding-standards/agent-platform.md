@@ -44,9 +44,9 @@ Before writing a helper, search for the owner. Two copies of a rule always drift
 - **No agent slugs in platform code.** No `if (slug === 'stella-v2-agent')`. Behaviour that differs between agents is a manifest declaration. A spec fails the build when a slug literal appears in `src/` outside `default-agent-type.ts`.
 - **Requirements, not raw schemas, cross boundaries.** The API returns `requirements` for each agent type. The deploy wizard renders from that and never parses `configSchema` itself.
 - **The platform and the agent talk through declared contracts only:** the manifest going in, `AGENT_CONFIG` and env vars to the pod, and gRPC registration back. An agent uses the SDK's public API, never its private attributes. STELLA never relies on an agent's internals.
-- **Platform keys and user settings are separate.**
+- **A deployment sets platform keys only; everything else is an env var.**
   - STELLA sets `persona`, `mode`, `plan`, `available_plans` and `pipeline_config` (`PLATFORM_CONFIG_KEYS`).
-  - Everything else is a user setting. `configSchema` describes it and `defaultConfig` fills it in.
+  - The rest of the config is the agent's own `defaultConfig`. A deploy request that tries to change it is refused (`withAgentDefaults`). What a deployer chooses for an agent is declared under `env`.
 - **Infrastructure has no business logic.** `KubernetesService` receives final values (merged env, resolved resources). It doesn't decide them.
 
 ## 4. High cohesion

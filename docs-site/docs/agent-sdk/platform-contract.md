@@ -24,14 +24,14 @@ The SDK also reports its own version (`self.sdk_version`) when it registers, so 
 | `plan` | The plan to follow, also as `self.plan` (inline plans only) |
 | `available_plans` | Companion mode: the activities it may offer |
 | `pipeline_config` | The Agent Configurator's saved configuration |
-| `config` | **The user's settings**: every key that isn't a platform key, as described by `configSchema` in `agent.yaml`, with `defaultConfig` already merged in |
+| `config` | The agent's own `defaultConfig` from `agent.yaml`. A deployment can't change it: whatever the deploying user chooses reaches the agent as an env var (see `env` in the manifest) |
 
 Connectors aren't part of `AGENT_CONFIG`; list them with `await self.connectors.list()`.
 
 ```python
 async def on_session_start(self, session_id, config):
     await super().on_session_start(session_id, config)   # parses self.session
-    project = self.session.config["elias"]["project_id"]
+    project = os.environ["ELIAS_PROJECT_ID"]          # declared under env.required
     greeting_name = self.persona.name if self.persona else "there"
 ```
 

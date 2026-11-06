@@ -94,8 +94,8 @@ sdk:
 | `connectors` | Outside MCP servers (Connectors) the agent reaches through the SDK by slot name. Users can always offer extra ones on top. |
 | `image` | `dockerfile` (default `Dockerfile`). Uploaded agents are always built by STELLA from it. `command` (optional, exec form, e.g. `[python, -m, my_agent]`) is the pod's start command. Leave it out and the image's own `CMD` runs. |
 | `resources` | Kubernetes `request` and `limit` for `memory` and `cpu`. Defaults: 512Mi and 250m. Maximum limits: 4Gi and 2000m. |
-| `configSchema` | The settings a user may give the agent at deploy, as a JSON Schema object. Only user settings belong here. |
-| `defaultConfig` | Default values for those settings. They must fit `configSchema`. |
+| `configSchema` | Describes the agent's `defaultConfig`, as a JSON Schema object. A user never sets these at deploy: anything a deployer chooses is an `env` variable. |
+| `defaultConfig` | Fixed values the agent receives in `config`. They must fit `configSchema`. |
 | `pipelineSchema` | The pipeline the Configurator edits (nodes, slots, thresholds). Needed for `features.configurator`. |
 | `runtimeVariables` | The `{{placeholder}}` palette the agent's prompt compiler resolves. |
 | `promptCompiler.version` | The SDK prompt compiler version the agent uses. Saved configurations are checked against it. |

@@ -35,10 +35,6 @@ export class PublicAgentConfigDto {
 
   @IsOptional()
   @IsObject()
-  config?: Record<string, unknown>;
-
-  @IsOptional()
-  @IsObject()
   pipelineConfig?: Record<string, unknown>;
 
   /** A saved Agent Configuration, resolved by id at spawn. */

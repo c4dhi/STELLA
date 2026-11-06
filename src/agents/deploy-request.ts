@@ -1,7 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 import { deepmergeCustom } from 'deepmerge-ts'
 import { requestedSdkProblem } from '../agent-package/sdk-support.js'
-import { validateAgainstSchema } from '../agent-package/schemas/agent-manifest.schema.js'
 import type { AgentRequirements } from './agent-requirements.js'
 
 /**
@@ -11,8 +10,8 @@ import type { AgentRequirements } from './agent-requirements.js'
  */
 
 /**
- * Keys of an agent config that STELLA sets itself. Everything else is a user
- * setting, which configSchema describes and defaultConfig fills in.
+ * Keys of an agent config that STELLA sets itself. A deployment sets nothing
+ * else: whatever an agent needs from the person deploying it is an env var.
  */
 export const PLATFORM_CONFIG_KEYS = ['persona', 'mode', 'plan', 'available_plans', 'pipeline_config'] as const
 
@@ -77,32 +76,45 @@ function sdkProblems({ sdkMinVersion }: AgentRequirements): string[] {
   return problem ? [problem] : []
 }
 
-/** Arrays in a user setting replace the default instead of being appended to it. */
-const mergeSettings = deepmergeCustom({ mergeArrays: false })
+/** Arrays replace the default instead of being appended to it. */
+const mergeDefaults = deepmergeCustom({ mergeArrays: false })
 
 /**
- * The config a pod receives: the user's settings deep-merged over the agent's
- * defaultConfig and checked against its configSchema, plus the platform keys
- * untouched. Idempotent, so a restart or wake can pass a saved config again.
+ * The config a pod receives: the agent's own defaultConfig plus the platform
+ * keys. A deployment cannot set anything else; an agent takes what a deployer
+ * chooses as env vars. Keys that only repeat the defaults are accepted, so a
+ * restart or wake can pass a saved config again (this is idempotent).
  */
-export function withUserSettings(
+export function withAgentDefaults(
   slug: string,
   requirements: AgentRequirements,
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   const platform: Record<string, unknown> = {}
-  const settings: Record<string, unknown> = {}
+  const other: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(config)) {
     if ((PLATFORM_CONFIG_KEYS as readonly string[]).includes(key)) platform[key] = value
-    else settings[key] = value
+    else other[key] = value
   }
 
-  const merged = mergeSettings(requirements.defaultConfig, settings) as Record<string, unknown>
-  if (requirements.configSchema) {
-    const errors = validateAgainstSchema(requirements.configSchema, merged)
-    if (errors.length > 0) {
-      throw new BadRequestException(`Cannot deploy ${slug}: its settings do not fit configSchema: ${errors.join('; ')}`)
-    }
+  const defaults = requirements.defaultConfig ?? {}
+  // A key changes something when merging it over its default gives another value.
+  const keys = Object.keys(other).filter(
+    (key) => canonical(mergeDefaults({ v: defaults[key] }, { v: other[key] }).v) !== canonical(defaults[key]),
+  )
+  if (keys.length > 0) {
+    throw new BadRequestException(
+      `Cannot deploy ${slug}: a deployment sets no agent settings (${keys.join(', ')}); pass them as env vars`,
+    )
   }
-  return { ...merged, ...platform }
+  return { ...defaults, ...platform }
+}
+
+/** JSON with sorted keys, so two equal values compare equal whatever their key order. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+      : v,
+  ) ?? 'undefined'
 }
