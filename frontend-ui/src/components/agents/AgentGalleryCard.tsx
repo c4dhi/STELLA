@@ -25,7 +25,7 @@ export default function AgentGalleryCard({
       onClick={onClick}
       whileTap={{ scale: 0.99 }}
       className={`
-        relative w-full h-[160px] p-3 rounded-xl text-left transition-[color,background-color,border-color,box-shadow] duration-200 border-2
+        relative w-full min-h-[160px] flex flex-col p-3 rounded-xl text-left transition-[color,background-color,border-color,box-shadow] duration-200 border-2
         ${dimmed ? 'opacity-60 hover:opacity-100' : ''}
         ${isSelected
           ? isDark
@@ -112,7 +112,7 @@ export default function AgentGalleryCard({
 
       {/* Capabilities badges */}
       {agentType.capabilities && agentType.capabilities.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-2">
+        <div className="flex flex-wrap gap-1 mt-auto pt-2 pr-10">
           {agentType.capabilities.slice(0, 3).map((cap) => (
             <span
               key={cap}
