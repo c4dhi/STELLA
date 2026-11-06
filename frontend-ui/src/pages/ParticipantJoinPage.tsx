@@ -207,9 +207,10 @@ export default function ParticipantJoinPage() {
 
   // Check if we need to show permissions screen
   const checkAndProceed = useCallback(async () => {
-    // Locked to the Text face: the whole session is typed, so no microphone
-    // or camera is asked for.
-    if (invitation && isTextFace(invitation.visualizerType) && invitation.visualizerLocked) {
+    // Starts on the Text face: nothing is spoken, so no microphone or camera is
+    // asked for. If the participant may switch faces, the session asks for the
+    // devices when they switch to a voice face.
+    if (invitation && isTextFace(invitation.visualizerType)) {
       setPageState('TEXT_READY');
       return;
     }
@@ -383,6 +384,7 @@ export default function ParticipantJoinPage() {
                 </h2>
                 <p className="text-content-secondary dark:text-content-inverse-secondary text-sm mb-6">
                   You will type your answers. No microphone or camera is needed, and nothing is read aloud.
+                  {!invitation.visualizerLocked && ' If you switch to voice later, we will ask for your microphone then.'}
                 </p>
                 <button
                   type="button"

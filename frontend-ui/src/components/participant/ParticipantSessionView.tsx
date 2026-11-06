@@ -25,7 +25,9 @@ import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
 import SessionTimeoutOverlay from './SessionTimeoutOverlay'
-import { VisualizerType, isTextFace } from '../face/types'
+import { TEXT_FACE, VisualizerType, isTextFace } from '../face/types'
+import PermissionsModal from './PermissionsModal'
+import { checkMicrophonePermission } from '../../lib/mediaDevices'
 import TextFace from './TextFace'
 import { mergeHistory, liveIdOf, correlationIdOf } from '../../lib/chatHistory'
 import { apiClient } from '../../services/ApiClient'
@@ -1150,6 +1152,28 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     }
   }, [room, clientChannel])
 
+  // A session that started on the Text face skipped the device check when the
+  // participant joined. Switching to a voice face asks for the microphone then,
+  // unless the browser already allows it; switching back closes the check.
+  const [deviceCheckOpen, setDeviceCheckOpen] = useState(false)
+  const deviceModeRef = useRef<InteractionMode>(interactionMode)
+  useEffect(() => {
+    const previous = deviceModeRef.current
+    deviceModeRef.current = interactionMode
+    if (interactionMode === 'text') {
+      setDeviceCheckOpen(false)
+      return
+    }
+    if (previous !== 'text') return
+    let cancelled = false
+    void checkMicrophonePermission().then((state) => {
+      if (!cancelled && state !== 'granted') setDeviceCheckOpen(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [interactionMode])
+
   // Voice or text interface: tell the agent on every switch, and take the
   // microphone away on the text side (give it back if that is what took it).
   const mutedForTextRef = useRef(false)
@@ -1711,6 +1735,24 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
             </button>
           </div>
         </motion.div>
+      )}
+
+      {/* Device check on switching from the Text face to a voice face */}
+      {deviceCheckOpen && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto">
+          <PermissionsModal
+            isOpen
+            participantName={sessionData.participantName}
+            subtitle="Voice needs your microphone. Check it before you continue."
+            actionLabel="Continue with voice"
+            cancelLabel="Stay in writing"
+            onComplete={() => setDeviceCheckOpen(false)}
+            onCancel={() => {
+              setDeviceCheckOpen(false)
+              setCurrentVisualizer(TEXT_FACE)
+            }}
+          />
+        </div>
       )}
 
       {/* Session Completed Overlay */}
