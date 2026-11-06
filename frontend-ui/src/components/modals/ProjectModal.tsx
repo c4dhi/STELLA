@@ -325,6 +325,12 @@ export default function ProjectModal({
   const handleBack = () => {
     if (step === 'basic') return
 
+    // In the env var editor, Back returns to the template picker first.
+    if (step === 'envvars' && envVarsView === 'edit') {
+      setEnvVarsView('select')
+      return
+    }
+
     const currentIndex = publicSteps.indexOf(step as any)
     if (currentIndex === 0) {
       setStep('basic')
@@ -354,6 +360,13 @@ export default function ProjectModal({
       } else {
         setStep('agent')
       }
+      return
+    }
+
+    // As in the deploy dialog: Continue on the env var picker opens the editor,
+    // so variables a template lacks (required or optional) can still be set.
+    if (step === 'envvars' && envVarsView === 'select') {
+      setEnvVarsView('edit')
       return
     }
 
@@ -393,17 +406,13 @@ export default function ProjectModal({
         // Optional: skipping means the system default, which is what every
         // public project got before this step existed.
         return true
-      case 'envvars':
-        // If a template is selected, we can proceed (template has the values stored securely on server)
-        if (selectedEnvVarTemplate !== null) {
-          return true
-        }
-        // If no template selected and there are required env vars, check they all have values
-        if (needs.requiredEnvVars.length > 0) {
-          return needs.requiredEnvVars.every(key => envVars[key]?.trim())
-        }
-        // No template and no required env vars - can proceed
-        return true
+      case 'envvars': {
+        // Picking a template (or none) opens the editor next, so the select view can always continue.
+        if (envVarsView === 'select') return true
+        // In the editor, every required var the template doesn't hold must be typed in.
+        const fromTemplate = new Set(selectedEnvVarTemplate?.variableKeys ?? [])
+        return needs.requiredEnvVars.filter((key) => !fromTemplate.has(key)).every((key) => envVars[key]?.trim())
+      }
       case 'voice':
         // Both choices are optional — Auto / provider default is a valid answer.
         return true
@@ -416,7 +425,7 @@ export default function ProjectModal({
       default:
         return false
     }
-  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, selectedEnvVarTemplate, needs.requiredEnvVars, envVars, isEditMode, project, agentInactivityTimeout, needs, connectorSlots, slotChoices, ownConnectors])
+  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, selectedEnvVarTemplate, envVarsView, needs.requiredEnvVars, envVars, isEditMode, project, agentInactivityTimeout, needs, connectorSlots, slotChoices, ownConnectors])
 
   const handleSubmit = async () => {
     if (!name.trim()) {

@@ -104,7 +104,27 @@ export default function EnvVarsSelectionStep({
     onSelectEnvVarTemplate(template)
   }
 
+  // The parent's Continue on the select view also opens the editor (as the
+  // deploy dialog does), so a picked template's gaps can still be filled in.
+  const seededByClick = useRef(false)
+  const lastView = useRef(envVarsView)
+  useEffect(() => {
+    if (lastView.current === 'select' && envVarsView === 'edit' && !seededByClick.current) {
+      const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
+      const templateKeySet = new Set(templateKeys)
+      editor.reset({
+        requiredKeys: requiredEnvVars.filter((key) => !templateKeySet.has(key)),
+        optionalKeys: optionalNames.filter((key) => !templateKeySet.has(key)),
+        templateKeys,
+        initial: {},
+      })
+    }
+    seededByClick.current = false
+    lastView.current = envVarsView
+  }, [envVarsView])
+
   const handleGoToEdit = (template: EnvVarTemplate | null) => {
+    seededByClick.current = true
     onSelectEnvVarTemplate(template)
     // Surface all of the template's variables as editable default rows (blank =
     // use the template value, type to override; merged server-side). Required keys
