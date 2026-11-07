@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import EmojiPicker from '../EmojiPicker'
-import { AgentUploadCard } from '../agents'
 import { apiClient } from '../../services/ApiClient'
 import { useThemeStore } from '../../store/themeStore'
 import { PlanSelectionStep, PersonaSelectionStep, ModeSelectionStep, ActivitySelectionStep, AgentPickerSections } from '../shared'
@@ -9,7 +8,6 @@ import type { AgentMode } from '../shared'
 import type {
   AgentType,
   CustomAgentType,
-  AgentUploadResponse,
   PlanTemplate,
   EnvVarTemplate,
   AgentConfiguration,
@@ -36,7 +34,7 @@ interface DeployAgentModalProps {
   projectId?: string
 }
 
-type Step = 'gallery' | 'upload' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'connectors' | 'voice' | 'plan' | 'envvars'
+type Step = 'gallery' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'connectors' | 'voice' | 'plan' | 'envvars'
 type EnvVarsView = 'select' | 'edit'  // select=choose template, edit=manual entry
 
 export default function DeployAgentModal({
@@ -53,7 +51,6 @@ export default function DeployAgentModal({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingTypes, setIsLoadingTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [uploadRefreshTrigger, setUploadRefreshTrigger] = useState(0)
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
 
@@ -255,11 +252,6 @@ export default function DeployAgentModal({
     setSelectedType(agentTypes.find((t) => t.id === agent.id) ?? (agent as AgentType))
   }
 
-  const handleUploadComplete = (_result: AgentUploadResponse) => {
-    setUploadRefreshTrigger(prev => prev + 1)
-    setStep('gallery')
-  }
-
   // Open the variable editor, seeded from a template (or none). Every way into
   // the editor goes through here: the editor rows are what gets sent, so setting
   // `envVars` without resetting them lost what was typed.
@@ -295,9 +287,7 @@ export default function DeployAgentModal({
   }
 
   const handleBack = () => {
-    if (step === 'upload') {
-      setStep('gallery')
-    } else if (step === 'envvars' && envVarsView === 'edit') {
+    if (step === 'envvars' && envVarsView === 'edit') {
       // Go back to template selection within envvars step
       setEnvVarsView('select')
     } else {
@@ -316,14 +306,12 @@ export default function DeployAgentModal({
   }
 
   const getCurrentStepNumber = (): number => {
-    if (step === 'upload') return 1
-    const stepsWithoutUpload = dynamicSteps.filter((s): s is Exclude<Step, 'upload'> => s !== 'upload')
-    const idx = stepsWithoutUpload.indexOf(step as Exclude<Step, 'upload'>)
+    const idx = dynamicSteps.indexOf(step)
     return idx >= 0 ? idx + 1 : 1
   }
 
   const getTotalSteps = (): number => {
-    return dynamicSteps.filter(s => s !== 'upload').length
+    return dynamicSteps.length
   }
 
   const canContinue = (): boolean => {
@@ -445,7 +433,6 @@ export default function DeployAgentModal({
   const getStepTitle = (): string => {
     switch (step) {
       case 'gallery': return 'Choose an Agent'
-      case 'upload': return 'Upload Agent'
       case 'configure': return 'Customize Agent'
       case 'configuration': return 'Pipeline Configuration'
       case 'connectors': return 'Connectors'
@@ -461,7 +448,6 @@ export default function DeployAgentModal({
   const getStepDescription = (): string => {
     switch (step) {
       case 'gallery': return 'Select an agent type to deploy to this session'
-      case 'upload': return 'Upload a custom agent package (.zip)'
       case 'configure': return `Set a name and icon for your ${selectedType?.name || 'agent'}`
       case 'configuration': return `Customize the pipeline configuration for ${selectedType?.name || 'the agent'}`
       case 'connectors': return `Which of your connectors ${selectedType?.name || 'the agent'} may use`
@@ -581,23 +567,7 @@ export default function DeployAgentModal({
                     selectedId={selectedType?.id ?? null}
                     onSelectType={handleSelectType}
                     onSelectCustom={handleSelectCustomAgent}
-                    refreshTrigger={uploadRefreshTrigger}
-                    onUpload={() => setStep('upload')}
                     isDark={isDark}
-                  />
-                </motion.div>
-              ) : step === 'upload' ? (
-                <motion.div
-                  key="upload"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                  transition={{ duration: 0.2 }}
-                  className="p-6"
-                >
-                  <AgentUploadCard
-                    onUploadComplete={handleUploadComplete}
-                    onError={(err) => setError(err)}
                   />
                 </motion.div>
               ) : step === 'configure' ? (
@@ -1067,26 +1037,6 @@ export default function DeployAgentModal({
                       Continue
                     </button>
                   </>
-                ) : step === 'upload' ? (
-                  <button
-                    type="button"
-                    onClick={handleBack}
-                    className={`
-                      w-full py-2.5 px-4 rounded-xl text-sm font-light tracking-wider
-                      transition-all duration-200
-                      ${isDark
-                        ? 'bg-white/5 text-zinc-300 hover:bg-white/10 border border-white/10'
-                        : 'bg-neutral-100/80 text-neutral-600 hover:bg-neutral-200/80'
-                      }
-                    `}
-                  >
-                    <span className="flex items-center justify-center gap-2">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                        <path d="M19 12H5M12 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      Back to Gallery
-                    </span>
-                  </button>
                 ) : (
                   <>
                     <button

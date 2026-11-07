@@ -312,6 +312,8 @@ export interface AgentType {
   ownerName?: string | null
   /** Another user's upload, shared with a project you are in: deploy only. */
   sharedWithYou?: boolean
+  /** For a shared upload: your projects it is shared with, the only places you can deploy it. */
+  sharedInProjects?: { id: string; name: string }[]
 }
 
 /** A {{placeholder}} the agent's prompt compiler can resolve (manifest-declared). */

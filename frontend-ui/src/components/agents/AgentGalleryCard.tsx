@@ -93,7 +93,7 @@ export default function AgentGalleryCard({
       {/* Description */}
       <p
         className={`
-          text-xs font-light leading-relaxed line-clamp-2 pr-8
+          text-xs font-light leading-relaxed line-clamp-2
           ${isDark ? 'text-zinc-400' : 'text-neutral-500'}
         `}
       >
@@ -102,7 +102,7 @@ export default function AgentGalleryCard({
 
       {agentType.deprecated && agentType.deprecationNote && (
         <p
-          className={`mt-1.5 text-[10px] font-light leading-snug line-clamp-2 pr-8 ${
+          className={`mt-1.5 text-[10px] font-light leading-snug line-clamp-2 ${
             isDark ? 'text-amber-300/80' : 'text-amber-700/90'
           }`}
         >
@@ -110,10 +110,16 @@ export default function AgentGalleryCard({
         </p>
       )}
 
-      {/* Capabilities badges */}
-      {agentType.capabilities && agentType.capabilities.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-auto pt-2 pr-10">
-          {agentType.capabilities.slice(0, 3).map((cap) => (
+      {agentType.sharedWithYou && agentType.ownerName && (
+        <div className={`mt-2 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+          Shared by {agentType.ownerName}
+        </div>
+      )}
+
+      {/* Capabilities and version, on one row at the bottom */}
+      <div className="mt-auto pt-2 flex items-end justify-between gap-2">
+        <div className="flex flex-wrap gap-1">
+          {(agentType.capabilities ?? []).slice(0, 3).map((cap) => (
             <span
               key={cap}
               className={`
@@ -127,33 +133,20 @@ export default function AgentGalleryCard({
               {cap}
             </span>
           ))}
-          {agentType.capabilities.length > 3 && (
+          {(agentType.capabilities?.length ?? 0) > 3 && (
             <span
               className={`
                 px-1.5 py-0.5 text-[10px] font-light
                 ${isDark ? 'text-zinc-500' : 'text-neutral-400'}
               `}
             >
-              +{agentType.capabilities.length - 3}
+              +{(agentType.capabilities?.length ?? 0) - 3}
             </span>
           )}
         </div>
-      )}
-
-      {agentType.sharedWithYou && agentType.ownerName && (
-        <div className={`mt-2 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-          Shared by {agentType.ownerName}
-        </div>
-      )}
-
-      {/* Version badge */}
-      <div
-        className={`
-          absolute bottom-2 right-2 text-[10px] font-light
-          ${isDark ? 'text-zinc-500' : 'text-neutral-400'}
-        `}
-      >
-        v{agentType.version}
+        <span className={`flex-shrink-0 text-[10px] font-light ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+          v{agentType.version}
+        </span>
       </div>
     </motion.button>
   )
