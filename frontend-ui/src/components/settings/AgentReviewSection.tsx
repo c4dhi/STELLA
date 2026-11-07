@@ -180,7 +180,7 @@ export function AgentReviewCard({
                 <ul className="mt-3 space-y-1">
                   {detail.buildLogs.map(log => (
                     <li key={log.id} className="flex gap-3">
-                      <span className="font-medium w-20 flex-shrink-0">{log.status}</span>
+                      <span className="font-medium w-24 flex-shrink-0">{buildBadge(log).label}</span>
                       <span className={muted}>{formatDate(log.startedAt)}</span>
                       {log.errorMessage && <span className="text-red-500 truncate">{log.errorMessage}</span>}
                     </li>
