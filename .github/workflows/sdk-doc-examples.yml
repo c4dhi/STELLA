@@ -1,0 +1,51 @@
+name: SDK Doc Examples
+
+# Every Python example in the SDK docs must import cleanly against the SDK in
+# this repo (#887). Blocks that are deliberately not runnable carry
+# <!-- pseudo-code --> on the line before their fence.
+
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - 'docs-site/docs/**'
+      - 'agents/stella-ai-agent-sdk/src/**'
+      - 'agents/stella-ai-agent-sdk/pyproject.toml'
+      - 'scripts/check-sdk-doc-examples.py'
+      - '.github/workflows/sdk-doc-examples.yml'
+  pull_request:
+    branches: [main, development]
+    paths:
+      - 'docs-site/docs/**'
+      - 'agents/stella-ai-agent-sdk/src/**'
+      - 'agents/stella-ai-agent-sdk/pyproject.toml'
+      - 'scripts/check-sdk-doc-examples.py'
+      - '.github/workflows/sdk-doc-examples.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      # The examples import the SDK and the OpenAI client; nothing else is run.
+      - name: Install the SDK
+        run: |
+          uv pip install --system -e agents/stella-ai-agent-sdk
+          uv pip install --system openai
+
+      - name: Check the examples import
+        run: python scripts/check-sdk-doc-examples.py
