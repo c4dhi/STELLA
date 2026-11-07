@@ -399,6 +399,61 @@ Turn **Review uploaded agents** on or off. While it is on (the default), no uplo
 | `agentReviewRequired` | boolean | Required |
 
 **Returns:** the settings, as `platform_settings_get` shows them.
+
+## Agent review (system admins)
+
+Reviewing uploaded agents, as in Settings → Agent Review. Approving an agent lets its code run in the cluster, so only a system admin sees these four tools; anyone else gets `403` calling them by name. Built-in agents are never reviewed.
+
+### `agent_reviews_list` · `mcp:read`
+
+Uploaded agents in one review state. Pending ones come oldest first, as a queue; approved and rejected ones newest first.
+
+**Inputs:** `status` (`pending`, `approved` or `rejected`, *optional*, default `pending`).
+
+**Returns:** `{ items }`. Each item has:
+
+- `lastBuild`: the latest build, with `status` (`pending`, `building`, `success` or `failed`), `errorMessage`, `startedAt` and `completedAt`. It is `null` when the agent was never built.
+- `id`, `slug`, `name`, `description`, `icon` and `version`.
+- `authorName`, `authorEmail`, `resourceGpu` and `packageSize`.
+- `validationStatus`, `validationNotes` and `validatedAt`.
+- `createdAt`, `sdkVersion` and `capabilities`.
+- `requirements`: what `agent.yaml` declares: `persona`, `plans`, `configurator`, `env` (`required`, `optional`), `connectors`, `client`, `configSchema`, `defaultConfig`, `resources` and `sdkMinVersion`. It is `null` when STELLA can't read the manifest, and `manifestError` then says why.
+- `owner`: `id`, `email` and `name`.
+
+### `agent_reviews_get` · `mcp:read`
+
+Everything a reviewer looks at for one uploaded agent.
+
+**Inputs:** `agentTypeId` (from `agent_reviews_list`).
+
+**Returns:** the fields of a list item, plus `configSchema`, `defaultConfig`, `resourceCpu`, `resourceMemory`, `tags`, `sdkMinVersion`, `packageHash`, `imageUrl`, `validatedBy`, `updatedAt` and `buildLogs` (the five latest builds, newest first, shaped like `lastBuild`).
+
+### `agent_reviews_approve` · `mcp:write`
+
+Approve an uploaded agent, so it can deploy. An agent that was rejected can be approved after all; one that is already approved is refused with `400`.
+
+**Inputs:**
+
+| Name | Type | |
+|---|---|---|
+| `agentTypeId` | string | Required |
+| `notes` | string | Optional. Shown to the uploader |
+
+**Returns:** the agent, as `agent_reviews_get` shows it.
+
+### `agent_reviews_reject` · `mcp:write`
+
+Reject an uploaded agent, so it cannot deploy, also when it was approved before. One that is already rejected is refused with `400`.
+
+**Inputs:**
+
+| Name | Type | |
+|---|---|---|
+| `agentTypeId` | string | Required |
+| `reason` | string | Required, not blank. Shown to the uploader |
+
+**Returns:** the agent, as `agent_reviews_get` shows it.
+
 ## Connectors
 
 Outside MCP servers that agents call through STELLA, for example an interview-question server. The token stays in STELLA: agents only get the tools. See [Connectors](../agent-sdk/connectors.md) for how an agent uses them.

@@ -106,6 +106,7 @@ PROMPT_COMPILER_VERSION = "1.0.0"
 
 class MyAgent(BaseAgent):
     async def on_session_start(self, session_id, config):
+        await super().on_session_start(session_id, config)
         # config override, else the agent's pinned default
         self._compiler_version = config.get("compiler_version") or PROMPT_COMPILER_VERSION
 

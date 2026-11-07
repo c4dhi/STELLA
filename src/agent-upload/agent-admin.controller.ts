@@ -1,22 +1,10 @@
-import {
-  Controller,
-  Post,
-  Get,
-  Param,
-  Body,
-  BadRequestException,
-  NotFoundException,
-  Logger,
-  Req,
-  UseGuards,
-} from '@nestjs/common'
+import { Controller, Post, Get, Param, Body, Req, UseGuards } from '@nestjs/common'
 import { Request } from 'express'
-import { PrismaService } from '../prisma/prisma.service.js'
-import { AgentValidationStatus } from '@prisma/client'
 import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js'
+import { AgentReviewService } from './agent-review.service.js'
 
 interface AuthenticatedRequest extends Request {
-  user?: { userId: string; email: string }
+  user: { userId: string; email: string }
 }
 
 interface ApproveDto {
@@ -33,282 +21,35 @@ interface RejectDto {
 @Controller('admin/agent-types')
 @UseGuards(SystemAdminGuard)
 export class AgentAdminController {
-  private readonly logger = new Logger(AgentAdminController.name)
+  constructor(private readonly review: AgentReviewService) {}
 
-  constructor(private prisma: PrismaService) {}
-
-  /**
-   * Get all pending agent types for review.
-   * GET /admin/agent-types/pending
-   */
+  /** GET /admin/agent-types/pending: uploads waiting for review, oldest first. */
   @Get('pending')
-  async getPendingAgents() {
-    const agents = await this.prisma.agentType.findMany({
-      where: {
-        validationStatus: AgentValidationStatus.PENDING,
-        isBuiltIn: false,
-      },
-      orderBy: { createdAt: 'asc' },
-      include: {
-        user: {
-          select: { id: true, email: true, name: true },
-        },
-      },
-    })
-
-    return agents.map((agent) => ({
-      id: agent.id,
-      slug: agent.slug,
-      name: agent.name,
-      description: agent.description,
-      icon: agent.icon,
-      version: agent.version,
-      authorName: agent.authorName,
-      authorEmail: agent.authorEmail,
-      resourceGpu: agent.resourceGpu,
-      packageSize: agent.packageSize,
-      createdAt: agent.createdAt,
-      owner: agent.user
-        ? {
-            id: agent.user.id,
-            email: agent.user.email,
-            name: agent.user.name,
-          }
-        : null,
-    }))
+  getPendingAgents() {
+    return this.review.list('pending')
   }
 
-  /**
-   * Get all agent types by validation status.
-   * GET /admin/agent-types/status/:status
-   */
+  /** GET /admin/agent-types/status/:status (pending, approved or rejected). */
   @Get('status/:status')
-  async getAgentsByStatus(@Param('status') status: string) {
-    // Validate status
-    const statusMap: Record<string, AgentValidationStatus> = {
-      pending: AgentValidationStatus.PENDING,
-      approved: AgentValidationStatus.APPROVED,
-      rejected: AgentValidationStatus.REJECTED,
-    }
-
-    const validationStatus = statusMap[status.toLowerCase()]
-    if (!validationStatus) {
-      throw new BadRequestException(
-        `Invalid status. Must be one of: ${Object.keys(statusMap).join(', ')}`,
-      )
-    }
-
-    const agents = await this.prisma.agentType.findMany({
-      where: {
-        validationStatus,
-        isBuiltIn: false,
-      },
-      orderBy: { updatedAt: 'desc' },
-      include: {
-        user: {
-          select: { id: true, email: true, name: true },
-        },
-      },
-    })
-
-    return agents.map((agent) => ({
-      id: agent.id,
-      slug: agent.slug,
-      name: agent.name,
-      description: agent.description,
-      icon: agent.icon,
-      version: agent.version,
-      validationStatus: agent.validationStatus,
-      validationNotes: agent.validationNotes,
-      validatedAt: agent.validatedAt,
-      createdAt: agent.createdAt,
-      owner: agent.user
-        ? {
-            id: agent.user.id,
-            email: agent.user.email,
-            name: agent.user.name,
-          }
-        : null,
-    }))
+  getAgentsByStatus(@Param('status') status: string) {
+    return this.review.list(status)
   }
 
-  /**
-   * Approve a pending agent type.
-   * POST /admin/agent-types/:id/approve
-   */
+  /** POST /admin/agent-types/:id/approve, with optional notes. */
   @Post(':id/approve')
-  async approveAgent(
-    @Param('id') id: string,
-    @Body() dto: ApproveDto,
-    @Req() req: AuthenticatedRequest,
-  ) {
-    const agentType = await this.prisma.agentType.findUnique({
-      where: { id },
-    })
-
-    if (!agentType) {
-      throw new NotFoundException('Agent type not found')
-    }
-
-    if (agentType.isBuiltIn) {
-      throw new BadRequestException('Cannot modify built-in agents')
-    }
-
-    if (agentType.validationStatus === AgentValidationStatus.APPROVED) {
-      throw new BadRequestException('Agent is already approved')
-    }
-
-    const adminId = req.user?.userId
-
-    // Update status to approved
-    const updated = await this.prisma.agentType.update({
-      where: { id },
-      data: {
-        validationStatus: AgentValidationStatus.APPROVED,
-        validationNotes: dto.notes,
-        validatedAt: new Date(),
-        validatedBy: adminId,
-      },
-    })
-
-    this.logger.log(
-      `Agent ${updated.slug} approved by ${adminId || 'anonymous'}`,
-    )
-
-    return {
-      id: updated.id,
-      slug: updated.slug,
-      name: updated.name,
-      validationStatus: updated.validationStatus,
-      validatedAt: updated.validatedAt,
-    }
+  approveAgent(@Param('id') id: string, @Body() dto: ApproveDto, @Req() req: AuthenticatedRequest) {
+    return this.review.approve(id, req.user.userId, dto?.notes)
   }
 
-  /**
-   * Reject a pending agent type.
-   * POST /admin/agent-types/:id/reject
-   */
+  /** POST /admin/agent-types/:id/reject, with a required reason. */
   @Post(':id/reject')
-  async rejectAgent(
-    @Param('id') id: string,
-    @Body() dto: RejectDto,
-    @Req() req: AuthenticatedRequest,
-  ) {
-    if (!dto.reason || dto.reason.trim().length === 0) {
-      throw new BadRequestException('Rejection reason is required')
-    }
-
-    const agentType = await this.prisma.agentType.findUnique({
-      where: { id },
-    })
-
-    if (!agentType) {
-      throw new NotFoundException('Agent type not found')
-    }
-
-    if (agentType.isBuiltIn) {
-      throw new BadRequestException('Cannot modify built-in agents')
-    }
-
-    if (agentType.validationStatus === AgentValidationStatus.REJECTED) {
-      throw new BadRequestException('Agent is already rejected')
-    }
-
-    const adminId = req.user?.userId
-
-    // Update status to rejected
-    const updated = await this.prisma.agentType.update({
-      where: { id },
-      data: {
-        validationStatus: AgentValidationStatus.REJECTED,
-        validationNotes: dto.reason,
-        validatedAt: new Date(),
-        validatedBy: adminId,
-      },
-    })
-
-    this.logger.log(
-      `Agent ${updated.slug} rejected by ${adminId || 'anonymous'}: ${dto.reason}`,
-    )
-
-    return {
-      id: updated.id,
-      slug: updated.slug,
-      name: updated.name,
-      validationStatus: updated.validationStatus,
-      validationNotes: updated.validationNotes,
-      validatedAt: updated.validatedAt,
-    }
+  rejectAgent(@Param('id') id: string, @Body() dto: RejectDto, @Req() req: AuthenticatedRequest) {
+    return this.review.reject(id, req.user.userId, dto?.reason ?? '')
   }
 
-  /**
-   * Get detailed info about an agent for review.
-   * GET /admin/agent-types/:id
-   */
+  /** GET /admin/agent-types/:id: everything a reviewer looks at. */
   @Get(':id')
-  async getAgentDetails(@Param('id') id: string) {
-    const agent = await this.prisma.agentType.findUnique({
-      where: { id },
-      include: {
-        user: {
-          select: { id: true, email: true, name: true },
-        },
-        buildLogs: {
-          orderBy: { startedAt: 'desc' },
-          take: 5,
-        },
-      },
-    })
-
-    if (!agent) {
-      throw new NotFoundException('Agent type not found')
-    }
-
-    return {
-      id: agent.id,
-      slug: agent.slug,
-      name: agent.name,
-      description: agent.description,
-      icon: agent.icon,
-      version: agent.version,
-      isBuiltIn: agent.isBuiltIn,
-      validationStatus: agent.validationStatus,
-      validationNotes: agent.validationNotes,
-      validatedAt: agent.validatedAt,
-      validatedBy: agent.validatedBy,
-      packagePath: agent.packagePath,
-      packageSize: agent.packageSize,
-      packageHash: agent.packageHash,
-      dockerfilePath: agent.dockerfilePath,
-      imageUrl: agent.imageUrl,
-      configSchema: agent.configSchema,
-      capabilities: agent.capabilities,
-      defaultConfig: agent.defaultConfig,
-      resourceMemory: agent.resourceMemory,
-      resourceCpu: agent.resourceCpu,
-      resourceGpu: agent.resourceGpu,
-      authorName: agent.authorName,
-      authorEmail: agent.authorEmail,
-      tags: agent.tags,
-      sdkMinVersion: agent.sdkMinVersion,
-      sdkVersion: agent.sdkVersion,
-      createdAt: agent.createdAt,
-      updatedAt: agent.updatedAt,
-      owner: agent.user
-        ? {
-            id: agent.user.id,
-            email: agent.user.email,
-            name: agent.user.name,
-          }
-        : null,
-      buildLogs: agent.buildLogs.map((log) => ({
-        id: log.id,
-        status: log.status,
-        imageName: log.imageName,
-        errorMessage: log.errorMessage,
-        startedAt: log.startedAt,
-        completedAt: log.completedAt,
-      })),
-    }
+  getAgentDetails(@Param('id') id: string) {
+    return this.review.get(id)
   }
 }

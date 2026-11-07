@@ -8,6 +8,13 @@ import type { AgentType, CustomAgentType, AgentBuildStatus } from '../../lib/api
 import { deployNeeds, type DeployNeeds } from '../../lib/deployNeeds'
 import { defaultLabel } from '../../lib/agentSettings'
 
+// Felix, #154: the tab is still the agent's capabilities list; "Overview" undersold that.
+const TAB_LABELS: Record<'build' | 'overview' | 'config', string> = {
+  build: 'Build',
+  overview: 'Capabilities',
+  config: 'Config',
+}
+
 interface AgentDetailModalProps {
   isOpen: boolean
   agent: AgentType | CustomAgentType | null
@@ -26,7 +33,10 @@ export default function AgentDetailModal({
   const { addToast } = useToastStore()
   const isDark = resolvedTheme === 'dark'
 
-  const [activeTab, setActiveTab] = useState<'overview' | 'config' | 'build'>('overview')
+  // A custom upload always opens straight to its build status, built or not
+  // (Felix, #154: "the modal always opens on Build") - Capabilities and
+  // Config stay a click away.
+  const [activeTab, setActiveTab] = useState<'build' | 'overview' | 'config'>('overview')
   const [buildStatus, setBuildStatus] = useState<AgentBuildStatus | null>(null)
   const [buildLogs, setBuildLogs] = useState<string[]>([])
   const [isBuilding, setIsBuilding] = useState(false)
@@ -34,9 +44,10 @@ export default function AgentDetailModal({
   const isCustomAgent = agent && !agent.isBuiltIn
   const customAgent = agent as CustomAgentType
 
-  // Load build status for custom agents
+  // Load build status for custom agents, and open straight to it.
   useEffect(() => {
     if (isOpen && agent && isCustomAgent) {
+      setActiveTab('build')
       loadBuildStatus()
     }
   }, [isOpen, agent?.id])
@@ -46,6 +57,9 @@ export default function AgentDetailModal({
     try {
       const status = await apiClient.getAgentBuildStatus(agent.id)
       setBuildStatus(status)
+      // A build already running (started by the upload itself, or queued
+      // behind another) streams its log live, the same as one triggered here.
+      setIsBuilding(status?.status === 'pending' || status?.status === 'building')
     } catch (err) {
       console.error('Failed to load build status:', err)
     }
@@ -210,14 +224,14 @@ export default function AgentDetailModal({
                 </div>
               </div>
 
-              {/* Tabs */}
+              {/* Tabs: Build leads for a custom upload, since that's what matters first */}
               <div className="flex gap-1 mt-5">
-                {(['overview', 'config', ...(isCustomAgent ? ['build'] : [])] as ('overview' | 'config' | 'build')[]).map((tab) => (
+                {([...(isCustomAgent ? ['build'] : []), 'overview', 'config'] as ('overview' | 'config' | 'build')[]).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
                     className={`
-                      px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
+                      px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 inline-flex items-center gap-2
                       ${activeTab === tab
                         ? isDark
                           ? 'bg-zinc-700 text-zinc-100'
@@ -228,7 +242,8 @@ export default function AgentDetailModal({
                       }
                     `}
                   >
-                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                    {TAB_LABELS[tab]}
+                    {tab === 'build' && buildStatus && <BuildStatusDot status={buildStatus.status} />}
                   </button>
                 ))}
               </div>
@@ -406,7 +421,7 @@ export default function AgentDetailModal({
                         </div>
                       ) : (
                         <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-                          No build history
+                          No build yet
                         </p>
                       )}
                     </div>
@@ -426,7 +441,8 @@ export default function AgentDetailModal({
                       </div>
                     )}
 
-                    {/* Build Button */}
+                    {/* Rebuild: the first build already started on upload, so a manual
+                        click here is always a rebuild. */}
                     <button
                       onClick={handleTriggerBuild}
                       disabled={isBuilding}
@@ -453,14 +469,14 @@ export default function AgentDetailModal({
                           >
                             <path d="M21 12a9 9 0 11-6.219-8.56" />
                           </motion.svg>
-                          Building...
+                          {buildStatus?.status === 'building' ? 'Building...' : 'Queued...'}
                         </>
                       ) : (
                         <>
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                           </svg>
-                          Trigger Build
+                          Rebuild
                         </>
                       )}
                     </button>
@@ -530,36 +546,45 @@ function CapabilityIcon({ capability }: { capability: string }) {
   )
 }
 
-function BuildStatusBadge({ status, isDark }: { status: string; isDark: boolean }) {
-  const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
-    pending: {
-      bg: isDark ? 'bg-yellow-500/20' : 'bg-yellow-100',
-      text: isDark ? 'text-yellow-400' : 'text-yellow-700',
-      label: 'Pending',
-    },
-    building: {
-      bg: isDark ? 'bg-blue-500/20' : 'bg-blue-100',
-      text: isDark ? 'text-blue-400' : 'text-blue-700',
-      label: 'Building',
-    },
-    success: {
-      bg: isDark ? 'bg-green-500/20' : 'bg-green-100',
-      text: isDark ? 'text-green-400' : 'text-green-700',
-      label: 'Success',
-    },
-    failed: {
-      bg: isDark ? 'bg-red-500/20' : 'bg-red-100',
-      text: isDark ? 'text-red-400' : 'text-red-700',
-      label: 'Failed',
-    },
+/** Label and dot color for a build status, shared by the badge and the tab dot. */
+function buildStatusConfig(status: string) {
+  switch (status) {
+    case 'building':
+      return { dot: 'bg-blue-500', label: 'Building' }
+    case 'success':
+      return { dot: 'bg-green-500', label: 'Built' }
+    case 'failed':
+      return { dot: 'bg-red-500', label: 'Failed' }
+    default:
+      return { dot: 'bg-yellow-500', label: 'Queued' }
   }
+}
 
-  const config = statusConfig[status] || statusConfig.pending
+function BuildStatusBadge({ status, isDark }: { status: string; isDark: boolean }) {
+  const { label } = buildStatusConfig(status)
+  const colors: Record<string, { bg: string; text: string }> = {
+    pending: { bg: isDark ? 'bg-yellow-500/20' : 'bg-yellow-100', text: isDark ? 'text-yellow-400' : 'text-yellow-700' },
+    building: { bg: isDark ? 'bg-blue-500/20' : 'bg-blue-100', text: isDark ? 'text-blue-400' : 'text-blue-700' },
+    success: { bg: isDark ? 'bg-green-500/20' : 'bg-green-100', text: isDark ? 'text-green-400' : 'text-green-700' },
+    failed: { bg: isDark ? 'bg-red-500/20' : 'bg-red-100', text: isDark ? 'text-red-400' : 'text-red-700' },
+  }
+  const { bg, text } = colors[status] ?? colors.pending
 
   return (
-    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${config.bg} ${config.text}`}>
-      {config.label}
+    <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${bg} ${text}`}>
+      {label}
     </span>
+  )
+}
+
+function BuildStatusDot({ status }: { status: string }) {
+  const { dot } = buildStatusConfig(status)
+  return (
+    <motion.span
+      className={`w-1.5 h-1.5 rounded-full ${dot}`}
+      animate={status === 'building' ? { scale: [1, 1.3, 1] } : {}}
+      transition={{ repeat: Infinity, duration: 1 }}
+    />
   )
 }
 

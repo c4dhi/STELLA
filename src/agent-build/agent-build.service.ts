@@ -81,8 +81,11 @@ export class AgentBuildService {
   private readonly logger = new Logger(AgentBuildService.name)
   private readonly isProduction: boolean
 
-  // Track active builds to prevent duplicates
+  // The build currently running for an agent type, if any.
   private readonly activeBuilds: Map<string, Promise<BuildResult>> = new Map()
+  // The one build queued behind it, if any. A further request while that is
+  // still queued (not yet started) supersedes it rather than piling up.
+  private readonly queuedNext: Map<string, string> = new Map()
 
   constructor(
     private configService: ConfigService,
@@ -94,51 +97,127 @@ export class AgentBuildService {
   }
 
   /**
-   * Start building a Docker image for an agent type.
-   * Returns immediately with build log ID; build runs asynchronously.
+   * Start building a Docker image for an agent type. Returns immediately with
+   * a build log id; the build itself runs asynchronously.
+   *
+   * Never runs two builds of the same agent type at once: a request that
+   * arrives while one is already running is queued to start right after,
+   * reading whatever is current on the agent type at that time. A second
+   * request that arrives while one is already queued (not yet started)
+   * supersedes it, so only the latest upload ever gets built next.
    */
   async startBuild(agentTypeId: string): Promise<BuildResult> {
-    // Check if build is already in progress
-    const existingBuild = this.activeBuilds.get(agentTypeId)
-    if (existingBuild) {
-      this.logger.log(`Build already in progress for ${agentTypeId}`)
-      return existingBuild
+    const running = this.activeBuilds.get(agentTypeId)
+    if (running) {
+      return this.queueBuild(agentTypeId, running)
     }
 
-    // Get agent type
-    const agentType = await this.prisma.agentType.findUnique({
-      where: { id: agentTypeId },
+    // Reserve the slot before the first await: two startBuild calls for the
+    // same agent type can arrive in the same tick (e.g. an upload racing a
+    // Rebuild click), and without this a later one would still see the map
+    // empty and start a second build of its own.
+    let settleReservation!: (result: BuildResult) => void
+    const reservation = new Promise<BuildResult>((resolve) => {
+      settleReservation = resolve
     })
+    this.activeBuilds.set(agentTypeId, reservation)
 
-    if (!agentType) {
-      throw new Error(`Agent type not found: ${agentTypeId}`)
+    try {
+      const agentType = await this.prisma.agentType.findUnique({
+        where: { id: agentTypeId },
+      })
+
+      if (!agentType) {
+        throw new Error(`Agent type not found: ${agentTypeId}`)
+      }
+
+      if (!agentType.packagePath) {
+        throw new Error('Agent type has no uploaded package')
+      }
+
+      const buildLog = await this.prisma.agentBuildLog.create({
+        data: {
+          agentTypeId,
+          status: 'pending',
+        },
+      })
+
+      // Swap the reservation for the real build: a call queued behind the
+      // reservation chains onto it, which only settles once this build does.
+      const buildPromise = this.executeBuild(agentType, buildLog.id)
+      this.activeBuilds.set(agentTypeId, buildPromise)
+      buildPromise.finally(() => {
+        if (this.activeBuilds.get(agentTypeId) === buildPromise) this.activeBuilds.delete(agentTypeId)
+      })
+      buildPromise.then(settleReservation, (err) =>
+        settleReservation({ success: false, buildLogId: buildLog.id, errorMessage: (err as Error).message }),
+      )
+
+      return {
+        success: true,
+        buildLogId: buildLog.id,
+      }
+    } catch (err) {
+      if (this.activeBuilds.get(agentTypeId) === reservation) this.activeBuilds.delete(agentTypeId)
+      settleReservation({ success: false, buildLogId: '', errorMessage: (err as Error).message })
+      throw err
+    }
+  }
+
+  /** Queues a build behind the one currently running, superseding any build already queued. */
+  private async queueBuild(agentTypeId: string, running: Promise<BuildResult>): Promise<BuildResult> {
+    const staleQueuedId = this.queuedNext.get(agentTypeId)
+    if (staleQueuedId) {
+      await this.prisma.agentBuildLog
+        .update({
+          where: { id: staleQueuedId },
+          data: { status: 'failed', errorMessage: 'Superseded by a newer upload', completedAt: new Date() },
+        })
+        .catch(() => undefined)
     }
 
-    if (!agentType.packagePath) {
-      throw new Error('Agent type has no uploaded package')
-    }
-
-    // Create build log
     const buildLog = await this.prisma.agentBuildLog.create({
-      data: {
-        agentTypeId,
-        status: 'pending',
-      },
+      data: { agentTypeId, status: 'pending' },
+    })
+    this.queuedNext.set(agentTypeId, buildLog.id)
+    this.logger.log(`Queued build ${buildLog.id} for ${agentTypeId} behind the one in progress`)
+
+    const chained = running.catch(() => undefined).then(() => this.runQueuedBuild(agentTypeId, buildLog.id))
+    this.activeBuilds.set(agentTypeId, chained)
+    chained.finally(() => {
+      if (this.activeBuilds.get(agentTypeId) === chained) this.activeBuilds.delete(agentTypeId)
     })
 
-    // Start build in background
-    const buildPromise = this.executeBuild(agentType, buildLog.id)
-    this.activeBuilds.set(agentTypeId, buildPromise)
+    return { success: true, buildLogId: buildLog.id }
+  }
 
-    // Clean up when done
-    buildPromise.finally(() => {
-      this.activeBuilds.delete(agentTypeId)
-    })
-
-    return {
-      success: true,
-      buildLogId: buildLog.id,
+  /** Runs a queued build, unless a later upload has since superseded it. */
+  private async runQueuedBuild(agentTypeId: string, buildLogId: string): Promise<BuildResult> {
+    if (this.queuedNext.get(agentTypeId) !== buildLogId) {
+      // queueBuild only marks the row it is itself replacing: two queueBuild
+      // calls landing in the same tick can each read queuedNext before either
+      // writes it, so the loser's row never gets marked there and would
+      // otherwise sit "pending" forever. Marking it here too closes that race.
+      await this.prisma.agentBuildLog
+        .update({
+          where: { id: buildLogId },
+          data: { status: 'failed', errorMessage: 'Superseded by a newer upload', completedAt: new Date() },
+        })
+        .catch(() => undefined)
+      return { success: false, buildLogId, errorMessage: 'Superseded by a newer upload' }
     }
+    this.queuedNext.delete(agentTypeId)
+
+    const agentType = await this.prisma.agentType.findUnique({ where: { id: agentTypeId } })
+    if (!agentType?.packagePath) {
+      const errorMessage = agentType ? 'Agent type has no uploaded package' : `Agent type not found: ${agentTypeId}`
+      await this.prisma.agentBuildLog
+        .update({ where: { id: buildLogId }, data: { status: 'failed', errorMessage, completedAt: new Date() } })
+        .catch(() => undefined)
+      return { success: false, buildLogId, errorMessage }
+    }
+
+    return this.executeBuild(agentType, buildLogId)
   }
 
   /**

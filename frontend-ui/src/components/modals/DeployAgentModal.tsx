@@ -47,6 +47,10 @@ export default function DeployAgentModal({
   const [name, setName] = useState('')
   const [icon, setIcon] = useState('🤖')
   const [agentTypes, setAgentTypes] = useState<AgentType[]>([])
+  // Bumped each time the dialog opens, so "My Agents" and the review-required
+  // flag it gates on refetch instead of showing whatever they last held — a
+  // build finished in Settings, or a review toggle flipped, since the last visit.
+  const [myAgentsRefresh, setMyAgentsRefresh] = useState(0)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoadingTypes, setIsLoadingTypes] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -186,6 +190,7 @@ export default function DeployAgentModal({
       setSelectedConfiguration(null)
       setTtsVoice('')
       setTtsLanguage('')
+      setMyAgentsRefresh((n) => n + 1)
 
       // Fetch TTS capabilities so the voice step (and its inclusion in the
       // step flow) reflects what the active provider can actually produce.
@@ -488,6 +493,7 @@ export default function DeployAgentModal({
                     selectedId={selectedType?.id ?? null}
                     onSelectType={handleSelectType}
                     onSelectCustom={handleSelectCustomAgent}
+                    refreshTrigger={myAgentsRefresh}
                     isDark={isDark}
                   />
                 </motion.div>

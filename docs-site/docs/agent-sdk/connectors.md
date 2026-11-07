@@ -83,6 +83,7 @@ logger = logging.getLogger(__name__)
 
 class InterviewAgent(BaseAgent):
     async def on_session_start(self, session_id, config):
+        await super().on_session_start(session_id, config)
         for c in await self.connectors.list():
             logger.info("connector %s (%s): %s", c.handle, c.slot, [t.name for t in c.tools])
 
