@@ -353,6 +353,21 @@ class MyAgent(BaseAgent):
         await self.send_status("listening")
 ```
 
+## Take-back
+
+A person's turn can be closed while they still have more to say. If they carry on before any of the reply was heard, the reply can simply be dropped. Take-back does that. It is off unless an agent turns it on.
+
+```python
+pipeline.enable_take_back(6000)   # window in ms after a final; 0 is off
+```
+
+`run_agent_from_env` turns it on for an agent with a `take_back_window_ms` attribute. This doesn't change how barge-in is wired.
+
+- **Hold.** If speech starts within the window after a final, while a turn is in progress and nothing of its reply has been played, the reply is held. There is no duration threshold, because nothing is audible yet. The next final is judged like a barge-in. On `COMMIT`, the held turn is dropped, and the joined-up text is answered as one turn (its metadata lists `taken_back`). On `RESUME`, the held reply plays.
+- **`await pipeline.wait_until_turn_is_final(timeout_s=15)`** returns once the reply is first heard. It returns `False` if the turn was taken back. Save a turn's values after this, so a dropped reply saves nothing. A hold doesn't use up the timeout. If speech never starts, the turn counts as final after the timeout, and `take_back_no_speech` is logged.
+- **Nothing played, nothing held.** With TTS off or on the text interface (`stella.interaction_mode` text), the call returns at once, and no turn is held.
+- **Analytics:** `take_back_held` (`since_final_ms`), `take_back_done` (`outcome`, `held_ms`, `parts`) and `take_back_no_speech`. They carry timings and outcomes, never words.
+
 ## Audio Format
 
 Default audio format:

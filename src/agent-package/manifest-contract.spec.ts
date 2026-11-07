@@ -22,7 +22,12 @@ import * as clamping from '../kubernetes/utils/resource-clamping.util.js'
 
 const ROOT = process.cwd()
 const FIXTURES = path.join(ROOT, 'src/agent-package/__fixtures__')
-const BUILTIN = ['stella-v2-agent', 'stella-light-agent']
+// Every folder under agents/ with an agent.yaml is a built-in; there is no list.
+const BUILTIN = fs
+  .readdirSync(path.join(ROOT, 'agents'))
+  .filter((slug) => fs.existsSync(path.join(ROOT, 'agents', slug, 'agent.yaml')))
+// Built-ins that shipped on manifest 1.0 keep a golden file of it.
+const SHIPPED_ON_V1 = BUILTIN.filter((slug) => fs.existsSync(path.join(FIXTURES, `${slug}.v1.yaml`)))
 
 const read = (p: string) => fs.readFileSync(p, 'utf-8')
 const parse = (text: string) => {
@@ -37,7 +42,12 @@ const base = {
 }
 
 describe('built-in agents on manifest 2.0', () => {
-  it.each(BUILTIN)('%s: the 1.0 file upgrades to exactly the 2.0 file', (slug) => {
+  it('finds every built-in folder, and the ones that shipped on 1.0', () => {
+    expect(BUILTIN).toEqual(expect.arrayContaining(['stella-v2-agent', 'stella-light-agent', 'stella-jev-agent']))
+    expect(SHIPPED_ON_V1).toEqual(expect.arrayContaining(['stella-v2-agent', 'stella-light-agent']))
+  })
+
+  it.each(SHIPPED_ON_V1)('%s: the 1.0 file upgrades to exactly the 2.0 file', (slug) => {
     const v1 = parse(read(path.join(FIXTURES, `${slug}.v1.yaml`)))
     const v2 = parse(read(path.join(ROOT, 'agents', slug, 'agent.yaml')))
     expect(v2.warnings).toEqual([])
