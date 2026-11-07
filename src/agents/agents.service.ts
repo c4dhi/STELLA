@@ -31,6 +31,7 @@ import { PlatformSettingsService } from '../platform-settings/platform-settings.
 import { ConnectorsService } from '../connectors/connectors.service.js';
 import { readBindings, type BindingRequest } from '../connectors/connector-bindings.util.js';
 import { CONNECTOR_TOKEN_ENV, issueAgentConnectorToken } from '../connectors/agent-connector-token.util.js';
+import { agentLiveKitCredentials } from './agent-livekit-credentials.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -385,7 +386,7 @@ export class AgentsService {
     // 4. Create K8s pod asynchronously (don't block response)
     // NOTE: In the new architecture, agents connect directly to LiveKit rooms via SDK
     // No need for session-management-server to join rooms
-    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, envVars, agentConfig, requirements);
+    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, envVars, agentConfig, requirements, agentTypeRecord?.isBuiltIn ?? false);
 
     return agent;
   }
@@ -402,6 +403,7 @@ export class AgentsService {
     envVars: Record<string, string>,
     sanitizedConfig: Record<string, unknown>,
     requirements: AgentRequirements,
+    isBuiltIn: boolean,
   ): Promise<void> {
     try {
       // Get environment variables for LiveKit (agent pod needs these for gRPC config)
@@ -431,8 +433,15 @@ export class AgentsService {
         agentType,
         roomName: session.room?.livekitRoomName || '',
         livekitUrl,
-        livekitApiKey,
-        livekitApiSecret,
+        // Uploaded agents get a token for this room only, not the key and secret (issue 856).
+        ...(await agentLiveKitCredentials({
+          isBuiltIn,
+          apiKey: livekitApiKey,
+          apiSecret: livekitApiSecret,
+          roomName: session.room?.livekitRoomName || '',
+          identity: `agent-${agentId}`,
+          name: sanitizedName,
+        })),
         ttsProvider: this.configService.get<string>('TTS_PROVIDER', 'opensource'),
         agentConfig: sanitizedConfig,
         forceRebuild: createAgentDto.forceRebuild,
@@ -1129,8 +1138,15 @@ export class AgentsService {
         agentIcon: agent.icon || '🤖',
         roomName: agent.session.room.livekitRoomName,
         livekitUrl,
-        livekitApiKey,
-        livekitApiSecret,
+        // A restart is a new pod, so an uploaded agent gets a freshly signed token (issue 856).
+        ...(await agentLiveKitCredentials({
+          isBuiltIn: agentTypeRecord?.isBuiltIn ?? false,
+          apiKey: livekitApiKey,
+          apiSecret: livekitApiSecret,
+          roomName: agent.session.room.livekitRoomName,
+          identity: `agent-${id}`,
+          name: agent.name,
+        })),
         ttsProvider: this.configService.get<string>('TTS_PROVIDER', 'opensource'),
         // Intentional asymmetry with env vars (re-resolved above): the persisted
         // agentConfig — including the pipeline_config injected at create() by

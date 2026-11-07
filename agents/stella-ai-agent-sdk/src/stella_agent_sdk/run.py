@@ -27,6 +27,7 @@ Environment Variables (set by session-management-server):
     AGENT_IDENTITY: Participant identity for the agent
     LIVEKIT_API_KEY: LiveKit API key for JWT authentication
     LIVEKIT_API_SECRET: LiveKit API secret for JWT signing
+    LIVEKIT_TOKEN: Ready-made token for the room; when set, key and secret are not needed
     STT_SERVICE_ADDRESS: Address of external STT service (gRPC)
     TTS_SERVICE_ADDRESS: Address of external TTS service (gRPC)
     SESSION_SERVER_URL: URL of session management server (for chat history)
@@ -42,15 +43,13 @@ import logging
 import os
 import re
 import signal
-import time
 import uuid
 from typing import Optional, Dict, Any, Coroutine
 
-import jwt
 
 from stella_agent_sdk.agent.base import BaseAgent
 from stella_agent_sdk.audio.pipeline import AudioPipeline
-from stella_agent_sdk.livekit.room import RoomManager
+from stella_agent_sdk.livekit.room import RoomManager, livekit_credentials_from_env
 from stella_agent_sdk.services.stt_client import STTClient
 from stella_agent_sdk.services.tts_client import TTSClient
 from stella_agent_sdk.services.history_client import HistoryClient
@@ -187,6 +186,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         AGENT_IDENTITY: Participant identity (e.g., "agent-abc123")
         LIVEKIT_API_KEY: LiveKit API key for JWT authentication
         LIVEKIT_API_SECRET: LiveKit API secret for JWT signing
+        LIVEKIT_TOKEN: Ready-made token for the room; when set, key and secret are not needed
         STT_SERVICE_ADDRESS: Address of STT service (e.g., "stt-service:50051")
         TTS_SERVICE_ADDRESS: Address of TTS service (e.g., "tts-service:50052")
         SESSION_ID: Database session UUID for chat history API (optional, falls back to ROOM_NAME)
@@ -219,8 +219,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
     livekit_url = os.environ["LIVEKIT_URL"]
     room_name = os.environ["ROOM_NAME"]
     identity = os.environ["AGENT_IDENTITY"]
-    livekit_api_key = os.environ["LIVEKIT_API_KEY"]
-    livekit_api_secret = os.environ["LIVEKIT_API_SECRET"]
+    # An uploaded agent gets only LIVEKIT_TOKEN, scoped to its own room; the
+    # built-in agents get the key and secret and sign their own (issue 856).
+    livekit_creds = livekit_credentials_from_env(os.environ)
     stt_address = os.environ.get("STT_SERVICE_ADDRESS", "stt-service:50051")
     tts_address = os.environ.get("TTS_SERVICE_ADDRESS", "tts-service:50052")
     session_server_url = os.environ.get("SESSION_SERVER_URL", "http://session-management-server:3000")
@@ -289,8 +290,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         # 1. Initialize RoomManager for LiveKit
         room_manager = RoomManager(
             livekit_url=livekit_url,
-            api_key=livekit_api_key,
-            api_secret=livekit_api_secret,
+            api_key=livekit_creds["api_key"],
+            api_secret=livekit_creds["api_secret"],
+            token=livekit_creds["token"],
         )
 
         # 2. Connect to external STT service (gRPC)
@@ -375,24 +377,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         if getattr(agent, "supports_emotion_tags", False):
             audio_pipeline.enable_emotion_tags()
 
-        # 7. Create HistoryClient for chat history access
-        # Generate JWT token with same claims as LiveKit token (for validation)
-        now = int(time.time())
-        token_claims = {
-            "iss": livekit_api_key,
-            "sub": identity,
-            "iat": now,
-            "exp": now + 3600,  # 1 hour expiry
-            "nbf": now,
-            "video": {
-                "roomJoin": True,
-                "room": room_name,
-                "canPublish": True,
-                "canSubscribe": True,
-                "canPublishData": True,
-            },
-        }
-        agent_token = jwt.encode(token_claims, livekit_api_secret, algorithm="HS256")
+        # 7. Create HistoryClient for chat history access. The backend checks
+        # this token's room against the session, so it is the room token.
+        agent_token = room_manager.token_for(room_name, identity)
 
         history_client = HistoryClient(
             base_url=session_server_url,

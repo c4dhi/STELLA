@@ -247,6 +247,8 @@ data:
   SESSION_ID: {base64-encoded}
 ```
 
+An uploaded agent's secret holds `LIVEKIT_TOKEN` instead of `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`: a token the backend signs for that session's room and the agent's own identity, valid for 24 hours. With the key and secret, an agent could sign itself into any room, so only the built-in agents get them. A restart or an auto-pause wake creates a new pod with a new token.
+
 ### Security Context
 
 Pods run with restricted permissions:

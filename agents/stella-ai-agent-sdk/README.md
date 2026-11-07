@@ -158,8 +158,9 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `LIVEKIT_URL` | LiveKit server WebSocket URL |
 | `ROOM_NAME` | LiveKit room to join |
 | `AGENT_IDENTITY` | Agent participant identity |
-| `LIVEKIT_API_KEY` | LiveKit API key |
-| `LIVEKIT_API_SECRET` | LiveKit API secret |
+| `LIVEKIT_API_KEY` | LiveKit API key (not needed with `LIVEKIT_TOKEN`) |
+| `LIVEKIT_API_SECRET` | LiveKit API secret (not needed with `LIVEKIT_TOKEN`) |
+| `LIVEKIT_TOKEN` | Ready-made token for the agent's room; when set, it is used instead of signing one. Uploaded agents get only this. |
 
 ### Optional
 

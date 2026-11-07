@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, AsyncIterator, Callable, Dict, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Mapping, Optional
 
 import jwt
 import numpy as np
@@ -42,8 +42,9 @@ class RoomManager:
     def __init__(
         self,
         livekit_url: str,
-        api_key: str,
-        api_secret: str,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+        token: Optional[str] = None,
     ):
         """
         Initialize the RoomManager.
@@ -52,7 +53,15 @@ class RoomManager:
             livekit_url: WebSocket URL for LiveKit server (e.g., ws://localhost:7880)
             api_key: LiveKit API key for JWT signing
             api_secret: LiveKit API secret for JWT signing
+            token: A ready-made token for the agent's room. When given, it is
+                used as is and no key or secret is needed: the backend gives
+                uploaded agents only this (issue 856).
         """
+        if not token and not (api_key and api_secret):
+            raise ValueError(
+                "LiveKit credentials missing: set LIVEKIT_TOKEN, or "
+                "LIVEKIT_API_KEY and LIVEKIT_API_SECRET"
+            )
         if not LIVEKIT_AVAILABLE:
             raise RuntimeError(
                 "livekit-rtc is not installed. "
@@ -62,6 +71,7 @@ class RoomManager:
         self.livekit_url = livekit_url
         self.api_key = api_key
         self.api_secret = api_secret
+        self.token = token
 
         self._room: Optional[rtc.Room] = None
         self._audio_source: Optional[rtc.AudioSource] = None
@@ -130,6 +140,12 @@ class RoomManager:
         """
         return self._participant_names.get(identity)
 
+    def token_for(self, room_name: str, identity: str, name: Optional[str] = None) -> str:
+        """The token this agent joins with: the given one, or one it signs."""
+        if self.token:
+            return self.token
+        return self._generate_token(room_name, identity, name)
+
     def _generate_token(self, room_name: str, identity: str, name: Optional[str] = None) -> str:
         """Generate a JWT token for LiveKit authentication."""
         now = int(time.time())
@@ -168,7 +184,7 @@ class RoomManager:
         logger.info(f"Connecting to LiveKit room: {room_name} as {identity} (name: {name})")
 
         # Generate JWT token with display name
-        token = self._generate_token(room_name, identity, name)
+        token = self.token_for(room_name, identity, name)
 
         # Create room instance
         self._room = rtc.Room()
@@ -677,3 +693,20 @@ class RoomManager:
     def on_data_received(self, callback: Callable[[str, bytes], None]) -> None:
         """Register callback for data channel messages."""
         self._on_data_received = callback
+
+
+def livekit_credentials_from_env(env: Mapping[str, str]) -> Dict[str, Optional[str]]:
+    """Read the agent's LiveKit credentials from its environment.
+
+    A LIVEKIT_TOKEN wins: an agent that was given one (every uploaded agent,
+    issue 856) never signs anything itself. Otherwise the key and secret are
+    used, as for the built-in agents.
+    """
+    token = env.get("LIVEKIT_TOKEN") or None
+    if token:
+        return {"api_key": None, "api_secret": None, "token": token}
+    return {
+        "api_key": env.get("LIVEKIT_API_KEY") or None,
+        "api_secret": env.get("LIVEKIT_API_SECRET") or None,
+        "token": None,
+    }

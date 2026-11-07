@@ -423,7 +423,7 @@ Before deploying an agent, validate the same surfaces STELLA depends on at build
 
 - `agent.yaml` should parse cleanly and satisfy the canonical manifest schema
 - the package should include a `Dockerfile` or point to a published image
-- Python dependencies should include `stella-ai-agent-sdk`
+- Python dependencies should include `stella-ai-agent-sdk` 0.10.0 or later (`stella-ai-agent-sdk>=0.10.0`); STELLA refuses to deploy an agent built with an older SDK
 - the agent should start successfully with representative config
 
 For built-in agents in this repository, these checks are enforced automatically in GitHub Actions:
