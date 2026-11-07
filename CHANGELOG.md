@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [2.0.0] - 2026-11-07
+
+The agent platform. Anyone can now write an agent with the Agent SDK, describe
+what it needs in its `agent.yaml`, upload it and run it in a session. STELLA
+holds no code for any one agent. Agents can use outside tools through
+connectors, which each user sets up in Settings, and the credentials never
+reach the agent. Participants can hold a whole conversation in writing on the
+new Text face. STELLA Jev joins as a third built-in agent, and the ELIAS
+interviewer is the first uploaded one. **If you upgrade, read "Upgrade notes"
+first: agents uploaded before this release need one rebuild.**
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** This release applies six database migrations on its own during the deploy (connectors, connector icons and descriptions, the agent manifest, the agent's SDK version, and sharing uploaded agents with projects, with a backfill), and nothing backs up for you first
+- **Rebuild every uploaded agent once.** STELLA now records which SDK an agent's image contains, and refuses to deploy an image whose SDK it doesn't know. Agents built before this release have no record, so they stay undeployable until they are rebuilt from Settings → Agent Library. On production this includes ELIAS
+- **Uploaded agents need Agent SDK 0.10.0**, which ships with this release (`MIN_SUPPORTED_SDK_VERSION` is 0.10.0). Built-in agents are built with it automatically
+- **A deploy without a required env var is now refused up front** with a 400 that names it, instead of starting a pod that then fails. Check that each built-in agent's required keys (for example `OPENAI_API_KEY`) are set
+- **"Review uploaded agents" is on after the upgrade** (Settings → Platform Defaults), so a system admin approves each upload before it can run
+- No new required setting for the platform itself
+
 ### Added
 
 - **STELLA Jev (`stella-jev-agent`), a third built-in agent (#849).** STELLA V2's pipeline without the bridge: one Jev call decides the experts and barge-in, and the agent asks back when what it heard isn't believable (the common-sense expert). The reply no longer waits for task extraction, which saves the answer in the background. Take-back: if someone carries on speaking after their turn was closed and before any of the reply was heard, the reply is dropped and the joined-up words are answered, and nothing from the dropped reply is saved (`take_back_window_ms` on the new Turn Taking node, 0 is off). It sends conversation text to TypeSafe and needs `TYPESAFE_API_KEY`. It is seeded and built from `agents/stella-jev-agent/` like the other built-ins, with no agent-specific code in STELLA.
@@ -38,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A restart or wake that STELLA refuses (agent type rejected, under review, missing a required env var, or built with an unsupported SDK) now leaves the running agent alone. Before, the pod was deleted first and the agent was left in STARTING with no pod.
 - An agent whose manifest sets a memory or CPU limit below 512Mi / 250m now starts. Pod requests were fixed at those values, so Kubernetes refused the pod (request above limit) and the agent went FAILED without a pod. Requests are now lowered to the limit when the limit is smaller.
 - **Uploaded agents can be deployed into a session.** Before, any agent type other than the built-in STELLA V2 and STELLA Light was turned away at deploy time. Now an uploaded agent deploys once a system admin approves it, and its pod runs the build's own start command. A rejected agent never deploys, including on restart or wake after auto-pause.
-- **Admin switch: "Review uploaded agents"** in Settings → Platform Defaults. **It is on by default**, because an agent pod still receives the platform's LiveKit key (which can join any session) and building an upload runs its Dockerfile on the server. A system admin can turn it off; then a user can deploy their own upload as soon as it is built, and other users still need an admin's approval.
+- **Admin switch: "Review uploaded agents"** in Settings → Platform Defaults. **It is on by default**, because building an upload runs its Dockerfile on the server and the agent's code runs in sessions unreviewed. A system admin can turn it off; then a user can deploy their own upload as soon as it is built, and other users still need an admin's approval.
 
 ### Changed
 
