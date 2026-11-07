@@ -100,6 +100,76 @@ configSchema:
     expect(result.errors.join('\n')).toContain('env.optional.0.name')
   })
 
+  describe('typed optional env vars (#585)', () => {
+    const manifestWith = (vars: string) => `
+version: "2.0"
+metadata:
+  name: "Typed Env Agent"
+  slug: "typed-env-agent"
+  version: "1.0.0"
+  description: "Typed env vars"
+image:
+  dockerfile: "Dockerfile"
+env:
+  optional:
+${vars}`
+
+    it('accepts typed settings with labels, groups, ranges and options', () => {
+      const result = validator.validate(manifestWith(`
+    - name: TTS_SPEED
+      type: number
+      label: Speaking rate
+      group: Voice
+      min: 0.5
+      max: 2
+      step: 0.05
+      agentDefault: "1.0"
+    - name: STELLA_TTS_PLAYBACK
+      type: enum
+      default: auto
+      options:
+        - { value: auto, label: Auto }
+        - { value: sentence }
+    - name: BARGE_IN_ENABLED
+      type: boolean
+      agentDefault: "true"
+      advanced: false
+    - name: STELLA_TTS_PREROLL_MS
+      type: integer
+      min: 0
+      max: 3000
+      unit: ms
+      unsetLabel: Automatic
+    - name: STELLA_LANGUAGE
+      type: string
+      format: language-or-auto
+      default: auto
+`))
+      expect(result.errors).toEqual([])
+      expect(result.valid).toBe(true)
+    })
+
+    it.each([
+      ['an unknown type', '    - { name: X, type: colour }', 'env.optional.0.type'],
+      ['an enum without options', '    - { name: X, type: enum }', 'enum settings must list options'],
+      ['options on a non-enum', '    - { name: X, type: string, options: [{ value: a }] }', 'only enum settings take options'],
+      ['min above max', '    - { name: X, type: number, min: 2, max: 1 }', 'min must not be above max'],
+      ['a range on a non-number', '    - { name: X, type: boolean, min: 0 }', 'only number and integer settings take min, max or step'],
+      ['a default outside the range', '    - { name: X, type: number, min: 0, max: 1, default: "2" }', 'default "2" must be between 0 and 1'],
+      ['an agentDefault that is not an option', '    - { name: X, type: enum, options: [{ value: a }], agentDefault: b }', 'agentDefault "b" must be one of: a'],
+      ['a default on a secret', '    - { name: X, type: secret, default: abc }', 'secret settings take no default'],
+      ['both default and agentDefault', '    - { name: X, default: "1", agentDefault: "1" }', 'set default or agentDefault, not both'],
+      ['a regular expression of its own (ReDoS)', '    - { name: X, pattern: "^a+$" }', 'pattern'],
+      ['a format STELLA does not know', '    - { name: X, format: email }', 'env.optional.0.format'],
+      ['a format on a non-string', '    - { name: X, type: number, format: language }', 'only string settings take a format'],
+      ['a default that does not fit its format', '    - { name: X, format: language, default: auto }', 'default "auto" must be a two-letter language code'],
+    ])('rejects %s', (_case, vars, message) => {
+      const result = validator.validate(manifestWith(vars))
+      expect(result.valid).toBe(false)
+      expect(result.errors.join('\n')).toContain(message)
+    })
+  })
+
   it('rejects select slots without options in pipeline schema', () => {
     // Select slots must be self-contained; missing options would break frontend/runtime rendering.
     const result = validator.validate(`

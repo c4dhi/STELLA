@@ -6,6 +6,7 @@ import { useToastStore } from '../../store/toastStore'
 import { apiClient } from '../../services/ApiClient'
 import type { AgentType, CustomAgentType, AgentBuildStatus } from '../../lib/api-types'
 import { deployNeeds, type DeployNeeds } from '../../lib/deployNeeds'
+import { defaultLabel } from '../../lib/agentSettings'
 
 interface AgentDetailModalProps {
   isOpen: boolean
@@ -721,15 +722,17 @@ function ConfigSchemaViewer({ schema, needs, pipelineSchema, isDark, onNavigateT
                 key={envVar.name}
                 className={`px-3 py-2 rounded-lg ${isDark ? 'bg-zinc-700/50' : 'bg-neutral-50'}`}
               >
-                <div className="flex items-center gap-2">
-                  <span className={`font-mono text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-neutral-800'}`}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {envVar.label && (
+                    <span className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-neutral-800'}`}>{envVar.label}</span>
+                  )}
+                  <span className={`font-mono ${envVar.label ? 'text-xs' : 'text-sm font-medium'} ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
                     {envVar.name}
                   </span>
-                  {envVar.default && (
-                    <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-                      default: {envVar.default}
-                    </span>
-                  )}
+                  <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+                    {[envVar.type ?? 'string', envVar.group, envVar.advanced && 'advanced'].filter(Boolean).join(' · ')}
+                    {' · default: '}{defaultLabel(envVar)}
+                  </span>
                 </div>
                 {envVar.description && (
                   <p className={`text-xs mt-1 ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>

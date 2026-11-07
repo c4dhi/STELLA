@@ -67,20 +67,26 @@ export class AgentsTools implements McpToolProvider {
         description:
           "The user's env var templates (API keys for agents), with variable names only, never values. " +
           "Pass one as envVarTemplateId to agents_deploy when the agent type's required env vars need it; " +
-          'a template only fits agents of its agentTypeId.',
+          'a template only fits agents of its agentTypeId. invalid names the settings whose stored value does ' +
+          'not fit their type or range (agents_deploy refuses those until they are fixed in the app); ' +
+          'needsCheck is true for a template not saved since settings became typed.',
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
         handler: async (_args, { auth }) => ({
           items: (
             await this.envVarTemplates.findAllByUser(auth.user.userId)
-          ).map(({ id, name, description, variableKeys, agentTypeId }) => ({
-            id,
-            name,
-            description,
-            variableKeys,
-            agentTypeId,
-          })),
+          ).map(
+            ({ id, name, description, variableKeys, agentTypeId, invalid, needsCheck }) => ({
+              id,
+              name,
+              description,
+              variableKeys,
+              agentTypeId,
+              invalid,
+              needsCheck,
+            }),
+          ),
         }),
       }),
       defineTool({

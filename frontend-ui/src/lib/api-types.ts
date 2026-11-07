@@ -1,3 +1,4 @@
+import type { DeclaredEnv } from './agentSettings'
 // TypeScript types for Session Management Server API
 // Based on session-management-server/docs/TYPESCRIPT_TYPES.md
 
@@ -273,7 +274,7 @@ export interface DeployRequirements {
   persona: boolean
   plans: { required: boolean; modes: ('plan' | 'companion')[] } | null
   configurator: { required: boolean } | null
-  env: { required: string[]; optional: { name: string; description?: string; default?: string }[] }
+  env: DeclaredEnv
   connectors: ConnectorSlot[]
   /** Describes the agent's own defaultConfig; never set by a deployment. */
   configSchema: Record<string, unknown> | null
@@ -1040,6 +1041,12 @@ export interface EnvVarTemplate {
   description?: string
   variableKeys: string[]  // Only keys, not values (for security)
   agentTypeId: string  // Required: every template is scoped to exactly one agent type
+  /** Values of the agent type's declared non-secret settings (#585). */
+  settings: Record<string, string>
+  /** Declared settings whose stored value does not fit, with the reason. */
+  invalid: Record<string, string>
+  /** Not saved since settings became typed: shown as "check". */
+  needsCheck: boolean
   createdAt: string
   updatedAt: string
 }

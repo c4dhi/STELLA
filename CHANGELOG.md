@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Agent settings in tabs.** Deploying an agent and editing a template in Settings now show the settings an agent declares as one control each (switch, slider, list, number or text), in tabs by topic, with anything the agent does not declare under "Custom". The deploy starts from the agent's defaults or a template, shows what changed, and can save the result as a new template. A value that does not fit is refused, with the setting and the reason, both on save and on deploy. Templates saved before this release are marked "Migrated · check" until they are saved again (#585)
+- The agents' manifests declare a type, label and tab for every optional setting, list `BARGE_IN_DUCK_GAIN`, and give the right default for `BARGE_IN_MIN_SPEECH_MS` (600 ms) (#548)
 - **The deploy wizard's Connectors step is one list to tick**, with no categories. STELLA fills the agent's declared slots from the ticked connectors (those covering a slot's tools first, matched so as many slots as possible are covered, then untested ones; never one connector for two slots) and binds the rest as extras.
 - **The device check appears only when voice needs it.** A participant who joins on the Text face, locked or not, skips it. Switching from Text to a voice face opens it in the session, unless the browser already allows the microphone, with **Stay in writing** to go back. Where a browser cannot report the microphone permission, a microphone the page can already see counts as allowed.
 - **The participant's end screens no longer show a code.** The completion code and the time-limit failure code (from the Prolific study flow) are gone; both screens thank the participant and say they can close the window. The **Session complete** screen also waits until the agent's last message has been heard and read (3 to 10 s by length, 25 s at most) instead of covering it at once.
@@ -65,6 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building an uploaded agent no longer runs its Dockerfile path, name or version through a shell. The Dockerfile must be a plain relative path inside the package.
 - An uploaded agent no longer receives the platform's LiveKit key and secret. It gets a token for its own session's room and identity only, so it can't join or listen to other sessions. Built-in agents are unchanged. Because only SDK 0.10.0 and later read the token, STELLA now supports SDK 0.10.0 or later: an uploaded agent built with an older SDK is refused at deploy, restart and wake, and My Agents marks it as needing a rebuild (https://github.com/c4dhi/STELLA/issues/856)
 - **Connectors.** Each user can store outside MCP servers (URL + bearer token) in Settings → Connectors, test them, and see their tools. Agents reach a connector only through the backend, so the token never reaches the agent pod. The owner can share a connector with projects they belong to; members' agents there may then use it, without seeing or editing the token, until it is unshared. Agents declare the connectors they need in `configSchema.x-stella-connectors`, and users may offer extra ones. The deploy request takes `connectorBindings`; the wizard for choosing them comes next. Connectors can also be managed from an AI assistant over Stella's MCP server (`connectors_list`, `_get`, `_create`, `_update`, `_test`, `connector_shares_set`; no delete), and `agents_deploy` takes `connectorBindings`. One database migration (`Connector`, `ConnectorProjectShare`, `ConnectorAuditLog`, `AgentInstance.connectorBindings`/`deployedByUserId`/`connectorTokenHash`)
+
+### Upgrade notes
+
+- One database migration runs on its own during the deploy (a column marking which templates have been checked). No template data is changed
 
 ---
 
