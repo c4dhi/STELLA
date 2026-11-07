@@ -159,7 +159,7 @@ Audio Out (LiveKit)
 Agents can call custom tools during conversations:
 
 ```python
-from stella_sdk import Tool
+from stella_agent_sdk import Tool
 
 class SearchKnowledgeBase(Tool):
     name = "search_knowledge_base"

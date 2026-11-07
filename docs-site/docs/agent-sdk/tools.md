@@ -28,7 +28,7 @@ LLM generates: "The weather in San Francisco is 65°F and sunny."
 ### Using the @tool Decorator
 
 ```python
-from stella_sdk import tool
+from stella_agent_sdk import tool
 
 @tool
 async def search_knowledge_base(query: str) -> str:
@@ -47,7 +47,7 @@ async def search_knowledge_base(query: str) -> str:
 ### Using the Tool Class
 
 ```python
-from stella_sdk import Tool
+from stella_agent_sdk import Tool
 
 class SearchKnowledgeBase(Tool):
     name = "search_knowledge_base"
@@ -74,7 +74,7 @@ class SearchKnowledgeBase(Tool):
 ### In Agent Constructor
 
 ```python
-from stella_sdk import BaseAgent
+from stella_agent_sdk import BaseAgent
 
 class MyAgent(BaseAgent):
     def __init__(self):
@@ -306,7 +306,7 @@ async def get_account_balance(account_id: str) -> dict:
 Add validation to tool parameters:
 
 ```python
-from stella_sdk import tool, ValidationError
+from stella_agent_sdk import tool, ValidationError
 
 @tool
 async def transfer_funds(

@@ -11,7 +11,7 @@ The `BaseAgent` class is the foundation for all STELLA agents. It handles LiveKi
 ## Class Definition
 
 ```python
-from stella_sdk import BaseAgent
+from stella_agent_sdk import BaseAgent
 
 class MyAgent(BaseAgent):
     async def on_connect(self):
@@ -228,7 +228,7 @@ async def on_participant_left(self, participant: Participant):
 Register a function as a tool.
 
 ```python
-from stella_sdk import tool
+from stella_agent_sdk import tool
 
 @tool
 async def search(query: str) -> dict:

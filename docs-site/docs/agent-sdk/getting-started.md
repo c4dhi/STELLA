@@ -44,7 +44,7 @@ Create `agent.py`:
 
 ```python
 import asyncio
-from stella_sdk import BaseAgent, AudioPipeline
+from stella_agent_sdk import BaseAgent, AudioPipeline
 
 class MyFirstAgent(BaseAgent):
     """A simple agent that responds to user messages."""

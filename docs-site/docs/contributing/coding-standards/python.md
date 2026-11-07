@@ -53,7 +53,7 @@ mypy src/
 from typing import Optional
 
 from openai import AsyncOpenAI
-from stella_sdk import BaseAgent, AudioPipeline, tool
+from stella_agent_sdk import BaseAgent, AudioPipeline, tool
 
 from .config import settings
 
@@ -105,7 +105,7 @@ class CustomerSupportAgent(BaseAgent):
 
 from typing import Optional
 
-from stella_sdk import tool
+from stella_agent_sdk import tool
 
 from .database import db
 

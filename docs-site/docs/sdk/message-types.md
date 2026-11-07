@@ -173,7 +173,7 @@ interface TodoItem {
 ### Usage (Agent)
 
 ```python
-from stella_sdk import TodoItem
+from stella_agent_sdk import TodoItem
 
 # Initialize todo list
 await self.update_todo([

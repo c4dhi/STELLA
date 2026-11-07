@@ -20,7 +20,7 @@ Tools are async Python functions that:
 ### Basic Tool
 
 ```python
-from stella_sdk import tool
+from stella_agent_sdk import tool
 
 
 @tool

@@ -89,7 +89,7 @@ Todo lists help structure conversations and show users what tasks the agent is w
 ### TodoItem Structure
 
 ```python
-from stella_sdk import TodoItem
+from stella_agent_sdk import TodoItem
 
 item = TodoItem(
     id="task-1",                    # Unique identifier
@@ -102,7 +102,7 @@ item = TodoItem(
 ### Sending Todo Updates
 
 ```python
-from stella_sdk import TodoItem
+from stella_agent_sdk import TodoItem
 
 async def update_tasks(self):
     await self.update_todo([
@@ -148,7 +148,7 @@ async def process_request(self, user_input: str):
 ### Helper Class
 
 ```python
-from stella_sdk import TodoList
+from stella_agent_sdk import TodoList
 
 class TaskTracker:
     def __init__(self, agent):
@@ -249,7 +249,7 @@ async def handle_request(self, text: str):
 ## Complete Example
 
 ```python
-from stella_sdk import BaseAgent, TodoItem
+from stella_agent_sdk import BaseAgent, TodoItem
 
 class TaskAgent(BaseAgent):
     def __init__(self):

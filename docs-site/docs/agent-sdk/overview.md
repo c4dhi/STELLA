@@ -61,7 +61,7 @@ The Agent SDK is a Python framework that provides:
 The foundation class that all agents extend:
 
 ```python
-from stella_sdk import BaseAgent
+from stella_agent_sdk import BaseAgent
 
 class MyAgent(BaseAgent):
     async def on_message(self, message):
@@ -78,7 +78,7 @@ class MyAgent(BaseAgent):
 Manages the STT → LLM → TTS flow:
 
 ```python
-from stella_sdk import AudioPipeline, STTProvider, TTSProvider
+from stella_agent_sdk import AudioPipeline, STTProvider, TTSProvider
 
 pipeline = AudioPipeline(
     stt=STTProvider.SHERPA,
@@ -91,7 +91,7 @@ pipeline = AudioPipeline(
 Structured messages for data channel communication:
 
 ```python
-from stella_sdk import TranscriptMessage, StatusMessage
+from stella_agent_sdk import TranscriptMessage, StatusMessage
 
 # Send transcript update
 await agent.send(TranscriptMessage(
@@ -110,7 +110,7 @@ await agent.send(StatusMessage(
 Custom functions the agent can call:
 
 ```python
-from stella_sdk import Tool
+from stella_agent_sdk import Tool
 
 @tool
 async def search_database(query: str) -> str:
@@ -137,7 +137,7 @@ See [Accessing Chat History](../guides/build-your-own-agent.md#accessing-chat-hi
 ## Quick Example
 
 ```python
-from stella_sdk import BaseAgent, AudioPipeline
+from stella_agent_sdk import BaseAgent, AudioPipeline
 
 class SimpleAgent(BaseAgent):
     def __init__(self):

@@ -93,7 +93,7 @@ Sent when the agent's task list updates:
 **Python SDK:**
 
 ```python
-from stella_sdk import TodoItem
+from stella_agent_sdk import TodoItem
 
 await agent.update_todo([
     TodoItem(
@@ -221,7 +221,7 @@ Dynamic configuration update:
 The SDK provides typed message classes:
 
 ```python
-from stella_sdk.messages import (
+from stella_agent_sdk.messages import (
     TranscriptMessage,
     StatusMessage,
     TodoListMessage,
@@ -256,7 +256,7 @@ msg = TodoListMessage(
 Use the agent's `send` method:
 
 ```python
-from stella_sdk.messages import StatusMessage
+from stella_agent_sdk.messages import StatusMessage
 
 async def on_connect(self):
     # Using convenience method
@@ -289,7 +289,7 @@ async def on_data_message(self, message: dict):
 You can define custom messages:
 
 ```python
-from stella_sdk.messages import BaseMessage
+from stella_agent_sdk.messages import BaseMessage
 
 class CustomMessage(BaseMessage):
     type = "custom_type"

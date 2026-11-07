@@ -17,7 +17,7 @@ pip install "stella-ai-agent-sdk>=0.10.0"
 ## Quick Start
 
 ```python
-from stella_sdk import BaseAgent, AudioPipeline
+from stella_agent_sdk import BaseAgent, AudioPipeline
 from openai import AsyncOpenAI
 
 
@@ -77,7 +77,7 @@ Manages speech processing:
 Extend agent capabilities with custom functions:
 
 ```python
-from stella_sdk import tool
+from stella_agent_sdk import tool
 
 @tool
 async def search(query: str) -> dict:

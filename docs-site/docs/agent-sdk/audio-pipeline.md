@@ -23,7 +23,7 @@ The pipeline handles:
 ## Basic Usage
 
 ```python
-from stella_sdk import AudioPipeline
+from stella_agent_sdk import AudioPipeline
 
 # Create pipeline with defaults
 pipeline = AudioPipeline()
@@ -267,7 +267,7 @@ async for audio_chunk in pipeline.text_to_speech_stream("Hello, world!"):
 The pipeline includes VAD to detect when someone is speaking:
 
 ```python
-from stella_sdk import AudioPipeline, VADConfig
+from stella_agent_sdk import AudioPipeline, VADConfig
 
 pipeline = AudioPipeline(
     vad_config=VADConfig(
@@ -392,7 +392,7 @@ pipeline = AudioPipeline(
 ## Complete Example
 
 ```python
-from stella_sdk import BaseAgent, AudioPipeline, VADConfig
+from stella_agent_sdk import BaseAgent, AudioPipeline, VADConfig
 
 class VoiceAgent(BaseAgent):
     def __init__(self):

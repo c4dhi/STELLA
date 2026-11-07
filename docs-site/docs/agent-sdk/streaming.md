@@ -24,7 +24,7 @@ User Speakers ◀── WebRTC ◀── Agent ◀── TTS ◀── LLM Respo
 The AudioPipeline processes incoming audio continuously:
 
 ```python
-from stella_sdk import BaseAgent, AudioPipeline
+from stella_agent_sdk import BaseAgent, AudioPipeline
 
 
 class MyAgent(BaseAgent):

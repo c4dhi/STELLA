@@ -34,8 +34,8 @@ Create `src/agent.py`:
 ```python
 import asyncio
 from openai import AsyncOpenAI
-from stella_sdk import BaseAgent, AudioPipeline, TodoItem
-from stella_sdk.messages import TranscriptMessage, StatusMessage
+from stella_agent_sdk import BaseAgent, AudioPipeline, TodoItem
+from stella_agent_sdk.messages import TranscriptMessage, StatusMessage
 
 from .tools import search_knowledge, create_ticket
 from .prompts import SYSTEM_PROMPT
@@ -206,7 +206,7 @@ if __name__ == "__main__":
 Create `src/tools/knowledge.py`:
 
 ```python
-from stella_sdk import tool
+from stella_agent_sdk import tool
 
 
 @tool

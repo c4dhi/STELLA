@@ -115,7 +115,7 @@ Create your main agent class in `src/agent.py`:
 
 ```python title="src/agent.py"
 from openai import AsyncOpenAI
-from stella_sdk import BaseAgent, AudioPipeline
+from stella_agent_sdk import BaseAgent, AudioPipeline
 
 from .config import settings
 
@@ -192,7 +192,7 @@ if __name__ == "__main__":
 Tools allow your agent to perform actions beyond conversation. Here's how to add a search tool:
 
 ```python title="src/tools.py"
-from stella_sdk import tool
+from stella_agent_sdk import tool
 
 
 @tool

@@ -10,7 +10,7 @@ The `BaseAgent` class is the foundation for all STELLA agents. It handles LiveKi
 ## Class Definition
 
 ```python
-from stella_sdk import BaseAgent
+from stella_agent_sdk import BaseAgent
 
 class BaseAgent:
     """Base class for all STELLA agents."""
@@ -288,7 +288,7 @@ async def on_idle(self, session_id: str, idle_seconds: float) -> None:
 The `AgentConfig` class configures agent behavior:
 
 ```python
-from stella_sdk import AgentConfig
+from stella_agent_sdk import AgentConfig
 
 config = AgentConfig(
     # LiveKit settings
@@ -316,7 +316,7 @@ agent = MyAgent(config)
 ## Complete Example
 
 ```python
-from stella_sdk import BaseAgent, AgentConfig, AudioPipeline
+from stella_agent_sdk import BaseAgent, AgentConfig, AudioPipeline
 
 class ConversationalAgent(BaseAgent):
     def __init__(self):
