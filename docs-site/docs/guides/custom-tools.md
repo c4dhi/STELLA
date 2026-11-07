@@ -892,6 +892,6 @@ for tool in tools:
 
 ## Next Steps
 
-- [SDK Tools Reference](../sdk/tools.md) - API documentation
-- [Base Agent](../sdk/base-agent.md) - Full agent API
+- [SDK Tools Reference](../agent-sdk/tools.md) - API documentation
+- [Base Agent](../agent-sdk/base-agent.md) - Full agent API
 - [Build Your Own Agent](./build-your-own-agent.md) - Complete agent tutorial
