@@ -25,6 +25,7 @@ import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import type { AvailableConnector } from '../../lib/api-types'
 import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
+import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
 
 interface DeployAgentModalProps {
   isOpen: boolean
@@ -508,7 +509,7 @@ export default function DeployAgentModal({
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
             className={`
-              backdrop-blur-xl rounded-[20px] w-full max-w-2xl overflow-hidden
+              backdrop-blur-xl rounded-[20px] w-full ${WIZARD_MODAL_SIZE} overflow-hidden
               flex flex-col max-h-[calc(100dvh-2rem)]
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
@@ -810,7 +811,7 @@ export default function DeployAgentModal({
                             </div>
                           </div>
                         ) : (
-                          <div className="grid grid-cols-2 gap-3 max-h-[300px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
+                          <div className={`${WIZARD_CARD_GRID} pr-2 pt-1 -mt-1`}>
                             {/* Template cards */}
                             {envVarTemplates.map((template, index) => {
                               const style = getEnvVarCardStyle(index)
@@ -990,7 +991,7 @@ export default function DeployAgentModal({
                           </div>
                         )}
 
-                        <div className="max-h-[300px] overflow-y-auto pr-2">
+                        <div className="pr-2">
                           <EnvVarListEditor editor={envVarEditor} isDark={isDark} hints={envVarHints(needs.optionalEnvVars)} />
                         </div>
                       </motion.div>

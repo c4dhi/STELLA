@@ -10,6 +10,7 @@ import type {
   RuntimeVariable,
   ExpertDefault,
 } from '../../lib/api-types'
+import { WIZARD_CARD_GRID } from './wizardLayout'
 
 interface ConfigurationSelectionStepProps {
   agentTypeId: string
@@ -149,7 +150,7 @@ export default function ConfigurationSelectionStep({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-3 max-h-[350px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
+    <div className={`${WIZARD_CARD_GRID} pr-2 pt-1 -mt-1`}>
       {/* Saved configuration cards */}
       {configurations.map((config, index) => {
         const style = getConfigCardStyle(config.id)

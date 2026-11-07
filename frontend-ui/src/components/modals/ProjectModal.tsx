@@ -35,6 +35,7 @@ import {
   DEFAULT_EXPIRATION_OPTIONS,
   SessionDurationSelectionStep,
 } from '../shared'
+import { WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
 
 interface ProjectModalProps {
   isOpen: boolean
@@ -597,7 +598,7 @@ export default function ProjectModal({
 
   // Determine modal size
   const modalSizeClass = (isPublicWizard || step === 'complete')
-    ? 'max-w-2xl'
+    ? WIZARD_MODAL_SIZE
     : 'max-w-lg'
 
   return (
