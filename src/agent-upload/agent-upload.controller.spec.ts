@@ -2,6 +2,7 @@ import { jest } from '@jest/globals'
 import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common'
 import { AgentUploadController } from './agent-upload.controller.js'
 import { AgentAdminController } from './agent-admin.controller.js'
+import { AgentReviewService } from './agent-review.service.js'
 import { agentManifestSchema } from '../agent-package/schemas/agent-manifest.schema.js'
 
 // request.user is an AuthUser ({ userId, ... }). The controllers used to read
@@ -95,6 +96,19 @@ describe('AgentUploadController identity and ownership', () => {
     const { controller, prisma } = makeUpload()
     await controller.getMyAgents(user('u1') as any)
     expect(prisma.agentType.findMany.mock.calls[0][0].where).toEqual({ isBuiltIn: false, userId: 'u1' })
+  })
+
+  it('tells the uploader what the reviewer wrote (#153)', async () => {
+    const { controller, prisma } = makeUpload()
+    const validatedAt = new Date('2026-11-07T15:00:00Z')
+    prisma.agentType.findMany.mockResolvedValueOnce([
+      {
+        id: 'a1', slug: 'my-agent', name: 'My agent', validationStatus: 'REJECTED',
+        validationNotes: 'Opens a shell', validatedAt, buildLogs: [], projectShares: [],
+      },
+    ])
+    const [mine] = await controller.getMyAgents(user('u1') as any)
+    expect(mine).toMatchObject({ validationStatus: 'REJECTED', validationNotes: 'Opens a shell', validatedAt })
   })
 
   const upload = { id: 'a1', slug: 'my-agent', name: 'My agent', isBuiltIn: false, packagePath: 'p', userId: 'owner' }
@@ -195,7 +209,7 @@ describe('AgentAdminController records the reviewing admin', () => {
         update: jest.fn().mockImplementation(({ data }) => Promise.resolve({ ...pending, ...data })),
       },
     }
-    return { controller: new AgentAdminController(prisma as any), prisma }
+    return { controller: new AgentAdminController(new AgentReviewService(prisma as any)), prisma }
   }
 
   it('on approve', async () => {

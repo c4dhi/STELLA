@@ -219,6 +219,9 @@ export class AgentUploadController {
       icon: agent.icon,
       version: agent.version,
       validationStatus: agent.validationStatus,
+      // What the reviewing admin wrote: the approval notes or the rejection reason.
+      validationNotes: agent.validationNotes,
+      validatedAt: agent.validatedAt,
       capabilities: agent.capabilities,
       defaultConfig: agent.defaultConfig,
       configSchema: agent.configSchema,

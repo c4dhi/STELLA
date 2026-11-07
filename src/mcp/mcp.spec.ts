@@ -20,6 +20,7 @@ import { SessionsTools } from './tools/sessions.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
+import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import {
   CreateConnectorDto,
   UpdateConnectorDto,
@@ -60,6 +61,13 @@ function setup() {
   const platformSettings = {
     getView: jest.fn(async () => settingsView(true)),
     setAgentReviewRequired: jest.fn(async (raw: boolean, _userId: string) => settingsView(raw)),
+  };
+  const reviewed = (validationStatus: string) => ({ id: 'up1', slug: 'my-agent', validationStatus });
+  const agentReview = {
+    list: jest.fn(async (_state: string) => [reviewed('PENDING')]),
+    get: jest.fn(async (_id: string) => ({ ...reviewed('APPROVED'), buildLogs: [] })),
+    approve: jest.fn(async (_id: string, _adminId: string, _notes?: string) => reviewed('APPROVED')),
+    reject: jest.fn(async (_id: string, _adminId: string, _reason: string) => reviewed('REJECTED')),
   };
   const personas = {
     findAllForUser: jest.fn(async () => [
@@ -338,6 +346,7 @@ function setup() {
       access,
     ),
     new PlatformSettingsTools(platformSettings as any),
+    new AgentReviewsTools(agentReview as any),
     new ConnectorsTools(connectors as any),
   ];
   const factory = new McpServerFactory(providers, audit as any);
@@ -346,6 +355,7 @@ function setup() {
   return {
     factory,
     platformSettings,
+    agentReview,
     personas,
     plans,
     configurations,
@@ -768,6 +778,56 @@ describe('MCP session and agent tools', () => {
         needsCheck: true,
       },
     ]);
+  });
+});
+
+describe('MCP agent review tools (system admins only)', () => {
+  const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
+  const ADMIN_READ: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read'] };
+  const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
+  const REVIEW_TOOLS = ['agent_reviews_list', 'agent_reviews_get', 'agent_reviews_approve', 'agent_reviews_reject'];
+
+  it('lists them only to a system admin, writes only with mcp:write', () => {
+    const { factory } = setup();
+    expect(factory.toolNamesFor(READ_WRITE).filter((n) => REVIEW_TOOLS.includes(n))).toEqual([]);
+    expect(factory.toolNamesFor(ADMIN_READ).filter((n) => REVIEW_TOOLS.includes(n))).toEqual([
+      'agent_reviews_list',
+      'agent_reviews_get',
+    ]);
+    expect(factory.toolNamesFor(ADMIN_RW)).toEqual(expect.arrayContaining(REVIEW_TOOLS));
+  });
+
+  it('refuses a user approving their own upload by name, and records it', async () => {
+    const { factory, tool, agentReview, audit } = setup();
+    const result: any = await factory.run(tool('agent_reviews_approve'), { agentTypeId: 'up1' }, READ_WRITE);
+    expect(parse(result).error.status).toBe(403);
+    expect(agentReview.approve).not.toHaveBeenCalled();
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'agent_reviews_approve', success: false, errorCode: 'not_system_admin' }),
+    );
+  });
+
+  it('lists pending uploads unless another state is asked for', async () => {
+    const { factory, tool, agentReview } = setup();
+    const result: any = await factory.run(tool('agent_reviews_list'), {}, ADMIN_READ);
+    expect(agentReview.list).toHaveBeenCalledWith('pending');
+    expect(result.structuredContent).toEqual({ items: [{ id: 'up1', slug: 'my-agent', validationStatus: 'PENDING' }] });
+    await factory.run(tool('agent_reviews_list'), { status: 'rejected' }, ADMIN_READ);
+    expect(agentReview.list).toHaveBeenLastCalledWith('rejected');
+  });
+
+  it('approves and rejects as the admin, returning what _get shows', async () => {
+    const { factory, tool, agentReview } = setup();
+    const approved: any = await factory.run(
+      tool('agent_reviews_approve'),
+      { agentTypeId: 'up1', notes: 'fine' },
+      ADMIN_RW,
+    );
+    expect(agentReview.approve).toHaveBeenCalledWith('up1', 'admin-1', 'fine');
+    expect(approved.structuredContent).toEqual({ id: 'up1', slug: 'my-agent', validationStatus: 'APPROVED', buildLogs: [] });
+    await factory.run(tool('agent_reviews_reject'), { agentTypeId: 'up1', reason: 'opens a shell' }, ADMIN_RW);
+    expect(agentReview.reject).toHaveBeenCalledWith('up1', 'admin-1', 'opens a shell');
+    expect(agentReview.get).toHaveBeenCalledTimes(2);
   });
 });
 
