@@ -92,7 +92,7 @@ Everything a deployer chooses is an env var declared here; there is no separate 
 
 <Step number={4} title="Implement the agent" isLast>
 
-`BaseAgent` has two abstract methods: `process()`, called once per user turn, and `on_interrupt()`, called when the user speaks over the agent. Whatever `process()` yields is shown and spoken.
+`BaseAgent` has two abstract methods: `process()`, called once per user turn, and `on_interrupt()`. Whatever `process()` yields is shown and spoken. `on_interrupt()` must exist, but SDK 0.10.0's default loop never calls it: when the user speaks over the agent, the SDK drops what was not yet spoken itself (see [Barge-in](../agent-sdk/base-agent.md#barge-in)).
 
 ```python title="my_agent/agent.py"
 import os
@@ -111,6 +111,7 @@ class MyCustomAgent(BaseAgent):
         self.history: list[dict[str, str]] = []
 
     async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
+        await super().on_session_start(session_id, config)  # fills self.session and self.persona
         self.history = []
 
     async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
@@ -124,7 +125,7 @@ class MyCustomAgent(BaseAgent):
         yield AgentOutput.text_final(input.session_id, reply)
 
     async def on_interrupt(self, session_id: str) -> None:
-        # Nothing is streaming here; an agent that streams cancels its generation.
+        # Not called by SDK 0.10.0's default loop; required all the same.
         pass
 ```
 

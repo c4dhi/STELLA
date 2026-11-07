@@ -181,7 +181,6 @@ class SupportAgent(BaseAgent):
         self.executor = ToolExecutor(self.registry)
         self.history: List[Dict[str, Any]] = []
         self.task_status: Dict[str, ItemStatus] = {}
-        self._cancelled = False
 
     # ── lifecycle ────────────────────────────────────────────────────
 
@@ -198,8 +197,10 @@ class SupportAgent(BaseAgent):
         yield AgentOutput.progress_update(session_id, self._progress(), update_trigger="session_start")
 
     async def on_interrupt(self, session_id: str) -> None:
-        # The user started talking: stop after the current model call.
-        self._cancelled = True
+        # Required, but the default loop of SDK 0.10.0 never calls it. A committed
+        # barge-in drops the unspoken reply; a typed one stops reading process()
+        # at its next yield. Only an agent running its own loop calls this.
+        pass
 
     async def on_session_end(self, session_id: str) -> Dict[str, Any]:
         result = await super().on_session_end(session_id)
@@ -209,7 +210,6 @@ class SupportAgent(BaseAgent):
     # ── a turn ───────────────────────────────────────────────────────
 
     async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
-        self._cancelled = False
         self.history.append({"role": "user", "content": input.text})
         if self.task_status["understand"] != ItemStatus.COMPLETED:
             self.task_status["understand"] = ItemStatus.COMPLETED
@@ -226,8 +226,6 @@ class SupportAgent(BaseAgent):
             except Exception as e:
                 logger.exception("LLM call failed")
                 yield AgentOutput.error(input.session_id, f"LLM error: {e}", error_type="llm_error")
-                return
-            if self._cancelled:
                 return
 
             message = response.choices[0].message
@@ -411,7 +409,7 @@ You don't build or push an image: STELLA builds it from your `Dockerfile`. Zip t
 1. **Return failures, don't raise them.** A `ToolResult(success=False, error=...)` lets the model recover.
 2. **Cap the tool loop.** The executor never loops on its own; stop after a few rounds.
 3. **Keep replies speakable.** Short sentences, no markdown: they go to TTS.
-4. **Stop on interrupt.** Check a flag set in `on_interrupt` between model calls.
+4. **Yield between slow steps.** A typed interruption stops the SDK reading `process()` at the next `yield`, so a turn that yields (a status, a progress update) between model calls can be cut short. `on_interrupt` is not called by the default loop.
 5. **Declare every env var** in `agent.yaml`. STELLA refuses a deploy that is missing a required one.
 
 ## See Also

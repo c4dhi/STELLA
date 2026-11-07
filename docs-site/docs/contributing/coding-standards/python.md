@@ -68,6 +68,7 @@ class CustomerSupportAgent(BaseAgent):
 
     async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
         """Start each session with an empty history."""
+        await super().on_session_start(session_id, config)  # fills self.session and self.persona
         self.history = []
 
     async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
@@ -82,7 +83,7 @@ class CustomerSupportAgent(BaseAgent):
         yield AgentOutput.text_final(input.session_id, reply)
 
     async def on_interrupt(self, session_id: str) -> None:
-        """The user spoke over the agent; nothing is in flight to cancel here."""
+        """Required; SDK 0.10.0's default loop does not call it."""
 ```
 
 ### Tool
