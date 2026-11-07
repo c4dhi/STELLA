@@ -42,3 +42,18 @@ This means a custom agent does not need to be part of the built-in agent set to 
   - Agents of it whose pod is gone (an OOMKilled pod, say) are cleaned up first.
   - Your own running agents of it are stopped. They keep their transcripts.
   - The delete is refused while it still runs in another user's session, or while a public project uses it. The message says how many.
+
+### How an upload is built
+
+- **STELLA builds every upload from its own Dockerfile.** An upload can't point at a prebuilt image: a package whose `agent.yaml` sets `image.imageUrl` is refused. The Dockerfile path must be a plain relative path inside the package.
+- **The Dockerfile installs `stella-ai-agent-sdk` from PyPI**, for example `stella-ai-agent-sdk>=0.10.0` in its `requirements.txt`.
+
+### SDK versions
+
+STELLA 2.0.0 supports Agent SDK 0.10.0 and newer, up to the version it ships (`GET /agent-types/sdk-support` returns `{ minSupported, current }`).
+
+- **After every build, STELLA reads the SDK version actually installed in the image.** A build with no SDK, or with one older than `minSupported`, fails and says so.
+- **An agent built with an SDK outside the window can't be deployed, restarted or woken.** My Agents marks it as needing an SDK update. Update the SDK in the package, then build it again.
+- **Uploads built before 2.0.0 have no recorded SDK version**, so each one needs to be built once after upgrading (see [Upgrading](./upgrading.md#200)).
+
+The manifest side of this is in [Agent manifest → SDK versions](../agent-sdk/agent-manifest.md#sdk-versions).

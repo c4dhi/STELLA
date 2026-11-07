@@ -36,13 +36,12 @@ Environment variable templates store API keys and configuration that agents need
 
 1. Create or open a session from the **Sessions** page
 2. Click **"Deploy Agent"** in the session view
-3. Select your environment variable template from the dropdown
-4. Choose an agent type:
-   - **stella-agent** - Full-featured agent with advanced capabilities
-   - **stella-light-agent** - Lightweight agent for simpler use cases
-   - **echo-agent** - Simple test agent that echoes back messages
-5. Optionally select a **Plan Template** to define the conversation flow
-6. Click **Deploy**
+3. Choose an agent. **Built-in** lists STELLA V2, STELLA Jev and the deprecated STELLA Light; **Custom** lists agents uploaded in Settings → Agent Library and shared with this project
+4. Go through the steps the agent asks for. The wizard shows only what the agent's `agent.yaml` declares:
+   - **Persona**, **plan** and **mode**, and a **Configurator configuration**, where the agent uses them
+   - **Settings**: start from the agent's defaults or an environment variable template. Each setting the agent declares is one control (switch, slider, list, number or text), in tabs by topic, with anything else under **Custom**. The step shows what you changed and can save it as a new template. Required keys such as `OPENAI_API_KEY` must be filled in
+   - **Connectors**, for an agent that uses outside tools: tick the connectors to use, and a line above the list says what the agent still needs
+5. Click **Deploy**. A deploy that is missing something the agent requires is refused with a message that says what
 
 The agent will start in a Kubernetes pod and automatically connect to the LiveKit room.
 
@@ -57,6 +56,7 @@ Once deployed, you can:
 ## Step 4: Monitor Your Agent
 
 - View agent status in the session panel (Running, Starting, Stopped)
+- **Speech recognition warming up.** After a quiet spell, speech recognition can need up to about 30 seconds to get ready when a session starts. The session view then shows an **STT warming up** chip with a timer and a line on the agent card, and the participant sees "Getting ready to listen…". After 30 seconds it says it is taking longer than usual; if warming up fails, the chip turns red and the participant is asked to tell the study team. Nothing shows when the model is already warm
 - Click on the agent to see logs and metrics
 - Stop the agent when done to free up resources
 

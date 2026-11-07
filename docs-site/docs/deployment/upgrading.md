@@ -46,11 +46,11 @@ Choose **Export**. The wizard asks whether to include metrics and logs (not need
 
 ## The upgrade
 
-Fetch the release, check out its tag, for example `v1.3.0`, and install that release's Node packages:
+Fetch the release, check out its tag, for example `v2.0.0`, and install that release's Node packages:
 
 ```bash
 git fetch --tags
-git checkout v1.3.0
+git checkout v2.0.0
 npm ci
 ```
 
@@ -74,11 +74,21 @@ All pods should be `Running` and ready, and started just now (the `AGE` column):
 kubectl -n ai-agents get pods
 ```
 
-Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v1.3.0`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
+Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v2.0.0`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
 
 ## Manual steps per version
 
 Run the steps of every version you pass, oldest first. A version not listed here needs none.
+
+### 2.0.0
+
+The deploy applies seven new database migrations on its own (connectors, connector icons and descriptions, the agent manifest, the agent's SDK version, sharing uploaded agents with projects with a backfill, and a column marking which configuration templates have been checked), so back up first as described above.
+
+After the upgrade:
+
+- **Rebuild every uploaded agent once.** STELLA now records which Agent SDK an image contains and refuses to deploy one whose SDK it doesn't know, so an agent uploaded before 2.0.0 can't be deployed until it is rebuilt. For each one, open **Settings → Agent Library** and build it again; with **Review uploaded agents** on, an admin approves it again too. Built-in agents are rebuilt by the deploy. Uploaded agents need Agent SDK 0.10.0 or newer (see [Agent validation](./agent-validation.md#sdk-versions)).
+- **Check the built-in agents' required env vars.** A deploy that is missing one is now refused up front with a message that names it, instead of starting an agent that fails. STELLA V2 and STELLA Light need `OPENAI_API_KEY`; STELLA Jev needs `OPENAI_API_KEY` and `TYPESAFE_API_KEY`.
+- **"Review uploaded agents" is on** (Settings → Platform Defaults), so an admin approves each upload before anyone can deploy it. Uploads keep their owner and are shared with the projects that already used them; see [Agent validation](./agent-validation.md).
 
 ### 1.5.0
 

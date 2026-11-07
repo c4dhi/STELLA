@@ -370,7 +370,7 @@ CMD ["python", "-m", "src.agent"]
 Create `requirements.txt`:
 
 ```
-stella-agent-sdk>=1.0.0
+stella-ai-agent-sdk>=0.10.0
 openai>=1.0.0
 livekit>=0.10.0
 pydantic-settings>=2.0.0

@@ -11,7 +11,7 @@ The STELLA Agent SDK is a Python library for building conversational AI agents. 
 ## Installation
 
 ```bash
-pip install stella-agent-sdk
+pip install "stella-ai-agent-sdk>=0.10.0"
 ```
 
 ## Quick Start

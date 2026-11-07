@@ -16,7 +16,7 @@ This guide walks you through creating your first custom agent using the STELLA A
 ## Installation
 
 ```bash
-pip install stella-agent-sdk
+pip install "stella-ai-agent-sdk>=0.10.0"
 ```
 
 ## Project Setup
@@ -157,7 +157,7 @@ audio:
 Create `requirements.txt`:
 
 ```
-stella-agent-sdk>=1.0.0
+stella-ai-agent-sdk>=0.10.0
 openai>=1.0.0
 livekit>=0.10.0
 ```
