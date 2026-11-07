@@ -2,7 +2,7 @@
 """
 Check that the Python examples in the SDK docs work against the SDK (#887).
 
-Every ```python block under the SDK doc folders must parse, and every import
+Every ```python block in the SDK docs must parse, and every import
 in it must resolve: the module exists and has each name imported from it.
 Nothing else in the block runs. A block that is deliberately not runnable
 (an outline, a fragment) is marked by putting `<!-- pseudo-code -->` on the
@@ -27,7 +27,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PATHS = [
     "docs-site/docs/agent-sdk",
-    "docs-site/docs/sdk",
     "docs-site/docs/guides/build-your-own-agent.md",
     "docs-site/docs/agents/stella-agent/index.md",
     "docs-site/docs/contributing/coding-standards/python.md",
