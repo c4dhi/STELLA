@@ -240,6 +240,16 @@ async def test_the_text_interface_means_no_wait_and_no_hold():
     assert not pipe.is_turn_suspended and pipe._take_back_tid is None
 
 
+@pytest.mark.asyncio
+async def test_switching_to_text_mid_wait_ends_the_wait():
+    pipe = _pipe()
+    pipe.begin_turn()
+    waiting = asyncio.create_task(pipe.wait_until_turn_is_final(timeout_s=5))
+    await asyncio.sleep(0.05)
+    pipe.set_interaction_mode("text")
+    assert await asyncio.wait_for(waiting, 1.0) is True
+
+
 class _Agent(BaseAgent):
     def __init__(self):
         super().__init__()

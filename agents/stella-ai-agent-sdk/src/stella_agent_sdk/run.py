@@ -182,7 +182,6 @@ def _is_registered_participant_identity(identity: str) -> bool:
     return isinstance(identity, str) and identity.startswith("participant-")
 
 
-
 def wire_turn_taking(agent: BaseAgent, audio_pipeline: AudioPipeline, session_id: str) -> None:
     """Barge-in and take-back, from what the agent declares.
 

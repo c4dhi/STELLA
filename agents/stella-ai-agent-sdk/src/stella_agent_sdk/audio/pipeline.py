@@ -1927,6 +1927,8 @@ class AudioPipeline:
             return not self.is_turn_aborted
         waited = 0.0
         while not self._reply_settled.is_set() and not self.is_turn_aborted:
+            if not self._take_back_possible():
+                break  # switched to text (or TTS off) mid-wait: nothing will be played
             try:
                 await asyncio.wait_for(self._reply_settled.wait(), 0.25)
             except asyncio.TimeoutError:
