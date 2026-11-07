@@ -34,7 +34,8 @@ This means a custom agent does not need to be part of the built-in agent set to 
 ### A new version, and deleting
 
 - **A new version replaces your old one.** Upload the package again with the same `metadata.slug` and a higher `metadata.version`. STELLA replaces your agent in place, so its env var templates, configurations, shares and public projects keep pointing at it.
-  - The new version must be built (and approved, if review is on) before it can be deployed.
+  - The new version starts building on its own; see [How an upload is built](#how-an-upload-is-built).
+  - It must be built (and approved, if review is on) before it can be deployed.
   - Agents that are running keep the old image until they stop.
   - A paused agent of it can't wake, and new deploys are refused, until the new version is built (and approved).
 - **Some uploads are refused.** This happens when the version is unchanged, or when the slug belongs to another user's agent or a built-in one. Another user's agent is never replaced.
@@ -45,6 +46,8 @@ This means a custom agent does not need to be part of the built-in agent set to 
 
 ### How an upload is built
 
+- **The build starts on its own** as soon as the upload, or a new version, finishes saving — no separate Build step. The card shows its status live: Queued, Building, Built or Build Failed, with a link to the log. The button stays there as Rebuild, for building it again later.
+- **Only one build of an agent type runs at a time.** An upload (or Rebuild) that arrives while one is already building queues behind it and runs next with whatever is then current on the agent type. A further upload while one is queued supersedes it — only the latest upload is ever built next, and the one it replaced is marked "Superseded by a newer upload" rather than left pending.
 - **STELLA builds every upload from its own Dockerfile.** An upload can't point at a prebuilt image: a package whose `agent.yaml` sets `image.imageUrl` is refused. The Dockerfile path must be a plain relative path inside the package.
 - **The Dockerfile installs `stella-ai-agent-sdk` from PyPI**, for example `stella-ai-agent-sdk>=0.10.0` in its `requirements.txt`.
 

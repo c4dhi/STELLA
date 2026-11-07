@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An upload, or uploading a new version, builds on its own.** Before, a build only started when the owner pressed Build after the upload finished. The button is now Rebuild. Only one build of an agent type runs at a time: a second upload while one is already building queues behind it, and a further upload while one is queued supersedes it (shown as "Superseded by a newer upload"), so only the latest upload is ever built next
+- **Build status and log, live, on the agent card** (Settings → Agent Library and the deploy wizard's "My Agents"). Queued, Building, Built or Build Failed shows on the card itself and updates on its own as the build runs, with a link to the log — no manual refresh needed
+
+### Fixed
+
+- **Live build logs never reached the browser.** The backend's log stream resolved each poll's status but sent the unresolved promise as the event instead, so every update went out with no data; separately, the browser only listened for the stream's default message event, but the backend sends each update as a named `build` event, which that listener never receives. Both are fixed — live status and log streaming now work everywhere they're used, including the existing build-log viewer
+
 ---
 
 ## [2.0.0] - 2026-11-07

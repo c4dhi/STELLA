@@ -194,6 +194,16 @@ export class AgentBuildService {
   /** Runs a queued build, unless a later upload has since superseded it. */
   private async runQueuedBuild(agentTypeId: string, buildLogId: string): Promise<BuildResult> {
     if (this.queuedNext.get(agentTypeId) !== buildLogId) {
+      // queueBuild only marks the row it is itself replacing: two queueBuild
+      // calls landing in the same tick can each read queuedNext before either
+      // writes it, so the loser's row never gets marked there and would
+      // otherwise sit "pending" forever. Marking it here too closes that race.
+      await this.prisma.agentBuildLog
+        .update({
+          where: { id: buildLogId },
+          data: { status: 'failed', errorMessage: 'Superseded by a newer upload', completedAt: new Date() },
+        })
+        .catch(() => undefined)
       return { success: false, buildLogId, errorMessage: 'Superseded by a newer upload' }
     }
     this.queuedNext.delete(agentTypeId)

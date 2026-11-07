@@ -93,6 +93,55 @@ describe('AgentBuildService: never two builds of one agent type at once', () => 
     expect(executeBuild).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'a1' }), r3.buildLogId)
   })
 
+  it('marks a same-tick queued-build race loser instead of leaving it stuck pending', async () => {
+    // queueBuild only marks the row it already knows is stale, read before its
+    // own agentBuildLog.create resolves: two calls landing in the same tick can
+    // both read "nothing queued yet" before either writes queuedNext, so
+    // whichever's create resolves first is silently overwritten and never
+    // marked by queueBuild itself. runQueuedBuild has to catch that case too.
+    const { service, buildLogs, prisma } = makeService({ a1: { id: 'a1', packagePath: 'p' } })
+    const first = deferred<BuildResult>()
+    const executeBuild = jest.spyOn(service as any, 'executeBuild')
+    executeBuild.mockReturnValueOnce(first.promise as any)
+
+    await service.startBuild('a1') // occupies the running slot
+
+    const createA = deferred<{ id: string; agentTypeId: string; status: string }>()
+    const createB = deferred<{ id: string; agentTypeId: string; status: string }>()
+    ;(prisma.agentBuildLog.create as jest.Mock)
+      .mockReturnValueOnce(createA.promise as any)
+      .mockReturnValueOnce(createB.promise as any)
+
+    const p2 = service.startBuild('a1') // queueBuild call A: reads queuedNext as empty, blocks on create
+    const p3 = service.startBuild('a1') // queueBuild call B: also reads queuedNext as empty, blocks on create
+
+    // B's create resolves first, so B briefly becomes queuedNext...
+    buildLogs['logB'] = { id: 'logB', agentTypeId: 'a1', status: 'pending' }
+    createB.resolve(buildLogs['logB'])
+    await flush()
+    // ...then A's resolves and overwrites queuedNext with logA, losing logB
+    // without queueBuild ever marking it stale (there was nothing stale to see).
+    buildLogs['logA'] = { id: 'logA', agentTypeId: 'a1', status: 'pending' }
+    createA.resolve(buildLogs['logA'])
+    await flush()
+
+    const r2 = await p2
+    const r3 = await p3
+    expect([r2.buildLogId, r3.buildLogId].sort()).toEqual(['logA', 'logB'])
+
+    executeBuild.mockResolvedValueOnce({ success: true, buildLogId: 'logA' })
+    first.resolve({ success: true, buildLogId: 'log1' })
+    await flush()
+    await flush()
+    await flush()
+
+    // logA is queuedNext and runs; logB is the race's loser and must be
+    // marked itself, or it reads "pending" forever despite never running.
+    expect(buildLogs['logB'].status).toBe('failed')
+    expect(buildLogs['logB'].errorMessage).toMatch(/superseded/i)
+    expect(executeBuild).toHaveBeenCalledTimes(2)
+  })
+
   it('a queued build reads whatever is current on the agent type once it actually runs', async () => {
     const agentTypesById: Record<string, { id: string; packagePath: string | null; version?: string }> = {
       a1: { id: 'a1', packagePath: 'p', version: '1.0.0' },
