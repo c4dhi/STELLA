@@ -139,7 +139,7 @@ if __name__ == "__main__":
     asyncio.run(run_agent_from_env(MyCustomAgent()))
 ```
 
-`run_agent_from_env()` reads the room, the LiveKit credentials and the STT and TTS addresses from the environment, which STELLA sets on the pod. To stream a reply token by token, yield `AgentOutput.text_chunk(...)` pieces instead of one `text_final`; `examples/openai_agent.py` in the SDK shows how.
+`run_agent_from_env()` reads the room, the LiveKit credentials and the STT and TTS addresses from the environment, which STELLA sets on the pod. To stream a reply, yield `AgentOutput.text_chunk(...)` as it grows instead of one `text_final`. Each chunk carries the whole text so far, not only the new token: the SDK speaks the part that extends the previous chunk. [Getting started](../agent-sdk/getting-started.md) shows it.
 
 </Step>
 
@@ -293,9 +293,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
+# livekit-rtc needs libgobject from libglib2.0
+RUN apt-get update && apt-get install -y --no-install-recommends libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
