@@ -1,7 +1,9 @@
+import type { ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { VISUALIZER_CONFIGS, type VisualizerType } from '../face/types'
 import VisualizerPreview from '../face/VisualizerPreview'
+import { choiceCardClass, SelectedBadge } from './wizardChoice'
 
 interface VisualizerSelectionStepProps {
   visualizerType: VisualizerType | undefined
@@ -21,57 +23,33 @@ export default function VisualizerSelectionStep({
 
   return (
     <div>
-      <div className="grid grid-cols-4 gap-3">
-        {/* Let them choose option */}
-        <button
-          onClick={() => {
+      <div role="radiogroup" aria-label="Visualizer" className="grid grid-cols-4 gap-3">
+        <FaceTile
+          label="Their choice"
+          selected={!visualizerType}
+          isDark={isDark}
+          onSelect={() => {
             onVisualizerTypeChange(undefined)
             onVisualizerLockedChange(false)
           }}
-          className={`
-            p-4 rounded-xl flex flex-col items-center gap-2 transition-all
-            ${!visualizerType
-              ? isDark
-                ? 'bg-primary-500/20 border-2 border-primary-500'
-                : 'bg-neutral-100 border-2 border-neutral-900'
-              : isDark
-                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-            }
-          `}
         >
           <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isDark ? 'bg-zinc-600' : 'bg-neutral-200'}`}>
             <span className="text-xl">🎨</span>
           </div>
-          <span className={`text-xs font-light ${isDark ? 'text-zinc-300' : 'text-neutral-600'}`}>
-            Their choice
-          </span>
-        </button>
+        </FaceTile>
 
-        {/* Visualizer options */}
         {VISUALIZER_CONFIGS.map((config) => (
-          <button
+          <FaceTile
             key={config.id}
-            onClick={() => onVisualizerTypeChange(config.id)}
-            className={`
-              p-4 rounded-xl flex flex-col items-center gap-2 transition-all
-              ${visualizerType === config.id
-                ? isDark
-                  ? 'bg-primary-500/20 border-2 border-primary-500'
-                  : 'bg-neutral-100 border-2 border-neutral-900'
-                : isDark
-                  ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                  : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-              }
-            `}
+            label={config.name}
+            selected={visualizerType === config.id}
+            isDark={isDark}
+            onSelect={() => onVisualizerTypeChange(config.id)}
           >
             <div className={`relative w-10 h-10 rounded-full flex items-center justify-center overflow-hidden ${config.previewBg}`}>
               <VisualizerPreview type={config.id} size="sm" />
             </div>
-            <span className={`text-xs font-light ${isDark ? 'text-zinc-300' : 'text-neutral-600'}`}>
-              {config.name}
-            </span>
-          </button>
+          </FaceTile>
         ))}
       </div>
 
@@ -106,5 +84,39 @@ export default function VisualizerSelectionStep({
         </label>
       )}
     </div>
+  )
+}
+
+interface FaceTileProps {
+  label: string
+  selected: boolean
+  isDark: boolean
+  onSelect: () => void
+  children: ReactNode
+}
+
+/** One choice in the face grid, in the shared wizard card style. */
+function FaceTile({ label, selected, isDark, onSelect, children }: FaceTileProps) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={label}
+      onClick={onSelect}
+      className={`relative p-4 rounded-xl flex flex-col items-center gap-2 transition-all duration-200 ${choiceCardClass(selected, isDark)}`}
+    >
+      {selected && <SelectedBadge isDark={isDark} className="absolute top-2 right-2" />}
+      {children}
+      <span
+        className={`text-xs ${
+          selected
+            ? `font-medium ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`
+            : `font-light ${isDark ? 'text-zinc-300' : 'text-neutral-600'}`
+        }`}
+      >
+        {label}
+      </span>
+    </button>
   )
 }

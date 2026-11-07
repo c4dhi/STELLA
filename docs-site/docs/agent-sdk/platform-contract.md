@@ -54,8 +54,9 @@ The address comes from `STATE_MACHINE_ADDRESS`, which STELLA sets on every pod. 
 
 | Call | What it does |
 |------|--------------|
-| `await self.wait_for_participant(timeout=None)` | Waits until a person is in the room and returns their identity. Agents and services are skipped (`is_human_participant`) |
-| `self.human_participants()` | The people in the room now |
+| `await self.wait_for_participant(timeout=None)` | For agents that speak first. Returns when the session should start, with the identity that started it. Two things start it: a session participant joins (`participant-*`: an invitation link, a public project or a manual registration), or anyone else in the room, such as an organiser testing from the session page, sends a chat message or says something. An organiser who only opens the session page does not start it. The message that starts it is the trigger: it is taken off the queue and not handed to `audio_in()` as a reply |
+| `self.session_participants()` | The session's participants in the room now (`is_session_participant`, prefix `SESSION_PARTICIPANT_PREFIX`) |
+| `self.human_participants()` | Everyone in the room now who is not an agent or service, organisers included (`is_human_participant`) |
 | `await self.publish_progress(progress)` | Sends the task panel state outside a turn. The SDK re-sends it to anyone who joins later |
 | `await self.complete_session(reason)` | Waits for speech to finish, shows the completion overlay, and stops the loop |
 | `self.record_message_processed()` | Counts a handled message for health reporting |

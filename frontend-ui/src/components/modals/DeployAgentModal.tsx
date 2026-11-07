@@ -24,8 +24,9 @@ import EnvVarNeedsSummary from '../shared/EnvVarNeedsSummary'
 import EnvVarListEditor from '../shared/EnvVarListEditor/EnvVarListEditor'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import type { AvailableConnector } from '../../lib/api-types'
-import { bindingsFromChoices, initialSlotChoices, missingTools, unboundRequiredSlots, type SlotChoices } from '../../lib/connectorBindings'
+import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
 import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
+import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 
 interface DeployAgentModalProps {
   isOpen: boolean
@@ -94,8 +95,8 @@ export default function DeployAgentModal({
   const [availableConnectors, setAvailableConnectors] = useState<AvailableConnector[]>([])
   const [connectorsLoading, setConnectorsLoading] = useState(false)
   const [connectorsError, setConnectorsError] = useState<string | null>(null)
-  const [slotChoices, setSlotChoices] = useState<SlotChoices>({})
-  const [extraConnectors, setExtraConnectors] = useState<string[]>([])
+  // Ticked connectors, in ticking order; the agent's slots are filled from them.
+  const [selectedConnectors, setSelectedConnectors] = useState<string[]>([])
   // The connectors this user may bind here: their own and those shared with
   // the session's project. Loaded once per opening, for every agent type,
   // because any agent may be offered extra connectors.
@@ -113,10 +114,13 @@ export default function DeployAgentModal({
   }, [isOpen, projectId])
   // A new agent type starts from its own preselection and no extras.
   useEffect(() => {
-    setSlotChoices(initialSlotChoices(connectorSlots, availableConnectors))
-    setExtraConnectors([])
+    setSelectedConnectors(initialSelection(connectorSlots, availableConnectors))
   }, [connectorSlots, availableConnectors])
   const slotsNeedProject = connectorSlots.length > 0 && !projectId
+  const slotChoices = useMemo(
+    () => assignSlots(connectorSlots, availableConnectors, selectedConnectors),
+    [connectorSlots, availableConnectors, selectedConnectors],
+  )
   const showConnectorsStep = connectorSlots.length > 0 || availableConnectors.length > 0
 
   // Shared env-var editor (manual entry). Required keys must be filled; values are
@@ -326,10 +330,7 @@ export default function DeployAgentModal({
       case 'plan':
         return !!selectedPlan || !needs.planRequired
       case 'connectors':
-        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0 && connectorSlots.every((slot) => {
-          const chosen = availableConnectors.find((c) => c.id === slotChoices[slot.slot])
-          return !chosen || !missingTools(slot, chosen)?.length
-        })
+        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0
       case 'envvars':
         // In select view: can always continue (template selection is optional)
         if (envVarsView === 'select') {
@@ -414,7 +415,7 @@ export default function DeployAgentModal({
         needs.persona ? selectedPersona?.id : undefined,
         runsPlans ? runMode : undefined,
         runsPlans && runMode === 'companion' ? activityPlanIds : undefined,
-        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, extraConnectors) : undefined,
+        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors) : undefined,
       )
       onClose()
     } catch (err) {
@@ -688,12 +689,11 @@ export default function DeployAgentModal({
                     available={availableConnectors}
                     loading={connectorsLoading}
                     loadError={slotsNeedProject ? 'this session has no project' : connectorsError}
-                    choices={slotChoices}
-                    onChoose={(slot, connectorId) => setSlotChoices((prev) => ({ ...prev, [slot]: connectorId }))}
-                    extras={extraConnectors}
-                    onToggleExtra={(connectorId, on) =>
-                      setExtraConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
+                    selected={selectedConnectors}
+                    onToggle={(connectorId, on) =>
+                      setSelectedConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
                     }
+                    choices={slotChoices}
                   />
                 </motion.div>
               ) : step === 'voice' ? (
@@ -825,22 +825,13 @@ export default function DeployAgentModal({
                                   whileHover={{ y: -2 }}
                                   className={`
                                     p-4 rounded-xl text-left transition-all duration-200
-                                    ${isSelected
-                                      ? isDark
-                                        ? 'bg-primary-500/20 border-2 border-primary-500 shadow-lg shadow-primary-500/20'
-                                        : 'bg-primary-50 border-2 border-primary-500 shadow-lg shadow-primary-500/10'
-                                      : isDark
-                                        ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500 hover:bg-zinc-700/80'
-                                        : 'bg-white border border-neutral-200 hover:border-neutral-300 hover:shadow-md'
-                                    }
+                                    ${choiceCardClass(isSelected, isDark)}
                                   `}
                                 >
                                   {/* Selection checkmark */}
                                   {isSelected && (
                                     <div className="absolute top-3 right-3">
-                                      <svg className={`w-5 h-5 ${isDark ? 'text-primary-400' : 'text-primary-500'}`} fill="currentColor" viewBox="0 0 20 20">
-                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                      </svg>
+                                      <SelectedBadge isDark={isDark} />
                                     </div>
                                   )}
 

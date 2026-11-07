@@ -58,6 +58,7 @@ from stella_agent_sdk.services.connectors_client import ConnectorsClient
 from stella_agent_sdk.services.agent_server_client import AgentServerClient
 from stella_agent_sdk.messages.types import OutputType
 from stella_agent_sdk.session_config import SessionConfig
+from stella_agent_sdk.participants import is_session_participant
 
 logger = logging.getLogger(__name__)
 
@@ -162,24 +163,6 @@ def _render_message_template(template: str, variables: Dict[str, str]) -> str:
     empty string, so rendering never raises due to missing keys.
     """
     return re.sub(r"\{([a-zA-Z0-9_]+)\}", lambda m: variables.get(m.group(1), ""), template)
-
-
-def _is_registered_participant_identity(identity: str) -> bool:
-    """Check whether a LiveKit identity should trigger participant event speech.
-
-    The join/left TTS feature should only fire for real invited/registered
-    session participants. In this codebase those identities are generated with
-    the ``participant-`` prefix (for both invitation and manual registration
-    flows). Other identities such as organizer/admin (``human``), agents
-    (``agent-*``), and system participants are intentionally excluded.
-
-    Args:
-        identity: LiveKit participant identity from room callbacks.
-
-    Returns:
-        ``True`` only for identities that start with ``participant-``.
-    """
-    return isinstance(identity, str) and identity.startswith("participant-")
 
 
 async def run_agent_from_env(agent: BaseAgent) -> None:
@@ -502,7 +485,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 if cfg.get("enabled") is not True:
                     return
 
-                if not _is_registered_participant_identity(participant_identity):
+                if not is_session_participant(participant_identity):
                     logger.info(
                         "[PARTICIPANT %s] Skipping non-participant identity: %s",
                         event_type.upper(),

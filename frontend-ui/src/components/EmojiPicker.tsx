@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 interface EmojiPickerProps {
   value: string
   onChange: (emoji: string) => void
+  /** The emojis offered. Defaults to a general set. */
+  options?: string[]
 }
 
 const COMMON_EMOJIS = [
@@ -12,7 +14,7 @@ const COMMON_EMOJIS = [
   '🌈', '🦋', '🌺', '🍀', '🌙', '☀️', '⭐', '🌸', '🎭', '🎪'
 ]
 
-export default function EmojiPicker({ value, onChange }: EmojiPickerProps) {
+export default function EmojiPicker({ value, onChange, options = COMMON_EMOJIS }: EmojiPickerProps) {
   const [isOpen, setIsOpen] = useState(false)
 
   return (
@@ -54,7 +56,7 @@ export default function EmojiPicker({ value, onChange }: EmojiPickerProps) {
               "
             >
               <div className="grid grid-cols-10 gap-1">
-                {COMMON_EMOJIS.map((emoji) => (
+                {options.map((emoji) => (
                   <button
                     key={emoji}
                     type="button"

@@ -18,6 +18,15 @@ An uploadable agent (`custom-agents/elias-interviewer`) that runs an ELIAS inter
 
 The ELIAS token never reaches the pod: the agent calls ELIAS only through the connector the deployer binds to the `elias` slot (see [Connectors](../agent-sdk/connectors.md)).
 
+## When the interview starts
+
+ELIAS speaks first, so it waits (`wait_for_participant`) before its opening line. Two things start it:
+
+- **A participant joins** through the invitation link or a public project.
+- **An organiser on the session page writes or says something.** That is how to test it without a participant link. The message that starts it is not taken as an answer: ELIAS says its opening line and asks the first question.
+
+An organiser who only opens the session page does not start it. This needs stella-ai-agent-sdk 0.10.0; with 0.9.0 it starts as soon as anyone, organisers included, is in the room.
+
 ## Session end
 
 - **Auto-pause** stops the pod but leaves the ELIAS interview open. On wake the agent continues at the next unanswered question in the same interview.

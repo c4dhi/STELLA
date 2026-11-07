@@ -5,20 +5,36 @@
 export type PermissionState = 'granted' | 'denied' | 'prompt'
 
 /**
- * Check microphone permission state
- * Falls back to 'prompt' if permissions API is not supported
+ * Whether the page can already see a named microphone. Browsers show device
+ * labels only once microphone access was given, so a label means "granted".
+ */
+async function microphoneLabelVisible(): Promise<boolean> {
+  try {
+    const devices = await navigator.mediaDevices?.enumerateDevices()
+    return !!devices?.some((d) => d.kind === 'audioinput' && d.label !== '')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Check microphone permission state.
+ * Where the browser cannot be asked (no Permissions API, or it does not know
+ * "microphone"), or answers 'prompt', a visible microphone label still counts
+ * as 'granted', so nobody is asked again for access they already gave.
  */
 export async function checkMicrophonePermission(): Promise<PermissionState> {
+  let state: PermissionState = 'prompt'
   try {
-    if (!navigator.permissions) {
-      return 'prompt' // API not supported, will need to request
+    if (navigator.permissions) {
+      const result = await navigator.permissions.query({ name: 'microphone' as PermissionName })
+      state = result.state as PermissionState
     }
-    const result = await navigator.permissions.query({ name: 'microphone' as PermissionName })
-    return result.state as PermissionState
   } catch {
     // Some browsers don't support querying microphone permission
-    return 'prompt'
   }
+  if (state === 'prompt' && (await microphoneLabelVisible())) return 'granted'
+  return state
 }
 
 /**

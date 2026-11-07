@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
+import { CHOICE_CARD, SelectedBadge } from './wizardChoice'
 
 export type AgentMode = 'plan' | 'companion'
 
@@ -51,27 +52,15 @@ export default function ModeSelectionStep({ mode, onSelectMode }: ModeSelectionS
               relative p-5 rounded-xl text-left transition-all duration-200
               ${selected
                 ? isDark
-                  ? 'bg-primary-500/20 border-2 border-primary-500 shadow-lg shadow-primary-500/20'
-                  : 'bg-neutral-100 border-2 border-neutral-900 shadow-lg shadow-neutral-900/10'
+                  ? CHOICE_CARD.selected.dark
+                  : CHOICE_CARD.selected.light
                 : isDark
-                  ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                  : 'bg-white border border-neutral-200 hover:border-neutral-300 hover:shadow-md'
+                  ? CHOICE_CARD.idle.dark
+                  : CHOICE_CARD.idle.light
               }
             `}
           >
-            {selected && (
-              <svg
-                className={`absolute top-3 right-3 w-5 h-5 ${isDark ? 'text-primary-400' : 'text-neutral-900'}`}
-                fill="currentColor"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            )}
+            {selected && <SelectedBadge isDark={isDark} className="absolute top-3 right-3" />}
             <div className="text-2xl mb-2">{option.icon}</div>
             <p className={`text-sm font-medium mb-1 ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
               {option.title}

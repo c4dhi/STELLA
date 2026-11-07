@@ -4,6 +4,7 @@ import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import type { Persona } from '../../lib/api-types'
 import { WIZARD_CARD_GRID } from './wizardLayout'
+import { CHOICE_CARD, SelectedBadge } from './wizardChoice'
 
 /** The built-in persona for companion deployments (prisma/seed.ts). */
 export const COMPANION_DEFAULT_PERSONA_ID = '00000000-0000-4000-8000-000000000002'
@@ -331,11 +332,11 @@ export default function PersonaSelectionStep({
                 group/card relative p-4 rounded-xl text-left transition-all duration-200
                 ${isSelected
                   ? isDark
-                    ? 'bg-primary-500/20 border-2 border-primary-500 shadow-lg shadow-primary-500/20'
-                    : 'bg-neutral-100 border-2 border-neutral-900 shadow-lg shadow-neutral-900/10'
+                    ? CHOICE_CARD.selected.dark
+                    : CHOICE_CARD.selected.light
                   : isDark
-                    ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500 hover:bg-zinc-700/80'
-                    : 'bg-white border border-neutral-200 hover:border-neutral-300 hover:shadow-md'
+                    ? CHOICE_CARD.idle.dark
+                    : CHOICE_CARD.idle.light
                 }
               `}
             >
@@ -368,11 +369,7 @@ export default function PersonaSelectionStep({
                     </svg>
                   )}
                 </motion.div>
-                {isSelected && (
-                  <svg className={`w-5 h-5 ${isDark ? 'text-primary-400' : 'text-neutral-900'}`} fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                )}
+                {isSelected && <SelectedBadge isDark={isDark} />}
               </div>
 
               <div className={`w-10 h-10 mb-3 rounded-lg bg-gradient-to-br ${style.gradient} flex items-center justify-center text-lg`}>

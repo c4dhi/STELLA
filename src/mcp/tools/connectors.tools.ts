@@ -24,6 +24,20 @@ const connectorFields = {
     .describe(
       'Shown in Settings and the deploy wizard, e.g. "ELIAS interview questions"',
     ),
+  icon: z
+    .string()
+    .max(32)
+    .optional()
+    .describe(
+      'An emoji shown on the connector card, e.g. "🗂️". An empty string clears it.',
+    ),
+  description: z
+    .string()
+    .max(500)
+    .optional()
+    .describe(
+      "What the connector is for, in the user's words. An empty string clears it.",
+    ),
   handle: z
     .string()
     .regex(/^[a-z][a-z0-9-]{0,39}$/)
