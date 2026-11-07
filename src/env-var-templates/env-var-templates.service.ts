@@ -118,7 +118,7 @@ export class EnvVarTemplatesService {
     const templates = await this.prisma.envVarTemplate.findMany({
       where: { userId },
       orderBy: { updatedAt: 'desc' },
-     include: WITH_SETTINGS,
+      include: WITH_SETTINGS,
     });
 
     return templates.map((t) => this.toResponse(t));
@@ -135,7 +135,7 @@ export class EnvVarTemplatesService {
     const templates = await this.prisma.envVarTemplate.findMany({
       where: { userId, agentTypeId },
       orderBy: { updatedAt: 'desc' },
-     include: WITH_SETTINGS,
+      include: WITH_SETTINGS,
     });
 
     return templates.map((t) => this.toResponse(t));

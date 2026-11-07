@@ -49,6 +49,12 @@ describe('agent settings', () => {
     expect(checkEnvVarValue({ name: 'TTS_LANGUAGE', format: 'language' }, 'auto')).toBe('must be a two-letter language code, e.g. "de"')
   })
 
+  it('checks a very long number in linear time, as the backend does', () => {
+    const started = Date.now()
+    expect(checkEnvVarValue({ name: 'N', type: 'number' }, '1'.repeat(100_000) + 'x')).toBe('must be a number')
+    expect(Date.now() - started).toBeLessThan(100)
+  })
+
   it('makes tabs: keys first, groups in manifest order, General for ungrouped, Advanced last', () => {
     expect(settingsTabs(settings).map((t) => [t.id, t.settings.map((s) => s.name)])).toEqual([
       ['Keys', ['OPENAI_API_KEY']],

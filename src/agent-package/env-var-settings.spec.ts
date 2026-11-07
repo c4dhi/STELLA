@@ -58,6 +58,21 @@ describe('checkEnvVarValue', () => {
     expect(ENV_VAR_FORMATS).toEqual(['language', 'language-or-auto'])
   })
 
+  it('checks a very long number in linear time (no ReDoS, PR 885 review)', () => {
+    const long = '1'.repeat(100_000) + 'x'
+    const started = Date.now()
+    expect(checkEnvVarValue(speed, long)).toBe('must be a number')
+    expect(Date.now() - started).toBeLessThan(100)
+  })
+
+  it.each(['1', '-2.5', '.5', '3.', '1e5', '1.2E-3'])('reads %s as a number', (value) => {
+    expect(checkEnvVarValue({ name: 'N', type: 'number' }, value)).toBeNull()
+  })
+
+  it.each(['x', '1..2', '', '-', '.', 'e5'])('does not read %p as a number', (value) => {
+    expect(checkEnvVarValue({ name: 'N', type: 'number' }, value)).toBe('must be a number')
+  })
+
   it('treats a declared variable without a type as free text', () => {
     expect(checkEnvVarValue({ name: 'STELLA_EXPERTS_DIR' }, 'anything at all')).toBeNull()
   })

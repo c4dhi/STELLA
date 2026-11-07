@@ -69,7 +69,8 @@ export interface DeclaredEnv {
   optional: EnvVarSetting[]
 }
 
-const NUMBER_RE = /^-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/
+// No run of digits can be split two ways, so this is linear on any input (ReDoS).
+const NUMBER_RE = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/
 
 /** Why `value` does not fit `setting`, or null when it does. */
 export function checkEnvVarValue(setting: EnvVarSetting, value: string): string | null {
