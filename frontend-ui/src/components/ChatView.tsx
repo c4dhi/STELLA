@@ -9,10 +9,12 @@ import { useTeleprompter } from '../hooks/useTeleprompter'
 import ProcessingMessageView from './ProcessingMessageView'
 import ProcessingToggle from './ProcessingToggle'
 import ParticipantNotification from './ParticipantNotification'
+import { foldParticipantEvents } from '../lib/participantEvents'
 import { MessageBubble, useMessaging } from './messaging'
 import { determineMessageRole, extractSpeakerInfo } from '../lib/messageUtils'
 import type { ListenerStatus } from '../lib/api-types'
 import type { DebugData } from '../lib/types'
+import { SttStatusChip } from './SttStatusChip'
 
 /** Decisions ride the debug channel but are not diagnostics — see the filter
  *  below. One predicate so the live and replayed paths cannot disagree. */
@@ -563,6 +565,9 @@ export default function ChatView({
               )
             })()}
 
+            {/* Speech recognition still warming up, or failed to (#564) */}
+            <SttStatusChip isDark={isDark} />
+
             {/* Face Button */}
             <button
               onClick={() => setFaceModalOpen(true)}
@@ -631,7 +636,7 @@ export default function ChatView({
         )}
 
         <AnimatePresence initial={false}>
-          {allMessages.map((message, index) => {
+          {foldParticipantEvents(allMessages).map((message, index) => {
             // Only animate container for non-transcript messages (processing messages, etc.)
             const shouldAnimate = message.messageType !== 'transcript'
 
@@ -664,8 +669,8 @@ export default function ChatView({
                       cues={cuesByTranscript[message.id]}
                     />
                   )
-              ) : message.messageType === 'participant' ? (
-                <ParticipantNotification event={message} />
+              ) : message.messageType === 'participant-run' ? (
+                <ParticipantNotification events={message.events} />
               ) : (
                 <motion.div
                   // initial={{ opacity: 0, scale: 0.9 }}

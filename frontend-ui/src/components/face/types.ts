@@ -161,7 +161,8 @@ export type VisualizerType =
   | 'rainy'
   | 'snowy'
   | 'christmas'
-  | 'sunny';
+  | 'sunny'
+  | 'text';
 
 // Standard props all visualizers receive
 export interface VisualizerProps {
@@ -178,7 +179,19 @@ export interface VisualizerConfig {
   checkmarkColor: string;
 }
 
+// The Text face (#92): the conversation in writing, nothing spoken. Picking it
+// puts the agent in text mode; any other face is voice.
+export const TEXT_FACE: VisualizerType = 'text';
+export const isTextFace = (type: string | null | undefined): boolean => type === TEXT_FACE;
+
 export const VISUALIZER_CONFIGS: VisualizerConfig[] = [
+  {
+    id: 'text',
+    name: 'Text',
+    description: 'Chat in writing; nothing is spoken',
+    previewBg: 'bg-[#0a0a12]',
+    checkmarkColor: 'bg-violet-500',
+  },
   {
     id: 'face',
     name: 'Face',

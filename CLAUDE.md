@@ -9,6 +9,14 @@ This file contains important context about the STELLA backend project for AI ass
 - **Database**: PostgreSQL with Prisma ORM
 - **Deployment**: Kubernetes (K8s) via scripts in `scripts/` and manifests in `k8s/`
 
+## Agent Platform Standards (read before changing agents, deploy, upload, SDK or the wizard)
+
+`agent.yaml` is the single source of truth for an agent; STELLA has no agent-specific code. The full rules, and which module owns which concern, are in `docs-site/docs/contributing/coding-standards/agent-platform.md`. In short:
+- Behaviour that differs between agents is a manifest declaration, never `if (slug === …)`. The only slug in `src/` is in `src/agents/default-agent-type.ts`.
+- Every declaration is enforced on deploy, restart and wake; anything undeclared is refused, not ignored.
+- One owner per concern: extend it (`agent-manifest.schema.ts`, `manifest-normalizer.ts`, `manifest-mapper.ts`, `manifest-defaults.ts`, `agent-requirements.ts`, `deploy-request.ts`), never copy it.
+- Pure logic in plain functions; services only fetch, call and persist. Defaults are set once and pinned by specs.
+
 ## Database & Prisma Migrations
 
 ### CRITICAL: Schema Change Workflow

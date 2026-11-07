@@ -194,7 +194,7 @@ The silence-bridging floor is `min(120 ms, preroll ÷ 2)`, so a zero pre-roll le
 
 ## Tunables
 
-All are read by the SDK inside the agent pod. Declare them in `agent.yaml` under `x-stella-optional-env-vars` to expose them in the deploy modal.
+All are read by the SDK inside the agent pod, which declares them itself (`stella_agent_sdk.platform_env`), so the deploy dialog offers them for every agent. An agent may also list one under `env.optional` in `agent.yaml` to give it its own default.
 
 | Variable | Default | Description |
 |---|---|---|

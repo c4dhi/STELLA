@@ -1,3 +1,4 @@
+import { sdkSupport } from '../agent-package/sdk-support.js';
 import {
   Controller,
   Get,
@@ -35,9 +36,23 @@ export class AgentsController {
     private readonly agentImageService: AgentImageService,
   ) {}
 
+  /**
+   * The agent types this user can deploy: built-ins, their own uploads, and
+   * uploads shared with a project they are in. `?projectId=` narrows the shared
+   * ones to that project (the deploy dialogs pass it).
+   */
   @Get('agent-types')
-  async getAgentTypes() {
-    return this.agentImageService.getAgentTypesWithInfo();
+  async getAgentTypes(@CurrentUser() user: any, @Query('projectId') projectId?: string) {
+    return this.agentImageService.getAgentTypesWithInfo({ userId: user.userId, projectId: projectId || null });
+  }
+
+  /**
+   * The SDK versions this STELLA runs: agents built with an SDK older than
+   * `minSupported`, or asking for one newer than `current`, cannot deploy.
+   */
+  @Get('agent-types/sdk-support')
+  getSdkSupport() {
+    return sdkSupport();
   }
 
   @Post('sessions/:sessionId/agents')

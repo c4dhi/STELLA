@@ -28,11 +28,12 @@ const INSTRUCTIONS = [
   'Read before you write: fetch an existing item to see its exact structure before creating or updating one.',
   'Every tool works the same way.',
   'Ids are named after what they point to (projectId, sessionId, agentId, invitationId, personaId, planId,',
-  'agentConfigurationId, agentTypeId, envVarTemplateId), with the same name in every tool.',
+  'agentConfigurationId, agentTypeId, envVarTemplateId, connectorId), with the same name in every tool.',
   '<things>_list returns { items } with a summary of each; <things>_get returns one in full.',
   '<things>_update takes the id and only the fields to change.',
   'Every write returns the resulting object as the matching _get shows it, so there is no need to fetch it again.',
   'A failed call returns { error: { status, message } }; 404 also means the user has no access to it.',
+  'platform_settings_get and platform_settings_update are listed only to system admins.',
 ].join(' ');
 
 // The same settings as the global pipe in main.ts.
@@ -82,17 +83,20 @@ export class McpServerFactory {
     }
   }
 
-  /** Tool names a token with these scopes can see, for tests and logs. */
-  toolNamesFor(auth: Pick<McpAuthContext, 'scopes'>): string[] {
-    return this.tools
-      .filter((t) => auth.scopes.includes(t.scope))
-      .map((t) => t.name);
+  /** Tool names this caller can see, for tests and logs. */
+  toolNamesFor(auth: Pick<McpAuthContext, 'scopes' | 'user'>): string[] {
+    return this.tools.filter((t) => this.visibleTo(t, auth)).map((t) => t.name);
+  }
+
+  /** The token has the tool's scope, and the user is a system admin if the tool needs one. */
+  private visibleTo(tool: McpToolDefinition, auth: Pick<McpAuthContext, 'scopes' | 'user'>): boolean {
+    return auth.scopes.includes(tool.scope) && (!tool.systemAdminOnly || auth.user.isSystemAdmin === true);
   }
 
   create(auth: McpAuthContext): McpServer {
     const server = new McpServer(SERVER_INFO, { instructions: INSTRUCTIONS });
     for (const tool of this.tools) {
-      if (!auth.scopes.includes(tool.scope)) continue;
+      if (!this.visibleTo(tool, auth)) continue;
       server.registerTool(
         tool.name,
         {
@@ -128,6 +132,10 @@ export class McpServerFactory {
           403,
           `This access token does not have the ${tool.scope} scope`,
         );
+      }
+      if (tool.systemAdminOnly && auth.user.isSystemAdmin !== true) {
+        errorCode = 'not_system_admin';
+        return errorResult(403, `${tool.name} is for system admins only`);
       }
       const result = await tool.handler((args ?? {}) as never, ctx);
       // Round-trip to plain JSON (Dates become strings) so structuredContent matches the text.

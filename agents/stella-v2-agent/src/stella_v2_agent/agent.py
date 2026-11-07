@@ -36,7 +36,6 @@ from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.tools import ToolRegistry
-from stella_agent_sdk.tools.state_machine import create_state_machine_tools
 from stella_v2_agent.companion_tools import create_companion_tools
 
 from stella_agent_sdk.llm import LLMService
@@ -166,17 +165,13 @@ class StellaV2Agent(BaseAgent):
         """
         super().__init__()
 
-        self._agent_type = "stella-v2-agent"
-
         # Resolve config paths
         if llm_config_path is None:
             llm_config_path = self._find_config_file("config/llm_config.json")
 
-        # State machine gRPC address
-        self._state_machine_address = (
-            state_machine_address
-            or os.environ.get("STATE_MACHINE_ADDRESS", "localhost:50051")
-        )
+        # State machine gRPC address. None: the SDK's plan_runtime reads
+        # STATE_MACHINE_ADDRESS (set on every agent pod).
+        self.state_machine_address = state_machine_address
 
         # Explicit prompt-compiler version (never implicit/latest). Defaults to the
         # version this agent was authored against; overridable per deployment via
@@ -652,6 +647,15 @@ class StellaV2Agent(BaseAgent):
                 or directive.redirect_message
                 or self.arbitration.gate_failure_message_for(resolved_language)
             )
+            # The bridge is already streaming under this transcript_id, and every
+            # TEXT_CHUNK carries the FULL text so far. Emitting the template alone
+            # replaced the bridge mid-playout: the chat bubble and teleprompter
+            # jumped to the template while the bridge was still being spoken, and
+            # the TTS diff saw a non-extending chunk and reset its buffer. Carry
+            # the bridge as the prefix, exactly as the Response Generator does.
+            deterministic_text = (
+                f"{bridge} {deterministic_response}" if bridge else deterministic_response
+            )
             if directive.action == "short_circuit":
                 # Replace the response AND skip downstream processing entirely
                 # (e.g. noise_detection "unclear" — nothing actionable this turn).
@@ -661,12 +665,14 @@ class StellaV2Agent(BaseAgent):
                 # safety line is spoken as a separate, ungrouped TTS chunk.
                 logger.info(f"Arbitration short_circuit by '{directive.directive_source}'")
                 short_circuit_output = AgentOutput.text_chunk(
-                    input.session_id, deterministic_response,
+                    input.session_id, deterministic_text,
                     transcript_id=transcript_id, is_final=True,
                 )
                 short_circuit_output.metadata["language"] = resolved_language
                 if resolved_voice:
                     short_circuit_output.metadata["voice"] = resolved_voice
+                # Same rate as the bridge — one turn, one voice setting.
+                short_circuit_output.metadata["speed"] = turn_speed
                 yield short_circuit_output
                 return
             if directive.action == "override":
@@ -677,12 +683,13 @@ class StellaV2Agent(BaseAgent):
                 # utterance (see short_circuit above).
                 logger.info(f"Arbitration override by '{directive.directive_source}'")
                 override_output = AgentOutput.text_chunk(
-                    input.session_id, deterministic_response,
+                    input.session_id, deterministic_text,
                     transcript_id=transcript_id, is_final=True,
                 )
                 override_output.metadata["language"] = resolved_language
                 if resolved_voice:
                     override_output.metadata["voice"] = resolved_voice
+                override_output.metadata["speed"] = turn_speed
                 yield override_output
 
             # ── Stage 4: Response Generator (original context + collected keys filtered) ──
@@ -1108,25 +1115,12 @@ class StellaV2Agent(BaseAgent):
         if plan or self._companion_mode:
             self._plan_config = plan
 
-            # Connect to gRPC state machine service
-            self.sm_client = StateMachineClient(
-                session_id=session_id,
-                address=self._state_machine_address,
-            )
-            await self.sm_client.connect()
-
-            if plan:
-                result = await self.sm_client.initialize(plan)
-                if result and result.get("success"):
-                    logger.info(f"State machine initialized via gRPC: {plan.get('title', 'Unknown')}")
-                else:
-                    error = result.get("error", "unknown") if result else "no response"
-                    logger.error(f"Failed to initialize state machine: {error}")
-
-            # Create tool registry with SDK state machine tools
-            self.tool_registry = ToolRegistry()
-            for tool in create_state_machine_tools(self.sm_client):
-                self.tool_registry.register(tool)
+            # The SDK's plan runtime: state machine connection, the plan loaded
+            # into it (a companion loads an activity's plan later), and a tool
+            # registry holding the state machine tools.
+            await self.plan_runtime.start(plan)
+            self.sm_client = self.plan_runtime.client
+            self.tool_registry = self.plan_runtime.tools
 
             if self._companion_mode:
                 for tool in create_companion_tools(self.companion.activities):

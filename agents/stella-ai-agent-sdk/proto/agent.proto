@@ -138,6 +138,9 @@ message RegisterAgentRequest {
   string agent_type = 1;         // Agent identifier (e.g., "stella-agent")
   string agent_version = 2;      // Agent version
   map<string, string> capabilities = 3;  // Agent capabilities
+  // stella-ai-agent-sdk version the agent was built with (e.g. "0.10.0").
+  // Empty from SDKs before 0.10. STELLA refuses SDKs older than it supports.
+  string sdk_version = 4;
 }
 
 message RegisterAgentResponse {

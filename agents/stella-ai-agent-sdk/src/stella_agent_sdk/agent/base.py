@@ -3,15 +3,29 @@
 from abc import ABC, abstractmethod
 import asyncio
 import logging
+import os
 import re
 import time
 import uuid
 from typing import Any, AsyncIterator, Awaitable, Dict, List, Optional, TYPE_CHECKING
 
+from stella_agent_sdk._version import SDK_VERSION
+from stella_agent_sdk.client_channel import (
+    INTERACTION_MODE_EVENT,
+    INTERACTION_MODES,
+    PLATFORM_PREFIX,
+    ClientChannel,
+    message_data,
+    reply_payload,
+)
 from stella_agent_sdk.emotion.tags import strip_emotion_tags
 from stella_agent_sdk.language import turn_language_record
 from stella_agent_sdk.messages.input import AgentInput
 from stella_agent_sdk.messages.output import AgentOutput
+from stella_agent_sdk.services.connectors_client import ConnectorsClient
+from stella_agent_sdk.participants import human_identities, session_participants
+from stella_agent_sdk.plan.runtime import PlanRuntime
+from stella_agent_sdk.session_config import PersonaConfig, SessionConfig
 from stella_agent_sdk.messages.types import (
     AgentState,
     BargeInDecision,
@@ -106,8 +120,21 @@ class BaseAgent(ABC):
         self._start_time: float = time.time()
         self._messages_processed: int = 0
         self._last_error: Optional[str] = None
-        self._agent_type: str = self.__class__.__name__
-        self._agent_version: str = "1.0.0"
+        # Identity the agent registers under. The platform injects AGENT_TYPE
+        # (the agent.yaml slug it waits for) and AGENT_VERSION; the class name
+        # and "1.0.0" are only fallbacks for running outside STELLA.
+        self._agent_type: str = os.environ.get("AGENT_TYPE") or self.__class__.__name__
+        self._agent_version: str = os.environ.get("AGENT_VERSION") or "1.0.0"
+        # AGENT_CONFIG, typed (set by run_agent and on_session_start).
+        self._session_config: SessionConfig = SessionConfig()
+        # The state machine + its tools, created on first use of plan_runtime.
+        self._plan_runtime: Optional[PlanRuntime] = None
+        #: Where plan_runtime connects. None: STATE_MACHINE_ADDRESS, then the
+        #: in-cluster default. Set it before the session starts to override.
+        self.state_machine_address: Optional[str] = None
+        # complete_session() already told the frontend; the audio loop must not
+        # announce it a second time.
+        self._completion_announced: bool = False
         # Audio pipeline (set by run_agent when using direct LiveKit mode)
         self._audio_pipeline: Optional["AudioPipeline"] = None
         # History client (set by run_agent for chat history access)
@@ -145,6 +172,9 @@ class BaseAgent(ABC):
         # In-flight long-running ("deferred") tool calls, keyed by name (#198/#303).
         # Drained when the session ends so a slow tool can't speak after lockdown.
         self._pending_tools: Dict[str, "asyncio.Task[Any]"] = {}
+        # Connectors: outside MCP servers reached through STELLA's backend (set
+        # by run_agent). Until then, an empty client: list() is [], calls raise.
+        self._connectors: Optional[ConnectorsClient] = None
 
     def defer_tool(self, name: str, coro: Awaitable[Any]) -> "asyncio.Task[Any]":
         """Register a long-running tool call so it can be reconciled if the session
@@ -232,6 +262,45 @@ class BaseAgent(ABC):
         self._agent_version = value
 
     @property
+    def sdk_version(self) -> str:
+        """The installed stella-ai-agent-sdk version, reported at registration."""
+        return SDK_VERSION
+
+    @property
+    def session(self) -> SessionConfig:
+        """This session's ``AGENT_CONFIG``, typed: ``persona``, ``mode``,
+        ``plan``, ``available_plans`` and ``pipeline_config`` (the platform
+        keys), and ``config``: every other key, the agent's own defaultConfig
+        from agent.yaml. A deployment sets nothing else; its choices arrive
+        as env vars."""
+        return self._session_config
+
+    @property
+    def persona(self) -> Optional[PersonaConfig]:
+        """The deployed Persona, if the backend resolved one."""
+        return self._session_config.persona
+
+    @property
+    def plan(self) -> Optional[Dict[str, Any]]:
+        """The plan this session follows (inline plans only), else ``None``."""
+        return self._session_config.plan_dict
+
+    @property
+    def plan_runtime(self) -> PlanRuntime:
+        """The session's state machine and its tools (opt-in, see
+        ``stella_agent_sdk.plan.runtime``). Nothing connects until
+        ``await self.plan_runtime.start(plan)``."""
+        session_id = self._session_id or ""
+        if self._plan_runtime is None or self._plan_runtime.session_id != session_id:
+            self._plan_runtime = PlanRuntime(session_id, address=self.state_machine_address)
+        return self._plan_runtime
+
+    @property
+    def session_completed(self) -> bool:
+        """Whether the session has been completed (see ``complete_session``)."""
+        return self._session_completed
+
+    @property
     def agent_name(self) -> str:
         """The deployed agent name (from AGENT_NAME env var)."""
         return self._agent_name
@@ -240,6 +309,19 @@ class BaseAgent(ABC):
     def agent_id(self) -> str:
         """The deployed agent ID (from AGENT_ID env var)."""
         return self._agent_id
+
+    @property
+    def connectors(self) -> ConnectorsClient:
+        """The outside MCP servers ("connectors") bound to this deployment.
+
+        ``await self.connectors.list()``, ``list_tools(handle)`` and
+        ``call_tool(handle, tool, args)``. Calls go through STELLA's backend,
+        which holds the credentials; failures raise ``ConnectorError``. On a
+        deployment without connectors, ``list()`` returns ``[]``.
+        """
+        if self._connectors is None:
+            self._connectors = ConnectorsClient(agent_id=self._agent_id, token=None, address=None)
+        return self._connectors
 
     @property
     def uptime_seconds(self) -> int:
@@ -444,6 +526,11 @@ class BaseAgent(ABC):
         self._last_error = error
         self._state = AgentState.ERROR
 
+    def record_message_processed(self, count: int = 1) -> None:
+        """Count a handled user message for health reporting. The default audio
+        loop does this itself; an agent with its own loop calls it."""
+        self._messages_processed += count
+
     def get_health_status(self) -> Dict[str, Any]:
         """
         Get the current health status of the agent.
@@ -459,6 +546,7 @@ class BaseAgent(ABC):
             "session_id": self._session_id,
             "agent_type": self._agent_type,
             "agent_version": self._agent_version,
+            "sdk_version": SDK_VERSION,
             "uptime_seconds": self.uptime_seconds,
             "messages_processed": self._messages_processed,
             "last_error": self._last_error,
@@ -631,6 +719,8 @@ class BaseAgent(ABC):
             ```
         """
         self._session_id = session_id
+        self._session_config = SessionConfig.parse(config)
+        self._completion_announced = False
         self._state = AgentState.READY
 
     async def on_session_end(self, session_id: str) -> Dict[str, Any]:
@@ -664,6 +754,20 @@ class BaseAgent(ABC):
         self._state = AgentState.SHUTTING_DOWN
         self._session_id = None
         return {}
+
+    SESSION_END_MODES = ("farewell", "wrap_up", "silent")
+
+    def session_end_mode(self) -> str:
+        """What the agent does when the platform ends the session (issue #198):
+        'farewell' speaks the plan's farewell (or a built-in goodbye), 'wrap_up'
+        lets ``on_session_ending`` generate a closing, 'silent' just closes.
+
+        Read from the ``SESSION_END_MODE`` env var, default 'farewell'. An agent
+        that lets its deployer choose this some other way (its own Configurator
+        node, say) overrides this method; the SDK reads nothing agent-specific.
+        """
+        mode = (os.environ.get("SESSION_END_MODE") or "").strip().lower()
+        return mode if mode in self.SESSION_END_MODES else "farewell"
 
     async def on_session_ending(
         self, session_id: str, reason: str, deadline_ms: int
@@ -777,14 +881,26 @@ class BaseAgent(ABC):
         ``self.audio.speak`` or ``send_client_command``. Default: do nothing.
         """
 
-    async def on_client_event(self, session_id: str, event: str, data: Dict[str, Any]) -> None:
-        """The user did something on the device that is neither speech nor text.
+    async def on_client_event(self, session_id: str, event: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The user's screen sent an event (``{"type": "client_event", "data":
+        {"event": ..., ...}}``) that the manifest declares in ``client.events``.
 
-        ``event`` and ``data`` are whatever the client sent as ``{"type":
-        "client_event", "data": {"event": ..., ...}}``. The SDK gives them no
-        meaning: which events exist is agreed between an agent and its client.
-        May arrive while a turn is being processed. Default: do nothing.
+        ``data`` is the event's own data, already checked against its declared
+        schema. What you return (a dict, or None) is the reply when the screen
+        asked for one (the event carried a ``request_id``); raise to reply with
+        an error. Undeclared events never get here, and ``stella.…`` events are
+        the SDK's own. May arrive while a turn is being processed. Default: do
+        nothing.
         """
+        return None
+
+    @property
+    def client_channel(self) -> ClientChannel:
+        """What ``agent.yaml`` declares the screen and the agent may send each
+        other (``STELLA_CLIENT_CHANNEL``). Unset outside STELLA: all allowed."""
+        if getattr(self, "_client_channel", None) is None:
+            self._client_channel = ClientChannel.from_env()
+        return self._client_channel
 
     async def send_client_command(self, command: str, **data: Any) -> None:
         """Send a command to the user's device right now, outside a turn.
@@ -792,12 +908,116 @@ class BaseAgent(ABC):
         Inside ``process()``, yield ``AgentOutput.client_command`` instead: that
         one waits until the turn's speech has been heard.
         """
+        problem = self.client_channel.command_problem(command, data)
+        if problem:
+            raise ValueError(f"cannot send {problem}")
         payload = AgentOutput.client_command(
             self._session_id or "", command, **data
         ).to_data_payload()
         payload["data"]["agent_id"] = self._agent_identity().get("agent_id")
         logger.info(f"[CLIENT COMMAND] {command}")
         await self.audio._room.publish_data(payload)
+
+    # ── public room helpers ───────────────────────────────────────────────
+
+    def human_participants(self) -> List[str]:
+        """Identities of the people in the room now (not agents or services)."""
+        if not self.has_audio:
+            return []
+        return human_identities(self.audio.participant_identities())
+
+    def session_participants(self) -> List[str]:
+        """Identities of the session's participants in the room now.
+
+        People who joined through an invitation, a public project or a manual
+        registration; not an organiser watching from the session page.
+        """
+        if not self.has_audio:
+            return []
+        return session_participants(self.audio.participant_identities())
+
+    async def wait_for_participant(
+        self, *, timeout: Optional[float] = None, poll_interval: float = 0.3
+    ) -> str:
+        """Wait until the session should start and return who started it.
+
+        For agents that speak first. Two things start it:
+
+        - a session participant joins (``participant-*``: an invitation link, a
+          public project or a manual registration): returns their identity;
+        - anyone else in the room, such as an organiser testing from the session
+          page, sends a chat message or says something: returns the message's
+          participant id. That message is the trigger, so it is taken off the
+          queue and not handed to ``audio_in()`` as a reply.
+
+        An organiser who only opens the session page does not start it. Raises
+        ``asyncio.TimeoutError`` after ``timeout`` seconds (``None``: wait as
+        long as it takes).
+        """
+        async def _poll() -> str:
+            while True:
+                people = self.session_participants()
+                if people:
+                    return people[0]
+                if self.has_audio:
+                    message = self.audio.take_waiting_input()
+                    if message is not None:
+                        return message.participant_id or "human"
+                await asyncio.sleep(poll_interval)
+
+        if timeout is None:
+            return await _poll()
+        return await asyncio.wait_for(_poll(), timeout)
+
+    async def publish_progress(
+        self,
+        progress: Any,
+        *,
+        update_trigger: str = "turn_completion",
+        **metadata: Any,
+    ) -> None:
+        """Send the task panel's state to the frontend, outside a turn.
+
+        ``progress`` is a ``ProgressState`` (or its dict), or a ready
+        ``AgentOutput.progress_update``. The SDK keeps the last one and sends it
+        again to anyone who joins later. Inside ``process()``, yield
+        ``AgentOutput.progress_update`` instead.
+        """
+        if isinstance(progress, AgentOutput):
+            output = progress
+        else:
+            output = AgentOutput.progress_update(
+                self._session_id or "", progress, update_trigger=update_trigger, **metadata
+            )
+        if output.type != OutputType.PROGRESS_UPDATE:
+            raise ValueError(f"publish_progress needs a progress update, got {output.type.value}")
+        payload = output.to_data_payload(self._agent_identity())
+        if payload is None:
+            return
+        self._last_progress_payload = payload
+        await self.audio.publish_data(payload)
+
+    async def complete_session(self, reason: str = "completed", *, delay_s: float = 1.0) -> None:
+        """End the session from the agent's side: the work is done.
+
+        Waits until what the agent said has been heard, tells the frontend the
+        session is complete (its completion overlay), and stops the audio loop
+        after the current turn. For an agent that runs its own loop, return
+        from it after this. Calling it twice does nothing the second time.
+        """
+        if self._session_completed and self._completion_announced:
+            return
+        self._session_completed = True
+        self._completion_announced = True
+        if not self.has_audio:
+            return
+        try:
+            await self.audio.wait_for_playout_drain()
+            await self.audio.publish_data({"type": "session_completed", "data": {"reason": reason}})
+            if delay_s > 0:
+                await asyncio.sleep(delay_s)  # let the frame reach the client before teardown
+        except Exception:
+            logger.exception("[SESSION] could not publish completion")
 
     def _note_activity(self) -> None:
         self._last_activity_at = time.monotonic()
@@ -819,12 +1039,49 @@ class BaseAgent(ABC):
         if self.has_audio:
             self.audio.start_agent_turn(metadata)
 
-    async def _dispatch_client_event(self, event: str, data: Dict[str, Any]) -> None:
+    async def _dispatch_client_event(self, event: str, payload: Dict[str, Any]) -> None:
+        """One event from the screen: the platform's own (``stella.…``), or one
+        the manifest declares. Answers when it carries a ``request_id``."""
         self._note_activity()
-        try:
-            await self.on_client_event(self._session_id or "", event, data)
-        except Exception as e:
-            logger.error(f"Error in on_client_event({event!r}): {e}")
+        request_id = payload.get("request_id")
+        data = message_data(payload)
+        ok, result, error = True, None, None
+        if event.startswith(PLATFORM_PREFIX):
+            error = await self._platform_event(event, data)
+            ok = error is None
+            result = {"mode": data.get("mode")} if ok and event == INTERACTION_MODE_EVENT else None
+        else:
+            error = self.client_channel.event_problem(event, data)
+            if error:
+                ok = False
+                logger.warning(f"[CLIENT EVENT] refused: {error}")
+            else:
+                try:
+                    result = await self.on_client_event(self._session_id or "", event, data)
+                except Exception as e:
+                    ok, error = False, str(e) or e.__class__.__name__
+                    logger.error(f"Error in on_client_event({event!r}): {e}")
+        if request_id and self.has_audio:
+            reply = reply_payload(
+                str(request_id), event, ok=ok,
+                data=result if isinstance(result, dict) else None,
+                error=error, agent_id=self._agent_identity().get("agent_id"),
+            )
+            try:
+                await self.audio._room.publish_data(reply)
+            except Exception as e:
+                logger.error(f"[CLIENT EVENT] could not reply to {event!r}: {e}")
+
+    async def _platform_event(self, event: str, data: Dict[str, Any]) -> Optional[str]:
+        """Handle a ``stella.…`` event; return why it failed, or None."""
+        if event == INTERACTION_MODE_EVENT:
+            mode = data.get("mode")
+            if mode not in INTERACTION_MODES:
+                return f"{event}: mode must be one of {', '.join(INTERACTION_MODES)}"
+            if self.has_audio:
+                self.audio.set_interaction_mode(mode)
+            return None
+        return f"unknown platform event {event!r}"
 
     async def _idle_watchdog(self) -> None:
         """Fire ``on_idle`` once per quiet stretch. Ends with the session."""
@@ -944,6 +1201,7 @@ class BaseAgent(ABC):
                     language_confidence=getattr(event, "language_confidence", 0.0) or 0.0,
                     stt_confidence=getattr(event, "confidence", 0.0) or 0.0,
                     is_barge_in=getattr(event, "is_barge_in", False),
+                    **({"taken_back": event.taken_back} if getattr(event, "taken_back", None) else {}),
                     # A turn the agent opened itself (start_turn): no text, and
                     # whatever it passed along. Absent on a user's turn.
                     **({"agent_initiated": getattr(event, "agent_initiated")}
@@ -1153,7 +1411,12 @@ class BaseAgent(ABC):
                     if client_commands and not self.audio.is_turn_aborted:
                         await self.audio.wait_for_playout_drain()
                         for command in client_commands:
-                            await self.send_client_command(command.content, **command.metadata)
+                            # A command the manifest doesn't declare is an
+                            # author's mistake: log it, don't end the turn loop.
+                            try:
+                                await self.send_client_command(command.content, **command.metadata)
+                            except ValueError as e:
+                                logger.error(f"[CLIENT] Not sent: {e}")
                     self._sentence_buffer = ""
                     self._is_processing = False
                     self._note_activity()
@@ -1164,6 +1427,9 @@ class BaseAgent(ABC):
 
                 # If the plan reached __end__ during this turn, stop accepting new input.
                 # The farewell has already been spoken; exit the loop cleanly.
+                if self._session_completed and self._completion_announced:
+                    logger.info("Session completed — exiting audio loop")
+                    break
                 if self._session_completed:
                     # Wait for any remaining TTS audio to finish playing on the
                     # client before sending the completion signal and disconnecting.
@@ -1173,6 +1439,7 @@ class BaseAgent(ABC):
                     await asyncio.sleep(3)
 
                     # Notify frontend that session is complete (triggers completion overlay).
+                    self._completion_announced = True
                     await self.audio._room.publish_data({
                         "type": "session_completed",
                         "data": {}

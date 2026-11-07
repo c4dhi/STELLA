@@ -327,9 +327,6 @@ export class AgentConfigurationsService {
         defaultConfig: (agentTypeRecord.defaultConfig ?? null) as
           | Record<string, unknown>
           | null,
-        configSchema: (agentTypeRecord.configSchema ?? null) as
-          | Record<string, unknown>
-          | null,
       },
       { configuration: overrides },
     );

@@ -4,9 +4,10 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as dotenv from 'dotenv'
 import { fileURLToPath } from 'url'
-import { parseAgentManifestYaml, type CanonicalAgentManifest } from '../src/agent-package/schemas/agent-manifest.schema.js'
+import { loadAgentDirectory, type LoadedAgentDirectory } from '../src/agent-package/agent-directory.js'
+import { manifestToAgentTypeData } from '../src/agent-package/manifest-mapper.js'
+import { CURRENT_SDK_VERSION } from '../src/agent-package/manifest-defaults.js'
 import { reconcileAgentTypeConfigurations } from '../src/agent-configurations/configuration-reconciliation.js'
-import { hashPipelineSchema } from '../src/agent-configurations/configuration-compat.util.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -54,12 +55,8 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: proc
 // Directories to skip when scanning for agents
 const SKIP_DIRS = ['stella-ai-agent-sdk']
 
-type AgentManifest = CanonicalAgentManifest
 
-interface BuiltinAgentInfo {
-  manifest: AgentManifest
-  directoryPath: string
-}
+type BuiltinAgentInfo = LoadedAgentDirectory
 
 /**
  * Discover built-in agents from the agents/ directory.
@@ -89,140 +86,20 @@ function discoverBuiltinAgents(): BuiltinAgentInfo[] {
   const agents: BuiltinAgentInfo[] = []
 
   for (const dir of agentDirs) {
-    const agentPath = path.join(agentsDir, dir.name)
-    const manifestPath = path.join(agentPath, 'agent.yaml')
-
-    // Check manifest exists
-    if (!fs.existsSync(manifestPath)) {
-      throw new Error(
-        `Missing agent.yaml in ${dir.name}. Every built-in agent must have a manifest file.`,
-      )
-    }
-
-    // Seed uses the same parser as package upload/runtime validation to avoid drift.
-    const content = fs.readFileSync(manifestPath, 'utf-8')
-    const validation = parseAgentManifestYaml(content)
-
-    if (!validation.valid) {
-      throw new Error(
-        `Invalid agent.yaml in ${dir.name}:\n  - ${validation.errors.join('\n  - ')}`,
-      )
-    }
-
-    // Log warnings
-    if (validation.warnings.length > 0) {
+    // Same parser, Dockerfile check and expert reader as uploads, so the two can't drift.
+    const loaded = loadAgentDirectory(path.join(agentsDir, dir.name))
+    if (loaded.warnings.length > 0) {
       console.warn(`  Warnings for ${dir.name}:`)
-      for (const warning of validation.warnings) {
+      for (const warning of loaded.warnings) {
         console.warn(`    - ${warning}`)
       }
     }
-
-    const manifest = validation.manifest!
-
-    // Verify Dockerfile exists (unless using pre-built image)
-    if (!manifest.image.imageUrl) {
-      const dockerfilePath = manifest.image.dockerfile
-        ? path.join(agentPath, manifest.image.dockerfile)
-        : path.join(agentPath, 'Dockerfile')
-
-      if (!fs.existsSync(dockerfilePath)) {
-        throw new Error(`Dockerfile not found for ${dir.name}: ${dockerfilePath}`)
-      }
-    }
-
-    agents.push({
-      manifest,
-      directoryPath: agentPath,
-    })
-
-    console.log(`  Found: ${manifest.metadata.name} (${manifest.metadata.slug})`)
+    agents.push(loaded)
+    console.log(`  Found: ${loaded.manifest.metadata.name} (${loaded.manifest.metadata.slug})`)
   }
 
   console.log(`Discovered ${agents.length} built-in agents`)
   return agents
-}
-
-/**
- * Read an agent's declared default experts from config/experts/*.json.
- *
- * Capability-gated per expert: `task_extraction` rides on the "plans" capability
- * (its job is to fill the plan's deliverables) and `companion_router` on
- * "companion" (its job is to drive activity transitions), while the assessment
- * experts ride on the "experts" capability. The parsed array (each file = one expert:
- * name/model/prompt/verdict_directives/…) is stored on AgentType.expertDefaults so
- * the Configurator's Expert Module renders the agent's declared experts/verdicts/
- * actions instead of hardcoding them.
- */
-function readExpertDefaults(
-  directoryPath: string,
-  capabilities: unknown,
-): Prisma.InputJsonValue | typeof Prisma.DbNull {
-  const caps = Array.isArray(capabilities) ? (capabilities as string[]) : []
-  const hasExperts = caps.includes('experts')
-  const hasPlans = caps.includes('plans')
-  const hasCompanion = caps.includes('companion')
-  if (!hasExperts && !hasPlans && !hasCompanion) return Prisma.DbNull
-
-  const expertsDir = path.join(directoryPath, 'config', 'experts')
-  if (!fs.existsSync(expertsDir)) return Prisma.DbNull
-
-  const experts: Record<string, unknown>[] = []
-  // Sort by filename for a deterministic, drift-free order.
-  for (const file of fs.readdirSync(expertsDir).filter((f) => f.endsWith('.json')).sort()) {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(fs.readFileSync(path.join(expertsDir, file), 'utf-8'))
-    } catch (err) {
-      throw new Error(`Invalid expert config ${file} in ${directoryPath}: ${(err as Error).message}`)
-    }
-    if (!parsed || typeof parsed !== 'object') continue
-    const name = (parsed as Record<string, unknown>).name
-    // Two experts are structural rather than assessment: task_extraction is how
-    // plans are executed, companion_router is how companion mode is executed.
-    // Each rides on the capability for the mode it implements, so an agent that
-    // does not support that mode never publishes it at all.
-    const include =
-      name === 'task_extraction'
-        ? hasPlans
-        : name === 'companion_router'
-          ? hasCompanion
-          : hasExperts
-    if (include) experts.push(parsed as Record<string, unknown>)
-  }
-
-  return experts.length > 0 ? (experts as Prisma.InputJsonValue) : Prisma.DbNull
-}
-
-/**
- * Map a manifest to database fields for AgentType model.
- */
-function mapManifestToDbFields(manifest: AgentManifest): Prisma.AgentTypeCreateInput {
-  return {
-    slug: manifest.metadata.slug,
-    name: manifest.metadata.name,
-    description: manifest.metadata.description,
-    icon: manifest.metadata.icon || null,
-    version: manifest.metadata.version,
-    authorName: manifest.metadata.author?.name || null,
-    authorEmail: manifest.metadata.author?.email || null,
-    tags: manifest.metadata.tags || Prisma.JsonNull,
-    capabilities: manifest.capabilities || [],
-    dockerfilePath: manifest.image.dockerfile || 'Dockerfile',
-    imageUrl: manifest.image.imageUrl || null,
-    resourceMemory: manifest.resources?.memory?.limit || '512Mi',
-    resourceCpu: manifest.resources?.cpu?.limit || '250m',
-    resourceGpu: manifest.resources?.gpu || false,
-    // Preserve null semantics expected by existing DB readers.
-    configSchema: manifest.configSchema ? (manifest.configSchema as Prisma.InputJsonValue) : Prisma.DbNull,
-    defaultConfig: manifest.defaultConfig ? (manifest.defaultConfig as Prisma.InputJsonValue) : Prisma.JsonNull,
-    pipelineSchema: manifest.pipelineSchema ? (manifest.pipelineSchema as Prisma.InputJsonValue) : Prisma.DbNull,
-    pipelineSchemaHash: hashPipelineSchema((manifest.pipelineSchema as Record<string, unknown>) ?? null),
-    runtimeVariables: manifest.runtimeVariables ? (manifest.runtimeVariables as Prisma.InputJsonValue) : Prisma.DbNull,
-    compilerVersion: manifest.promptCompiler?.version || null,
-    sdkMinVersion: manifest.sdk?.minVersion || null,
-    deprecated: manifest.metadata.deprecated === true,
-    deprecationNote: manifest.metadata.deprecationNote || null,
-  }
 }
 
 function normalizeJsonForCompare(value: unknown): unknown {
@@ -278,7 +155,7 @@ async function verifySeedRoundTrip(agents: BuiltinAgentInfo[]): Promise<void> {
   const mismatches: string[] = []
 
   for (const { manifest } of agents) {
-    const expected = mapManifestToDbFields(manifest)
+    const expected = manifestToAgentTypeData(manifest, null)
     const actual = await prisma.agentType.findUnique({
       where: { slug: manifest.metadata.slug },
       select: {
@@ -535,9 +412,9 @@ async function main() {
   }
 
   // Upsert each agent to database
-  for (const { manifest, directoryPath } of agents) {
-    const dbFields = mapManifestToDbFields(manifest)
-    const expertDefaults = readExpertDefaults(directoryPath, manifest.capabilities)
+  for (const { manifest, expertDefaults } of agents) {
+    // Built-ins are built from this repo, so they install the repo's SDK.
+    const dbFields = { ...manifestToAgentTypeData(manifest, expertDefaults), sdkVersion: CURRENT_SDK_VERSION }
 
     // Capture the pre-upsert state so we can detect a version/schema change and
     // reconcile saved configurations ONLY when the agent type actually changed.
@@ -548,38 +425,12 @@ async function main() {
 
     const result = await prisma.agentType.upsert({
       where: { slug: manifest.metadata.slug },
-      update: {
-        name: dbFields.name,
-        description: dbFields.description,
-        icon: dbFields.icon,
-        version: dbFields.version,
-        authorName: dbFields.authorName,
-        authorEmail: dbFields.authorEmail,
-        tags: dbFields.tags,
-        capabilities: dbFields.capabilities,
-        dockerfilePath: dbFields.dockerfilePath,
-        imageUrl: dbFields.imageUrl,
-        resourceMemory: dbFields.resourceMemory,
-        resourceCpu: dbFields.resourceCpu,
-        resourceGpu: dbFields.resourceGpu,
-        configSchema: dbFields.configSchema,
-        defaultConfig: dbFields.defaultConfig,
-        pipelineSchema: dbFields.pipelineSchema,
-        pipelineSchemaHash: dbFields.pipelineSchemaHash,
-        runtimeVariables: dbFields.runtimeVariables,
-        expertDefaults,
-        compilerVersion: dbFields.compilerVersion,
-        sdkMinVersion: dbFields.sdkMinVersion,
-        // The manifest is the source of truth for deprecation, so an UPDATE
-        // must carry it — otherwise marking an agent deprecated would only
-        // take effect on databases that had never seeded it.
-        deprecated: dbFields.deprecated,
-        deprecationNote: dbFields.deprecationNote,
-        // Preserve isBuiltIn and validationStatus on update
-      },
+      // The manifest is the source of truth for every manifest-derived column, so
+      // an UPDATE carries all of them (deprecation included). isBuiltIn and
+      // validationStatus are kept as they are.
+      update: dbFields,
       create: {
         ...dbFields,
-        expertDefaults,
         isBuiltIn: true,
         // Use literal to avoid hard dependency on generated enum export names.
         validationStatus: 'APPROVED',

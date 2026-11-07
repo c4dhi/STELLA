@@ -27,11 +27,14 @@ Environment Variables (set by session-management-server):
     AGENT_IDENTITY: Participant identity for the agent
     LIVEKIT_API_KEY: LiveKit API key for JWT authentication
     LIVEKIT_API_SECRET: LiveKit API secret for JWT signing
+    LIVEKIT_TOKEN: Ready-made token for the room; when set, key and secret are not needed
     STT_SERVICE_ADDRESS: Address of external STT service (gRPC)
     TTS_SERVICE_ADDRESS: Address of external TTS service (gRPC)
     SESSION_SERVER_URL: URL of session management server (for chat history)
     SESSION_ID: Database session ID (UUID) for chat history API calls
-    AGENT_CONFIG: JSON string with agent-specific configuration (passed to on_session_start)
+    AGENT_CONFIG: JSON string with the session config (passed to on_session_start
+        as a dict, and typed as ``agent.session``; see session_config.py)
+    AGENT_TYPE / AGENT_VERSION: identity the agent registers under (see BaseAgent)
 """
 
 import asyncio
@@ -40,20 +43,22 @@ import logging
 import os
 import re
 import signal
-import time
 import uuid
 from typing import Optional, Dict, Any, Coroutine
 
-import jwt
 
 from stella_agent_sdk.agent.base import BaseAgent
 from stella_agent_sdk.audio.pipeline import AudioPipeline
-from stella_agent_sdk.livekit.room import RoomManager
+from stella_agent_sdk.livekit.room import RoomManager, livekit_credentials_from_env
 from stella_agent_sdk.services.stt_client import STTClient
+from stella_agent_sdk.services.stt_readiness import SttReadiness
 from stella_agent_sdk.services.tts_client import TTSClient
 from stella_agent_sdk.services.history_client import HistoryClient
+from stella_agent_sdk.services.connectors_client import ConnectorsClient
 from stella_agent_sdk.services.agent_server_client import AgentServerClient
 from stella_agent_sdk.messages.types import OutputType
+from stella_agent_sdk.session_config import SessionConfig
+from stella_agent_sdk.participants import is_session_participant
 
 logger = logging.getLogger(__name__)
 
@@ -73,16 +78,14 @@ def _resolve_farewell_message(agent_config: Dict[str, Any]) -> str:
     return farewell.strip() if isinstance(farewell, str) else ""
 
 
-def _resolve_interrupt_mode(agent_config: Dict[str, Any]) -> str:
-    """Author-configured session-end behavior (issue #198), read from the
-    Configurator's interrupt_handler node: 'farewell' (speak the plan farewell),
-    'wrap_up' (let the agent's on_session_ending generate a custom closing), or
-    'silent' (just close). Defaults to 'farewell' — safe for every agent.
-    """
-    pipeline_config = agent_config.get("pipeline_config")
-    nodes = pipeline_config.get("nodes") if isinstance(pipeline_config, dict) else None
-    handler = nodes.get("interrupt_handler") if isinstance(nodes, dict) else None
-    mode = handler.get("mode") if isinstance(handler, dict) else None
+def _resolve_session_end_mode(agent: Any) -> str:
+    """The agent's session-end mode (BaseAgent.session_end_mode), falling back
+    to 'farewell' if an override raises or returns something unknown."""
+    try:
+        mode = agent.session_end_mode()
+    except Exception as e:  # never let a bad override stop the goodbye
+        logger.warning(f"[SESSION END] session_end_mode() failed: {e}; using 'farewell'")
+        return "farewell"
     return mode if mode in ("farewell", "wrap_up", "silent") else "farewell"
 
 
@@ -162,23 +165,31 @@ def _render_message_template(template: str, variables: Dict[str, str]) -> str:
     return re.sub(r"\{([a-zA-Z0-9_]+)\}", lambda m: variables.get(m.group(1), ""), template)
 
 
-def _is_registered_participant_identity(identity: str) -> bool:
-    """Check whether a LiveKit identity should trigger participant event speech.
+def wire_turn_taking(agent: BaseAgent, audio_pipeline: AudioPipeline, session_id: str) -> None:
+    """Barge-in and take-back, from what the agent declares.
 
-    The join/left TTS feature should only fire for real invited/registered
-    session participants. In this codebase those identities are generated with
-    the ``participant-`` prefix (for both invitation and manual registration
-    flows). Other identities such as organizer/admin (``human``), agents
-    (``agent-*``), and system participants are intentionally excluded.
-
-    Args:
-        identity: LiveKit participant identity from room callbacks.
-
-    Returns:
-        ``True`` only for identities that start with ``participant-``.
+    Barge-in: an agent with ``supports_barge_in`` gets it (unless
+    BARGE_IN_ENABLED=false), and ``on_barge_in`` judges each interruption.
+    Take-back is separate: only an agent with a ``take_back_window_ms`` turns
+    it on, and it never changes how barge-in is wired.
     """
-    return isinstance(identity, str) and identity.startswith("participant-")
-
+    if getattr(agent, "supports_barge_in", False):
+        audio_pipeline.enable_barge_in()
+        if audio_pipeline.barge_in_enabled:
+            audio_pipeline.set_barge_in_decider(
+                lambda transcript: agent.on_barge_in(session_id, transcript)
+            )
+            logger.info(
+                "Barge-in enabled: VAD duration yields the floor, on_barge_in "
+                "judges the transcript"
+            )
+        else:
+            logger.info(
+                "Agent supports barge-in but BARGE_IN_ENABLED=false override "
+                "is set — running in turn-based mode"
+            )
+    if getattr(agent, "take_back_window_ms", 0):
+        audio_pipeline.enable_take_back(agent.take_back_window_ms)
 
 async def run_agent_from_env(agent: BaseAgent) -> None:
     """
@@ -202,6 +213,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         AGENT_IDENTITY: Participant identity (e.g., "agent-abc123")
         LIVEKIT_API_KEY: LiveKit API key for JWT authentication
         LIVEKIT_API_SECRET: LiveKit API secret for JWT signing
+        LIVEKIT_TOKEN: Ready-made token for the room; when set, key and secret are not needed
         STT_SERVICE_ADDRESS: Address of STT service (e.g., "stt-service:50051")
         TTS_SERVICE_ADDRESS: Address of TTS service (e.g., "tts-service:50052")
         SESSION_ID: Database session UUID for chat history API (optional, falls back to ROOM_NAME)
@@ -234,8 +246,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
     livekit_url = os.environ["LIVEKIT_URL"]
     room_name = os.environ["ROOM_NAME"]
     identity = os.environ["AGENT_IDENTITY"]
-    livekit_api_key = os.environ["LIVEKIT_API_KEY"]
-    livekit_api_secret = os.environ["LIVEKIT_API_SECRET"]
+    # An uploaded agent gets only LIVEKIT_TOKEN, scoped to its own room; the
+    # built-in agents get the key and secret and sign their own (issue 856).
+    livekit_creds = livekit_credentials_from_env(os.environ)
     stt_address = os.environ.get("STT_SERVICE_ADDRESS", "stt-service:50051")
     tts_address = os.environ.get("TTS_SERVICE_ADDRESS", "tts-service:50052")
     session_server_url = os.environ.get("SESSION_SERVER_URL", "http://session-management-server:3000")
@@ -257,8 +270,17 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
     except json.JSONDecodeError as e:
         logger.warning(f"Invalid AGENT_CONFIG JSON: {e}, using empty config")
         agent_config = {}
+    if not isinstance(agent_config, dict):
+        logger.warning("AGENT_CONFIG is not a JSON object, using empty config")
+        agent_config = {}
+    # Typed view (agent.session / .persona / .plan). on_session_start keeps
+    # getting the plain dict, as before.
+    agent._session_config = SessionConfig.parse(agent_config)
 
-    logger.info(f"Starting agent {agent.agent_type} v{agent.agent_version}")
+    logger.info(
+        f"Starting agent {agent.agent_type} v{agent.agent_version} "
+        f"(stella-ai-agent-sdk {agent.sdk_version})"
+    )
     logger.info(f"Agent config: {agent_config}")
     logger.info(f"Room: {room_name}, Identity: {identity}, Session: {session_id}")
     logger.info(f"STT: {stt_address}, TTS: {tts_address}")
@@ -279,6 +301,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
     tts_client: Optional[TTSClient] = None
     audio_pipeline: Optional[AudioPipeline] = None
     history_client: Optional[HistoryClient] = None
+    connectors_client: Optional[ConnectorsClient] = None
     agent_server_client: Optional[AgentServerClient] = None
     shutdown_event = asyncio.Event()
 
@@ -294,8 +317,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         # 1. Initialize RoomManager for LiveKit
         room_manager = RoomManager(
             livekit_url=livekit_url,
-            api_key=livekit_api_key,
-            api_secret=livekit_api_secret,
+            api_key=livekit_creds["api_key"],
+            api_secret=livekit_creds["api_secret"],
+            token=livekit_creds["token"],
         )
 
         # 2. Connect to external STT service (gRPC)
@@ -337,10 +361,22 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
         # 6. Inject audio pipeline and agent identity into agent
         agent._audio_pipeline = audio_pipeline
+        # Screen events reach the agent from the start, also for an agent that
+        # runs its own run_audio_loop (the SDK handles stella.* events itself).
+        audio_pipeline.on_client_event(agent._dispatch_client_event)
         agent._session_id = session_id
         agent._agent_name = agent_name
         agent._agent_id = agent_id
         agent._agent_icon = agent_icon
+
+        # Tell the screens when speech recognition is still warming up
+        # (#564). The language is the session's locked one, if any, so the
+        # participant card is worded in it; otherwise the browser decides.
+        def _session_language() -> Optional[str]:
+            resolver = getattr(agent, "language_resolver", None)
+            return getattr(resolver, "locked", None)
+
+        stt_readiness = SttReadiness(room_manager.publish_data, language=_session_language)
 
         # 6a. Wire barge-in: the agent declares whether it supports barge-in
         # (an intrinsic capability — its config depends on it). If so, enable it
@@ -350,21 +386,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         # pipeline's cheap filters have already fired (duck on first sound,
         # go silent at BARGE_IN_MIN_SPEECH_MS); the hook then judges the final
         # transcript. Text has no acoustic signal, so it goes straight there.
-        if getattr(agent, "supports_barge_in", False):
-            audio_pipeline.enable_barge_in()
-            if audio_pipeline.barge_in_enabled:
-                audio_pipeline.set_barge_in_decider(
-                    lambda transcript: agent.on_barge_in(session_id, transcript)
-                )
-                logger.info(
-                    "Barge-in enabled: VAD duration yields the floor, on_barge_in "
-                    "judges the transcript"
-                )
-            else:
-                logger.info(
-                    "Agent supports barge-in but BARGE_IN_ENABLED=false override "
-                    "is set — running in turn-based mode"
-                )
+        wire_turn_taking(agent, audio_pipeline, session_id)
 
         # 6b. Wire the teleprompter (#241): the agent declares whether it wants
         # word-by-word speech-progress emitted (honoring any explicit
@@ -377,24 +399,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         if getattr(agent, "supports_emotion_tags", False):
             audio_pipeline.enable_emotion_tags()
 
-        # 7. Create HistoryClient for chat history access
-        # Generate JWT token with same claims as LiveKit token (for validation)
-        now = int(time.time())
-        token_claims = {
-            "iss": livekit_api_key,
-            "sub": identity,
-            "iat": now,
-            "exp": now + 3600,  # 1 hour expiry
-            "nbf": now,
-            "video": {
-                "roomJoin": True,
-                "room": room_name,
-                "canPublish": True,
-                "canSubscribe": True,
-                "canPublishData": True,
-            },
-        }
-        agent_token = jwt.encode(token_claims, livekit_api_secret, algorithm="HS256")
+        # 7. Create HistoryClient for chat history access. The backend checks
+        # this token's room against the session, so it is the room token.
+        agent_token = room_manager.token_for(room_name, identity)
 
         history_client = HistoryClient(
             base_url=session_server_url,
@@ -404,6 +411,14 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         agent._history_client = history_client
         logger.info(f"Chat history client initialized for session {session_id}")
         logger.info(f"History client base_url: {session_server_url}")
+
+        # 7b. Connectors client (outside MCP servers via the backend). The pod
+        # carries only its own STELLA_CONNECTOR_TOKEN, never a connector's
+        # credential. Without bindings there is no token and the client is inert.
+        connectors_client = ConnectorsClient.from_env(agent_id)
+        agent._connectors = connectors_client
+        if connectors_client.configured:
+            logger.info("Connectors client initialized")
 
         # 8. Start audio pipeline
         await audio_pipeline.start()
@@ -429,13 +444,17 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             await audio_pipeline._room.publish_data(payload)
 
         # 10b. Register agent with session-management-server (marks status as RUNNING)
-        logger.info(f"Registering agent: type='{agent.agent_type}', version='{agent.agent_version}'")
+        logger.info(
+            f"Registering agent: type='{agent.agent_type}', version='{agent.agent_version}', "
+            f"sdk='{agent.sdk_version}'"
+        )
         agent_server_client = AgentServerClient(agent_server_address)
         try:
             await agent_server_client.connect()
             registration_result = await agent_server_client.register_agent(
                 agent_type=agent.agent_type,
                 agent_version=agent.agent_version,
+                sdk_version=agent.sdk_version,
             )
             if registration_result["success"]:
                 logger.info(f"Agent registered with session-management-server: {registration_result['session_id']}")
@@ -475,7 +494,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 if cfg.get("enabled") is not True:
                     return
 
-                if not _is_registered_participant_identity(participant_identity):
+                if not is_session_participant(participant_identity):
                     logger.info(
                         "[PARTICIPANT %s] Skipping non-participant identity: %s",
                         event_type.upper(),
@@ -515,8 +534,17 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             # Warm up STT model when participant joins (in case agent was idle)
             # The warmup has a TTL, so this is a no-op if model is already warm
             if os.environ.get("STT_WARMUP_ENABLED", "true").lower() != "false":
+                # A participant joining mid-warmup is told the state now; the
+                # call already running announces ready or failed to everyone.
+                if stt_readiness.needs_resend():
+                    audio_pipeline._room.publish_data_ordered(stt_readiness.payload())
+
                 async def do_warmup():
-                    result = await stt_client.warmup(session_id=session_id)
+                    # Longer than the client's 30 s default: past 30 s the
+                    # screens say "taking longer than usual", not "failed".
+                    result = await stt_readiness.track(
+                        stt_client.warmup(session_id=session_id, timeout=90.0)
+                    )
                     if result["success"]:
                         logger.info(f"STT warmup on participant join completed in {result['warmup_time_ms']}ms")
                 asyncio.create_task(do_warmup())
@@ -569,7 +597,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 return
             session_end_started = True  # set before the first await — gates re-entry
 
-            mode = _resolve_interrupt_mode(agent_config)
+            mode = _resolve_session_end_mode(agent)
             logger.info(
                 f"[SESSION END] signal received (reason={reason}, mode={mode}, deadline={deadline_ms}ms)"
             )
@@ -682,6 +710,13 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             except Exception as e:
                 logger.error(f"Error in on_session_end: {e}")
 
+        # Close the state machine connection, if the agent used plan_runtime
+        if agent._plan_runtime is not None:
+            try:
+                await agent._plan_runtime.close()
+            except Exception as e:
+                logger.error(f"Error closing the plan runtime: {e}")
+
         # Stop audio pipeline
         if audio_pipeline:
             try:
@@ -701,6 +736,14 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
         # Clear agent's history client reference
         agent._history_client = None
+
+        # Close the connectors channel
+        if connectors_client:
+            try:
+                await connectors_client.close()
+            except Exception as e:
+                logger.error(f"Error closing connectors client: {e}")
+        agent._connectors = None
 
         # Disconnect from LiveKit
         if room_manager:

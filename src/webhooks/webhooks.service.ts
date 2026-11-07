@@ -1,3 +1,4 @@
+import { agentTypeOrDefault } from '../agents/default-agent-type.js';
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -5,6 +6,8 @@ import { AgentsService } from '../agents/agents.service.js';
 import { SessionsService } from '../sessions/sessions.service.js';
 import { LiveKitService } from '../livekit/livekit.service.js';
 import { EncryptionService } from '../env-var-templates/encryption.service.js';
+import { bindingRequestsFrom } from '../connectors/connector-bindings.util.js';
+import { Prisma } from '@prisma/client';
 
 interface ParticipantJoinedEvent {
   roomName: string;
@@ -451,11 +454,16 @@ export class WebhooksService {
         // spawnOrResumeAgent() will decrypt this before calling agentsService.create(),
         // closing the gap where manual env vars were previously persisted as plaintext.
         manualEnvVarsEncrypted: firstAgent.manualEnvVarsEncrypted || null,
+        // The connectors it was deployed with, so an agent recreated on wake
+        // keeps the same tools. Deploy checks them again.
+        connectorBindings: bindingRequestsFrom(firstAgent.connectorBindings),
+        // Whoever deployed it: their own connectors are only bindable by them.
+        deployedByUserId: firstAgent.deployedByUserId ?? null,
       };
 
       await this.prisma.session.update({
         where: { id: sessionId },
-        data: { lastAgentConfig: agentConfig },
+        data: { lastAgentConfig: agentConfig as unknown as Prisma.InputJsonValue },
       });
     }
 
@@ -520,12 +528,22 @@ export class WebhooksService {
         this.logger.log(`Resumed agent ${pausedAgent.id} for session ${session.id} (resume #${pausedAgent.resumeCount + 1})`);
       } else {
         // No paused agent found — create a new one from saved config
-        const projectMembership = await this.prisma.projectMembership.findFirst({
-          where: {
-            projectId: session.projectId,
-            role: { in: ['OWNER', 'ADMIN'] },
-          },
-        });
+        // Recreate it as the member who deployed it when they still belong to
+        // the project (their own connectors are bindable only by them), else
+        // as an owner or admin.
+        const deployer = config.deployedByUserId
+          ? await this.prisma.projectMembership.findFirst({
+              where: { projectId: session.projectId, userId: config.deployedByUserId },
+            })
+          : null;
+        const projectMembership =
+          deployer ??
+          (await this.prisma.projectMembership.findFirst({
+            where: {
+              projectId: session.projectId,
+              role: { in: ['OWNER', 'ADMIN'] },
+            },
+          }));
 
         if (!projectMembership) {
           this.logger.error(`No owner found for project ${session.projectId}`);
@@ -545,7 +563,7 @@ export class WebhooksService {
           {
             name: config.name || 'Agent',
             icon: config.icon || '🤖',
-            agentType: config.agentType || 'stella-v2-agent',
+            agentType: agentTypeOrDefault(config.agentType),
             config: config.agentConfig || {},
             agentConfigurationId: config.agentConfigurationId,
             // Only public projects set this — their saved agentConfig is built
@@ -553,6 +571,7 @@ export class WebhooksService {
             personaId: config.personaId ?? undefined,
             envVarTemplateId: config.envVarTemplateId,
             envVars: manualEnvVars,
+            connectorBindings: Array.isArray(config.connectorBindings) ? config.connectorBindings : undefined,
           },
           projectMembership.userId,
         );

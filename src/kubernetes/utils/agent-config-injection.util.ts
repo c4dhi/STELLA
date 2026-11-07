@@ -1,7 +1,11 @@
+import { withEnvDefaults } from '../../agents/deploy-request.js'
+import type { AgentRequirements } from '../../agents/agent-requirements.js'
+
 export interface InjectionAgentTypeInput {
   slug: string
   defaultConfig?: Record<string, unknown> | null
-  configSchema?: Record<string, unknown> | null
+  /** The env vars the agent declares (requirements.env). */
+  env?: AgentRequirements['env']
 }
 
 export interface InjectionAgentConfigurationInput {
@@ -19,13 +23,18 @@ export interface PodEnvBuildInput {
   ttsServiceAddress: string
   stateMachineAddress: string
   nodeEnv: string
+  /** requirements.client: the messages the screen and the agent may send each other. */
+  clientChannel?: AgentRequirements['client']
 }
 
 export interface SecretDataBuildInput {
   agentId: string
   livekitUrl: string
-  livekitApiKey: string
-  livekitApiSecret: string
+  // Either the platform key and secret (built-in agents) or a token scoped to
+  // the session's room (uploaded agents, issue 856), never both.
+  livekitApiKey?: string
+  livekitApiSecret?: string
+  livekitToken?: string
   roomName: string
   ttsProvider: string
   agentConfig: Record<string, unknown>
@@ -44,16 +53,6 @@ export interface PodInjectionResult {
   appliedOptionalDefaults: string[]
 }
 
-interface AgentOptionalEnvVarSpec {
-  name: string
-  default?: string
-}
-
-export interface ResolvedAgentEnvVars {
-  resolvedEnvVars: Record<string, string>
-  missingRequiredEnvVars: string[]
-  appliedOptionalDefaults: string[]
-}
 
 /**
  * Build the exact container env var list injected into the pod spec.
@@ -72,7 +71,19 @@ export function buildPodEnvVars(input: PodEnvBuildInput): Array<{ name: string; 
     { name: 'TTS_SERVICE_ADDRESS', value: input.ttsServiceAddress },
     { name: 'STATE_MACHINE_ADDRESS', value: input.stateMachineAddress },
     { name: 'NODE_ENV', value: input.nodeEnv },
+    // Always set, so the SDK refuses what the manifest did not declare (an
+    // agent run outside STELLA has none and allows everything).
+    { name: CLIENT_CHANNEL_ENV, value: clientChannelEnv(input.clientChannel) },
   ]
+}
+
+export const CLIENT_CHANNEL_ENV = 'STELLA_CLIENT_CHANNEL'
+
+/** The client channel as the SDK reads it: names and data schemas only. */
+export function clientChannelEnv(channel: AgentRequirements['client'] | undefined): string {
+  const slim = (list: { name: string; data?: unknown }[] = []) =>
+    list.map((m) => (m.data ? { name: m.name, data: m.data } : { name: m.name }))
+  return JSON.stringify({ events: slim(channel?.events), commands: slim(channel?.commands) })
 }
 
 /**
@@ -82,6 +93,27 @@ export function buildPodEnvVars(input: PodEnvBuildInput): Array<{ name: string; 
 export function buildSecretStringData(input: SecretDataBuildInput): Record<string, string> {
   const agentConfigJson = JSON.stringify(input.agentConfig || {})
 
+  if (input.livekitToken) {
+    // A token pod must not hold the key or secret by any route, including a
+    // template or manual var that happens to carry them.
+    const custom = filterNonEmptyEnvVars(input.customEnvVars)
+    delete custom.LIVEKIT_API_KEY
+    delete custom.LIVEKIT_API_SECRET
+    delete custom.LIVEKIT_TOKEN
+    return {
+      LIVEKIT_URL: input.livekitUrl,
+      LIVEKIT_TOKEN: input.livekitToken,
+      ROOM_NAME: input.roomName,
+      IDENTITY: `agent-${input.agentId}`,
+      TTS_PROVIDER: input.ttsProvider,
+      AGENT_CONFIG: agentConfigJson,
+      ...custom,
+    }
+  }
+
+  if (!input.livekitApiKey || !input.livekitApiSecret) {
+    throw new Error('An agent pod needs either a LiveKit token or the LiveKit key and secret')
+  }
   return {
     LIVEKIT_URL: input.livekitUrl,
     LIVEKIT_API_KEY: input.livekitApiKey,
@@ -141,16 +173,14 @@ export function buildPodInjectionFromAgentTypeAndConfiguration(
   },
 ): PodInjectionResult {
   const agentConfig = deriveEffectiveAgentConfig(params.agentType, params.userConfiguration)
-  // Resolve required/optional env vars from configSchema using provided env vars as highest precedence.
-  const envResolution = resolveAgentEnvVarsFromConfigSchema(
-    params.agentType.configSchema,
-    params.secret.customEnvVars || {},
-  )
+  // Optional defaults the agent declares; provided env vars take precedence.
+  const declared = params.agentType.env ?? { required: [], optional: [] }
+  const { env: resolvedEnvVars, appliedDefaults } = withEnvDefaults(declared, params.secret.customEnvVars || {})
   const envVars = buildPodEnvVars(params.podEnv)
   const secretStringData = buildSecretStringData({
     ...params.secret,
     agentConfig,
-    customEnvVars: envResolution.resolvedEnvVars,
+    customEnvVars: resolvedEnvVars,
   })
 
   return {
@@ -158,62 +188,9 @@ export function buildPodInjectionFromAgentTypeAndConfiguration(
     secretStringData,
     agentConfig,
     agentConfigJson: secretStringData.AGENT_CONFIG,
-    missingRequiredEnvVars: envResolution.missingRequiredEnvVars,
-    appliedOptionalDefaults: envResolution.appliedOptionalDefaults,
+    missingRequiredEnvVars: declared.required.filter((name) => resolvedEnvVars[name] === undefined),
+    appliedOptionalDefaults: appliedDefaults,
   }
-}
-
-/**
- * Resolve environment variable requirements declared in configSchema extensions:
- * - `x-stella-env-vars` (required)
- * - `x-stella-optional-env-vars` (optional defaults)
- *
- * Precedence: provided env vars > optional defaults.
- */
-export function resolveAgentEnvVarsFromConfigSchema(
-  configSchema: Record<string, unknown> | null | undefined,
-  providedEnvVars: Record<string, string>,
-): ResolvedAgentEnvVars {
-  const requiredEnvVars = extractRequiredEnvVars(configSchema)
-  const optionalEnvVars = extractOptionalEnvVars(configSchema)
-  // Start from provided values (template + request overrides already merged by caller).
-  const resolvedEnvVars: Record<string, string> = { ...providedEnvVars }
-  const appliedOptionalDefaults: string[] = []
-
-  for (const optionalVar of optionalEnvVars) {
-    // Do not override a provided value; defaults are only fallback values.
-    if (resolvedEnvVars[optionalVar.name] === undefined && optionalVar.default !== undefined) {
-      resolvedEnvVars[optionalVar.name] = optionalVar.default
-      appliedOptionalDefaults.push(optionalVar.name)
-    }
-  }
-
-  const missingRequiredEnvVars = requiredEnvVars.filter((name) => resolvedEnvVars[name] === undefined)
-
-  return {
-    resolvedEnvVars,
-    missingRequiredEnvVars,
-    appliedOptionalDefaults,
-  }
-}
-
-function extractRequiredEnvVars(configSchema: Record<string, unknown> | null | undefined): string[] {
-  if (!configSchema) return []
-  const raw = configSchema['x-stella-env-vars']
-  if (!Array.isArray(raw)) return []
-  // Ignore malformed non-string entries defensively.
-  return raw.filter((value): value is string => typeof value === 'string')
-}
-
-function extractOptionalEnvVars(configSchema: Record<string, unknown> | null | undefined): AgentOptionalEnvVarSpec[] {
-  if (!configSchema) return []
-  const raw = configSchema['x-stella-optional-env-vars']
-  if (!Array.isArray(raw)) return []
-  // Ignore malformed entries and keep only objects with a string `name`.
-  return raw
-    .filter((value) => typeof value === 'object' && value !== null)
-    .map((value) => value as AgentOptionalEnvVarSpec)
-    .filter((value) => typeof value.name === 'string')
 }
 
 function deepMerge(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {

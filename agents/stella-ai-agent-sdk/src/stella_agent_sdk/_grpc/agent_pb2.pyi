@@ -188,7 +188,7 @@ class StreamHealthStatusResponse(_message.Message):
     def __init__(self, request_id: _Optional[str] = ..., state: _Optional[_Union[AgentState, str]] = ..., session_id: _Optional[str] = ..., agent_type: _Optional[str] = ..., agent_version: _Optional[str] = ..., uptime_seconds: _Optional[int] = ..., messages_processed: _Optional[int] = ..., last_error: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class RegisterAgentRequest(_message.Message):
-    __slots__ = ("agent_type", "agent_version", "capabilities")
+    __slots__ = ("agent_type", "agent_version", "capabilities", "sdk_version")
     class CapabilitiesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -199,10 +199,12 @@ class RegisterAgentRequest(_message.Message):
     AGENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     AGENT_VERSION_FIELD_NUMBER: _ClassVar[int]
     CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    SDK_VERSION_FIELD_NUMBER: _ClassVar[int]
     agent_type: str
     agent_version: str
     capabilities: _containers.ScalarMap[str, str]
-    def __init__(self, agent_type: _Optional[str] = ..., agent_version: _Optional[str] = ..., capabilities: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    sdk_version: str
+    def __init__(self, agent_type: _Optional[str] = ..., agent_version: _Optional[str] = ..., capabilities: _Optional[_Mapping[str, str]] = ..., sdk_version: _Optional[str] = ...) -> None: ...
 
 class RegisterAgentResponse(_message.Message):
     __slots__ = ("success", "session_id", "message", "config")

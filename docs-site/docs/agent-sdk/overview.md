@@ -165,13 +165,13 @@ if __name__ == "__main__":
 ## Installation
 
 ```bash
-pip install stella-agent-sdk
+pip install "stella-ai-agent-sdk>=0.10.0"
 ```
 
 Or add to your `requirements.txt`:
 
 ```
-stella-agent-sdk>=1.0.0
+stella-ai-agent-sdk>=0.10.0
 ```
 
 ## Next Steps

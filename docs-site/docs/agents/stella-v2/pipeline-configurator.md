@@ -129,7 +129,7 @@ Which sections appear is gated by the agent's declared `capabilities`:
 | `plans` | **Task Extraction** configuration (deliverable extraction fills the plan's state machine) |
 | `experts` | the **assessment expert pool** + arbitration + custom experts + verdict directives |
 
-This is the same split the manifest validator enforces (`x-stella-requires-plan` ⟹ `plans`; expert config ⟹ `experts`). An agent receives only the configuration its capabilities expose.
+This is the same split the manifest validator enforces (`features.plans` needs the `plans` capability; expert config needs `experts`). An agent receives only the configuration its capabilities expose.
 
 ## Thresholds
 

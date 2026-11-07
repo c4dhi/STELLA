@@ -3,6 +3,8 @@ import { PlatformSettingsService } from './platform-settings.service.js';
 
 export interface PlatformFeatures {
   mcpEnabled: boolean;
+  // Uploaded agents wait for an admin's approval before they can deploy.
+  agentReviewRequired: boolean;
 }
 
 /**
@@ -16,6 +18,9 @@ export class PlatformFeaturesController {
   /** GET /platform/features */
   @Get()
   async get(): Promise<PlatformFeatures> {
-    return { mcpEnabled: await this.platformSettings.isMcpEnabled() };
+    return {
+      mcpEnabled: await this.platformSettings.isMcpEnabled(),
+      agentReviewRequired: await this.platformSettings.isAgentReviewRequired(),
+    };
   }
 }

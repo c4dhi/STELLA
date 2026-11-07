@@ -8,13 +8,15 @@ import {
   NotFoundException,
   Logger,
   Req,
+  UseGuards,
 } from '@nestjs/common'
 import { Request } from 'express'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentValidationStatus } from '@prisma/client'
+import { SystemAdminGuard } from '../auth/guards/system-admin.guard.js'
 
 interface AuthenticatedRequest extends Request {
-  user?: { id: string; email: string }
+  user?: { userId: string; email: string }
 }
 
 interface ApproveDto {
@@ -25,7 +27,11 @@ interface RejectDto {
   reason: string
 }
 
+// Approving an agent lets its uploaded code run in the cluster (see
+// assertDeployableAgentType), so review is for system admins only. Without
+// this guard any signed-in user could approve their own upload.
 @Controller('admin/agent-types')
+@UseGuards(SystemAdminGuard)
 export class AgentAdminController {
   private readonly logger = new Logger(AgentAdminController.name)
 
@@ -152,7 +158,7 @@ export class AgentAdminController {
       throw new BadRequestException('Agent is already approved')
     }
 
-    const adminId = req.user?.id
+    const adminId = req.user?.userId
 
     // Update status to approved
     const updated = await this.prisma.agentType.update({
@@ -208,7 +214,7 @@ export class AgentAdminController {
       throw new BadRequestException('Agent is already rejected')
     }
 
-    const adminId = req.user?.id
+    const adminId = req.user?.userId
 
     // Update status to rejected
     const updated = await this.prisma.agentType.update({
@@ -285,6 +291,7 @@ export class AgentAdminController {
       authorEmail: agent.authorEmail,
       tags: agent.tags,
       sdkMinVersion: agent.sdkMinVersion,
+      sdkVersion: agent.sdkVersion,
       createdAt: agent.createdAt,
       updatedAt: agent.updatedAt,
       owner: agent.user

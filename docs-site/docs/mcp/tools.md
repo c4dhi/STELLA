@@ -289,7 +289,7 @@ Create the join link for an active session. A session has at most one open invit
 | `sessionId` | id | |
 | `participantName` | string, *optional* | |
 | `customMessage` | string, *optional* | Shown to the participant before they join |
-| `visualizerType` | string, *optional* | e.g. `sphere`, `face`, `galaxy` |
+| `visualizerType` | string, *optional* | e.g. `sphere`, `face`, `galaxy`, or `text` for the Text face (a text-only session when locked) |
 | `visualizerLocked` | boolean, *optional* | |
 | `expiresInHours` | number 1–8760, *optional* | |
 | `maxSessionDurationSeconds` | number 60–7200, *optional* | Caps the conversation, counted from the agent's first message |
@@ -312,11 +312,13 @@ The user's env var templates, which hold the API keys an agent needs.
 
 **Inputs:** none.
 
-**Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys` and `agentTypeId`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
+**Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys`, `agentTypeId`, `invalid` and `needsCheck`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
+
+`invalid` maps each setting whose stored value does not fit its type or range to the reason, for example `{ "TTS_SPEED": "must be between 0.5 and 2" }`. `agents_deploy` refuses such a template until it is fixed in the app. `needsCheck` is `true` for a template that has not been saved since 1.6.0 made settings typed.
 
 ### `agents_deploy` · `mcp:write`
 
-Start an agent in an active session. Starting takes a while: poll `agents_get` until `status` is `RUNNING`. Refused in a session that is closing or closed.
+Start an agent in an active session. Starting takes a while: poll `agents_get` until `status` is `RUNNING`. Refused in a session that is closing or closed. Also refused, naming each one, when the env var template holds a setting whose value does not fit its type or range.
 
 **Inputs:**
 
@@ -332,6 +334,7 @@ Start an agent in an active session. Starting takes a while: poll `agents_get` u
 | `personaId` | id, *optional* | Default: the default persona |
 | `agentConfigurationId` | id, *optional* | Required by the STELLA V2 agent type |
 | `envVarTemplateId` | id, *optional* | The template holding the API keys the agent type needs |
+| `connectorBindings` | up to 20 of `{ connectorId, slot?, handle? }`, *optional* | Outside MCP servers the agent may call, from `connectors_list` with the session's `projectId`. Every required connector slot of the agent type needs one. The agent never receives their tokens |
 
 It takes no raw configuration and no env var values.
 
@@ -374,3 +377,88 @@ Stop an agent and remove its pod. The agent and its messages stay, and `agents_r
 **Inputs:** `agentId`.
 
 **Returns:** the stopped agent, as `agents_get` shows it. Its `healthState` may still read `ready` ([#807](https://github.com/c4dhi/STELLA/issues/807)).
+
+## Platform settings (system admins)
+
+The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets `403` calling them by name.
+
+### `platform_settings_get` · `mcp:read`
+
+**Inputs:** none.
+
+**Returns:** `agentReviewRequired`, `mcpEnabled`, `ttsPlayback` (`null` when no default is set).
+
+### `platform_settings_update` · `mcp:write`
+
+Turn **Review uploaded agents** on or off. While it is on (the default), no uploaded agent deploys until a system admin approves it, and unreviewed agents stop coming back on restart or wake. While it is off, a user can deploy their own upload as soon as it is built, and members of the projects they share it with can deploy it there. The MCP switch and the TTS playback default can only be changed in the UI.
+
+**Inputs:**
+
+| Name | Type | |
+|---|---|---|
+| `agentReviewRequired` | boolean | Required |
+
+**Returns:** the settings, as `platform_settings_get` shows them.
+## Connectors
+
+Outside MCP servers that agents call through STELLA, for example an interview-question server. The token stays in STELLA: agents only get the tools. See [Connectors](../agent-sdk/connectors.md) for how an agent uses them.
+
+### `connectors_list` · `mcp:read`
+
+The user's own connectors. With `projectId`: the connectors that can be bound to an agent in that project, the user's own plus those other members shared with it.
+
+**Inputs:** `projectId` (from `projects_list`, *optional*).
+
+**Returns:** `{ items }`. Each item has `id`, `name`, `handle`, `url`, `status` (`untested`, `ok` or `error`) and `tools`. Without `projectId`, items also have `authType`, `hasCredential`, `lastError`, `lastCheckedAt`, `serverInfo` and `sharedWith`. With it, they have `owned` and `ownerName`. No token is ever returned.
+
+### `connectors_get` · `mcp:read`
+
+One of the user's own connectors.
+
+**Inputs:** `connectorId`.
+
+**Returns:** the connector, as `connectors_list` shows each one without `projectId`.
+
+### `connectors_create` · `mcp:write`
+
+Add an outside MCP server. Run `connectors_test` next. Private and cluster-internal addresses are refused.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `name` | string, 1–100 | e.g. "ELIAS interview questions" |
+| `icon` | string, ≤ 32, *optional* | An emoji for its card, e.g. "🔌" |
+| `description` | string, ≤ 500, *optional* | What it is for, in the user's words. Shown on its card and in the deploy wizard. An empty string clears it |
+| `handle` | lowercase letters, digits, hyphens, ≤ 40 | How agents address it. Unique per user |
+| `url` | string, ≤ 2048 | The MCP endpoint (Streamable HTTP). A trailing slash and `//` are cleaned up |
+| `authType` | `bearer` or `none`, *optional* | Default `bearer` |
+| `token` | string, ≤ 8192, *optional* | Stored encrypted. It passes through the chat; no tool returns it, and the audit log records it as `[redacted]` |
+
+**Returns:** the connector, as `connectors_get` shows it.
+
+### `connectors_update` · `mcp:write`
+
+Change a connector the user owns. Leave out `token` to keep the stored one. Changing `url`, `authType` or `token` resets the status to `untested`; changing `icon` or `description` does not.
+
+**Inputs:** `connectorId`, and any of the fields of `connectors_create`.
+
+**Returns:** the connector, as `connectors_get` shows it.
+
+### `connectors_test` · `mcp:write`
+
+Connect with the stored token (MCP `initialize` and `tools/list`) and store the result as the connector's status and tool list.
+
+**Inputs:** `connectorId`.
+
+**Returns:** `{ ok, errorCode?, error?, connector }`. `errorCode` is one of `unauthorized`, `unreachable`, `timeout`, `redirect`, `blocked_host` or `protocol`.
+
+### `connector_shares_set` · `mcp:write`
+
+Replace the set of projects a connector the user owns is shared with. `[]` unshares it everywhere. Only projects the user is a member of.
+
+Members of those projects can bind the connector to their agents. The agents call it with the owner's token, and the audit log names the owner. Members never see the token and can't change the connector. Unsharing stops their agents' calls at once.
+
+**Inputs:** `connectorId`, `projectIds` (up to 100, from `projects_list`).
+
+**Returns:** the connector, as `connectors_get` shows it.

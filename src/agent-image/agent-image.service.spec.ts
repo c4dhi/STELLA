@@ -1,3 +1,7 @@
+import * as path from 'path';
+import { loadAgentDirectory } from '../agent-package/agent-directory.js';
+import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js';
+import { parseAgentManifest, type AgentManifest } from '../agent-package/schemas/agent-manifest.schema.js';
 import { jest } from '@jest/globals';
 import { ConfigService } from '@nestjs/config';
 import type { AgentTypeService } from '../agent-type/agent-type.service.js';
@@ -266,5 +270,110 @@ describe('AgentImageService.pruneOldConfigImages', () => {
 
     expect(issued).toContain('k3s ctr images rm docker.io/library/stella-v2-agent:cfg-444444444444');
     expect(removedImages()).toContain('stella-v2-agent:cfg-444444444444');
+  });
+});
+
+describe('AgentImageService.resolveAgentImage', () => {
+  const originalK8sEnv = process.env.KUBERNETES_SERVICE_HOST;
+
+  function makeService(record: Record<string, unknown> | null): InstanceType<typeof AgentImageService> {
+    const configService = new ConfigService();
+    jest.spyOn(configService, 'get').mockImplementation((_key: string, defaultValue?: unknown) => defaultValue);
+    const agentTypeService = {
+      findBySlug: jest.fn(async () => record),
+    } as unknown as AgentTypeService;
+    return new AgentImageService(configService, agentTypeService);
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    delete process.env.KUBERNETES_SERVICE_HOST;
+    // No Docker socket: built-ins resolve to their pre-built :latest without building.
+    execSync.mockImplementation(() => {
+      throw new Error('no docker');
+    });
+  });
+
+  afterEach(() => {
+    if (originalK8sEnv === undefined) {
+      delete process.env.KUBERNETES_SERVICE_HOST;
+    } else {
+      process.env.KUBERNETES_SERVICE_HOST = originalK8sEnv;
+    }
+  });
+
+  /** An AgentType row as the seed or upload stores it. */
+  function row(manifest: AgentManifest, extra: Record<string, unknown>) {
+    return { ...manifestToAgentTypeData(manifest, null), ...extra };
+  }
+  const builtIn = (slug: string) =>
+    row(loadAgentDirectory(path.join(process.cwd(), 'agents', slug)).manifest, {
+      isBuiltIn: true,
+      validationStatus: 'APPROVED',
+    });
+  const upload = (extra: Record<string, unknown>, image: Record<string, unknown> = { dockerfile: 'Dockerfile' }) => {
+    const manifest = parseAgentManifest({
+      version: '2.0',
+      metadata: { name: 'ELIAS', slug: 'elias-interviewer', version: '1.0.0', description: 'e' },
+      image,
+    }).manifest!;
+    return row(manifest, { isBuiltIn: false, ...extra });
+  };
+
+  it('starts a built-in with the command its manifest declares', async () => {
+    const svc = makeService(builtIn('stella-v2-agent'));
+    await expect(svc.resolveAgentImage('stella-v2-agent')).resolves.toEqual({
+      image: 'stella-v2-agent:latest',
+      command: ['python', '-m', 'stella_v2_agent'],
+    });
+  });
+
+  it('runs the image CMD of a built-in that declares no command', async () => {
+    const svc = makeService(builtIn('stella-light-agent'));
+    await expect(svc.resolveAgentImage('stella-light-agent')).resolves.toEqual({
+      image: 'stella-light-agent:latest',
+      command: undefined,
+    });
+  });
+
+  it('runs an approved uploaded agent from its built image with the image CMD', async () => {
+    const svc = makeService(upload({ validationStatus: 'APPROVED', imageUrl: 'elias-interviewer:1.0.0' }));
+    await expect(svc.resolveAgentImage('elias-interviewer')).resolves.toEqual({
+      image: 'elias-interviewer:1.0.0',
+      command: undefined,
+    });
+  });
+
+  it('starts an upload with its declared command', async () => {
+    const svc = makeService(
+      upload(
+        { validationStatus: 'APPROVED', imageUrl: 'elias-interviewer:1.0.0' },
+        { dockerfile: 'Dockerfile', command: ['python', 'main.py'] },
+      ),
+    );
+    await expect(svc.resolveAgentImage('elias-interviewer')).resolves.toEqual({
+      image: 'elias-interviewer:1.0.0',
+      command: ['python', 'main.py'],
+    });
+  });
+
+  it('refuses an uploaded agent that was rejected (restart / wake path)', async () => {
+    const svc = makeService(upload({ validationStatus: 'REJECTED', imageUrl: 'elias-interviewer:1.0.0' }));
+    await expect(svc.resolveAgentImage('elias-interviewer')).rejects.toThrow(/rejected/);
+  });
+
+  it('runs an unreviewed upload (who may deploy it is decided before this)', async () => {
+    const svc = makeService(upload({ validationStatus: 'PENDING', imageUrl: 'mine:0.1.0' }));
+    await expect(svc.resolveAgentImage('mine')).resolves.toMatchObject({ image: 'mine:0.1.0' });
+  });
+
+  it('refuses an uploaded agent with no build', async () => {
+    const svc = makeService(upload({ validationStatus: 'APPROVED', imageUrl: null }));
+    await expect(svc.resolveAgentImage('elias-interviewer')).rejects.toThrow(/no built image/);
+  });
+
+  it('refuses an unknown slug', async () => {
+    const svc = makeService(null);
+    await expect(svc.resolveAgentImage('nope')).rejects.toThrow(/Unknown agent type/);
   });
 });

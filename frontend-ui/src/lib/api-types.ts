@@ -1,3 +1,4 @@
+import type { DeclaredEnv } from './agentSettings'
 // TypeScript types for Session Management Server API
 // Based on session-management-server/docs/TYPESCRIPT_TYPES.md
 
@@ -260,6 +261,25 @@ export interface CreateAgentDto {
   availablePlanIds?: string[]
   envVarTemplateId?: string // environment variable template to use
   envVars?: Record<string, string> // additional env vars to merge with template (overrides template values)
+  // The user's connectors offered to this deployment: one per declared slot the
+  // agent needs (slot set), or extras the agent did not declare (slot omitted).
+  connectorBindings?: { connectorId: string; slot?: string }[]
+}
+
+/**
+ * What an agent needs to deploy, resolved on the server from its agent.yaml
+ * (GET /agent-types). The wizard reads this, never the manifest itself.
+ */
+export interface DeployRequirements {
+  persona: boolean
+  plans: { required: boolean; modes: ('plan' | 'companion')[] } | null
+  configurator: { required: boolean } | null
+  env: DeclaredEnv
+  connectors: ConnectorSlot[]
+  /** Describes the agent's own defaultConfig; never set by a deployment. */
+  configSchema: Record<string, unknown> | null
+  defaultConfig: Record<string, unknown>
+  sdkMinVersion: string | null
 }
 
 export interface AgentType {
@@ -276,6 +296,8 @@ export interface AgentType {
   deprecationNote?: string | null
   capabilities: string[]
   defaultConfig: Record<string, unknown>  // Default config for this agent type
+  /** Resolved from agent.yaml by the server. Absent from older servers. */
+  requirements?: DeployRequirements
   validationStatus?: AgentValidationStatus
   configSchema?: Record<string, unknown>  // JSON Schema for config options
   pipelineSchema?: PipelineSchema | null  // Pipeline topology + configurable slots
@@ -287,6 +309,12 @@ export interface AgentType {
   authorEmail?: string | null
   tags?: string[]
   createdAt?: string
+  /** Who uploaded it. Null for a built-in. */
+  ownerName?: string | null
+  /** Another user's upload, shared with a project you are in: deploy only. */
+  sharedWithYou?: boolean
+  /** For a shared upload: your projects it is shared with, the only places you can deploy it. */
+  sharedInProjects?: { id: string; name: string }[]
 }
 
 /** A {{placeholder}} the agent's prompt compiler can resolve (manifest-declared). */
@@ -300,11 +328,19 @@ export interface RuntimeVariable {
 
 // Extended AgentType with build info (for my-agents endpoint)
 export interface CustomAgentType extends AgentType {
+  /** A build succeeded and its image is stored. */
+  built: boolean
+  /** The SDK the last build installed (null: not built, or built before STELLA recorded it). */
+  sdkVersion: string | null
+  /** Why the last build cannot deploy on this STELLA ("Needs SDK update"), or null. */
+  sdkProblem: string | null
   lastBuild: {
     status: string
     startedAt: string
     completedAt: string | null
   } | null
+  /** The projects whose members may deploy it. */
+  sharedProjectIds?: string[]
 }
 
 // Agent package upload response
@@ -314,6 +350,8 @@ export interface AgentUploadResponse {
   name: string
   version: string
   validationStatus: AgentValidationStatus
+  /** Set when this upload replaced the user's own older version of the agent. */
+  replacedVersion: string | null
   warnings: string[]
 }
 
@@ -1003,6 +1041,12 @@ export interface EnvVarTemplate {
   description?: string
   variableKeys: string[]  // Only keys, not values (for security)
   agentTypeId: string  // Required: every template is scoped to exactly one agent type
+  /** Values of the agent type's declared non-secret settings (#585). */
+  settings: Record<string, string>
+  /** Declared settings whose stored value does not fit, with the reason. */
+  invalid: Record<string, string>
+  /** Not saved since settings became typed: shown as "check". */
+  needsCheck: boolean
   createdAt: string
   updatedAt: string
 }
@@ -1027,74 +1071,6 @@ export interface UpdateEnvVarTemplateDto {
 }
 
 // ============================================================================
-// Agent Requirements (parsed from configSchema)
-// ============================================================================
-
-export interface AgentRequirements {
-  requiresPlan: boolean
-  requiredEnvVars: string[]
-  supportsConfigurator: boolean
-}
-
-/**
- * Parse agent requirements from configSchema
- * Looks for:
- * - x-stella-requires-plan: true on any property
- * - x-stella-env-vars: ["VAR1", "VAR2"] at root level
- */
-export function parseAgentRequirements(
-  configSchema: Record<string, unknown> | null | undefined
-): AgentRequirements {
-  if (!configSchema) {
-    return { requiresPlan: false, requiredEnvVars: [], supportsConfigurator: false }
-  }
-
-  const properties = (configSchema.properties as Record<string, any>) || {}
-  const requiresPlan = Object.values(properties).some(
-    (prop: any) => prop?.['x-stella-requires-plan'] === true
-  )
-
-  const requiredEnvVars = (configSchema['x-stella-env-vars'] as string[]) || []
-  const supportsConfigurator = configSchema['x-stella-supports-configurator'] === true
-
-  return { requiresPlan, requiredEnvVars, supportsConfigurator }
-}
-
-/** Declared env var keys an agent type exposes, split by requiredness. */
-export interface DeclaredEnvVars {
-  required: string[]
-  optional: string[]
-}
-
-/**
- * Parse the env var keys an agent type declares in its configSchema. Mirrors the
- * backend extractors in src/kubernetes/utils/agent-config-injection.util.ts
- * (extractRequiredEnvVars / extractOptionalEnvVars):
- * - `x-stella-env-vars`          → required keys (string[])
- * - `x-stella-optional-env-vars` → optional specs ({ name, ... }[]) → names
- * Malformed entries are ignored defensively.
- */
-export function parseDeclaredEnvVars(
-  configSchema: Record<string, unknown> | null | undefined
-): DeclaredEnvVars {
-  if (!configSchema) return { required: [], optional: [] }
-
-  const rawRequired = configSchema['x-stella-env-vars']
-  const required = Array.isArray(rawRequired)
-    ? rawRequired.filter((v): v is string => typeof v === 'string')
-    : []
-
-  const rawOptional = configSchema['x-stella-optional-env-vars']
-  const optional = Array.isArray(rawOptional)
-    ? rawOptional
-        .filter((v): v is { name: string } => typeof v === 'object' && v !== null && typeof (v as { name?: unknown }).name === 'string')
-        .map((v) => v.name)
-    : []
-
-  return { required, optional }
-}
-
-// ============================================================================
 // Public Project Types
 // ============================================================================
 
@@ -1115,6 +1091,8 @@ export interface PublicAgentConfig {
   personaId?: string
   envVarTemplateId?: string
   envVars?: Record<string, string>
+  /** Connectors every public session's agent may call; the owner's own. */
+  connectorBindings?: { connectorId: string; slot?: string }[]
 }
 
 /**
@@ -1821,6 +1799,8 @@ export interface PlatformSettings {
   pinnedDeployments: PinnedDeployment[]
   /** Whether AI clients may connect over MCP. Off unless an admin turns it on. */
   mcpEnabled: boolean
+  /** Whether uploaded agents wait for an admin's approval before they can deploy. On by default. */
+  agentReviewRequired: boolean
   /** How well the voice fits this server under concurrent load (#93); null when it could not be read. */
   hardwareFit: HardwareFit | null
 }
@@ -1866,6 +1846,8 @@ export interface HardwareFit {
 
 export interface PlatformFeatures {
   mcpEnabled: boolean
+  /** Uploaded agents wait for an admin's approval before they can deploy. */
+  agentReviewRequired: boolean
 }
 
 // ============================================================================
@@ -1875,6 +1857,114 @@ export interface PlatformFeatures {
 export type AccessTokenScope = 'mcp:read' | 'mcp:write'
 export type AccessTokenAccess = 'read' | 'read_write'
 export type AccessTokenExpiryDays = 7 | 30 | 90 | 365
+
+// ============================================================================
+// Connectors: outside MCP servers the user's agents may call (STELLA as client)
+// ============================================================================
+
+export type ConnectorAuthType = 'bearer' | 'none'
+export type ConnectorStatus = 'untested' | 'ok' | 'error'
+
+export interface ConnectorTool {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
+/** A connector as the API returns it. The credential is never included. */
+export interface Connector {
+  id: string
+  name: string
+  /** An emoji for the card; null shows the default. */
+  icon: string | null
+  /** What it is for, in the owner's words. */
+  description: string | null
+  handle: string
+  kind: 'mcp'
+  url: string
+  authType: ConnectorAuthType
+  hasCredential: boolean
+  status: ConnectorStatus
+  lastError: string | null
+  lastCheckedAt: string | null
+  tools: ConnectorTool[] | null
+  serverInfo: { name?: string; version?: string; protocolVersion?: string } | null
+  /** Projects whose members may bind this connector when they deploy there. */
+  sharedWith: { projectId: string; projectName: string }[]
+  createdAt: string
+  updatedAt: string
+}
+
+/** A connector the user may bind in one project: their own, or shared with it. */
+export interface AvailableConnector {
+  id: string
+  name: string
+  icon: string | null
+  description: string | null
+  handle: string
+  kind: 'mcp'
+  url: string
+  status: ConnectorStatus
+  tools: ConnectorTool[] | null
+  owned: boolean
+  ownerName: string | null
+}
+
+/** A connector slot an agent declares in agent.yaml (`connectors`). */
+export interface ConnectorSlot {
+  slot: string
+  kind: 'mcp'
+  required: boolean
+  label: string
+  description?: string
+  requiredTools: string[]
+}
+
+export interface CreateConnectorRequest {
+  name: string
+  /** An empty string clears it on update. */
+  icon?: string
+  /** An empty string clears it on update. */
+  description?: string
+  handle: string
+  url: string
+  authType?: ConnectorAuthType
+  token?: string
+}
+
+export type UpdateConnectorRequest = Partial<CreateConnectorRequest>
+
+/** The result of running one tool from the connector's detail page. */
+export interface ConnectorToolCallResult {
+  ok: boolean
+  /** The server ran the tool but reported an error in its result. */
+  isError: boolean
+  content: unknown[]
+  structuredContent?: unknown
+  errorCode?: string
+  error?: string
+  durationMs: number
+}
+
+/** One outbound call to a connector, from its audit log. */
+export interface ConnectorCallLogEntry {
+  id: string
+  operation: 'initialize' | 'tools/list' | 'tools/call' | string
+  tool: string | null
+  success: boolean
+  errorCode: string | null
+  durationMs: number
+  createdAt: string
+  /** The agent that made the call; null for a test from Settings. */
+  agentName: string | null
+}
+
+export interface ConnectorTestResult {
+  ok: boolean
+  errorCode?: string
+  error?: string
+  connector: Connector
+}
 
 export interface AccessToken {
   id: string
@@ -1927,4 +2017,10 @@ export interface CreateAccessTokenResponse {
   /** The secret. Shown once; the server keeps only its hash. */
   token: string
   accessToken: AccessToken
+}
+
+/** A custom agent's project shares, and the projects its owner could share it with. */
+export interface AgentShares {
+  projectIds: string[]
+  projects: { id: string; name: string }[]
 }

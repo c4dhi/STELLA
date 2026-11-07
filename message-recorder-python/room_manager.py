@@ -347,6 +347,11 @@ class RoomManager:
                 should_store = True
                 print(f"   ✅ Forwarding turn_language")
 
+            elif message_type in ('client_event', 'client_event_reply', 'agent_command'):
+                # STORE: the screen<->agent channel (events, the agent's replies, commands)
+                should_store = True
+                print(f"   ✅ Storing client channel message: {message_type}")
+
             elif message_type == 'llm_config':
                 # STORE: LLM configuration for session context
                 should_store = True

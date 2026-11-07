@@ -5,6 +5,8 @@ import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
 import { apiClient } from '../../services/ApiClient'
 import type { AgentType, CustomAgentType, AgentBuildStatus } from '../../lib/api-types'
+import { deployNeeds, type DeployNeeds } from '../../lib/deployNeeds'
+import { defaultLabel } from '../../lib/agentSettings'
 
 interface AgentDetailModalProps {
   isOpen: boolean
@@ -331,9 +333,10 @@ export default function AgentDetailModal({
                     className="space-y-6"
                   >
                     {/* Config Schema */}
-                    {agent.configSchema ? (
+                    {agent.configSchema || (agent as AgentType).requirements ? (
                       <ConfigSchemaViewer
-                        schema={agent.configSchema}
+                        schema={agent.configSchema ?? {}}
+                        needs={deployNeeds(agent as AgentType)}
                         pipelineSchema={'pipelineSchema' in agent ? agent.pipelineSchema : undefined}
                         isDark={isDark}
                         onNavigateToConfigs={() => {
@@ -560,11 +563,12 @@ function BuildStatusBadge({ status, isDark }: { status: string; isDark: boolean 
   )
 }
 
-function ConfigSchemaViewer({ schema, pipelineSchema, isDark, onNavigateToConfigs }: { schema: Record<string, unknown>; pipelineSchema?: import('../../lib/api-types').PipelineSchema | null; isDark: boolean; onNavigateToConfigs?: () => void }) {
+function ConfigSchemaViewer({ schema, needs, pipelineSchema, isDark, onNavigateToConfigs }: { schema: Record<string, unknown>; needs: DeployNeeds; pipelineSchema?: import('../../lib/api-types').PipelineSchema | null; isDark: boolean; onNavigateToConfigs?: () => void }) {
   const properties = (schema.properties as Record<string, any>) || {}
-  const requiredEnvVars = (schema['x-stella-env-vars'] as string[]) || []
-  const optionalEnvVars = (schema['x-stella-optional-env-vars'] as Array<{ name: string; description?: string; default?: string }>) || []
-  const supportsConfigurator = schema['x-stella-supports-configurator'] === true
+  // What the agent declares, as the server resolved it from its agent.yaml.
+  const requiredEnvVars = needs.requiredEnvVars
+  const optionalEnvVars = needs.optionalEnvVars
+  const supportsConfigurator = needs.configurator
 
   return (
     <div className="space-y-4">
@@ -655,14 +659,6 @@ function ConfigSchemaViewer({ schema, pipelineSchema, isDark, onNavigateToConfig
                     }`}>
                       {prop.type || 'any'}
                     </span>
-                    {prop['x-stella-requires-plan'] && (
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-medium uppercase ${isDark
-                        ? 'bg-purple-500/20 text-purple-400'
-                        : 'bg-purple-100 text-purple-700'
-                      }`}>
-                        Plan
-                      </span>
-                    )}
                   </div>
                 </div>
                 {prop.description && (
@@ -726,15 +722,17 @@ function ConfigSchemaViewer({ schema, pipelineSchema, isDark, onNavigateToConfig
                 key={envVar.name}
                 className={`px-3 py-2 rounded-lg ${isDark ? 'bg-zinc-700/50' : 'bg-neutral-50'}`}
               >
-                <div className="flex items-center gap-2">
-                  <span className={`font-mono text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-neutral-800'}`}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {envVar.label && (
+                    <span className={`text-sm font-medium ${isDark ? 'text-zinc-200' : 'text-neutral-800'}`}>{envVar.label}</span>
+                  )}
+                  <span className={`font-mono ${envVar.label ? 'text-xs' : 'text-sm font-medium'} ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
                     {envVar.name}
                   </span>
-                  {envVar.default && (
-                    <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-                      default: {envVar.default}
-                    </span>
-                  )}
+                  <span className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+                    {[envVar.type ?? 'string', envVar.group, envVar.advanced && 'advanced'].filter(Boolean).join(' · ')}
+                    {' · default: '}{defaultLabel(envVar)}
+                  </span>
                 </div>
                 {envVar.description && (
                   <p className={`text-xs mt-1 ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>

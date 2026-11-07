@@ -93,6 +93,8 @@ WebRTC server configuration for real-time audio/video communication.
 | `LIVEKIT_TURN_ENABLED` | No | `false` | Enable TURN server for NAT traversal in production |
 | `LIVEKIT_TURN_DOMAIN` | No | - | Domain for TURN server (e.g., `turn.yourdomain.com`) |
 
+Since 2.0.0, an uploaded agent's pod gets neither `LIVEKIT_API_KEY` nor `LIVEKIT_API_SECRET`. STELLA sets `LIVEKIT_TOKEN` instead, a token for that session's room and the agent's identity only. Built-in agents still get the key and secret.
+
 **URL Configuration:**
 
 - **Local development**: Both URLs typically point to `ws://localhost:7880`
@@ -258,6 +260,18 @@ Settings for agent deployment and management.
 |----------|----------|---------|-------------|
 | `AGENT_IMAGE` | No | `conversational-ai-server:latest` | Docker image for agent pods |
 | `AGENTS_DIR` | No | `./agents` | Directory containing agent definitions |
+| `DEFAULT_AGENT_TYPE` | No | `stella-v2-agent` | The agent type a deployment gets when it names none: deploy, restart, wake, public projects (`src/agents/default-agent-type.ts`) |
+
+### Connectors
+
+The backend is the MCP client for every connector (see [Connectors](../agent-sdk/connectors.md)).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CONNECTORS_ALLOW_PRIVATE_HOSTS` | No | `false` | Allow connector URLs on localhost and private or cluster-internal addresses. For local development only |
+| `CONNECTORS_CONNECT_TIMEOUT_MS` | No | `10000` | Time to connect to a connector's MCP server |
+| `CONNECTORS_LIST_TIMEOUT_MS` | No | `15000` | Time to list its tools |
+| `CONNECTORS_CALL_TIMEOUT_MS` | No | `60000` | Time for one tool call |
 
 ---
 
@@ -298,7 +312,7 @@ STELLA_AI_TEMP_DIR=/mnt/stella-ai-temp
 
 ## Agent SDK (Pod-Level)
 
-These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. For how the audio pipeline actually works and why the timing constants are what they are, see [TTS & Audio Pipeline](./tts-pipeline.md). Agents declare them in their `agent.yaml` manifest under `x-stella-optional-env-vars` so the frontend deploy modal can expose them.
+These environment variables are read by the STELLA Agent SDK inside each agent pod. They control audio pipeline behavior, turn management, and TTS. For how the audio pipeline actually works and why the timing constants are what they are, see [TTS & Audio Pipeline](./tts-pipeline.md). The SDK declares them itself (`stella_agent_sdk.platform_env`, exported as `contracts/sdk-platform-env.json`), so an agent's `agent.yaml` doesn't need to repeat them. An agent may still list one under `env.optional` to show it with its own description or default.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -313,10 +327,14 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `TTS_VOICE` | No | provider default | Seed TTS voice, overridable per stream. Honored by voice-selecting providers, ignored by others |
 | `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
 | `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
+| `SESSION_END_MODE` | No | `farewell` | What the agent does when the time cap or the organiser ends the session: `farewell`, `wrap_up` (calls `on_session_ending`) or `silent`. An agent may decide this itself by overriding `session_end_mode()`; see [Platform contract](../agent-sdk/platform-contract.md#when-the-session-ends) |
+| `LIVEKIT_TOKEN` | Set by STELLA | – | Uploaded agents only: a token for this session's room and the agent's identity. When it is set, the SDK joins with it and needs neither `LIVEKIT_API_KEY` nor `LIVEKIT_API_SECRET` |
+| `STELLA_CONNECTOR_TOKEN` | Set by STELLA | – | Pods with bound connectors only: a fresh random token per pod start that the SDK sends to call connectors. It stops working when the agent stops, is paused or its session closes. See [Connectors](../agent-sdk/connectors.md) |
+| `STELLA_CLIENT_CHANNEL` | Set by STELLA | – | The `client` block of the agent's `agent.yaml` as JSON: the screen events and agent commands it declares, each with an optional schema for its data. STELLA sets it on every pod, as an empty declaration when there is no `client` block, which refuses every event and command. Left unset (outside STELLA) everything is allowed. See [Platform contract](../agent-sdk/platform-contract.md) |
 
 The SDK also reads two timing settings that neither built-in agent declares in `agent.yaml`: `BARGE_IN_DUCK_TIMEOUT_MS` (default `1200`), after which a duck that was never confirmed as an interruption lifts by itself, so background noise cannot keep the agent quiet; and `STELLA_MUTE_SILENCE_MS` (default `3000`), the silence fed to speech recognition when a participant mutes the microphone, so the sentence in flight is finalized like any pause.
 
-The SDK also reads `BARGE_IN_DUCK_GAIN` (default `0.25`): the volume the agent drops to the moment the user makes a sound, where `1.0` disables ducking. Neither built-in agent declares it in `agent.yaml` yet, so it can't be set from the deploy form and every deployment runs the default.
+The SDK also reads `BARGE_IN_DUCK_GAIN` (default `0.25`): the volume the agent drops to the moment the user makes a sound, where `1.0` disables ducking. All three built-in agents declare it in `agent.yaml` ("Voice level while interrupted"), so it can be set from the deploy form.
 
 ### Turn Management
 
@@ -340,22 +358,60 @@ When `TTS_ENABLED=false`, the gate still discards finals during processing but a
 
 ### Manifest Declaration
 
-Agents declare these in `agent.yaml` so the frontend deploy modal can display them:
+An agent's own optional variables go under `env.optional` in `agent.yaml` (manifest 2.0), each with a type, so the deploy dialog and the template editor in Settings can show one control per setting, in tabs. STELLA sets `default` on the pod when the deployer leaves one empty; `agentDefault` is only shown:
 
 ```yaml
-configSchema:
-  # ...
-  x-stella-optional-env-vars:
-    - name: TTS_ENABLED
-      description: "Enable text-to-speech audio output. Set to 'false' for text-only mode."
-      default: "true"
-    - name: INTERRUPT_MODE
-      description: "Transcript interrupt behavior: 'none' (turn-based gating) or 'smart' (barge-in)"
-      default: "none"
-    - name: TRANSCRIPT_DEBOUNCE_MS
-      description: "Debounce window (ms) for aggregating rapid successive final transcripts."
-      default: "300"
+env:
+  required:
+    - OPENAI_API_KEY
+  optional:
+    - name: BARGE_IN_ENABLED
+      type: boolean
+      label: Barge-in
+      description: "Let the participant interrupt the agent while it speaks."
+      group: Conversation
+      agentDefault: "true"
+    - name: TTS_SPEED
+      type: number
+      label: Speaking speed
+      group: Voice
+      min: 0.5
+      max: 2
+      step: 0.05
+      agentDefault: "1.0"
+    - name: STELLA_LANGUAGE
+      type: string
+      format: language-or-auto
+      default: auto
+    - name: STELLA_TTS_PLAYBACK
+      type: enum
+      group: Voice
+      advanced: true
+      default: auto
+      options:
+        - { value: auto, label: Automatic }
+        - { value: stream }
+        - { value: sentence }
 ```
+
+| Field | Meaning |
+|-------|---------|
+| `type` | `string` (the default), `secret`, `boolean`, `integer`, `number` or `enum` |
+| `label`, `description` | What the form shows. Without a label the name is shown |
+| `group` | The tab the setting goes in. Without one it goes under "General" |
+| `advanced` | Put it in the last tab, "Advanced", whatever its group |
+| `default` | Injected into the pod when nobody sets the variable |
+| `agentDefault` | Shown as the default but never injected: the agent applies it itself. Use it where an explicit value changes behaviour, such as `BARGE_IN_ENABLED`, which locks the setting once set |
+| `unsetLabel` | What the form says when there is no default, such as "Automatic" |
+| `min`, `max`, `step`, `unit` | For `number` and `integer` only |
+| `options` | For `enum` only, and required there |
+| `format` | A fixed check a `string` value has to pass: `language` (a two-letter code such as `de`) or `language-or-auto` (that, or `auto`). Manifests can't bring their own regular expression (ReDoS) |
+
+The manifest validator refuses an enum without options, options or ranges on the wrong type, `min` above `max`, a default on a secret, both `default` and `agentDefault`, a `format` on anything but a string, and a default that does not fit its own type. Keys under `env.required` are required and shown as secrets.
+
+Values are checked against the declaration when a template is saved and when an agent is deployed; a value that does not fit is refused with the key and the reason. Variables the agent does not declare are passed through unchecked, under the form's "Custom" tab.
+
+Templates keep their values encrypted, and the declaration is applied when a template is read: the API returns the values of settings declared with a non-secret `type`, so the form can show them. It never returns a secret, an untyped setting (a package from before typed settings may declare a key that way) or a custom value. A template saved before typed settings is marked "Migrated · check" until its values are saved again (a rename alone does not clear it), and one holding a value that no longer fits is marked "Needs a fix".
 
 ---
 

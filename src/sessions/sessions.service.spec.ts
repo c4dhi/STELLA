@@ -9,7 +9,7 @@ jest.mock('../message-recorder/room-monitor.service', () => ({ RoomMonitorServic
 jest.mock('livekit-server-sdk', () => ({ TokenVerifier: class {}, AccessToken: class {} }));
 
 import { NotFoundException } from '@nestjs/common';
-import { SessionsService } from './sessions.service.js';
+import { SessionsService, TRANSCRIPT_MESSAGE_TYPES } from './sessions.service.js';
 
 type SessionStatus = 'ACTIVE' | 'CLOSING' | 'CLOSED';
 type SessionRow = {
@@ -319,5 +319,126 @@ describe('SessionsService.storeRecordedMessage — cap-timer arming (issue #198)
       'session.agent-message',
       expect.anything(),
     );
+  });
+});
+
+describe('SessionsService.storeRecordedMessage — the client channel', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  it('stores an agent reply as a readable system line, never as an agent message', async () => {
+    const { service, prisma, eventEmitter } = setup({
+      session: { id: 's1', projectId: 'p1', name: null, status: 'ACTIVE' },
+    });
+    const envelope = {
+      type: 'client_event_reply',
+      data: { request_id: 'r1', event: 'tap', ok: false, error: 'not declared' },
+    };
+
+    await service.storeRecordedMessage('s1', envelope, 'agent-abc', 'Agent');
+
+    expect(prisma.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        content: 'Reply to tap: error: not declared',
+        role: 'system',
+        messageType: 'client_event_reply',
+        metadata: expect.objectContaining({ envelope }),
+      }),
+    });
+    expect(eventEmitter.emit).not.toHaveBeenCalledWith('session.agent-message', expect.anything());
+  });
+
+  it('stores a screen event from the participant', async () => {
+    const { service, prisma } = setup({
+      session: { id: 's1', projectId: 'p1', name: null, status: 'ACTIVE' },
+    });
+
+    await service.storeRecordedMessage(
+      's1',
+      { type: 'client_event', data: { event: 'stella.interaction_mode', mode: 'text' } },
+      'participant-1',
+      'P',
+    );
+
+    expect(prisma.message.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ content: 'Screen event: stella.interaction_mode', role: 'system' }),
+    });
+  });
+});
+
+describe('SessionsService — transcript-only messageCount (issue #808)', () => {
+  afterEach(() => jest.clearAllMocks());
+
+  /**
+   * A fake message table for one session, mixing transcript lines with
+   * internal bookkeeping rows (analytics, debug). `prisma.message.findMany`
+   * and `prisma.session.findUnique`'s `_count` filter are both backed by
+   * this same array, so a test failure here means the two code paths
+   * actually disagree about what counts as a transcript line — not just
+   * that a mock was told the right answer.
+   */
+  function messageTableSetup(rows: { messageType: string }[]) {
+    const prisma: any = {
+      session: {
+        findUnique: jest.fn(async ({ include }: any = {}) => {
+          const base = { id: 's1', agents: [], participants: [], room: null };
+          if (!include?._count) return base; // getMessages' existence check: no include
+          const typeFilter = include._count.select.messages?.where?.messageType?.in;
+          const messageCount = typeFilter
+            ? rows.filter((m) => typeFilter.includes(m.messageType)).length
+            : rows.length;
+          return { ...base, _count: { messages: messageCount, events: 0 } };
+        }),
+      },
+      message: {
+        findMany: jest.fn(async ({ where }: any) => {
+          const types: string[] = where.messageType.in;
+          return rows.filter((m) => types.includes(m.messageType));
+        }),
+      },
+    };
+
+    const service = new SessionsService(
+      prisma,
+      {} as any, // livekit
+      {} as any, // agentsService
+      {} as any, // roomMonitor
+      {} as any, // authService
+      {} as any, // eventEmitter
+    );
+
+    return { service, prisma };
+  }
+
+  it("sessions_get's messageCount equals session_transcript_get's line count", async () => {
+    const rows = [
+      { messageType: 'user_text' },
+      { messageType: 'agent_text' },
+      { messageType: 'transcript_chunk' },
+      { messageType: 'analytics' }, // not a transcript type
+      { messageType: 'debug' }, // not a transcript type
+    ];
+    const expectedTranscriptLines = rows.filter((m) =>
+      TRANSCRIPT_MESSAGE_TYPES.includes(m.messageType),
+    ).length;
+    const { service } = messageTableSetup(rows);
+
+    const detail = await service.findOne('s1');
+    const transcript = await service.getMessages('s1');
+
+    expect(detail._count.messages).toBe(expectedTranscriptLines);
+    expect(transcript.messages.length).toBe(expectedTranscriptLines);
+    // Proves it's actually filtering, not coincidentally equal to the raw row count.
+    expect(detail._count.messages).toBeLessThan(rows.length);
+  });
+
+  it('messageCount is 0 for a session with only bookkeeping rows, not the row count', async () => {
+    const rows = [{ messageType: 'analytics' }, { messageType: 'debug' }];
+    const { service } = messageTableSetup(rows);
+
+    const detail = await service.findOne('s1');
+    const transcript = await service.getMessages('s1');
+
+    expect(detail._count.messages).toBe(0);
+    expect(transcript.messages.length).toBe(0);
   });
 });

@@ -39,8 +39,8 @@ export class CatalogTools implements McpToolProvider {
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
-        handler: async () => ({
-          items: (await this.agentImages.getAgentTypesWithInfo()).map(
+        handler: async (_args, { auth }) => ({
+          items: (await this.agentImages.getAgentTypesWithInfo({ userId: auth.user.userId })).map(
             ({ id, slug, name, description, icon, version, capabilities }) => ({
               id,
               slug,
@@ -62,8 +62,8 @@ export class CatalogTools implements McpToolProvider {
         scope: 'mcp:read',
         input: { agentTypeId: idArg('agent type', 'agent_types_list') },
         annotations: READ_ONLY,
-        handler: async ({ agentTypeId }) => {
-          const type = (await this.agentImages.getAgentTypesWithInfo()).find(
+        handler: async ({ agentTypeId }, { auth }) => {
+          const type = (await this.agentImages.getAgentTypesWithInfo({ userId: auth.user.userId })).find(
             (t) => t.id === agentTypeId,
           );
           if (!type) {

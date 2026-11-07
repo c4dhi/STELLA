@@ -1,4 +1,26 @@
-import { IsString, IsNotEmpty, IsOptional, MaxLength, IsBoolean, IsObject, IsUUID, IsIn, IsArray, ArrayMaxSize } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, MaxLength, IsBoolean, IsObject, IsUUID, IsIn, IsArray, ArrayMaxSize, Matches, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { CONNECTOR_HANDLE_REGEX } from '../../connectors/connector-bindings.util.js';
+
+/** One connector offered to this deployment. See AgentInstance.connectorBindings. */
+export class ConnectorBindingDto {
+  /** One of the deploying user's connectors. */
+  @IsUUID()
+  connectorId: string;
+
+  /** The agent.yaml slot it fills. Omit for an extra connector the agent did not declare. */
+  @IsOptional()
+  @IsString()
+  @Matches(CONNECTOR_HANDLE_REGEX)
+  slot?: string;
+
+  /** How the agent addresses it. Defaults to the slot, then the connector's own handle. */
+  @IsOptional()
+  @IsString()
+  @Matches(CONNECTOR_HANDLE_REGEX)
+  handle?: string;
+}
+
 
 export class CreateAgentDto {
   @IsString()
@@ -69,6 +91,16 @@ export class CreateAgentDto {
   @IsObject()
   @IsOptional()
   envVars?: Record<string, string>;  // Additional env vars to merge with template (overrides template values)
+
+  // Connectors (outside MCP servers) this deployment may call through the
+  // backend: the slots the agent declares plus any extras. Optional; the deploy
+  // wizard sets it. Every connector must belong to the deploying user.
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => ConnectorBindingDto)
+  connectorBindings?: ConnectorBindingDto[];
 
   @IsBoolean()
   @IsOptional()

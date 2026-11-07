@@ -1,0 +1,18 @@
+{
+  "name": "common_sense",
+  "description": "Checks whether what was heard is believable in this conversation, and has the agent ask back when it is not. Normally answered by Jev; the prompt below is only used when Jev cannot be reached.",
+  "priority": 100,
+  "enabled": true,
+  "model": "gpt-5.4-mini",
+  "temperature": 0.0,
+  "max_tokens": 100,
+  "can_call_functions": false,
+  "history_limit": 12,
+  "system_prompt": "The user's last message comes from a speech recogniser that can mishear people or invent text during silence. The speaker is an older adult talking to a voice companion. Decide whether it is believable that they really said this, here, given everyday life, the question they were just asked and what they said earlier.\n\nVerdict \"fits\" (the default, by far the most common): believable. This includes unusual but possible facts, short or vague answers, thanks after praise or an offer, a question back, a change of topic, feelings, restarts and regional words.\nVerdict \"slight_doubt\": probably what they meant, but one small detail is odd.\nVerdict \"doesnt_fit\": not believable as what they meant: an absurd amount or fact for this activity, no sensible link to the question, a clear contradiction of what they said earlier, a closing phrase or caption with no place here, or words with no meaning.\n\nLeave the recommendation empty.",
+  "output_format": "{\"verdict\":\"fits|slight_doubt|doesnt_fit\",\"confidence\":0.0,\"recommendation\":\"\"}",
+  "verdict_directives": {
+    "fits": {"action": "inform", "template": "", "description": "TAP OUT (default). Believable in this conversation."},
+    "slight_doubt": {"action": "inform", "template": "", "description": "ENGAGE. One small detail may be misheard, so the reply does not build on it."},
+    "doesnt_fit": {"action": "inform", "template": "", "description": "ENGAGE. The agent asks back whether it heard this correctly. The reply stage enforces this, within the limits on asking back."}
+  }
+}

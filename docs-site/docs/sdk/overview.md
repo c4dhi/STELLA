@@ -11,7 +11,7 @@ The STELLA Agent SDK is a Python library for building conversational AI agents. 
 ## Installation
 
 ```bash
-pip install stella-agent-sdk
+pip install "stella-ai-agent-sdk>=0.10.0"
 ```
 
 ## Quick Start
@@ -127,8 +127,9 @@ Agents are configured via environment variables:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `LIVEKIT_URL` | Yes | LiveKit server URL |
-| `LIVEKIT_API_KEY` | Yes | LiveKit API key |
-| `LIVEKIT_API_SECRET` | Yes | LiveKit API secret |
+| `LIVEKIT_API_KEY` | Without `LIVEKIT_TOKEN` | LiveKit API key |
+| `LIVEKIT_API_SECRET` | Without `LIVEKIT_TOKEN` | LiveKit API secret |
+| `LIVEKIT_TOKEN` | No | A ready-made token for the agent's room. When set, the agent joins with it and needs no key or secret. Uploaded agents get only this. |
 | `ROOM_NAME` | Yes | LiveKit room to join |
 | `OPENAI_API_KEY` | Yes | OpenAI API key |
 | `STT_PROVIDER` | No | STT provider (default: sherpa) |

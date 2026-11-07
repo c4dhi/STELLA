@@ -75,8 +75,9 @@ export class ProjectsController {
   updatePublicConfig(
     @Param('projectId') id: string,
     @Body() dto: UpdatePublicConfigDto,
+    @CurrentUser() user: any,
   ) {
-    return this.projectsService.updatePublicConfig(id, dto);
+    return this.projectsService.updatePublicConfig(id, dto, user.userId);
   }
 
   /**

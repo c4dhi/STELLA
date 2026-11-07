@@ -66,7 +66,7 @@ touch Dockerfile requirements.txt .env
 Create your `requirements.txt` with the necessary packages:
 
 ```txt title="requirements.txt"
-stella-agent-sdk>=1.0.0
+stella-ai-agent-sdk>=0.10.0
 openai>=1.0.0
 livekit>=0.10.0
 pydantic-settings>=2.0.0
@@ -386,7 +386,7 @@ ENV PYTHONPATH=/app
 CMD ["python", "-m", "src.agent"]
 ```
 
-### Build and Push
+### Build and test locally
 
 ```bash title="terminal"
 # Build the image
@@ -394,36 +394,25 @@ docker build -t my-custom-agent:latest .
 
 # Test locally
 docker run --env-file .env my-custom-agent:latest
-
-# Push to registry
-docker tag my-custom-agent:latest registry.example.com/my-custom-agent:latest
-docker push registry.example.com/my-custom-agent:latest
 ```
 
-### Register with STELLA
+### Upload it to STELLA
 
-Add your agent to the STELLA configuration so it can be deployed:
+STELLA builds your agent itself, from the package's own `Dockerfile`; you don't push an image anywhere.
 
-```yaml title="agents-config.yaml"
-agents:
-  - name: my-custom-agent
-    image: registry.example.com/my-custom-agent:latest
-    resources:
-      requests:
-        cpu: "250m"
-        memory: "512Mi"
-      limits:
-        cpu: "1000m"
-        memory: "2Gi"
-```
+1. Zip the package: `agent.yaml`, the `Dockerfile` and your code.
+2. Upload it in **Settings → Agent Library**. STELLA validates `agent.yaml`, builds the image and reads the SDK version installed in it.
+3. If **Review uploaded agents** is on, a system admin approves it. Then share it with the projects that should use it.
+
+Resources (CPU and memory requests and limits) come from the `resources` block of `agent.yaml`. See [Agent validation](../deployment/agent-validation.md) for review, sharing, new versions and deleting.
 
 ### Run Deployment Tests
 
 Before deploying an agent, validate the same surfaces STELLA depends on at build and runtime:
 
 - `agent.yaml` should parse cleanly and satisfy the canonical manifest schema
-- the package should include a `Dockerfile` or point to a published image
-- Python dependencies should include `stella-ai-agent-sdk`
+- the package should include a `Dockerfile`; STELLA builds every upload from it, and a package that points at a prebuilt image (`image.imageUrl`) is refused
+- Python dependencies should include `stella-ai-agent-sdk` 0.10.0 or later (`stella-ai-agent-sdk>=0.10.0`); STELLA refuses to deploy an agent built with an older SDK
 - the agent should start successfully with representative config
 
 For built-in agents in this repository, these checks are enforced automatically in GitHub Actions:

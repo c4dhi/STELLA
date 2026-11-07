@@ -18,6 +18,12 @@ export interface TranscriptThemeConfig {
 
 // Pre-defined theme configurations
 const THEME_CONFIGS: Record<VisualizerType, TranscriptThemeConfig> = {
+  text: {
+    background: 'bg-black/40',
+    border: 'border-white/10',
+    textColor: 'text-white/90',
+    blur: 'backdrop-blur-md',
+  },
   face: {
     background: 'bg-black/40',
     border: 'border-white/10',

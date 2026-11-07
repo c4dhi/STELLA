@@ -16,9 +16,10 @@ import AgentConfigSection from '../components/settings/AgentConfigSection'
 import AnalyticsSection from '../components/settings/AnalyticsSection'
 import PlatformSettingsSection from '../components/settings/PlatformSettingsSection'
 import McpAccessSection from '../components/settings/McpAccessSection'
+import ConnectorsSection from '../components/settings/ConnectorsSection'
 import { useAuthStore } from '../store/authStore'
 
-const validSections: SettingsSection[] = ['profile', 'preferences', 'personas', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin', 'platform', 'mcp']
+const validSections: SettingsSection[] = ['profile', 'preferences', 'personas', 'plan-builder', 'agent-configs', 'env-vars', 'agent-library', 'inbox', 'analytics', 'admin', 'platform', 'mcp', 'connectors']
 
 // Animation variants for page transitions
 const pageVariants = {
@@ -100,6 +101,8 @@ export default function SettingsPage() {
         return isSystemAdmin ? <PlatformSettingsSection /> : <ProfileSection />
       case 'mcp':
         return <McpAccessSection />
+      case 'connectors':
+        return <ConnectorsSection />
       default:
         return <ProfileSection />
     }
@@ -139,7 +142,9 @@ export default function SettingsPage() {
                 initial="initial"
                 animate="animate"
                 exit="exit"
-                className="h-full pb-8"
+                // min-h, not h: a fixed height let long sections overflow it, so
+                // the bottom padding ended up behind the content, not after it.
+                className="min-h-full pb-12"
               >
                 {renderContent()}
               </motion.div>

@@ -1209,6 +1209,9 @@ deploy_services() {
     # Phase 1.5: Model Storage PVCs (for STT/TTS models)
     apply_model_storage_pvcs
 
+    # Uploaded agent packages outlive the server pod (builds read them again).
+    kubectl apply -f "$(prepare_manifest k8s/02-agent-packages-pvc.yaml)" >/dev/null 2>&1 || true
+
     # Phase 2: PostgreSQL
     echo -ne "   ${ARROW} PostgreSQL... "
     kubectl apply -f "$(prepare_manifest k8s/01-postgres-config.yaml)" >/dev/null 2>&1 || true
@@ -1312,6 +1315,7 @@ deploy_services() {
     echo -ne "   ${ARROW} Image cleanup... "
     prune_old_image_generations
     prune_dangling_images
+    prune_untagged_containerd_images
     printf "\r   ${ARROW} Image cleanup... ${GREEN}${CHECK}${NC}    \n"
 
     success "Deployment complete"
