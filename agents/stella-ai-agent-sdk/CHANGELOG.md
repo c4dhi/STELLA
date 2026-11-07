@@ -11,7 +11,9 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Releases as 0.10.0 (`pyproject.toml` is already bumped). The platform contract: an agent declares itself in `agent.yaml`, uses the SDK, and needs no STELLA-side code or knowledge of STELLA internals.
+## [0.10.0] - 2026-11-07
+
+Ships with STELLA 2.0.0. The platform contract: an agent declares itself in `agent.yaml`, uses the SDK, and needs no STELLA-side code or knowledge of STELLA internals.
 
 ### Added
 
