@@ -34,154 +34,112 @@ STELLA agents are Python applications that:
 
 ## Project Setup
 
+An agent is a small Python package with an `agent.yaml` next to it. The SDK owns the room connection, speech recognition, speech synthesis and the session lifecycle; your code receives what the user said and yields what the agent replies.
+
 <Steps>
 
 <Step number={1} title="Create the project structure">
 
-Set up your agent project with the following structure:
-
 ```text title=""
 my-agent/
-├── src/
-│   ├── __init__.py
-│   ├── agent.py           # Main agent class
-│   ├── tools.py           # Custom tools
-│   └── config.py          # Configuration
-├── Dockerfile
+├── agent.yaml          # what STELLA knows about the agent
+├── Dockerfile          # STELLA builds the image from it
 ├── requirements.txt
-└── .env
-```
-
-```bash title="terminal"
-mkdir -p my-agent/src
-cd my-agent
-touch src/__init__.py src/agent.py src/tools.py src/config.py
-touch Dockerfile requirements.txt .env
+└── my_agent/
+    ├── __init__.py
+    ├── __main__.py     # entry point: python -m my_agent
+    ├── agent.py        # the agent class
+    └── tools.py        # tools the LLM may call
 ```
 
 </Step>
 
 <Step number={2} title="Define your dependencies">
 
-Create your `requirements.txt` with the necessary packages:
-
 ```txt title="requirements.txt"
 stella-ai-agent-sdk>=0.10.0
 openai>=1.0.0
-livekit>=0.10.0
-pydantic-settings>=2.0.0
 ```
+
+The SDK brings LiveKit and the gRPC clients for STT and TTS with it. STELLA refuses to deploy an agent built with an SDK older than 0.10.0.
 
 </Step>
 
-<Step number={3} title="Configure the agent">
+<Step number={3} title="Describe the agent in agent.yaml">
 
-Create your configuration in `src/config.py`:
+```yaml title="agent.yaml"
+version: "2.0"
 
-```python title="src/config.py"
-from pydantic_settings import BaseSettings
+metadata:
+  name: "My Agent"
+  slug: "my-agent"
+  version: "0.1.0"
+  description: "A helpful voice assistant"
 
+capabilities: [voice, text]
 
-class Settings(BaseSettings):
-    # LiveKit connection
-    livekit_url: str
-    livekit_api_key: str
-    livekit_api_secret: str
+env:
+  required:
+    - OPENAI_API_KEY
 
-    # OpenAI
-    openai_api_key: str
-    openai_model: str = "gpt-4o"
-
-    # Audio pipeline
-    stt_provider: str = "sherpa"
-    tts_provider: str = "kokoro"
-
-    # Session
-    room_name: str
-    participant_identity: str = "agent"
-
-    class Config:
-        env_file = ".env"
-
-
-settings = Settings()
+image:
+  dockerfile: "Dockerfile"
 ```
+
+Everything a deployer chooses is an env var declared here; there is no separate settings file. The full format is in [Agent manifest](../agent-sdk/agent-manifest.md).
 
 </Step>
 
 <Step number={4} title="Implement the agent" isLast>
 
-Create your main agent class in `src/agent.py`:
+`BaseAgent` has two abstract methods: `process()`, called once per user turn, and `on_interrupt()`, called when the user speaks over the agent. Whatever `process()` yields is shown and spoken.
 
-```python title="src/agent.py"
+```python title="my_agent/agent.py"
+import os
+from typing import Any, AsyncIterator, Dict
+
 from openai import AsyncOpenAI
-from stella_agent_sdk import BaseAgent, AudioPipeline
-
-from .config import settings
+from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent
 
 
 class MyCustomAgent(BaseAgent):
-    """A custom conversational AI agent."""
+    """A custom conversational agent."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.pipeline = AudioPipeline(
-            stt_provider=settings.stt_provider,
-            tts_provider=settings.tts_provider
-        )
-        self.openai = AsyncOpenAI()
+        self.openai = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self.history: list[dict[str, str]] = []
+
+    async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
         self.history = []
 
-    async def on_connect(self):
-        """Called when the agent connects to the LiveKit room."""
-        print(f"Connected to room: {self.room_name}")
-
-        # Send a greeting
-        greeting = "Hello! How can I help you today?"
-        await self.speak(greeting)
-
-    async def on_transcript(self, text: str, is_final: bool):
-        """Handle transcribed user speech."""
-        if not is_final:
-            return
-
-        # Add to history
-        self.history.append({"role": "user", "content": text})
-
-        # Generate response
-        response = await self.generate_response(text)
-
-        # Speak the response
-        await self.speak(response)
-
-        # Add to history
-        self.history.append({"role": "assistant", "content": response})
-
-    async def generate_response(self, user_input: str) -> str:
-        """Generate a response using OpenAI."""
+    async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
+        self.history.append({"role": "user", "content": input.text})
         response = await self.openai.chat.completions.create(
-            model=settings.openai_model,
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                *self.history
-            ]
+            model="gpt-4o-mini",
+            messages=[{"role": "system", "content": "You are a helpful assistant."}, *self.history],
         )
-        return response.choices[0].message.content
+        reply = response.choices[0].message.content or ""
+        self.history.append({"role": "assistant", "content": reply})
+        yield AgentOutput.text_final(input.session_id, reply)
 
-    async def speak(self, text: str):
-        """Convert text to speech and publish to the room."""
-        async for audio_chunk in self.pipeline.text_to_speech_stream(text):
-            await self.publish_audio(audio_chunk)
+    async def on_interrupt(self, session_id: str) -> None:
+        # Nothing is streaming here; an agent that streams cancels its generation.
+        pass
+```
 
+```python title="my_agent/__main__.py"
+import asyncio
 
-def main():
-    agent = MyCustomAgent()
-    agent.run()
+from stella_agent_sdk import run_agent_from_env
 
+from my_agent.agent import MyCustomAgent
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(run_agent_from_env(MyCustomAgent()))
 ```
+
+`run_agent_from_env()` reads the room, the LiveKit credentials and the STT and TTS addresses from the environment, which STELLA sets on the pod. To stream a reply token by token, yield `AgentOutput.text_chunk(...)` pieces instead of one `text_final`; `examples/openai_agent.py` in the SDK shows how.
 
 </Step>
 
@@ -189,115 +147,77 @@ if __name__ == "__main__":
 
 ## Adding Custom Tools
 
-Tools allow your agent to perform actions beyond conversation. Here's how to add a search tool:
+A tool is a `BaseTool` subclass: a name, a description and a JSON Schema for the LLM, and an `execute()` that returns a `ToolResult`.
 
-```python title="src/tools.py"
-from stella_agent_sdk import tool
+```python title="my_agent/tools.py"
+from typing import Any, Dict
 
-
-@tool
-async def search_database(query: str, limit: int = 5) -> dict:
-    """Search the database for relevant information.
-
-    Args:
-        query: The search query
-        limit: Maximum number of results
-
-    Returns:
-        Search results
-    """
-    # Your database search logic here
-    results = await db.search(query, limit=limit)
-
-    return {
-        "found": len(results) > 0,
-        "results": [
-            {"title": r.title, "content": r.content}
-            for r in results
-        ]
-    }
+from stella_agent_sdk import BaseTool, ToolResult
 
 
-@tool
-async def create_task(title: str, description: str) -> dict:
-    """Create a new task in the task management system.
+class SearchDatabase(BaseTool):
+    @property
+    def name(self) -> str:
+        return "search_database"
 
-    Args:
-        title: Task title
-        description: Task description
+    @property
+    def description(self) -> str:
+        return "Search the database for information relevant to the user's question."
 
-    Returns:
-        Created task details
-    """
-    task = await task_service.create(title=title, description=description)
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to search for"},
+                "limit": {"type": "integer", "description": "Maximum results"},
+            },
+            "required": ["query"],
+        }
 
-    return {
-        "task_id": task.id,
-        "status": "created",
-        "message": f"Task '{title}' created successfully"
-    }
+    async def execute(self, query: str, limit: int = 5) -> ToolResult:
+        results: list[dict] = []  # your search here
+        return ToolResult(success=True, data={"found": bool(results), "results": results[:limit]})
 ```
 
-Register tools in your agent:
+Collect the tools in a `ToolRegistry`, which also gives you their schemas for the LLM:
 
-```python title="src/agent.py"
-from .tools import search_database, create_task
+```python title="my_agent/agent.py"
+from stella_agent_sdk import BaseAgent, ToolExecutor, ToolRegistry
+
+from my_agent.tools import SearchDatabase
 
 
 class MyCustomAgent(BaseAgent):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        # ... other initialization
-
-        # Register tools
-        self.register_tool(search_database)
-        self.register_tool(create_task)
+        self.tools = ToolRegistry()
+        self.tools.register(SearchDatabase())
+        self.executor = ToolExecutor(self.tools)
 ```
 
 ## Handling Tool Calls
 
-When the LLM wants to use a tool, handle it in your response generation:
+Pass `self.tools.get_openai_schemas()` to the model. When it asks for tools, the executor runs them and builds the result messages to send back:
 
 ```python title=""
-async def generate_response(self, user_input: str) -> str:
-    messages = [
-        {"role": "system", "content": self.system_prompt},
-        *self.history
-    ]
-
-    response = await self.openai.chat.completions.create(
-        model=settings.openai_model,
-        messages=messages,
-        tools=self.get_tool_definitions()
-    )
-
-    # Handle tool calls
-    while response.choices[0].message.tool_calls:
-        tool_calls = response.choices[0].message.tool_calls
-        messages.append(response.choices[0].message)
-
-        for tool_call in tool_calls:
-            # Execute the tool
-            result = await self.execute_tool(
-                tool_call.function.name,
-                json.loads(tool_call.function.arguments)
-            )
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": json.dumps(result)
-            })
-
-        # Get next response
+async def generate_response(self) -> str:
+    messages = [{"role": "system", "content": "You are a helpful assistant."}, *self.history]
+    while True:
         response = await self.openai.chat.completions.create(
-            model=settings.openai_model,
-            messages=messages,
-            tools=self.get_tool_definitions()
+            model="gpt-4o-mini", messages=messages, tools=self.tools.get_openai_schemas()
         )
-
-    return response.choices[0].message.content
+        message = response.choices[0].message
+        calls = self.executor.parse_openai_tool_calls(message)
+        if not calls:
+            return message.content or ""
+        messages.append(message.model_dump(exclude_none=True))
+        for call in calls:
+            event = await self.executor.execute_single(call)
+            messages.append(self.executor.build_tool_result_message_openai(call.id, event.result))
 ```
+
+Outside MCP servers (an interview-question service, say) are not tools you write: they are [connectors](../agent-sdk/connectors.md) the agent declares in `agent.yaml` and reaches through `self.connectors`.
 
 ## Accessing Chat History
 
@@ -324,17 +244,21 @@ class MyAgent(BaseAgent):
             for msg in history
         ])
 
-        # Use in your prompt
-        response = await self.llm.chat([
-            {"role": "system", "content": f"Previous conversation:\n{context}"},
-            {"role": "user", "content": input.text}
-        ])
+        # Use it in your prompt
+        response = await self.openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": f"Previous conversation:\n{context}"},
+                {"role": "user", "content": input.text},
+            ],
+        )
 
-        yield AgentOutput.text_final(input.session_id, response)
+        yield AgentOutput.text_final(input.session_id, response.choices[0].message.content or "")
 ```
 
 ### Method Reference
 
+<!-- pseudo-code -->
 ```python
 await self.get_chat_history(
     include_debug: bool = False,  # Include debug/processing messages
@@ -365,7 +289,7 @@ if self.has_history:
 ### Dockerfile
 
 ```dockerfile title="Dockerfile"
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -379,11 +303,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY src/ ./src/
+COPY my_agent/ ./my_agent/
 
-ENV PYTHONPATH=/app
-
-CMD ["python", "-m", "src.agent"]
+CMD ["python", "-m", "my_agent"]
 ```
 
 ### Build and test locally
@@ -392,7 +314,8 @@ CMD ["python", "-m", "src.agent"]
 # Build the image
 docker build -t my-custom-agent:latest .
 
-# Test locally
+# Run it against a local LiveKit (it needs LIVEKIT_URL, ROOM_NAME, AGENT_IDENTITY,
+# LIVEKIT_API_KEY, LIVEKIT_API_SECRET and OPENAI_API_KEY in .env)
 docker run --env-file .env my-custom-agent:latest
 ```
 
@@ -439,5 +362,5 @@ npm run validate:agents
 ## Next Steps
 
 - [Add Custom UI](./add-custom-ui.md) - Customize the frontend
-- [Base Agent Reference](../sdk/base-agent.md) - Full API documentation
-- [Tools Reference](../sdk/tools.md) - Advanced tool patterns
+- [Base Agent Reference](../agent-sdk/base-agent.md) - Full API documentation
+- [Tools Reference](../agent-sdk/tools.md) - Advanced tool patterns
