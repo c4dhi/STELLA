@@ -492,6 +492,7 @@ export default function AgentLibrarySection() {
                             onDelete={ownIds.has(agent.id) ? () => handleDelete(agent) : undefined}
                             onBuild={ownIds.has(agent.id) ? () => handleBuild(agent) : undefined}
                             onShare={ownIds.has(agent.id) ? () => setAgentToShare(agent) : undefined}
+                            onBuildSettled={loadAgents}
                           />
                         ))}
                       </AnimatePresence>

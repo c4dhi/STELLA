@@ -1,5 +1,7 @@
+import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
+import { apiClient } from '../../services/ApiClient'
 import type { AgentType, CustomAgentType, AgentValidationStatus } from '../../lib/api-types'
 
 interface AgentTypeCardProps {
@@ -10,6 +12,8 @@ interface AgentTypeCardProps {
   onBuild?: () => void
   /** Only the owner shares an upload with projects. */
   onShare?: () => void
+  /** Called once a build this card is showing as queued/building finishes, so the list can refetch and show the real result. */
+  onBuildSettled?: () => void
 }
 
 export default function AgentTypeCard({
@@ -19,6 +23,7 @@ export default function AgentTypeCard({
   onDelete,
   onBuild,
   onShare,
+  onBuildSettled,
 }: AgentTypeCardProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
@@ -26,6 +31,22 @@ export default function AgentTypeCard({
   const isCustomAgent = !agent.isBuiltIn
   const customAgent = agent as CustomAgentType
   const hasBuildInfo = isCustomAgent && 'lastBuild' in customAgent
+  const liveBuildStatus = hasBuildInfo ? customAgent.lastBuild?.status : undefined
+
+  // The card's badge otherwise only reflects whatever was true at the last
+  // list fetch: without this, a build that finishes while the card is just
+  // sitting in the list (not expanded) never stops showing Queued/Building.
+  useEffect(() => {
+    if (!hasBuildInfo || !customAgent.id) return
+    if (liveBuildStatus !== 'pending' && liveBuildStatus !== 'building') return
+
+    const cleanup = apiClient.subscribeToBuildLogs(customAgent.id, (data) => {
+      if (data.status === 'success' || data.status === 'failed') {
+        onBuildSettled?.()
+      }
+    })
+    return cleanup
+  }, [hasBuildInfo, customAgent.id, liveBuildStatus, onBuildSettled])
   // Someone else's upload can only be deployed in the projects it is shared with.
   const sharedIn = ('sharedInProjects' in agent ? agent.sharedInProjects ?? [] : []).map(p => p.name).join(', ')
 
