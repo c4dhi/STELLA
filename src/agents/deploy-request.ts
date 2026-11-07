@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 import { deepmergeCustom } from 'deepmerge-ts'
+import { invalidEnvVarValues } from '../agent-package/env-var-settings.js'
 import { requestedSdkProblem } from '../agent-package/sdk-support.js'
 import type { AgentRequirements } from './agent-requirements.js'
 
@@ -88,7 +89,12 @@ export function withEnvDefaults(
 function envProblems({ env }: AgentRequirements, provided: Record<string, string>): string[] {
   // An empty value never reaches the pod (see buildSecretStringData), so it counts as missing.
   const missing = env.required.filter((name) => !provided[name]?.trim())
-  return missing.length > 0 ? [`missing required environment variables: ${missing.join(', ')}`] : []
+  const problems = missing.length > 0 ? [`missing required environment variables: ${missing.join(', ')}`] : []
+  // A declared setting that does not fit its type or range (#585) stops here, by
+  // name, rather than reaching the pod as a string the agent then misreads.
+  const invalid = Object.entries(invalidEnvVarValues(env, provided)).map(([key, reason]) => `${key} ${reason}`)
+  if (invalid.length > 0) problems.push(`agent settings do not fit: ${invalid.join('; ')}`)
+  return problems
 }
 
 function sdkProblems({ sdkMinVersion }: AgentRequirements): string[] {

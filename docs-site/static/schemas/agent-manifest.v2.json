@@ -166,6 +166,70 @@
               },
               "default": {
                 "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "secret",
+                  "boolean",
+                  "integer",
+                  "number",
+                  "enum"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "group": {
+                "type": "string"
+              },
+              "advanced": {
+                "type": "boolean"
+              },
+              "agentDefault": {
+                "type": "string"
+              },
+              "unsetLabel": {
+                "type": "string"
+              },
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "step": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "unit": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "language",
+                  "language-or-auto"
+                ]
               }
             },
             "required": [

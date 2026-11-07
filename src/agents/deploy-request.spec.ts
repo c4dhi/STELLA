@@ -95,6 +95,29 @@ describe('assertDeployRequest', () => {
   })
 })
 
+describe('assertDeployRequest: typed settings (#585)', () => {
+  // The service passes the env the pod would get: template, overrides and
+  // defaults merged, so a bad value from any of them stops here, on deploy,
+  // restart and wake alike.
+  const typed = requirements({
+    env: {
+      optional: [
+        { name: 'TTS_SPEED', type: 'number', min: 0.5, max: 2 },
+        { name: 'STELLA_LANGUAGE', format: 'language-or-auto' },
+      ],
+    },
+  })
+
+  it('refuses a declared setting that does not fit, naming it and why', () => {
+    expect(check(typed, {}, { TTS_SPEED: '3' })).toThrow('agent settings do not fit: TTS_SPEED must be between 0.5 and 2')
+    expect(check(typed, {}, { STELLA_LANGUAGE: 'deu' })).toThrow('STELLA_LANGUAGE must be "auto" or a two-letter')
+  })
+
+  it('lets fitting settings and any custom variables through', () => {
+    expect(check(typed, {}, { TTS_SPEED: '0.95', STELLA_LANGUAGE: 'de', STUDY_ARM: '???' })).not.toThrow()
+  })
+})
+
 describe('withAgentDefaults', () => {
   const r = requirements({ defaultConfig: { elias: { tags: ['a', 'b'] }, llm: { model: 'm', temperature: 0.7 } } })
 

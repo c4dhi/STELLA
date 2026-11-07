@@ -17,6 +17,7 @@ import {
   parseMemoryBytes,
 } from '../manifest-defaults.js'
 import { normalizeManifest } from '../manifest-normalizer.js'
+import { ENV_VAR_FORMATS, ENV_VAR_SETTING_TYPES, checkEnvVarValue } from '../env-var-settings.js'
 
 /**
  * The agent manifest (agent.yaml), format 2.0: the single description of an agent
@@ -107,13 +108,65 @@ const featuresSchema = z
   })
   .strict()
 
+/**
+ * An optional env var, as a typed setting (#585): the deploy form and env var
+ * templates render one control per variable from these fields, and deploy and
+ * template saves refuse a value that does not fit. All but `name` are optional,
+ * so an untyped variable is free text, as before #585.
+ *
+ * There is no `pattern`: a manifest's regular expression would run on the event
+ * loop at every check, and a backtracking one freezes the server (ReDoS), the
+ * same reason configSchema refuses them. `format` names a fixed, safe check.
+ */
 const optionalEnvVarSchema = z
   .object({
     name: z.string().regex(ENV_VAR_NAME_REGEX, 'must be an uppercase environment variable name'),
     description: z.string().optional(),
+    /** Injected into the pod when the deployment leaves the variable empty. */
     default: z.string().optional(),
+    /** Absent: free text. */
+    type: z.enum(ENV_VAR_SETTING_TYPES).optional(),
+    label: z.string().optional(),
+    /** The tab the deploy form shows it in. */
+    group: z.string().optional(),
+    advanced: z.boolean().optional(),
+    /** What the agent does when unset: shown, never injected. For variables whose explicit value means more than leaving them unset. */
+    agentDefault: z.string().optional(),
+    /** How the form names "unset", e.g. "Automatic". */
+    unsetLabel: z.string().optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    step: z.number().positive().optional(),
+    unit: z.string().optional(),
+    options: z.array(z.object({ value: z.string(), label: z.string().optional() }).strict()).optional(),
+    /** A fixed check for string settings, from ENV_VAR_FORMATS. */
+    format: z.enum(ENV_VAR_FORMATS).optional(),
   })
   .strict()
+  .superRefine((setting, ctx) => {
+    const issue = (message: string, path: string) => ctx.addIssue({ code: 'custom', message, path: [path] })
+    const type = setting.type ?? 'string'
+    if (type === 'enum' && !setting.options?.length) issue('enum settings must list options', 'options')
+    if (type !== 'enum' && setting.options) issue('only enum settings take options', 'options')
+    const ranged = type === 'number' || type === 'integer'
+    if (!ranged && (setting.min !== undefined || setting.max !== undefined || setting.step !== undefined)) {
+      issue('only number and integer settings take min, max or step', 'min')
+    }
+    if (setting.min !== undefined && setting.max !== undefined && setting.min > setting.max) {
+      issue('min must not be above max', 'min')
+    }
+    if (type !== 'string' && setting.format) issue('only string settings take a format', 'format')
+    if (type === 'secret' && setting.default !== undefined) issue('secret settings take no default', 'default')
+    if (setting.default !== undefined && setting.agentDefault !== undefined) {
+      issue('set default or agentDefault, not both', 'agentDefault')
+    }
+    for (const field of ['default', 'agentDefault'] as const) {
+      const value = setting[field]
+      if (value === undefined || type === 'secret') continue
+      const problem = checkEnvVarValue(setting, value)
+      if (problem) issue(`${field} "${value}" ${problem}`, field)
+    }
+  })
 
 const envSchema = z
   .object({

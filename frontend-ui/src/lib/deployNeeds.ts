@@ -6,14 +6,12 @@
  * asks for nothing; deploying it is refused by the server with the reason.
  */
 import type { DeployRequirements } from './api-types'
+import type { EnvVarSetting } from './agentSettings'
 
 export type AgentMode = 'plan' | 'companion'
 
-export interface OptionalEnvVar {
-  name: string
-  description?: string
-  default?: string
-}
+/** An `env.optional` entry, with its typed-setting fields (#585). */
+export type OptionalEnvVar = EnvVarSetting
 
 export interface DeployNeeds {
   /** Ask for a persona. An agent may declare it uses none. */

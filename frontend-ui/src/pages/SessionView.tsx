@@ -262,6 +262,9 @@ export default function SessionView() {
     // Emotion tags (#face-emotions): same bridge, same consumer.
     transport.onEmotionCues = (data) => setEmotionCues(data)
     transport.onAgentCommand = (data) => useStore.getState().applyAgentCommand(data)
+    // A status from the last session's agent must not show on this one.
+    useStore.getState().applySttStatus({ state: 'ready' })
+    transport.onSttStatus = (data) => useStore.getState().applySttStatus(data)
     transport.onProcessingMessage = (m: ProcessingMessage) => addProcessingMessage(m)
 
     // === TTS handlers (from ConnectPanel) ===
@@ -494,6 +497,7 @@ export default function SessionView() {
       transport.onSpeechProgress = () => { }
       transport.onEmotionCues = () => { }
       transport.onAgentCommand = () => { }
+      transport.onSttStatus = () => { }
       transport.onProcessingMessage = () => { }
       transport.onTTSStart = () => { }
       transport.onTTSStop = () => { }

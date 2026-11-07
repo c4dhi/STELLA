@@ -79,6 +79,19 @@ Verify:
 kubectl get nodes
 ```
 
+### crictl configuration (relocated data-dir)
+
+Standalone `crictl` (used by the deploy scripts' housekeeping, not the `k3s crictl` wrapper) only auto-detects K3s's containerd socket when K3s runs with its default data-dir. With the kubelet data-dir relocated above, point it at K3s's own socket explicitly:
+
+```bash
+cat <<EOF | sudo tee /etc/crictl.yaml
+runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+image-endpoint: unix:///run/k3s/containerd/containerd.sock
+EOF
+```
+
+Without this file, `crictl` prints a config warning instead of a socket error — the deploy scripts detect that and skip the related cleanup step with a warning rather than failing the deploy, but the untagged-digest backlog then only clears on a rebuilt host once this step is done by hand.
+
 ## 4. GPU Verification
 
 Confirm the GPU is detected and drivers are working:

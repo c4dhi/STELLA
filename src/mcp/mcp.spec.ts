@@ -326,8 +326,11 @@ function setup() {
             userId: 'u1',
             name: 'Keys',
             description: null,
-            variableKeys: ['OPENAI_API_KEY'],
+            variableKeys: ['OPENAI_API_KEY', 'TTS_SPEED'],
             agentTypeId: 'at1',
+            settings: { TTS_SPEED: '3' },
+            invalid: { TTS_SPEED: 'must be between 0.5 and 2' },
+            needsCheck: true,
           },
         ]),
       } as any,
@@ -758,8 +761,11 @@ describe('MCP session and agent tools', () => {
         id: 'e1',
         name: 'Keys',
         description: null,
-        variableKeys: ['OPENAI_API_KEY'],
+        variableKeys: ['OPENAI_API_KEY', 'TTS_SPEED'],
         agentTypeId: 'at1',
+        // What does not fit, and why, but never a value — not even a setting's.
+        invalid: { TTS_SPEED: 'must be between 0.5 and 2' },
+        needsCheck: true,
       },
     ]);
   });
@@ -986,6 +992,20 @@ describe('One shape for every tool', () => {
       READ,
     );
     expect(parse(missing).error.status).toBe(404);
+  });
+
+  it('never sends clients to agent_types_list for the pipeline schema (#820)', async () => {
+    const offenders: string[] = [];
+    for (const t of await schemas()) {
+      const texts = [t.description, ...Object.values(t.inputSchema.properties ?? {}).map((s: any) => s.description)];
+      for (const text of texts) {
+        if (!text) continue;
+        if ((/pipeline ?schema|configSchema/i.test(text)) && /agent_types_list/.test(text)) {
+          offenders.push(t.name);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('deploys by agent type id', async () => {

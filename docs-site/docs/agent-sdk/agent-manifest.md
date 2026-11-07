@@ -161,6 +161,8 @@ The agent receives its `defaultConfig` at the top level of `AGENT_CONFIG`, uncha
 
 `env.optional` defaults are shown to the user when deploying and are set on the pod for every variable the deployer leaves empty, on deploy and on restart. A value the deployer enters wins. Keep the agent's own fallback the same as the declared default, for runs outside STELLA.
 
+An `env.optional` entry can also carry a type (`boolean`, `integer`, `number`, `enum`, `string`, `secret`), a label, a tab (`group`), a range or options, and a fixed `format` for strings. The deploy dialog and the template editor show it as one control, and a value that does not fit is refused on save, deploy, restart and wake. The fields are listed in [Environment variables](../architecture/environment-variables.md#manifest-declaration).
+
 ## SDK versions
 
 STELLA supports a window of `stella-ai-agent-sdk` versions. `GET /agent-types/sdk-support` returns it as `{ minSupported, current }`.
