@@ -41,11 +41,12 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
 
-      # The examples import the SDK and the OpenAI client; nothing else is run.
+      # The examples import the SDK, the OpenAI client and pytest (the testing
+      # examples); nothing else is run.
       - name: Install the SDK
         run: |
           uv pip install --system -e agents/stella-ai-agent-sdk
-          uv pip install --system openai
+          uv pip install --system openai pytest
 
       - name: Check the examples import
         run: python scripts/check-sdk-doc-examples.py
