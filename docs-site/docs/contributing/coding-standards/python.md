@@ -37,7 +37,7 @@ mypy src/
 | Type | Convention | Example |
 |------|------------|---------|
 | Classes | PascalCase | `BaseAgent` |
-| Functions | snake_case | `on_transcript` |
+| Functions | snake_case | `on_session_start` |
 | Variables | snake_case | `session_id` |
 | Constants | UPPER_SNAKE | `MAX_RETRIES` |
 | Private | _leading | `_internal_state` |
@@ -45,122 +45,108 @@ mypy src/
 
 ## Code Examples
 
+These follow the SDK as it is (`stella_agent_sdk`); the example agent in the SDK, `agents/stella-ai-agent-sdk/examples/openai_agent.py`, is the full version.
+
 ### Agent
 
 ```python
-"""Customer support agent implementation."""
+"""Customer support agent."""
 
-from typing import Optional
+from typing import Any, AsyncIterator, Dict
 
 from openai import AsyncOpenAI
-from stella_sdk import BaseAgent, AudioPipeline, tool
-
-from .config import settings
+from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent
 
 
 class CustomerSupportAgent(BaseAgent):
-    """Agent for handling customer support conversations."""
+    """Answers customer questions, one LLM call per turn."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.pipeline = AudioPipeline(
-            stt_provider=settings.stt_provider,
-            tts_provider=settings.tts_provider,
-        )
         self.openai = AsyncOpenAI()
-        self.history: list[dict] = []
+        self.history: list[dict[str, str]] = []
 
-    async def on_connect(self) -> None:
-        """Handle connection to the LiveKit room."""
-        greeting = "Hello! How can I help you today?"
-        await self.speak(greeting)
+    async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
+        """Start each session with an empty history."""
+        await super().on_session_start(session_id, config)  # fills self.session and self.persona
+        self.history = []
 
-    async def on_transcript(self, text: str, is_final: bool) -> None:
-        """Process transcribed speech.
-
-        Args:
-            text: The transcribed text
-            is_final: Whether this is a final transcription
-        """
-        if not is_final:
-            return
-
-        self.history.append({"role": "user", "content": text})
-        response = await self._generate_response(text)
-        await self.speak(response)
-
-    async def _generate_response(self, user_input: str) -> str:
-        """Generate a response using the LLM."""
+    async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
+        """Reply to one user turn; the SDK speaks what is yielded."""
+        self.history.append({"role": "user", "content": input.text})
         result = await self.openai.chat.completions.create(
-            model=settings.openai_model,
+            model="gpt-4o-mini",
             messages=self.history,
         )
-        return result.choices[0].message.content
+        reply = result.choices[0].message.content or ""
+        self.history.append({"role": "assistant", "content": reply})
+        yield AgentOutput.text_final(input.session_id, reply)
+
+    async def on_interrupt(self, session_id: str) -> None:
+        """Required; SDK 0.10.0's default loop does not call it."""
 ```
 
 ### Tool
 
 ```python
-"""Search tools for the agent."""
+"""Search tool for the agent."""
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from stella_sdk import tool
-
-from .database import db
+from stella_agent_sdk import BaseTool, ToolResult
 
 
-@tool
-async def search_knowledge(
-    query: str,
-    category: Optional[str] = None,
-    limit: int = 5,
-) -> dict:
-    """Search the knowledge base for relevant articles.
+class SearchKnowledge(BaseTool):
+    """Search the knowledge base for relevant articles."""
 
-    Args:
-        query: The search query
-        category: Optional category filter
-        limit: Maximum number of results
+    def __init__(self, db: Any) -> None:
+        self.db = db
 
-    Returns:
-        dict: Search results with articles
-    """
-    results = await db.search(query, category=category, limit=limit)
+    @property
+    def name(self) -> str:
+        return "search_knowledge"
 
-    return {
-        "found": len(results) > 0,
-        "articles": [
-            {"title": r.title, "summary": r.summary}
-            for r in results
-        ],
-    }
+    @property
+    def description(self) -> str:
+        return "Search the knowledge base for articles about the user's question."
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to search for"},
+                "limit": {"type": "integer", "description": "Maximum results", "default": 5},
+            },
+            "required": ["query"],
+        }
+
+    async def execute(self, query: str, limit: int = 5, category: Optional[str] = None) -> ToolResult:
+        results = await self.db.search(query, category=category, limit=limit)
+        return ToolResult(
+            success=True,
+            data={"articles": [{"title": r.title, "summary": r.summary} for r in results]},
+        )
 ```
 
 ## File Organization
 
+An agent is a package with its `agent.yaml` next to it, as STELLA V2 is laid out:
+
 ```
 agents/stella-v2-agent/
-├── src/
-│   └── stella_agent/
-│       ├── __init__.py
-│       ├── agent.py
-│       ├── config.py
-│       ├── pipeline/
-│       │   ├── __init__.py
-│       │   ├── audio.py
-│       │   └── stt.py
-│       ├── tools/
-│       │   ├── __init__.py
-│       │   └── search.py
-│       └── models/
-│           ├── __init__.py
-│           └── session.py
-├── tests/
-│   ├── test_agent.py
-│   └── test_tools.py
+├── agent.yaml
+├── Dockerfile
 ├── pyproject.toml
-└── README.md
+├── config/
+├── src/
+│   └── stella_v2_agent/
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── agent.py
+│       ├── pipeline/
+│       └── experts/
+└── tests/
 ```
 
 ## Best Practices

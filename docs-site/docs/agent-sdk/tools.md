@@ -5,369 +5,376 @@ title: "🔧 Tools"
 
 # 🔧 Tools
 
-Tools allow agents to execute custom functions during conversations, enabling them to search databases, call APIs, and perform actions beyond simple text generation.
-
-## Overview
-
-Tools are functions that the LLM can call during a conversation. The STELLA Agent SDK integrates with OpenAI's function calling to enable this.
+Tools are functions the LLM can ask your agent to run: look something up, call an API, record an answer. The SDK gives you the building blocks. It does not call an LLM for you: your agent sends the tool schemas to the model it uses, reads the tool calls back, runs them, and returns the results.
 
 ```
-User: "What's the weather in San Francisco?"
+User: "What's the weather in Bern?"
        ↓
-LLM decides to call weather tool
+LLM asks for get_weather(city="Bern")
        ↓
-Tool executes: get_weather("San Francisco")
+Your agent runs the tool → ToolResult(success=True, data={"temp_c": 18, ...})
        ↓
-Result: {"temp": 65, "conditions": "sunny"}
-       ↓
-LLM generates: "The weather in San Francisco is 65°F and sunny."
+LLM gets the result and replies: "It's 18 degrees and sunny in Bern."
 ```
 
-## Defining Tools
+Everything on this page is exported from `stella_agent_sdk`:
 
-### Using the @tool Decorator
+| Name | What it is |
+|---|---|
+| `BaseTool` | Abstract base class for a tool. |
+| `ToolResult` | What a tool returns: `success`, `data`, `error`. |
+| `ToolCall` | One call the LLM asked for: `id`, `name`, `arguments`. |
+| `ToolRegistry` | Holds the tools of a session and builds their schemas. |
+| `ToolExecutor` | Runs tool calls against a registry and builds the result messages. |
 
-```python
-from stella_sdk import tool
+## Defining a tool
 
-@tool
-async def search_knowledge_base(query: str) -> str:
-    """Search the knowledge base for relevant information.
+Subclass `BaseTool` and implement four members: `name`, `description`, `parameters_schema` (a JSON Schema object) and the async `execute`. The LLM's arguments arrive as keyword arguments.
 
-    Args:
-        query: The search query
+```python title="my_agent/tools.py"
+from typing import Any, Dict
 
-    Returns:
-        Relevant information from the knowledge base
-    """
-    results = await kb.search(query)
-    return format_results(results)
-```
+import aiohttp
 
-### Using the Tool Class
+from stella_agent_sdk import BaseTool, ToolResult
 
-```python
-from stella_sdk import Tool
 
-class SearchKnowledgeBase(Tool):
-    name = "search_knowledge_base"
-    description = "Search the knowledge base for relevant information"
+class GetWeatherTool(BaseTool):
+    """Current weather for a city."""
 
-    parameters = {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "The search query"
-            }
-        },
-        "required": ["query"]
-    }
+    @property
+    def name(self) -> str:
+        return "get_weather"
 
-    async def execute(self, query: str) -> str:
-        results = await kb.search(query)
-        return format_results(results)
-```
+    @property
+    def description(self) -> str:
+        return "Get the current weather for a city."
 
-## Registering Tools
-
-### In Agent Constructor
-
-```python
-from stella_sdk import BaseAgent
-
-class MyAgent(BaseAgent):
-    def __init__(self):
-        super().__init__()
-
-        # Register tools
-        self.register_tool(search_knowledge_base)
-        self.register_tool(SearchKnowledgeBase())
-        self.register_tool(get_weather)
-```
-
-### Using Tool List
-
-```python
-class MyAgent(BaseAgent):
-    tools = [
-        search_knowledge_base,
-        get_weather,
-        create_ticket
-    ]
-```
-
-## Tool Parameters
-
-Define parameters using JSON Schema:
-
-```python
-@tool
-async def create_ticket(
-    title: str,
-    description: str,
-    priority: str = "medium"
-) -> dict:
-    """Create a support ticket.
-
-    Args:
-        title: Ticket title
-        description: Detailed description of the issue
-        priority: Priority level (low, medium, high)
-
-    Returns:
-        The created ticket details
-    """
-    ticket = await tickets.create(
-        title=title,
-        description=description,
-        priority=priority
-    )
-    return {"ticket_id": ticket.id, "status": "created"}
-```
-
-The SDK automatically generates the JSON Schema:
-
-```json
-{
-  "name": "create_ticket",
-  "description": "Create a support ticket.",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "title": {
-        "type": "string",
-        "description": "Ticket title"
-      },
-      "description": {
-        "type": "string",
-        "description": "Detailed description of the issue"
-      },
-      "priority": {
-        "type": "string",
-        "description": "Priority level (low, medium, high)",
-        "default": "medium"
-      }
-    },
-    "required": ["title", "description"]
-  }
-}
-```
-
-## Tool Execution Flow
-
-```python
-class MyAgent(BaseAgent):
-    async def generate_response(self, user_input: str) -> str:
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            *self.history,
-            {"role": "user", "content": user_input}
-        ]
-
-        # First call - may include tool calls
-        response = await openai.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            tools=self.get_tool_definitions()
-        )
-
-        # Handle tool calls
-        while response.choices[0].message.tool_calls:
-            tool_calls = response.choices[0].message.tool_calls
-
-            # Add assistant message with tool calls
-            messages.append(response.choices[0].message)
-
-            # Execute each tool call
-            for tool_call in tool_calls:
-                # Notify frontend
-                await self.send_tool_call(
-                    tool_call.function.name,
-                    tool_call.function.arguments
-                )
-
-                # Execute tool
-                result = await self.execute_tool(
-                    tool_call.function.name,
-                    json.loads(tool_call.function.arguments)
-                )
-
-                # Notify frontend of result
-                await self.send_tool_result(tool_call.id, result)
-
-                # Add result to messages
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(result)
-                })
-
-            # Get next response
-            response = await openai.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                tools=self.get_tool_definitions()
-            )
-
-        return response.choices[0].message.content
-```
-
-## Common Tool Patterns
-
-### Database Search
-
-```python
-@tool
-async def search_products(
-    query: str,
-    category: str = None,
-    max_results: int = 5
-) -> list:
-    """Search for products in the catalog."""
-    filters = {}
-    if category:
-        filters["category"] = category
-
-    results = await db.products.search(
-        query=query,
-        filters=filters,
-        limit=max_results
-    )
-
-    return [
-        {"name": p.name, "price": p.price, "id": p.id}
-        for p in results
-    ]
-```
-
-### API Integration
-
-```python
-@tool
-async def check_order_status(order_id: str) -> dict:
-    """Check the status of an order."""
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"{API_URL}/orders/{order_id}") as resp:
-            if resp.status == 404:
-                return {"error": "Order not found"}
-            return await resp.json()
-```
-
-### Creating Records
-
-```python
-@tool
-async def schedule_appointment(
-    date: str,
-    time: str,
-    service: str,
-    customer_name: str
-) -> dict:
-    """Schedule an appointment."""
-    appointment = await appointments.create(
-        date=date,
-        time=time,
-        service=service,
-        customer_name=customer_name
-    )
-
-    return {
-        "confirmation_number": appointment.id,
-        "date": date,
-        "time": time,
-        "message": f"Appointment scheduled for {date} at {time}"
-    }
-```
-
-## Error Handling
-
-```python
-@tool
-async def get_account_balance(account_id: str) -> dict:
-    """Get the balance of an account."""
-    try:
-        account = await accounts.get(account_id)
-        if not account:
-            return {"error": "Account not found"}
-
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
         return {
-            "balance": account.balance,
-            "currency": account.currency
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "description": "City name, e.g. 'Bern'"},
+            },
+            "required": ["city"],
         }
-    except AuthorizationError:
-        return {"error": "Not authorized to access this account"}
-    except Exception as e:
-        return {"error": f"Failed to retrieve balance: {str(e)}"}
+
+    async def execute(self, city: str, **_kwargs) -> ToolResult:
+        async with aiohttp.ClientSession() as http:
+            async with http.get("https://wttr.in/" + city, params={"format": "j1"}) as resp:
+                if resp.status != 200:
+                    return ToolResult(success=False, error=f"No weather for {city}")
+                body = await resp.json(content_type=None)
+        current = body["current_condition"][0]
+        return ToolResult(
+            success=True,
+            data={"temp_c": current["temp_C"], "conditions": current["weatherDesc"][0]["value"]},
+        )
 ```
 
-## Tool Validation
+A tool that needs something from your agent (a client, a list of activities) takes it in `__init__`. The SDK's own state machine tools take a `StateMachineClient` that way.
 
-Add validation to tool parameters:
+### Schemas
+
+`to_openai_schema()` and `to_anthropic_schema()` turn a tool into the format each provider expects:
 
 ```python
-from stella_sdk import tool, ValidationError
-
-@tool
-async def transfer_funds(
-    from_account: str,
-    to_account: str,
-    amount: float
-) -> dict:
-    """Transfer funds between accounts."""
-    # Validate amount
-    if amount <= 0:
-        raise ValidationError("Amount must be positive")
-    if amount > 10000:
-        raise ValidationError("Amount exceeds transfer limit")
-
-    # Validate accounts exist
-    from_acc = await accounts.get(from_account)
-    to_acc = await accounts.get(to_account)
-
-    if not from_acc or not to_acc:
-        raise ValidationError("Invalid account")
-
-    # Perform transfer
-    result = await transfers.create(
-        from_account=from_account,
-        to_account=to_account,
-        amount=amount
-    )
-
-    return {"transfer_id": result.id, "status": "completed"}
+tool = GetWeatherTool()   # the tool defined above
+tool.to_openai_schema()
+# {"type": "function", "function": {"name": "get_weather", "description": ..., "parameters": {...}}}
+tool.to_anthropic_schema()
+# {"name": "get_weather", "description": ..., "input_schema": {...}}
 ```
 
-## Frontend Display
+### Guidance
 
-Tools can send updates to the frontend:
+`BaseTool.guidance` is a class attribute (empty by default) for how to use the tool beyond what its schema says. When you hand a model a set of tools, add the guidance of exactly those tools to the prompt, each distinct text once. That way the instructions travel with the tool and never reach a model that can't call it:
 
 ```python
-@tool
-async def search_flights(
-    origin: str,
-    destination: str,
-    date: str
-) -> list:
-    """Search for available flights."""
-    # This will appear in the UI
-    await agent.send_status("thinking", f"Searching flights from {origin} to {destination}...")
+from typing import List
 
-    flights = await flight_api.search(origin, destination, date)
+from stella_agent_sdk import BaseTool
 
+
+def tool_guidance(tools: List[BaseTool]) -> str:
+    return "\n\n".join(dict.fromkeys(t.guidance for t in tools if t.guidance))
+```
+
+### `ToolResult`
+
+```python
+from stella_agent_sdk import ToolResult
+
+ok = ToolResult(success=True, data={"ticket_id": "T-123"})
+failed = ToolResult(success=False, error="Ticket system is down")
+
+ok.to_dict()       # {"success": True, "data": {"ticket_id": "T-123"}}
+failed.to_dict()   # {"success": False, "error": "Ticket system is down"}
+```
+
+`to_dict()` leaves out `data` and `error` when they are `None`. It is what goes back to the LLM.
+
+## Registering tools
+
+`ToolRegistry` holds one session's tools by name.
+
+```python
+from stella_agent_sdk import ToolRegistry
+
+registry = ToolRegistry()
+registry.register(GetWeatherTool())     # the tool above; ValueError if the name is taken
+# registry.register_all([...])          # several at once
+
+registry.get("get_weather")             # the tool, or None
+registry.has("get_weather")             # also: "get_weather" in registry
+registry.list_names()                   # ["get_weather"]
+registry.list_tools()                   # the tool instances; also: for tool in registry
+len(registry)
+
+openai_tools = registry.get_openai_schemas()
+anthropic_tools = registry.get_anthropic_schemas()
+
+registry.unregister("get_weather")      # True if it was there
+registry.clear()
+```
+
+## Running tool calls
+
+`ToolExecutor` does the per-call work: it looks the tool up, runs it, and turns any exception into `ToolResult(success=False, error=...)`, so one failing tool never breaks the turn. An unknown tool name comes back the same way, listing the tools that exist. The loop around the LLM is yours to write.
+
+| Method | What it does |
+|---|---|
+| `parse_openai_tool_calls(message)` | `ToolCall`s from an OpenAI message object, or from a response dict with `choices`. |
+| `parse_anthropic_tool_calls(response)` | `ToolCall`s from the `tool_use` blocks of an Anthropic response. |
+| `await execute_single(call)` | Runs one call and returns an `ExecutorEvent` with `type=TOOL_RESULT` and `result`. |
+| `execute_tool_calls(calls)` | Async iterator: a `TOOL_CALL` event, then its `TOOL_RESULT` event, for each call in order. |
+| `build_tool_result_message_openai(call_id, result)` | The `role: "tool"` message for OpenAI. |
+| `build_tool_result_message_anthropic(tool_use_id, result)` | The `tool_result` user message for Anthropic. |
+
+`ToolExecutor(registry, on_tool_call=..., on_tool_result=...)` also takes two optional plain (not async) callbacks, called with the tool name and the arguments or the result. `ToolCall.from_openai(...)` and `ToolCall.from_anthropic(...)` build a single call by hand. `ExecutorEvent` and `EventType` live in `stella_agent_sdk.tools.executor`.
+
+### A tool loop with OpenAI
+
+This agent answers each turn with OpenAI, runs the tools it asks for, and reports every call to the debug panel with `AgentOutput.tool_call`:
+
+```python title="my_agent/agent.py"
+import asyncio
+import json
+from typing import Any, AsyncIterator, Dict, List
+
+from openai import AsyncOpenAI
+
+from stella_agent_sdk import (
+    AgentInput,
+    AgentOutput,
+    BaseAgent,
+    ToolExecutor,
+    ToolRegistry,
+    run_agent_from_env,
+)
+
+from .tools import GetWeatherTool
+
+MAX_ROUNDS = 5
+
+
+class WeatherAgent(BaseAgent):
+    def __init__(self) -> None:
+        super().__init__()
+        self.client = AsyncOpenAI()
+        self.registry = ToolRegistry()
+        self.registry.register(GetWeatherTool())
+        self.executor = ToolExecutor(self.registry)
+        self.history: List[Dict[str, Any]] = []
+
+    async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
+        await super().on_session_start(session_id, config)
+        self.history = []
+
+    async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
+        self.history.append({"role": "user", "content": input.text})
+        messages = [{"role": "system", "content": "You are a helpful assistant."}, *self.history]
+
+        for _ in range(MAX_ROUNDS):
+            response = await self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                tools=self.registry.get_openai_schemas(),
+            )
+            message = response.choices[0].message
+            calls = self.executor.parse_openai_tool_calls(message)
+            if not calls:
+                reply = message.content or ""
+                self.history.append({"role": "assistant", "content": reply})
+                yield AgentOutput.text_final(input.session_id, reply)
+                return
+
+            messages.append(message.model_dump(exclude_none=True))
+            for call in calls:
+                event = await self.executor.execute_single(call)
+                yield AgentOutput.tool_call(
+                    input.session_id,
+                    call.name,
+                    arguments=call.arguments,
+                    success=event.result.success,
+                    data=event.result.data if isinstance(event.result.data, dict) else None,
+                    error=event.result.error,
+                )
+                messages.append(self.executor.build_tool_result_message_openai(call.id, event.result))
+
+        yield AgentOutput.text_final(input.session_id, "Sorry, I couldn't finish that.")
+
+
+if __name__ == "__main__":
+    asyncio.run(run_agent_from_env(WeatherAgent()))
+```
+
+Run it as a module (`python -m my_agent.agent`) so the relative import works.
+
+The cap on rounds is yours: the executor doesn't loop on its own, so it is up to you when to stop asking the model.
+
+### Running calls in parallel
+
+When the model asks for several independent calls in one turn, run them together:
+
+```python
+import asyncio
+from typing import Any, Dict, List
+
+from stella_agent_sdk import ToolCall, ToolExecutor
+
+
+async def run_parallel(executor: ToolExecutor, calls: List[ToolCall]) -> List[Dict[str, Any]]:
+    events = await asyncio.gather(*(executor.execute_single(c) for c in calls))
     return [
-        {
-            "flight_number": f.number,
-            "departure": f.departure_time,
-            "arrival": f.arrival_time,
-            "price": f.price
-        }
-        for f in flights
+        executor.build_tool_result_message_openai(call.id, event.result)
+        for call, event in zip(calls, events)
     ]
+```
+
+## Errors and timeouts
+
+Return a failure instead of raising when the model can do something with it: retry, ask the user, or explain. `error` is what the model reads.
+
+```python title="my_agent/tools.py"
+import asyncio
+from typing import Any, Dict
+
+from stella_agent_sdk import BaseTool, ToolResult
+
+
+class LookupOrderTool(BaseTool):
+    def __init__(self, orders) -> None:
+        self._orders = orders   # your own order service
+
+    @property
+    def name(self) -> str:
+        return "lookup_order"
+
+    @property
+    def description(self) -> str:
+        return "Look up an order by its number."
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"order_id": {"type": "string"}},
+            "required": ["order_id"],
+        }
+
+    async def execute(self, order_id: str, **_kwargs) -> ToolResult:
+        if not order_id.isdigit():
+            return ToolResult(success=False, error="Order numbers are digits only. Ask the user again.")
+        try:
+            order = await asyncio.wait_for(self._orders.get(order_id), timeout=10.0)
+        except asyncio.TimeoutError:
+            return ToolResult(success=False, error="The order system timed out. Try again later.")
+        if order is None:
+            return ToolResult(success=False, error=f"No order {order_id}")
+        return ToolResult(success=True, data={"status": order["status"]})
+```
+
+Validate arguments inside `execute` and return a failure for bad ones. There is no separate validation layer: the schema tells the model what to send, `execute` checks what it got.
+
+A tool that keeps running after the turn (a long upload, a slow write) can be registered with `self.defer_tool(name, coro)` on `BaseAgent`. It returns the scheduled task, and the SDK waits for pending tools when the session ends.
+
+## State machine tools
+
+An agent that follows a plan doesn't write its own task tools. `self.plan_runtime` connects to the STELLA state machine, loads the plan and builds a `ToolRegistry` with the SDK's state machine tools:
+
+| Tool | What it does |
+|---|---|
+| `set_deliverable` | Record one value the user gave. |
+| `batch_update` | Record many deliverables and complete or skip many tasks in one call. |
+| `complete_task` | Mark a task done. |
+| `skip_task` | Skip one task. |
+| `skip_state` | Skip the whole current state and move on. |
+| `get_current_state`, `get_pending_tasks`, `get_pending_deliverables` | Read-only queries. |
+
+```python title="my_agent/agent.py"
+from typing import Any, Dict
+
+from stella_agent_sdk import BaseAgent
+
+from .tools import GetWeatherTool
+
+
+class PlanAgent(BaseAgent):
+    async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
+        await super().on_session_start(session_id, config)
+        if self.plan:
+            await self.plan_runtime.start(self.plan)
+            self.registry = self.plan_runtime.tools     # state machine tools
+            self.registry.register(GetWeatherTool())    # plus your own
+```
+
+These tools are the only way the conversation advances: nothing is completed implicitly. Their usage contract is `STATE_MACHINE_TOOL_GUIDANCE`, which is also each write tool's `guidance` (the three read tools have none). Append it to the prompt of any model that gets these tools; don't write your own version:
+
+```python
+from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE, create_state_machine_tools
+```
+
+`create_state_machine_tools(client)` builds the same list for a `StateMachineClient` you manage yourself. To show the state machine's progress in the task panel, see [Progress Tracking](./progress-tracking.md).
+
+## Connector tools
+
+Tools on an outside MCP server (a Connector) are called through `self.connectors`, not through `BaseTool`. See [Connectors](./connectors.md). To offer them to your LLM, wrap each `ConnectorTool` in a small `BaseTool` subclass whose `execute` calls `self.connectors.call_tool(...)`.
+
+## Testing tools
+
+A tool is a plain object, so test it by calling `execute`:
+
+```python title="tests/test_tools.py"
+import pytest
+
+from my_agent.tools import LookupOrderTool
+
+
+class FakeOrders:
+    async def get(self, order_id):
+        return {"status": "shipped"} if order_id == "42" else None
+
+
+@pytest.mark.asyncio
+async def test_lookup_order():
+    tool = LookupOrderTool(FakeOrders())
+
+    found = await tool.execute(order_id="42")
+    assert found.success and found.data == {"status": "shipped"}
+
+    missing = await tool.execute(order_id="7")
+    assert not missing.success
+
+    bad = await tool.execute(order_id="abc")
+    assert "digits" in bad.error
 ```
 
 ## See Also
 
 - [Base Agent](./base-agent.md)
 - [Message Types](./message-types.md)
+- [Connectors](./connectors.md)
+- [Progress Tracking](./progress-tracking.md)
 - [Building Custom Agents](./building-custom-agent.md)

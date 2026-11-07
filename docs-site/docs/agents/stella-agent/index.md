@@ -159,15 +159,27 @@ Audio Out (LiveKit)
 Agents can call custom tools during conversations:
 
 ```python
-from stella_sdk import Tool
+from typing import Any, Dict
 
-class SearchKnowledgeBase(Tool):
-    name = "search_knowledge_base"
-    description = "Search the knowledge base for relevant information"
+from stella_agent_sdk import BaseTool, ToolResult
 
-    async def execute(self, query: str) -> str:
-        # Search logic here
-        return results
+
+class SearchKnowledgeBase(BaseTool):
+    @property
+    def name(self) -> str:
+        return "search_knowledge_base"
+
+    @property
+    def description(self) -> str:
+        return "Search the knowledge base for relevant information"
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}
+
+    async def execute(self, query: str) -> ToolResult:
+        results: list[str] = []  # search logic here
+        return ToolResult(success=True, data=results)
 ```
 
 ## Resource Requirements

@@ -107,7 +107,7 @@ const config: Config = {
             },
             {
               label: 'SDK Reference',
-              to: '/docs/sdk/overview',
+              to: '/docs/agent-sdk/overview',
             },
           ],
         },
