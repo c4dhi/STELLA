@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Agent Review, where system admins approve or reject uploaded agents** (#897). Before, approving an upload was only possible through an API call, so shared uploads stayed stuck. The page has Pending, Approved and Rejected tabs. Each upload shows its latest build first, then the owner, version, upload date, SDK and what its `agent.yaml` declares. Approve takes optional notes and Reject needs a reason, and the uploader sees either one on their agent card. A decision can be reversed. The same actions are on MCP for system admins (`agent_reviews_list`, `_get`, `_approve`, `_reject`)
+
+### Fixed
+
+- An uploaded agent rejected in review was labelled "Failed" in the Agent Library. It now reads "Rejected"
+
 ---
 
 ## [2.0.0] - 2026-11-07
