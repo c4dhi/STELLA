@@ -1,3 +1,4 @@
+import type { SttStatusEnvelope } from './sttStatus'
 
 export type TurnId = string
 export type Role = 'user' | 'assistant' | 'system' | 'other_user'
@@ -243,6 +244,8 @@ export interface TransportEvents {
   onEmotionCues: (data: AgentEmotionCues) => void
   /** A command from the agent to this device, e.g. `sleep`. */
   onAgentCommand: (data: AgentCommand) => void
+  /** Whether speech recognition is ready to listen (#564). */
+  onSttStatus: (data: SttStatusEnvelope) => void
   onProcessingMessage: (message: ProcessingMessage) => void
   onServerMessage: (msg: unknown) => void
   onTTSStart: () => void
@@ -297,6 +300,7 @@ export type EnvelopeType =
   | 'agent_command'
   | 'client_event'
   | 'agent_playback'
+  | 'stt_status'
   | 'system'
   | 'audio_data'
   | 'audio_stream_start'

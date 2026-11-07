@@ -14,6 +14,7 @@ import { MessageBubble, useMessaging } from './messaging'
 import { determineMessageRole, extractSpeakerInfo } from '../lib/messageUtils'
 import type { ListenerStatus } from '../lib/api-types'
 import type { DebugData } from '../lib/types'
+import { SttStatusChip } from './SttStatusChip'
 
 /** Decisions ride the debug channel but are not diagnostics — see the filter
  *  below. One predicate so the live and replayed paths cannot disagree. */
@@ -563,6 +564,9 @@ export default function ChatView({
                 </button>
               )
             })()}
+
+            {/* Speech recognition still warming up, or failed to (#564) */}
+            <SttStatusChip isDark={isDark} />
 
             {/* Face Button */}
             <button

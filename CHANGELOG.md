@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`image.command` in the manifest** sets a pod's start command. Without it the image's own `CMD` runs.
 - **Agent platform standards** (*Contributing → Coding standards → Agent platform*): the rules that keep STELLA free of agent-specific code, and which module owns which concern.
 - **MCP: `platform_settings_get` and `platform_settings_update`** for system admins. An assistant can read the platform switches and turn "Review uploaded agents" on or off. Nobody else sees the two tools, and a call by name answers 403. The MCP switch and the TTS playback default stay UI-only.
+- When speech recognition is still warming up at the start of a session, after a quiet spell, the participant sees "Getting ready to listen…" (in German or English) and the researcher sees an "STT warming up" chip with a timer and a line on the agent card. After 30 seconds it says it is taking longer than usual; if warming up fails, the participant is asked to tell the study team and the researcher's chip turns red. Nothing shows when the model is already warm (#564)
 
 ### Fixed
 

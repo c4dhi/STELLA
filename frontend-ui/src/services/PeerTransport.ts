@@ -17,6 +17,7 @@ import type {
   StateChangeNotification,
   ProgressUpdateMessage,
 } from '../lib/types'
+import type { SttStatusEnvelope } from '../lib/sttStatus'
 import { Room, RoomEvent, Track, RemoteTrack, RemoteAudioTrack, RemoteParticipant, DataPacket_Kind, RoomConnectOptions, ConnectionState } from 'livekit-client'
 import { getRuntimeConfig } from '../config/runtime'
 import { applyAgentAudioSilencing } from '../lib/agentAudio'
@@ -118,6 +119,7 @@ export class PeerTransport implements Transport {
   onSpeechProgress = (_data: AgentSpeechProgress) => {}
   onEmotionCues = (_data: AgentEmotionCues) => {}
   onAgentCommand = (_data: AgentCommand) => {}
+  onSttStatus = (_data: SttStatusEnvelope) => {}
   onProcessingMessage = (_message: ProcessingMessage) => {}
   onServerMessage = (_msg: unknown) => {}
   onTTSStart = () => {}
@@ -307,6 +309,12 @@ export class PeerTransport implements Transport {
           // A command from the agent to this device (e.g. sleep).
           if (env.type === 'agent_command') {
             this.onAgentCommand(env.data || {})
+            return
+          }
+
+          // Speech recognition still warming up, or failed to (#564).
+          if (env.type === 'stt_status') {
+            this.onSttStatus(env.data || {})
             return
           }
 
