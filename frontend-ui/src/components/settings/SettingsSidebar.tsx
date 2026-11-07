@@ -5,7 +5,7 @@ import { useNotificationStore } from '../../store/notificationStore'
 import { useAuthStore } from '../../store/authStore'
 import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
 
-export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin' | 'platform' | 'mcp'
+export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin' | 'platform' | 'mcp' | 'connectors'
 
 interface SettingsSidebarProps {
   activeSection: SettingsSection
@@ -112,6 +112,16 @@ const sections: SectionItem[] = [
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
         <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </svg>
+    ),
+  },
+  {
+    id: 'connectors',
+    label: 'Connectors',
+    description: 'Outside servers for agents',
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0V8zM12 17v5" />
       </svg>
     ),
   },

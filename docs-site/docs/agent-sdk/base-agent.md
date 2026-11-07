@@ -225,7 +225,7 @@ def is_connected(self) -> bool:
 
 ## Beyond Speech: the Device Channel
 
-An agent can do more on the user's device than speak, and can learn about more than what the user said. The SDK carries these messages and gives them no meaning of its own: which commands and events exist is between your agent and its client. The built-in face client, for example, understands the commands `sleep` and `sleep_allowed` and reports the events `sleep` and `wake`.
+An agent can do more on the user's device than speak, and can learn about more than what the user said. Which commands and events exist is declared in the manifest's [`client` block](./agent-manifest.md#the-client-channel); the SDK refuses anything else, and checks each message's data against its declared schema. The built-in face client, for example, understands the commands `sleep` and `sleep_allowed` and reports the events `sleep` and `wake`, which stella-v2 declares. The envelopes are in [the platform contract](./platform-contract.md#the-screen-and-the-agent).
 
 ### Commands to the device
 
@@ -242,13 +242,18 @@ The client receives `{"type": "agent_command", "data": {"command": ..., ...}}`.
 
 ### on_client_event
 
-Called when the client sends `{"type": "client_event", "data": {"event": ..., ...}}`: something the user did that is neither speech nor text.
+Called when the client sends a declared event, `{"type": "client_event", "data": {"event": ..., ...}}`: something the user did that is neither speech nor text. `data` is the event's own data, already checked. When the screen asked for an answer (the event carried a `request_id`), what you return is the reply, and an exception is an error reply.
 
 ```python
-async def on_client_event(self, session_id: str, event: str, data: dict) -> None:
+async def on_client_event(self, session_id: str, event: str, data: dict) -> dict | None:
     if event == "wake":
         self.start_turn(event="wake")
+    elif event == "rate_answer":
+        self.ratings.append(data["stars"])
+        return {"saved": True}
 ```
+
+Events named `stella.…` never reach it: the SDK handles them (for example `stella.interaction_mode`, the switch between the voice and the text interface).
 
 ### start_turn
 

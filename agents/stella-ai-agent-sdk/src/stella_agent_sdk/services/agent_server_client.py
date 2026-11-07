@@ -6,6 +6,7 @@ from typing import Dict, Optional
 import grpc
 
 from stella_agent_sdk._grpc import agent_pb2, agent_pb2_grpc
+from stella_agent_sdk._version import SDK_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class AgentServerClient:
         agent_type: str,
         agent_version: str,
         capabilities: Optional[Dict[str, str]] = None,
+        sdk_version: Optional[str] = None,
     ) -> Dict[str, any]:
         """
         Register the agent with the session-management-server.
@@ -60,6 +62,8 @@ class AgentServerClient:
             agent_type: Agent type identifier (e.g., "stella-light-agent")
             agent_version: Agent version string
             capabilities: Optional dictionary of agent capabilities
+            sdk_version: stella-ai-agent-sdk version the agent runs (defaults to
+                the installed one). STELLA refuses SDKs older than it supports.
 
         Returns:
             Dictionary with:
@@ -76,6 +80,7 @@ class AgentServerClient:
             agent_type=agent_type,
             agent_version=agent_version,
             capabilities=capabilities or {},
+            sdk_version=sdk_version or SDK_VERSION,
         )
         logger.info(f"Request created: {request}")
 

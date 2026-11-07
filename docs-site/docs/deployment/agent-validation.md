@@ -23,6 +23,22 @@ Custom agents are validated individually when they are packaged, uploaded, or bu
 
 This means a custom agent does not need to be part of the built-in agent set to be validated before deployment.
 
-## Recommended Workflow
+### Who can use an uploaded agent
 
-If you are building your own agent, follow the deployment-test checklist in [Build Your Own Agent](../guides/build-your-own-agent.md#run-deployment-tests).
+- **An upload is its owner's.** Nobody else sees it or can deploy it until the owner shares it.
+- **Sharing is per project.** In Settings → Agent Library, the owner picks the projects to share it with. It is listed for those projects' members, marked "Shared by …", and they can deploy it in those projects only. Only the owner can build it, upload a new version, change its sharing or delete it, as with connectors.
+- **Unsharing only stops new deploys.** Agents that are already running in that project keep running, and a paused one can still wake or restart, because that runs as the owner. Stop them from the session if they must go.
+- **Upgrading.** Before this change, every approved upload was listed for everyone. The upgrade shares each upload with the projects that use it as their public agent, and with the projects where another user has it running or paused. Every other upload starts private to its owner.
+- **Review.** While **Review uploaded agents** is on (the default), an upload needs an admin's approval before anyone can deploy it, its owner included, and before it is listed for the projects it is shared with. With review off, the owner can deploy it once it is built, and sharing is what lets others use it.
+
+### A new version, and deleting
+
+- **A new version replaces your old one.** Upload the package again with the same `metadata.slug` and a higher `metadata.version`. STELLA replaces your agent in place, so its env var templates, configurations, shares and public projects keep pointing at it.
+  - The new version must be built (and approved, if review is on) before it can be deployed.
+  - Agents that are running keep the old image until they stop.
+  - A paused agent of it can't wake, and new deploys are refused, until the new version is built (and approved).
+- **Some uploads are refused.** This happens when the version is unchanged, or when the slug belongs to another user's agent or a built-in one. Another user's agent is never replaced.
+- **Deleting.**
+  - Agents of it whose pod is gone (an OOMKilled pod, say) are cleaned up first.
+  - Your own running agents of it are stopped. They keep their transcripts.
+  - The delete is refused while it still runs in another user's session, or while a public project uses it. The message says how many.

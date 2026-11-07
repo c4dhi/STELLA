@@ -11,10 +11,17 @@ import {
 } from './tts-playback.util.js';
 import { HARDWARE_FIT, HardwareFit, scoreHardwareFit } from './hardware-fit.util.js';
 import { MCP_ENABLED_SETTING_KEY, parseMcpEnabledSetting, parseStoredMcpEnabled } from './mcp-enabled.util.js';
+import {
+  AGENT_REVIEW_SETTING_KEY,
+  parseAgentReviewRequiredSetting,
+  parseStoredAgentReviewRequired,
+} from './agent-review.util.js';
 
 // Every MCP request checks the switch, so it is cached. With several backend
 // replicas a change reaches the others within this window.
 const MCP_ENABLED_CACHE_MS = 30_000;
+// Read on every deploy and wake; same caching and window as the MCP switch.
+const AGENT_REVIEW_CACHE_MS = 30_000;
 
 export interface PinnedDeployment {
   name: string;
@@ -31,6 +38,8 @@ export interface PlatformSettingsView {
   pinnedDeployments: PinnedDeployment[];
   // Whether AI clients may reach /mcp (#772). Off unless an admin turns it on.
   mcpEnabled: boolean;
+  // Whether uploaded agents need an admin's approval before they run. Off by default.
+  agentReviewRequired: boolean;
   // How well the voice fits this server under its concurrent load (#93);
   // null only when it could not be read.
   hardwareFit: HardwareFit | null;
@@ -41,12 +50,14 @@ const SWITCH_STAGE = 'tts_playback_switch';
 
 /**
  * Platform-wide defaults a system admin sets in Settings → Platform Defaults:
- * the TTS playback mode (#89) and the MCP switch (#772).
+ * the TTS playback mode (#89), the MCP switch (#772) and whether uploaded
+ * agents need review.
  */
 @Injectable()
 export class PlatformSettingsService {
   private readonly logger = new Logger(PlatformSettingsService.name);
   private mcpEnabledCache: { value: boolean; expiresAt: number } | null = null;
+  private agentReviewCache: { value: boolean; expiresAt: number } | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -77,6 +88,7 @@ export class PlatformSettingsService {
       updatedBy: row?.updatedBy ? row.updatedBy.name || row.updatedBy.email : null,
       pinnedDeployments: await this.listPinnedDeployments(),
       mcpEnabled: await this.isMcpEnabled(),
+      agentReviewRequired: await this.isAgentReviewRequired(),
       hardwareFit: await this.getHardwareFit().catch(error => {
         this.logger.warn(`Could not score the hardware fit: ${error.message}`);
         return null;
@@ -111,6 +123,40 @@ export class PlatformSettingsService {
     });
     this.mcpEnabledCache = null;
     this.logger.log(`Platform setting ${MCP_ENABLED_SETTING_KEY} set to ${value} by ${userId}`);
+    return this.getView();
+  }
+
+  /**
+   * Whether uploaded agents need an admin's approval before they deploy. A
+   * failed read counts as on: when the setting can't be read, unreviewed code
+   * doesn't run (fails closed, like the MCP switch).
+   */
+  async isAgentReviewRequired(): Promise<boolean> {
+    if (this.agentReviewCache && this.agentReviewCache.expiresAt > Date.now()) {
+      return this.agentReviewCache.value;
+    }
+    let value = false;
+    try {
+      const row = await this.prisma.platformSetting.findUnique({ where: { key: AGENT_REVIEW_SETTING_KEY } });
+      value = parseStoredAgentReviewRequired(row?.value);
+    } catch (error) {
+      this.logger.warn(`Could not read ${AGENT_REVIEW_SETTING_KEY}, requiring review: ${error.message}`);
+      return true;
+    }
+    this.agentReviewCache = { value, expiresAt: Date.now() + AGENT_REVIEW_CACHE_MS };
+    return value;
+  }
+
+  async setAgentReviewRequired(raw: unknown, userId: string): Promise<PlatformSettingsView> {
+    const required = parseAgentReviewRequiredSetting(raw);
+    const value = String(required);
+    await this.prisma.platformSetting.upsert({
+      where: { key: AGENT_REVIEW_SETTING_KEY },
+      create: { key: AGENT_REVIEW_SETTING_KEY, value, updatedById: userId },
+      update: { value, updatedById: userId },
+    });
+    this.agentReviewCache = null;
+    this.logger.log(`Platform setting ${AGENT_REVIEW_SETTING_KEY} set to ${value} by ${userId}`);
     return this.getView();
   }
 

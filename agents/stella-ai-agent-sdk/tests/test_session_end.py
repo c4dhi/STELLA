@@ -6,9 +6,10 @@ import json
 import pytest
 
 from stella_agent_sdk.audio.pipeline import AudioPipeline
+from stella_agent_sdk.agent.base import BaseAgent
 from stella_agent_sdk.run import (
     _resolve_farewell_message,
-    _resolve_interrupt_mode,
+    _resolve_session_end_mode,
 )
 
 
@@ -41,27 +42,51 @@ class TestFarewellResolver:
         assert _resolve_farewell_message(cfg) == ""
 
 
-class TestInterruptMode:
-    """_resolve_interrupt_mode reads the author-configured interrupt_handler mode."""
+class _Agent(BaseAgent):
+    async def process(self, input):  # pragma: no cover - not used here
+        if False:
+            yield None
 
-    @pytest.mark.parametrize("mode", ["farewell", "wrap_up", "silent"])
-    def test_valid_modes(self, mode):
-        cfg = {"pipeline_config": {"nodes": {"interrupt_handler": {"mode": mode}}}}
-        assert _resolve_interrupt_mode(cfg) == mode
+    async def on_interrupt(self, session_id):  # pragma: no cover - not used here
+        return None
 
-    @pytest.mark.parametrize(
-        "cfg",
-        [
-            {},
-            {"pipeline_config": None},
-            {"pipeline_config": {}},
-            {"pipeline_config": {"nodes": {}}},
-            {"pipeline_config": {"nodes": {"interrupt_handler": {}}}},
-            {"pipeline_config": {"nodes": {"interrupt_handler": {"mode": "bogus"}}}},
-        ],
-    )
-    def test_defaults_to_farewell(self, cfg):
-        assert _resolve_interrupt_mode(cfg) == "farewell"
+
+class TestSessionEndMode:
+    """The mode comes from the agent (BaseAgent.session_end_mode), not from any
+    agent's Configurator node: by default the SESSION_END_MODE env var."""
+
+    @pytest.mark.parametrize("mode", ["farewell", "wrap_up", "silent", "WRAP_UP"])
+    def test_env_var_picks_the_mode(self, monkeypatch, mode):
+        monkeypatch.setenv("SESSION_END_MODE", mode)
+        assert _resolve_session_end_mode(_Agent()) == mode.lower()
+
+    @pytest.mark.parametrize("value", [None, "", "bogus"])
+    def test_defaults_to_farewell(self, monkeypatch, value):
+        if value is None:
+            monkeypatch.delenv("SESSION_END_MODE", raising=False)
+        else:
+            monkeypatch.setenv("SESSION_END_MODE", value)
+        assert _resolve_session_end_mode(_Agent()) == "farewell"
+
+    def test_pipeline_config_is_not_read_by_the_sdk(self, monkeypatch):
+        monkeypatch.delenv("SESSION_END_MODE", raising=False)
+        agent = _Agent()
+        agent._session_config = agent.session.__class__.model_validate(
+            {"pipeline_config": {"nodes": {"interrupt_handler": {"mode": "silent"}}}}
+        )
+        assert _resolve_session_end_mode(agent) == "farewell"
+
+    def test_an_override_wins_and_a_bad_one_falls_back(self):
+        class Silent(_Agent):
+            def session_end_mode(self):
+                return "silent"
+
+        class Broken(_Agent):
+            def session_end_mode(self):
+                raise RuntimeError("boom")
+
+        assert _resolve_session_end_mode(Silent()) == "silent"
+        assert _resolve_session_end_mode(Broken()) == "farewell"
 
 
 class TestSessionEndDispatch:

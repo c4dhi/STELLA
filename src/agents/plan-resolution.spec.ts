@@ -37,7 +37,8 @@ function applyScoped(
     resolveForDeployConfig: jest.fn(async () => null),
   };
   service.logger = { warn: jest.fn() };
-  return service.applyScopedConfiguration(dto, 'user-1', null, agentConfig);
+  // Plan resolution does not depend on the agent type beyond taking a persona.
+  return service.applyScopedConfiguration(dto, 'user-1', null, agentConfig, { persona: true });
 }
 
 describe('AgentsService plan resolution', () => {

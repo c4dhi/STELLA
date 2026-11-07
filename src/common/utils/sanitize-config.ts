@@ -4,7 +4,7 @@ const logger = new Logger('sanitizeAgentConfig');
 
 // Blocklist of keys that should never be in agent config
 const BLOCKED_KEYS = new Set([
-  'OPENAI_API_KEY', 'ELEVENLABS_API_KEY', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET',
+  'OPENAI_API_KEY', 'TYPESAFE_API_KEY', 'ELEVENLABS_API_KEY', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET',
   'DATABASE_URL', 'JWT_SECRET', 'password', 'secret', 'token', 'credential',
   '__proto__', 'constructor', 'prototype',
 ]);

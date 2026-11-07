@@ -21,6 +21,7 @@ const sidebars: SidebarsConfig = {
         'guides/custom-tools',
         'guides/add-custom-ui',
         'guides/authentication',
+        'guides/text-sessions',
       ],
     },
     {
@@ -81,7 +82,9 @@ const sidebars: SidebarsConfig = {
             'agents/stella-agent/custom-experts',
           ],
         },
+        'agents/stella-jev',
         'agents/echo-agent',
+        'agents/elias-interviewer',
         // Deprecated — kept in the sidebar so existing links resolve and the
         // migration guidance stays findable, but last, after what to actually use.
         'agents/stella-light-agent',

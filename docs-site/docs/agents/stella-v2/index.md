@@ -70,7 +70,7 @@ V1 runs the state machine locally inside the agent process. V2 delegates state m
 
 stella-v2 uses two configuration schemas in `agent.yaml`:
 
-- **`configSchema`**: Top-level agent configuration (plan, LLM defaults, env vars). Includes `x-stella-supports-configurator: true` to enable the pipeline configurator.
+- **`features`**: what a deployment needs. `features.configurator.required: true` turns on the Pipeline Configurator and makes a configuration mandatory; `features.plans` declares the plan and companion modes.
 - **`pipelineSchema`**: Defines the 5 pipeline nodes, their configurable slots, edges between them, and global thresholds.
 
 Users create **Pipeline Configurations** — named, reusable presets that override specific slots. A configuration is **mandatory** when deploying stella-v2. See [Pipeline Configurator](./pipeline-configurator.md) for details.

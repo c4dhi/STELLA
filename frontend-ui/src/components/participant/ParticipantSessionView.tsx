@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Mic,
@@ -24,13 +24,19 @@ import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
+import { COMPLETION_SCREEN_CAP_MS, completionReadingTimeMs } from '../../lib/completionScreen'
 import SessionTimeoutOverlay from './SessionTimeoutOverlay'
-import { VisualizerType } from '../face/types'
+import { TEXT_FACE, VisualizerType, isTextFace } from '../face/types'
+import PermissionsModal from './PermissionsModal'
+import { checkMicrophonePermission } from '../../lib/mediaDevices'
+import TextFace from './TextFace'
+import { mergeHistory, liveIdOf, correlationIdOf } from '../../lib/chatHistory'
 import { apiClient } from '../../services/ApiClient'
 import { determineMessageRole, extractSpeakerInfo } from '../../lib/messageUtils'
 import { useTeleprompter } from '../../hooks/useTeleprompter'
 import { usePersistedState } from '../../hooks/usePersistedState'
 import { applyAgentAudioSilencing } from '../../lib/agentAudio'
+import { announceInteractionMode, createClientChannel, type InteractionMode } from '../../lib/clientChannel'
 import type { DeliveryStatus } from '../../lib/types'
 
 // Message type for participant chat - extends basic message with delivery tracking
@@ -47,6 +53,7 @@ export interface ParticipantMessage {
   speakerName?: string  // Display name of the speaker (for other_user messages)
   deliveryStatus?: DeliveryStatus
   correlationId?: string
+  isStreaming?: boolean  // An agent reply still coming in
 }
 
 interface ConnectionInfo {
@@ -131,6 +138,22 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   )
   const [isGalleryOpen, setIsGalleryOpen] = useState(false)
   const [isChatOpen, setIsChatOpen] = useState(false)
+  // The Text face is the text interface (nothing spoken, microphone off); every
+  // other face is voice. The chat drawer on a voice face is only a fallback for
+  // typing, the voice carries on. The agent is told on each switch.
+  const textFace = isTextFace(currentVisualizer)
+  const interactionMode: InteractionMode = textFace ? 'text' : 'voice'
+  const interactionModeRef = useRef<InteractionMode>('voice')
+
+  // The client channel to the agent (events out, replies in).
+  const roomRef = useRef<Room | null>(null)
+  useEffect(() => { roomRef.current = room }, [room])
+  const clientChannel = useMemo(() => createClientChannel((envelope) => {
+    const r = roomRef.current
+    if (!r || r.state !== 'connected') throw new Error('room not connected')
+    r.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(envelope)), { reliable: true })
+  }), [])
+  useEffect(() => () => clientChannel.close(), [clientChannel])
   const [isFullscreen, setIsFullscreen] = useState(false)
   // Transcript overlays (#343): two independent, persisted preferences instead
   // of one shared subtitles flag. Both default ON — same as the old single
@@ -376,23 +399,24 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           sessionData.participantName
         )
 
+        const agentName = metadata.envelope?.data?.agent_name
         return {
-          id: msg.id,
+          // An agent reply keeps the id it had on screen while it streamed.
+          id: (role === 'assistant' && liveIdOf(metadata)) || msg.id,
           role,
           text: msg.content,
           timestamp: new Date(msg.createdAt),
           messageType: 'message' as const,
           deliveryStatus: 'confirmed' as const, // History messages are always confirmed
-          speakerName: role === 'other_user' ? (speakerDisplayName || 'Organizer') : undefined,
+          correlationId: correlationIdOf(metadata),
+          speakerName: role === 'other_user'
+            ? (speakerDisplayName || 'Organizer')
+            : role === 'assistant' && typeof agentName === 'string' ? agentName : undefined,
         }
       })
 
-      // Prepend history (oldest first) to existing messages, avoiding duplicates
-      setMessages(prev => {
-        const existingIds = new Set(prev.map(m => m.id))
-        const newMessages = historyMessages.filter(m => !existingIds.has(m.id))
-        return [...newMessages, ...prev]
-      })
+      // Prepend history (oldest first) without repeating what is already shown
+      setMessages(prev => mergeHistory(prev, historyMessages))
 
       // Track if there are more messages to load
       setHasMoreMessages(response.hasMore)
@@ -482,12 +506,17 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     }
   }, [sessionData.sessionId, sessionData.authToken, sessionData.identity, sessionData.participantName, isLoadingMore, hasMoreMessages, messages])
 
-  // Load message history when chat is opened
+  // Load message history when a chat shows (the drawer or the Text face)
   useEffect(() => {
-    if (isChatOpen && !historyLoaded) {
+    if ((isChatOpen || textFace) && !historyLoaded) {
       loadMessageHistory()
     }
-  }, [isChatOpen, historyLoaded, loadMessageHistory])
+  }, [isChatOpen, textFace, historyLoaded, loadMessageHistory])
+
+  // The drawer belongs to the voice faces.
+  useEffect(() => {
+    if (textFace) setIsChatOpen(false)
+  }, [textFace])
 
   // Ref to store the remote audio track for analysis
   const remoteAudioTrackRef = useRef<RemoteTrack | null>(null)
@@ -557,6 +586,9 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       try {
         const decoder = new TextDecoder()
         const envelope = JSON.parse(decoder.decode(payload))
+
+        // An agent's reply to an event this screen sent.
+        if (clientChannel.handleEnvelope(envelope)) return
 
         // Terminal auto-end signal from the agent (#198): the agent has finished its
         // closing turn and is disconnecting. THIS is when the timeout overlay shows —
@@ -808,6 +840,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
               noteTeleprompterText(transcriptId, text)
             }
 
+            const agentName = typeof msgData.agent_name === 'string' ? msgData.agent_name : undefined
             setMessages(prev => {
               const existingIdx = prev.findIndex(m => m.id === transcriptId)
               if (existingIdx >= 0) {
@@ -816,6 +849,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
                 updated[existingIdx] = {
                   ...updated[existingIdx],
                   text,
+                  isStreaming: !isFinal,
                 }
                 return updated
               } else {
@@ -825,6 +859,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
                   role: 'assistant',
                   text,
                   timestamp: new Date(),
+                  isStreaming: !isFinal,
+                  speakerName: agentName,
                 }]
               }
             })
@@ -834,7 +870,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         console.error('Error parsing data:', error)
       }
     },
-    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, noteEmotionCues, clearTeleprompterText]
+    [pendingCorrelationIds, sessionData.identity, sessionData.participantName, sessionData.maxSessionDurationSeconds, applySpeechProgress, noteTeleprompterText, noteEmotionCues, clearTeleprompterText, clientChannel]
   )
 
   // Handle room disconnection
@@ -856,6 +892,11 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
 
   // Handle participant joined (for real-time notifications)
   const handleParticipantConnected = useCallback((participant: RemoteParticipant) => {
+    // An agent that joins (or restarts) while the text interface is open starts
+    // in voice: tell it, once it has had a moment to start listening.
+    if (participant.identity.startsWith('agent-') && interactionModeRef.current === 'text') {
+      setTimeout(() => void announceInteractionMode(clientChannel, 'text'), 1000)
+    }
     // Skip agents and the message recorder
     if (participant.identity.startsWith('agent-') || participant.identity === 'message-recorder') {
       return
@@ -870,7 +911,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       eventType: 'joined',
       participantName: participant.name || participant.identity,
     }])
-  }, [])
+  }, [clientChannel])
 
   // Handle participant left (for real-time notifications)
   const handleParticipantDisconnected = useCallback((participant: RemoteParticipant) => {
@@ -1105,13 +1146,53 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   // PeerTransport.sendClientEvent).
   const sendClientEvent = useCallback((event: string) => {
     if (!room || room.state !== 'connected') return
-    const envelope = { type: 'client_event', data: { event, timestamp: Date.now() } }
     try {
-      room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify(envelope)), { reliable: true })
+      clientChannel.send(event)
     } catch (error) {
       console.error('[Participant] Error sending client event:', error)
     }
-  }, [room])
+  }, [room, clientChannel])
+
+  // A session that started on the Text face skipped the device check when the
+  // participant joined. Switching to a voice face asks for the microphone then,
+  // unless the browser already allows it; switching back closes the check.
+  const [deviceCheckOpen, setDeviceCheckOpen] = useState(false)
+  const deviceModeRef = useRef<InteractionMode>(interactionMode)
+  useEffect(() => {
+    const previous = deviceModeRef.current
+    deviceModeRef.current = interactionMode
+    if (interactionMode === 'text') {
+      setDeviceCheckOpen(false)
+      return
+    }
+    if (previous !== 'text') return
+    let cancelled = false
+    void checkMicrophonePermission().then((state) => {
+      if (!cancelled && state !== 'granted') setDeviceCheckOpen(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [interactionMode])
+
+  // Voice or text interface: tell the agent on every switch, and take the
+  // microphone away on the text side (give it back if that is what took it).
+  const mutedForTextRef = useRef(false)
+  useEffect(() => {
+    if (!room || room.state !== 'connected') return
+    if (interactionModeRef.current === interactionMode) return
+    interactionModeRef.current = interactionMode
+    void announceInteractionMode(clientChannel, interactionMode)
+    if (interactionMode === 'text' && !isMuted) {
+      mutedForTextRef.current = true
+      void toggleMicrophone()
+    } else if (interactionMode === 'voice' && mutedForTextRef.current) {
+      mutedForTextRef.current = false
+      if (isMuted) void toggleMicrophone()
+    }
+    // Only a switch acts; mic changes alone must not re-run it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interactionMode, room, clientChannel])
   useSleepEvents({ send: sendClientEvent, enabled: room?.state === 'connected' })
   // Captions go when she falls asleep: the last thing she said should not
   // stay on screen under a sleeping face.
@@ -1164,6 +1245,25 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       setIsMuted(true)
     }
   }, [sessionCompleted, sessionTimedOut, isMuted, room])
+
+  // The completion screen waits until the agent's last message has been heard
+  // and read (lib/completionScreen.ts); the microphone above stops at once.
+  const [showCompletedScreen, setShowCompletedScreen] = useState(false)
+  const lastAgentMessage = useMemo(
+    () => [...messages].reverse().find((m) => m.role === 'assistant'),
+    [messages],
+  )
+  useEffect(() => {
+    if (!sessionCompleted || showCompletedScreen) return
+    const cap = setTimeout(() => setShowCompletedScreen(true), COMPLETION_SCREEN_CAP_MS)
+    return () => clearTimeout(cap)
+  }, [sessionCompleted, showCompletedScreen])
+  useEffect(() => {
+    if (!sessionCompleted || showCompletedScreen) return
+    if (isRemoteSpeaking || lastAgentMessage?.isStreaming) return
+    const read = setTimeout(() => setShowCompletedScreen(true), completionReadingTimeMs(lastAgentMessage?.text))
+    return () => clearTimeout(read)
+  }, [sessionCompleted, showCompletedScreen, isRemoteSpeaking, lastAgentMessage?.isStreaming, lastAgentMessage?.text])
 
   // Handle mouse movement to show/hide controls
   useEffect(() => {
@@ -1263,8 +1363,8 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   useEffect(() => {
     const handleSpacebar = (event: KeyboardEvent) => {
       if (event.key === ' ' || event.code === 'Space') {
-        // Don't toggle if typing in chat
-        if (isChatOpen && document.activeElement?.tagName === 'INPUT') return
+        // While typing (drawer or Text face) space is just a space.
+        if (isChatOpen || textFace) return
 
         event.preventDefault()
 
@@ -1289,9 +1389,21 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     return () => {
       document.removeEventListener('keydown', handleSpacebar)
     }
-  }, [toggleMicrophone, isChatOpen, isMuted])
+  }, [toggleMicrophone, isChatOpen, textFace, isMuted])
 
   // Loading state
+  // A typed message shows straight away, as "sending" until the agent echoes it.
+  const addOptimisticMessage = useCallback((message: ParticipantMessage) => {
+    setMessages(prev => [...prev, message])
+    if (message.correlationId) {
+      setPendingCorrelationIds(prev => {
+        const next = new Set(prev)
+        next.add(message.correlationId!)
+        return next
+      })
+    }
+  }, [])
+
   if (isConnecting) {
     return (
       <motion.div
@@ -1355,9 +1467,28 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         />
       </div>
 
-      {/* Audio Enable Overlay - shown until user clicks to enable audio */}
+      {/* The Text face: the whole conversation in writing (#92) */}
+      {textFace && (
+        <TextFace
+          messages={messages}
+          room={room}
+          participantName={sessionData.participantName}
+          isLoadingHistory={isLoadingHistory}
+          hasMoreMessages={hasMoreMessages}
+          isLoadingMore={isLoadingMore}
+          onLoadMore={loadMoreMessages}
+          onSendOptimisticMessage={addOptimisticMessage}
+          onOpenGallery={sessionData.visualizerLocked ? undefined : () => setIsGalleryOpen(true)}
+          onOpenSupport={() => setIsSupportOpen(true)}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={toggleFullscreen}
+        />
+      )}
+
+      {/* Audio Enable Overlay - shown until user clicks to enable audio
+          (not on the Text face: nothing is played there) */}
       <AnimatePresence>
-        {!audioEnabled && (
+        {!audioEnabled && !textFace && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -1390,7 +1521,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       {/* Top-right control buttons */}
       <motion.div
         className={`absolute top-6 right-6 flex gap-3 z-50 transition-opacity duration-300 ${
-          showControls && !isGalleryOpen && !isChatOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls && !isGalleryOpen && !isChatOpen && !textFace ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         {/* Microphone Button */}
@@ -1537,16 +1668,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         hasMoreMessages={hasMoreMessages}
         isLoadingMore={isLoadingMore}
         onLoadMore={loadMoreMessages}
-        onSendOptimisticMessage={(message) => {
-          setMessages(prev => [...prev, message])
-          if (message.correlationId) {
-            setPendingCorrelationIds(prev => {
-              const next = new Set(prev)
-              next.add(message.correlationId!)
-              return next
-            })
-          }
-        }}
+        onSendOptimisticMessage={addOptimisticMessage}
       />
 
       {/* Teleprompter Overlay (#241): agent speech, word-by-word highlight.
@@ -1558,20 +1680,20 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         text={teleprompterText}
         spokenChar={teleprompterSpokenChar}
         theme={currentVisualizer}
-        isVisible={showAgentTranscript && !isChatOpen && !isAsleep && (sessionTimeUp || !userTranscript.trim())}
+        isVisible={showAgentTranscript && !isChatOpen && !textFace && !isAsleep && (sessionTimeUp || !userTranscript.trim())}
       />
 
       {/* Transcript Overlay — hidden once time is up so it can't mask the farewell. */}
       <TranscriptOverlay
         transcript={userTranscript}
         theme={currentVisualizer}
-        isVisible={showUserTranscript && !sessionTimeUp && !isAsleep}
+        isVisible={showUserTranscript && !textFace && !sessionTimeUp && !isAsleep}
       />
 
       {/* Bottom hint */}
       <motion.div
         className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-40 transition-opacity duration-300 ${
-          showControls && !isGalleryOpen && !isChatOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls && !isGalleryOpen && !isChatOpen && !textFace ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div className="text-white/40 text-sm flex items-center gap-2">
@@ -1584,7 +1706,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       {/* Participant name badge with session timer */}
       <motion.div
         className={`absolute bottom-4 right-6 z-40 transition-opacity duration-300 ${
-          showControls && !isGalleryOpen && !isChatOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          showControls && !isGalleryOpen && !isChatOpen && !textFace ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
       >
         <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-full px-4 py-2 text-white/70 text-sm flex items-center gap-2">
@@ -1635,11 +1757,29 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         </motion.div>
       )}
 
+      {/* Device check on switching from the Text face to a voice face */}
+      {deviceCheckOpen && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto">
+          <PermissionsModal
+            isOpen
+            participantName={sessionData.participantName}
+            subtitle="Voice needs your microphone. Check it before you continue."
+            actionLabel="Continue with voice"
+            cancelLabel="Stay in writing"
+            onComplete={() => setDeviceCheckOpen(false)}
+            onCancel={() => {
+              setDeviceCheckOpen(false)
+              setCurrentVisualizer(TEXT_FACE)
+            }}
+          />
+        </div>
+      )}
+
       {/* Session Completed Overlay */}
-      <SessionCompletedOverlay isVisible={sessionCompleted} participantName={sessionData.participantName} />
+      <SessionCompletedOverlay isVisible={showCompletedScreen} />
 
       {/* Session Timeout Overlay */}
-      <SessionTimeoutOverlay isVisible={sessionTimedOut && !sessionCompleted} failureCode={`f-${sessionData.participantName}`} />
+      <SessionTimeoutOverlay isVisible={sessionTimedOut && !sessionCompleted} />
 
       </div>{/* End fullscreen container wrapper */}
     </motion.div>

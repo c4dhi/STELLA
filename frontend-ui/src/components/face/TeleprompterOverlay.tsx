@@ -19,6 +19,7 @@ import { TranscriptThemeConfig } from './TranscriptOverlay';
 import SpokenText from './SpokenText';
 
 const THEME_CONFIGS: Record<VisualizerType, TranscriptThemeConfig> = {
+  text: { background: 'bg-black/40', border: 'border-white/10', textColor: 'text-white', blur: 'backdrop-blur-md' },
   face: { background: 'bg-black/40', border: 'border-white/10', textColor: 'text-white', blur: 'backdrop-blur-md' },
   sphere: { background: 'bg-slate-900/50', border: 'border-violet-500/20', textColor: 'text-white', blur: 'backdrop-blur-md' },
   galaxy: { background: 'bg-indigo-950/50', border: 'border-purple-500/20', textColor: 'text-white', blur: 'backdrop-blur-md' },

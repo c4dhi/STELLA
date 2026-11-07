@@ -22,6 +22,9 @@ class TranscriptEvent:
     confidence: float
     timestamp_ms: int
     speech_started: bool = False
+    # Typed in the chat (user_text), not heard. The gate never drops it: the
+    # chat already shows it as sent, so it is the participant's next turn.
+    typed: bool = False
     # VAD has heard enough CONTINUOUS speech to call this an interruption rather
     # than a backchannel. Emitted once per utterance, from VAD alone — no decode,
     # no text, so it does not carry transcription latency or language risk.
@@ -42,6 +45,9 @@ class TranscriptEvent:
     # True when this transcript was produced by a committed barge-in and is
     # being injected as a new turn (set by the pipeline, not the STT service).
     is_barge_in: bool = False
+    # What this turn takes back: earlier finals whose reply nobody heard, which
+    # ``text`` already includes (set by the pipeline, not the STT service).
+    taken_back: Optional[List[str]] = None
     # Raw JSON from the STT decode-diagnostics pass; "" unless the STT service
     # has STT_DECODE_DIAGNOSTICS enabled. Forwarded verbatim — the SDK does not
     # interpret the schema, it only surfaces it for analytics.

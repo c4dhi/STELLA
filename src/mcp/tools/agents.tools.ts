@@ -121,6 +121,33 @@ export class AgentsTools implements McpToolProvider {
             'env var template',
             'env_var_templates_list',
           ).optional(),
+          connectorBindings: z
+            .array(
+              z.object({
+                connectorId: idArg(
+                  'connector',
+                  'connectors_list with this projectId',
+                ),
+                slot: z
+                  .string()
+                  .optional()
+                  .describe(
+                    "A connector slot the agent type declares in agent.yaml (connectors)",
+                  ),
+                handle: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'Name the agent uses; defaults to the slot, then the connector handle',
+                  ),
+              }),
+            )
+            .max(20)
+            .optional()
+            .describe(
+              'Outside MCP servers the agent may call. Every required slot of the agent type needs one; ' +
+                'the agent never receives their tokens.',
+            ),
         },
         annotations: CREATES,
         handler: async (args, ctx) => {
@@ -138,6 +165,7 @@ export class AgentsTools implements McpToolProvider {
             mode: args.mode,
             availablePlanIds: args.availablePlanIds,
             envVarTemplateId: args.envVarTemplateId,
+            connectorBindings: args.connectorBindings,
           };
           const agent = await this.agents.create(
             args.sessionId,

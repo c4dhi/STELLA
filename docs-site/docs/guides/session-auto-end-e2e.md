@@ -28,8 +28,8 @@ first agent message ─► cap timer armed (SessionTimeoutService)
 ## Prerequisites
 
 1. **Rebuild the agent image** — the SDK/agent changes (`pipeline._handle_data_message`
-   `session_end` branch, `run.py` handler, `on_session_ending`, the `interrupt_handler`
-   `agent.yaml` node) only run in a rebuilt agent. A backend (SMS) rebuild alone is
+   `session_end` branch, `run.py` handler, `on_session_ending`, and the agent's
+   `session_end_mode()`) only run in a rebuilt agent. A backend (SMS) rebuild alone is
    **not** enough: rebuild the agent **base image** and re-tag the cached
    `cfg-<fingerprint>` image.
 2. **Apply the migration** — `npx prisma migrate deploy` (runs automatically via
@@ -88,7 +88,7 @@ first agent message ─► cap timer armed (SessionTimeoutService)
 
 To verify the hard deadline (agent never finishes its wrap-up):
 
-1. Set the agent's interrupt mode to `wrap_up` and make `on_session_ending` hang
+1. Make the agent's `session_end_mode()` return `wrap_up` (or set `SESSION_END_MODE=wrap_up`; for Stella Light, its Configurator's `interrupt_handler` node) and make `on_session_ending` hang
    (or just confirm the timing with a slow TTS).
 2. The backend **force-closes at the backstop** regardless (wait budget + farewell
    reserve = ~45s after `CLOSING`) — `status` reaches `CLOSED` and

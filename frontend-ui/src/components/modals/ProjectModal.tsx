@@ -16,9 +16,13 @@ import type {
   AgentConfiguration,
   TtsCapabilities,
   Persona,
+  AvailableConnector,
 } from '../../lib/api-types'
-import { parseAgentRequirements } from '../../lib/api-types'
+import { deployNeeds } from '../../lib/deployNeeds'
+import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
+import ConnectorsStep from '../shared/ConnectorsStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
+import WizardProgress from '../shared/WizardProgress'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
 import {
   AgentGalleryStep,
@@ -31,6 +35,8 @@ import {
   DEFAULT_EXPIRATION_OPTIONS,
   SessionDurationSelectionStep,
 } from '../shared'
+import { WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
+import { choiceCardClass } from '../shared/wizardChoice'
 
 interface ProjectModalProps {
   isOpen: boolean
@@ -40,7 +46,7 @@ interface ProjectModalProps {
   onProjectUpdated?: (project: Project) => void
 }
 
-type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
+type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'connectors' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
 type ProjectType = 'private' | 'public'
 type EnvVarsView = 'select' | 'edit'
 
@@ -60,7 +66,8 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'configuration', number: 3, label: 'Configuration' },
   { id: 'persona', number: 4, label: 'Persona' },
   { id: 'plan', number: 5, label: 'Plan' },
-  { id: 'voice', number: 6, label: 'Voice & Language' },
+  { id: 'connectors', number: 7, label: 'Connectors' },
+  { id: 'voice', number: 8, label: 'Voice & Language' },
   { id: 'envvars', number: 7, label: 'Env Vars' },
   { id: 'visualizer', number: 8, label: 'Visualizer' },
   { id: 'duration', number: 9, label: 'Session Duration' },
@@ -140,11 +147,30 @@ export default function ProjectModal({
   const [publicLink, setPublicLink] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
-  // Parse agent requirements
-  const agentRequirements = useMemo(() => {
-    if (!selectedAgentType) return { requiresPlan: false, requiredEnvVars: [] as string[], supportsConfigurator: false }
-    return parseAgentRequirements(selectedAgentType.configSchema)
-  }, [selectedAgentType])
+  // What this agent needs, as the server resolved it from its agent.yaml.
+  // Public sessions run a single plan, so only the plan mode is offered here.
+  const needs = useMemo(() => deployNeeds(selectedAgentType), [selectedAgentType])
+  const runsPlan = needs.modes.includes('plan')
+
+  const requirements = selectedAgentType?.requirements
+
+  // Connectors. The project does not exist yet while this wizard runs, so
+  // nothing is shared with it: the owner's own connectors are offered. Public
+  // agents are deployed as the owner, so those are the ones they can use.
+  const connectorSlots = useMemo(() => requirements?.connectors ?? [], [requirements])
+  const [ownConnectors, setOwnConnectors] = useState<AvailableConnector[]>([])
+  const [connectorsLoading, setConnectorsLoading] = useState(false)
+  const [connectorsError, setConnectorsError] = useState<string | null>(null)
+  // Ticked connectors, in ticking order; the agent's slots are filled from them.
+  const [selectedConnectors, setSelectedConnectors] = useState<string[]>([])
+  useEffect(() => {
+    setSelectedConnectors(initialSelection(connectorSlots, ownConnectors))
+  }, [connectorSlots, ownConnectors])
+  const slotChoices = useMemo(
+    () => assignSlots(connectorSlots, ownConnectors, selectedConnectors),
+    [connectorSlots, ownConnectors, selectedConnectors],
+  )
+  const showConnectorsStep = connectorSlots.length > 0 || ownConnectors.length > 0
 
   // The language the selected plan declares, if it declares one. A plan written
   // in German is German wherever it is deployed, so it — not the operator —
@@ -159,34 +185,34 @@ export default function ProjectModal({
   // Dynamic steps for public project (excluding basic)
   const publicSteps = useMemo((): Step[] => {
     const s: Step[] = ['agent', 'configure']
-    if (agentRequirements.supportsConfigurator && selectedAgentType?.pipelineSchema) {
+    if (needs.configurator && selectedAgentType?.pipelineSchema) {
       s.push('configuration')
     }
     // Persona BEFORE plan: identity is the thing an operator picks first, and a
     // public visitor never gets to choose it — whatever is set here is what
     // every session on this link runs with.
-    s.push('persona')
+    if (needs.persona) {
+      s.push('persona')
+    }
     // Plan BEFORE voice: the plan may declare the language, and the voice step
     // needs to know that to skip the picker.
-    if (agentRequirements.requiresPlan) {
+    if (runsPlan) {
       s.push('plan')
+    }
+    if (showConnectorsStep) {
+      s.push('connectors')
     }
     if (supportsVoiceSelection) {
       s.push('voice')
     }
     s.push('envvars', 'visualizer', 'duration', 'expiration')
     return s
-  }, [agentRequirements.requiresPlan, agentRequirements.supportsConfigurator, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
+  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
 
   // Get visible step configs (filtered based on requirements)
   const visibleStepConfigs = useMemo(() => {
-    return STEPS_CONFIG.filter(s => {
-      if (s.id === 'plan') return agentRequirements.requiresPlan
-      if (s.id === 'configuration') return agentRequirements.supportsConfigurator && !!selectedAgentType?.pipelineSchema
-      if (s.id === 'voice') return supportsVoiceSelection
-      return publicSteps.includes(s.id)
-    }).map((s, idx) => ({ ...s, number: idx + 1 }))
-  }, [publicSteps, agentRequirements.requiresPlan, agentRequirements.supportsConfigurator, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
+    return STEPS_CONFIG.filter(s => publicSteps.includes(s.id)).map((s, idx) => ({ ...s, number: idx + 1 }))
+  }, [publicSteps])
 
   const getStepNumber = (s: Step): number => {
     const config = visibleStepConfigs.find(c => c.id === s)
@@ -216,6 +242,33 @@ export default function ProjectModal({
           setTtsCapabilities(null)
         })
         .finally(() => setIsLoadingTtsCaps(false))
+
+      // The owner's own connectors, for the public agent's Connectors step.
+      setOwnConnectors([])
+      setConnectorsError(null)
+      if (!project) {
+        setConnectorsLoading(true)
+        apiClient.listConnectors()
+          .then((list) =>
+            setOwnConnectors(
+              list.map((c) => ({
+                id: c.id,
+                name: c.name,
+                icon: c.icon,
+                description: c.description,
+                handle: c.handle,
+                kind: c.kind,
+                url: c.url,
+                status: c.status,
+                tools: c.tools,
+                owned: true,
+                ownerName: null,
+              })),
+            ),
+          )
+          .catch((err) => setConnectorsError(err instanceof Error ? err.message : String(err)))
+          .finally(() => setConnectorsLoading(false))
+      }
 
       if (project) {
         // Edit mode - load project values
@@ -279,6 +332,12 @@ export default function ProjectModal({
   const handleBack = () => {
     if (step === 'basic') return
 
+    // In the env var editor, Back returns to the template picker first.
+    if (step === 'envvars' && envVarsView === 'edit') {
+      setEnvVarsView('select')
+      return
+    }
+
     const currentIndex = publicSteps.indexOf(step as any)
     if (currentIndex === 0) {
       setStep('basic')
@@ -311,6 +370,13 @@ export default function ProjectModal({
       return
     }
 
+    // As in the deploy dialog: Continue on the env var picker opens the editor,
+    // so variables a template lacks (required or optional) can still be set.
+    if (step === 'envvars' && envVarsView === 'select') {
+      setEnvVarsView('edit')
+      return
+    }
+
     const currentIndex = publicSteps.indexOf(step as any)
     if (currentIndex < publicSteps.length - 1) {
       setStep(publicSteps[currentIndex + 1])
@@ -335,24 +401,22 @@ export default function ProjectModal({
       case 'configure':
         return agentName.trim().length > 0
       case 'plan':
-        return selectedPlan !== null
+        return selectedPlan !== null || !needs.planRequired
+      case 'connectors':
+        return unboundRequiredSlots(connectorSlots, slotChoices).length === 0
       case 'configuration':
         return selectedConfiguration !== null
       case 'persona':
         // Optional: skipping means the system default, which is what every
         // public project got before this step existed.
         return true
-      case 'envvars':
-        // If a template is selected, we can proceed (template has the values stored securely on server)
-        if (selectedEnvVarTemplate !== null) {
-          return true
-        }
-        // If no template selected and there are required env vars, check they all have values
-        if (agentRequirements.requiredEnvVars.length > 0) {
-          return agentRequirements.requiredEnvVars.every(key => envVars[key]?.trim())
-        }
-        // No template and no required env vars - can proceed
-        return true
+      case 'envvars': {
+        // Picking a template (or none) opens the editor next, so the select view can always continue.
+        if (envVarsView === 'select') return true
+        // In the editor, every required var the template doesn't hold must be typed in.
+        const fromTemplate = new Set(selectedEnvVarTemplate?.variableKeys ?? [])
+        return needs.requiredEnvVars.filter((key) => !fromTemplate.has(key)).every((key) => envVars[key]?.trim())
+      }
       case 'voice':
         // Both choices are optional — Auto / provider default is a valid answer.
         return true
@@ -365,7 +429,7 @@ export default function ProjectModal({
       default:
         return false
     }
-  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, selectedEnvVarTemplate, agentRequirements.requiredEnvVars, envVars, isEditMode, project, agentInactivityTimeout])
+  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, selectedEnvVarTemplate, envVarsView, needs.requiredEnvVars, envVars, isEditMode, project, agentInactivityTimeout, needs, connectorSlots, slotChoices, ownConnectors])
 
   const handleSubmit = async () => {
     if (!name.trim()) {
@@ -408,8 +472,13 @@ export default function ProjectModal({
             icon: agentIcon,
           }
 
-          if (selectedPlan) {
+          if (selectedPlan && runsPlan) {
             agentConfig.plan = selectedPlan.content as unknown as Record<string, unknown>
+          }
+
+          if (showConnectorsStep) {
+            const bindings = bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors)
+            if (bindings.length > 0) agentConfig.connectorBindings = bindings
           }
 
           if (selectedConfiguration) {
@@ -419,7 +488,7 @@ export default function ProjectModal({
             agentConfig.pipelineConfig = selectedConfiguration.configuration as unknown as Record<string, unknown>
           }
 
-          if (selectedPersona) {
+          if (selectedPersona && needs.persona) {
             agentConfig.personaId = selectedPersona.id
           }
 
@@ -502,6 +571,7 @@ export default function ProjectModal({
       case 'configuration': return 'Pipeline Configuration'
       case 'voice': return 'Voice & Language'
       case 'plan': return 'Select Plan'
+      case 'connectors': return 'Connectors'
       case 'envvars': return 'Environment Variables'
       case 'visualizer': return 'Choose Visualizer'
       case 'duration': return 'Session Duration'
@@ -519,6 +589,7 @@ export default function ProjectModal({
       case 'configure': return 'Customize the agent appearance and settings'
       case 'voice': return 'Choose the voice and language every participant\'s agent uses'
       case 'plan': return 'Select a conversation plan for this agent'
+      case 'connectors': return 'Outside tools every participant\'s agent may use, with your credentials'
       case 'envvars': return 'Configure API keys and secrets for this agent'
       case 'visualizer': return 'Set a default visualizer for participants'
       case 'duration': return 'Optionally cap how long each session runs after the agent starts speaking'
@@ -530,7 +601,7 @@ export default function ProjectModal({
 
   // Determine modal size
   const modalSizeClass = (isPublicWizard || step === 'complete')
-    ? 'max-w-2xl'
+    ? WIZARD_MODAL_SIZE
     : 'max-w-lg'
 
   return (
@@ -552,6 +623,7 @@ export default function ProjectModal({
             layout
             className={`
               backdrop-blur-xl rounded-[20px] w-full ${modalSizeClass} overflow-hidden
+              flex flex-col max-h-[calc(100dvh-2rem)]
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
@@ -561,7 +633,7 @@ export default function ProjectModal({
           >
             {/* Header */}
             {step !== 'complete' && (
-              <div className={`px-6 pt-6 pb-4 ${isPublicWizard ? `border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
+              <div className={`shrink-0 px-6 pt-6 pb-4 ${isPublicWizard ? `border-b ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
                 <div className="relative">
                   <button
                     onClick={handleClose}
@@ -581,29 +653,8 @@ export default function ProjectModal({
                     </svg>
                   </button>
 
-                  {/* Step indicator - only for public wizard steps */}
                   {isPublicWizard && (
-                    <div className="flex items-center gap-3 mb-2">
-                      {visibleStepConfigs.map((s, idx) => (
-                        <div key={s.id} className="flex items-center">
-                          <div className={`
-                            w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium
-                            ${getStepNumber(step) >= s.number
-                              ? isDark ? 'bg-violet-500 text-white' : 'bg-neutral-900 text-white'
-                              : isDark ? 'bg-zinc-600 text-zinc-300' : 'bg-neutral-200 text-neutral-600'
-                            }
-                          `}>
-                            {s.number}
-                          </div>
-                          {idx < visibleStepConfigs.length - 1 && (
-                            <div className={`w-8 h-0.5 ml-3 ${getStepNumber(step) > s.number
-                              ? isDark ? 'bg-violet-500' : 'bg-neutral-900'
-                              : isDark ? 'bg-zinc-600' : 'bg-neutral-200'
-                            }`} />
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                    <WizardProgress current={getStepNumber(step)} total={getTotalSteps()} isDark={isDark} />
                   )}
 
                   <h2 className={`text-2xl font-light tracking-wide ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
@@ -616,7 +667,8 @@ export default function ProjectModal({
               </div>
             )}
 
-            {/* Content */}
+            {/* Content: the only part that scrolls, so the footer stays on screen */}
+            <div className="flex-1 min-h-0 overflow-y-auto">
             <AnimatePresence mode="wait">
               {/* Basic Step */}
               {step === 'basic' && (
@@ -675,14 +727,7 @@ export default function ProjectModal({
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
                             disabled:opacity-60 disabled:cursor-not-allowed
-                            ${projectType === 'private'
-                              ? isDark
-                                ? 'bg-violet-500/20 border-2 border-violet-500'
-                                : 'bg-neutral-100 border-2 border-neutral-900'
-                              : isDark
-                                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                            }
+                            ${choiceCardClass(projectType === 'private', isDark)}
                           `}
                         >
                           <div className="flex items-start gap-3">
@@ -713,14 +758,7 @@ export default function ProjectModal({
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
                             disabled:opacity-60 disabled:cursor-not-allowed
-                            ${projectType === 'public'
-                              ? isDark
-                                ? 'bg-violet-500/20 border-2 border-violet-500'
-                                : 'bg-neutral-100 border-2 border-neutral-900'
-                              : isDark
-                                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                            }
+                            ${choiceCardClass(projectType === 'public', isDark)}
                           `}
                         >
                           <div className="flex items-start gap-3">
@@ -778,14 +816,7 @@ export default function ProjectModal({
                           className={`
                             p-3 rounded-xl text-left transition-all duration-200
                             disabled:opacity-60 disabled:cursor-not-allowed
-                            ${agentInactivityTimeout === option.value && !showCustomInput
-                              ? isDark
-                                ? 'bg-violet-500/20 border-2 border-violet-500'
-                                : 'bg-neutral-100 border-2 border-neutral-900'
-                              : isDark
-                                ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                                : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                            }
+                            ${choiceCardClass(agentInactivityTimeout === option.value && !showCustomInput, isDark)}
                           `}
                         >
                           <div className="flex items-center gap-2">
@@ -821,14 +852,7 @@ export default function ProjectModal({
                         className={`
                           p-3 rounded-xl text-left transition-all duration-200 col-span-2
                           disabled:opacity-60 disabled:cursor-not-allowed
-                          ${showCustomInput
-                            ? isDark
-                              ? 'bg-violet-500/20 border-2 border-violet-500'
-                              : 'bg-neutral-100 border-2 border-neutral-900'
-                            : isDark
-                              ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500'
-                              : 'bg-neutral-50 border border-neutral-200 hover:border-neutral-300'
-                          }
+                          ${choiceCardClass(showCustomInput, isDark)}
                         `}
                       >
                         <div className="flex items-center justify-between">
@@ -904,8 +928,7 @@ export default function ProjectModal({
                   <AgentGalleryStep
                     selectedAgentType={selectedAgentType}
                     onSelectAgentType={setSelectedAgentType}
-                    showMyAgentsTab={false}
-                    showUpload={false}
+                    projectId={project?.id ?? null}
                   />
                 </motion.div>
               )}
@@ -1079,6 +1102,30 @@ export default function ProjectModal({
                 </motion.div>
               )}
 
+              {/* Connectors Step */}
+              {step === 'connectors' && (
+                <motion.div
+                  key="connectors"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <ConnectorsStep
+                    slots={connectorSlots}
+                    available={ownConnectors}
+                    loading={connectorsLoading}
+                    loadError={connectorsError}
+                    selected={selectedConnectors}
+                    onToggle={(connectorId, on) =>
+                      setSelectedConnectors((prev) => (on ? [...prev, connectorId] : prev.filter((id) => id !== connectorId)))
+                    }
+                    choices={slotChoices}
+                  />
+                </motion.div>
+              )}
+
               {/* Environment Variables Step */}
               {step === 'envvars' && (
                 <motion.div
@@ -1091,7 +1138,8 @@ export default function ProjectModal({
                 >
                   <EnvVarsSelectionStep
                     agentTypeId={selectedAgentType?.id ?? ''}
-                    requiredEnvVars={agentRequirements.requiredEnvVars}
+                    requiredEnvVars={needs.requiredEnvVars}
+                    optionalEnvVars={needs.optionalEnvVars}
                     selectedEnvVarTemplate={selectedEnvVarTemplate}
                     onSelectEnvVarTemplate={setSelectedEnvVarTemplate}
                     envVars={envVars}
@@ -1259,10 +1307,11 @@ export default function ProjectModal({
                 </motion.div>
               )}
             </AnimatePresence>
+            </div>
 
             {/* Error message */}
             {error && step !== 'configure' && (
-              <div className={`mx-6 mb-4 p-3 rounded-xl text-sm ${
+              <div className={`shrink-0 mx-6 mb-4 p-3 rounded-xl text-sm ${
                 isDark
                   ? 'bg-red-500/10 border border-red-500/20 text-red-400'
                   : 'bg-red-50 border border-red-200 text-red-700'
@@ -1273,7 +1322,7 @@ export default function ProjectModal({
 
             {/* Footer Actions */}
             {step !== 'complete' && (
-              <div className={`px-6 py-4 flex gap-3 ${isPublicWizard || isEditMode ? `border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
+              <div className={`shrink-0 px-6 py-4 flex gap-3 ${isPublicWizard || isEditMode ? `border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}` : ''}`}>
                 {isPublicWizard && (
                   <button
                     onClick={handleBack}

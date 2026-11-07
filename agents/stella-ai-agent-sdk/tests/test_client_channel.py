@@ -106,6 +106,23 @@ async def test_an_interrupted_turn_drops_its_commands():
     assert "agent_command" not in order
 
 
+@pytest.mark.asyncio
+async def test_an_undeclared_command_in_a_turn_is_logged_and_the_turn_still_ends(monkeypatch):
+    from stella_agent_sdk.client_channel import CLIENT_CHANNEL_ENV
+
+    monkeypatch.setenv(CLIENT_CHANNEL_ENV, json.dumps({"events": [], "commands": []}))
+    agent = _Agent()
+    agent._audio_pipeline, order = _audio()
+    agent._session_id = "s1"
+    agent._enqueue_sentence = lambda *_a, **_k: None
+
+    await agent.run_audio_loop()
+
+    assert "agent_command" not in order
+    assert agent._is_processing is False
+    agent.audio.end_turn.assert_called()
+
+
 # ── events in ────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -138,8 +155,8 @@ async def test_a_client_event_without_a_handler_or_a_name_is_dropped():
 @pytest.mark.asyncio
 async def test_the_agent_hook_gets_the_event_and_a_failure_in_it_is_contained():
     agent = _Agent()
-    await agent._dispatch_client_event("wake", {"event": "wake"})
-    assert agent.events == [("wake", {"event": "wake"})]
+    await agent._dispatch_client_event("wake", {"event": "wake", "timestamp": 1})
+    assert agent.events == [("wake", {})]  # the envelope keys are not the event's data
 
     async def broken(*_a):
         raise RuntimeError("agent bug")

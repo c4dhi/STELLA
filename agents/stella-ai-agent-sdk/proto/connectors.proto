@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package stella.connectors.v1;
+
+// ConnectorService - agents reach the outside MCP servers ("connectors") bound
+// to their own deployment. The backend is the MCP client: it holds and decrypts
+// the credential, so the token never reaches the agent pod.
+//
+// Every call carries the agent's id in the request and its per-pod token in the
+// "x-stella-connector-token" metadata header (env STELLA_CONNECTOR_TOKEN). An
+// agent can only see and call connectors bound to its own instance.
+service ConnectorService {
+  // The connectors bound to this agent, with their last known tool list.
+  rpc ListConnectors(ListConnectorsRequest) returns (ListConnectorsResponse);
+
+  // Ask the connector for its current tools (MCP tools/list).
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+
+  // Call one tool (MCP tools/call).
+  rpc CallTool(CallToolRequest) returns (CallToolResponse);
+}
+
+message ConnectorError {
+  // not_bound, unauthenticated, unreachable, unauthorized, timeout, protocol,
+  // redirect, blocked_host, tool_not_found, invalid_arguments, tool_error, internal
+  string code = 1;
+  string message = 2;
+  // True when the same call may succeed later (timeouts, an unreachable server).
+  bool retryable = 3;
+}
+
+message ConnectorTool {
+  string name = 1;
+  string description = 2;
+  string input_schema_json = 3;  // JSON Schema of the arguments, as a JSON string
+}
+
+message ConnectorInfo {
+  string handle = 1;  // what the agent passes to ListTools / CallTool
+  string slot = 2;    // the agent.yaml slot it fills; empty for an extra connector
+  string name = 3;    // the user's display name for it
+  string status = 4;  // untested, ok, error (from the last check in Settings)
+  repeated ConnectorTool tools = 5;  // last snapshot; may be empty if never tested
+}
+
+message ListConnectorsRequest {
+  string agent_id = 1;
+}
+
+message ListConnectorsResponse {
+  bool success = 1;
+  ConnectorError error = 2;
+  repeated ConnectorInfo connectors = 3;
+}
+
+message ListToolsRequest {
+  string agent_id = 1;
+  string handle = 2;
+}
+
+message ListToolsResponse {
+  bool success = 1;
+  ConnectorError error = 2;
+  repeated ConnectorTool tools = 3;
+}
+
+message CallToolRequest {
+  string agent_id = 1;
+  string handle = 2;
+  string tool = 3;
+  string arguments_json = 4;  // a JSON object; empty means {}
+}
+
+message CallToolResponse {
+  // False when the call could not be made or the tool reported an error.
+  bool success = 1;
+  ConnectorError error = 2;
+  // The tool ran but reported failure (MCP isError). error.code is "tool_error".
+  bool is_error = 3;
+  // structuredContent when the server sent it; otherwise null.
+  string structured_content_json = 4;
+  // The MCP content blocks, as a JSON array.
+  string content_json = 5;
+}

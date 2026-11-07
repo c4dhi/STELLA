@@ -1,0 +1,23 @@
+# =============================================================================
+# Uploaded Agent Packages Persistent Volume Claim
+# =============================================================================
+# The .zip packages users upload for custom agents (AGENT_STORAGE_PATH). A
+# build reads the package again, so it must outlive the server pod: without
+# this, every redeploy or restart lost them and an uploaded agent could no
+# longer be rebuilt ("File not found").
+# =============================================================================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-packages-pvc
+  namespace: ai-agents
+  labels:
+    app: session-management-server
+    component: agent-packages
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

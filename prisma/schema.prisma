@@ -33,6 +33,7 @@ model User {
   platformSettingsUpdated    PlatformSetting[] // Platform defaults this admin last changed
   personalAccessTokens       PersonalAccessToken[] // Tokens AI clients use to reach /mcp as this user
   oauthGrants                OAuthGrant[] // Apps (Claude, ChatGPT…) connected to this account over MCP sign-in
+  connectors                 Connector[] // Outside MCP servers this user's agents may call (STELLA as client)
 }
 
 enum MemberRole {
@@ -80,6 +81,8 @@ model Project {
 
   // Project collaboration invitations
   projectInvitations ProjectInvitation[]
+  connectorShares    ConnectorProjectShare[] // Connectors members may bind in this project
+  agentTypeShares    AgentTypeProjectShare[] // Custom agents members may deploy in this project
 
   @@index([publicToken])
   @@index([isPublic, publicEnabled])
@@ -202,6 +205,12 @@ model AgentType {
   icon        String? // Default emoji or image URL
   version     String  @default("1.0.0")
 
+  // The agent's normalized manifest (agent.yaml, format 2.0): the source of truth
+  // for everything STELLA knows about this type. The other manifest-derived
+  // columns below are projections of it, kept for queries and existing readers.
+  // Null only for rows written before this column existed (re-seed / re-upload fills it).
+  manifest Json?
+
   // Built-in vs custom
   isBuiltIn Boolean @default(true)
 
@@ -213,8 +222,10 @@ model AgentType {
   deprecationNote String? // What to use instead, shown next to the badge
 
   // Ownership (for custom agents)
-  userId String? // Owner of custom agent (null for built-in)
-  user   User?   @relation(fields: [userId], references: [id])
+  userId        String? // Owner of custom agent (null for built-in)
+  user          User?                   @relation(fields: [userId], references: [id])
+  // Projects whose members may deploy this custom agent (the owner always may).
+  projectShares AgentTypeProjectShare[]
 
   // Package storage (for custom agents with uploaded zip)
   packagePath String? // Local filesystem path to stored zip
@@ -263,6 +274,10 @@ model AgentType {
 
   // SDK requirements
   sdkMinVersion String? // Minimum stella-ai-agent-sdk version
+  // The stella-ai-agent-sdk version installed in the built image (read from the
+  // image after each build; the repo SDK for built-ins). Deploy refuses one below
+  // MIN_SUPPORTED_SDK_VERSION. Null: not built yet.
+  sdkVersion    String?
 
   // Timestamps
   createdAt DateTime @default(now())
@@ -315,6 +330,18 @@ model AgentInstance {
   pausedAt    DateTime? // When agent was paused due to inactivity
   pauseReason String? // 'inactivity' | 'manual'
   resumeCount Int       @default(0) // Number of times agent has been resumed
+
+  // Connectors this deployment may call: [{ handle, connectorId, slot? }].
+  // Slots the agent type declares plus any extra connectors the deploying user
+  // offered. Kept across restart and auto-pause/wake.
+  connectorBindings  Json?
+  // Who deployed this instance. Their own connectors may be bound anywhere;
+  // anyone else's only while shared with the session's project. Re-checked on
+  // every connector call.
+  deployedByUserId   String?
+  // sha256 of the per-pod token the agent sends on ConnectorService calls.
+  // A new token is issued every time the pod is (re)created.
+  connectorTokenHash String?
 
   @@index([sessionId])
   @@index([status])
@@ -896,4 +923,111 @@ model OAuthToken {
 
   @@index([grantId])
   @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Connectors: outside MCP servers a user's agents may call. Here STELLA is the
+// MCP CLIENT (unlike PersonalAccessToken/OAuth* above, where it is the server).
+// The credential never leaves the backend: agents call through ConnectorService.
+// ---------------------------------------------------------------------------
+
+enum ConnectorKind {
+  MCP
+}
+
+enum ConnectorAuthType {
+  BEARER
+  NONE
+  // OAUTH later
+}
+
+enum ConnectorStatus {
+  UNTESTED
+  OK
+  ERROR
+}
+
+model Connector {
+  id                  String            @id @default(uuid())
+  userId              String
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                String
+  // An emoji shown on the connector's card, e.g. "🗂️". Null shows a default.
+  icon                String?
+  // What the connector is for, in the owner's words. Shown in Settings and the deploy wizard.
+  description         String?
+  // Slug the agent uses to address the connector; unique per user.
+  handle              String
+  kind                ConnectorKind     @default(MCP)
+  url                 String
+  authType            ConnectorAuthType @default(BEARER)
+  // AES-256-GCM via EncryptionService ({ token }). Never returned by the API.
+  credentialEncrypted String?           @db.Text
+  status              ConnectorStatus   @default(UNTESTED)
+  lastError           String?
+  lastCheckedAt       DateTime?
+  // tools/list result from the last successful test: [{ name, description, inputSchema }]
+  toolsSnapshot       Json?
+  serverInfo          Json?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  auditLogs ConnectorAuditLog[]
+  shares    ConnectorProjectShare[]
+
+  @@unique([userId, handle])
+  @@index([userId])
+}
+
+// A custom agent its owner shared with a project. Members of that project see
+// it and may deploy it there; only the owner builds, uploads a new version of,
+// shares or deletes it.
+model AgentTypeProjectShare {
+  id          String    @id @default(uuid())
+  agentTypeId String
+  agentType   AgentType @relation(fields: [agentTypeId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([agentTypeId, projectId])
+  @@index([projectId])
+}
+
+// A connector its owner shared with a project. Members of that project may bind
+// it when they deploy an agent there; they never see or edit the credential.
+// Only the owner shares, unshares, edits or rotates it.
+model ConnectorProjectShare {
+  id          String    @id @default(uuid())
+  connectorId String
+  connector   Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  @@unique([connectorId, projectId])
+  @@index([projectId])
+}
+
+// One row per outbound connector call (test, tools/list, tools/call). Arguments
+// are summarised and redacted like McpAuditLog. Deleted after 90 days.
+model ConnectorAuditLog {
+  id              String     @id @default(uuid())
+  connectorId     String?
+  connector       Connector? @relation(fields: [connectorId], references: [id], onDelete: SetNull)
+  userId          String
+  agentInstanceId String?
+  sessionId       String?
+  // "initialize", "tools/list" or "tools/call"
+  operation       String
+  tool            String?
+  argsSummary     Json?
+  success         Boolean
+  errorCode       String?
+  durationMs      Int
+  createdAt       DateTime   @default(now())
+
+  @@index([connectorId, createdAt])
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }

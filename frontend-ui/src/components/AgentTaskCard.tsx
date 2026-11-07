@@ -62,7 +62,7 @@ export default function AgentTaskCard({ agentId, agentName, todoList, isHistoryM
         duration: 0.4,
         ease: [0.16, 1, 0.3, 1]
       }}
-      className={`w-96 h-full flex flex-col ${isHistoryMode ? 'opacity-75' : 'opacity-100'} transition-[opacity] duration-300`}
+      className={`w-72 xl:w-96 h-full flex flex-col ${isHistoryMode ? 'opacity-75' : 'opacity-100'} transition-[opacity] duration-300`}
     >
       {/* Card Container */}
       <div className={`
