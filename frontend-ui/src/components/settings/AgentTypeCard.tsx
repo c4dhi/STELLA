@@ -99,6 +99,59 @@ export default function AgentTypeCard({
     )
   }
 
+  // The build status, visible on the card face (not just the corner dot), so
+  // an upload's progress is readable without opening it. Clicking it opens
+  // the detail view, which jumps straight to the build log.
+  const getBuildStatusLabel = () => {
+    if (!hasBuildInfo || !customAgent.lastBuild) return null
+
+    const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
+      pending: {
+        bg: isDark ? 'bg-yellow-500/20' : 'bg-yellow-100',
+        text: isDark ? 'text-yellow-400' : 'text-yellow-700',
+        label: 'Queued',
+      },
+      building: {
+        bg: isDark ? 'bg-blue-500/20' : 'bg-blue-100',
+        text: isDark ? 'text-blue-400' : 'text-blue-700',
+        label: 'Building',
+      },
+      success: {
+        bg: isDark ? 'bg-green-500/20' : 'bg-green-100',
+        text: isDark ? 'text-green-400' : 'text-green-700',
+        label: 'Built',
+      },
+      failed: {
+        bg: isDark ? 'bg-red-500/20' : 'bg-red-100',
+        text: isDark ? 'text-red-400' : 'text-red-700',
+        label: 'Build failed',
+      },
+    }
+    const status = customAgent.lastBuild.status
+    const config = statusConfig[status] ?? statusConfig.pending
+
+    return (
+      <motion.button
+        onClick={(e) => {
+          e.stopPropagation()
+          onView()
+        }}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${config.bg} ${config.text}`}
+        title="View build log"
+        whileHover={{ scale: 1.05 }}
+      >
+        {status === 'building' && (
+          <motion.span
+            className="w-1.5 h-1.5 rounded-full bg-current"
+            animate={{ scale: [1, 1.4, 1] }}
+            transition={{ repeat: Infinity, duration: 1 }}
+          />
+        )}
+        {config.label}
+      </motion.button>
+    )
+  }
+
   const handleCardClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement
     if (target.closest('button')) return
@@ -151,6 +204,7 @@ export default function AgentTypeCard({
                 {agent.name}
               </h3>
               {getStatusBadge()}
+              {getBuildStatusLabel()}
             </div>
             {agent.description ? (
               <p className={`text-body-sm line-clamp-2 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
@@ -262,7 +316,7 @@ export default function AgentTypeCard({
                   ? 'text-content-inverse-secondary hover:text-primary hover:bg-primary/10'
                   : 'text-content-secondary hover:text-primary hover:bg-primary/10'
                 }`}
-                title="Build Agent"
+                title="Rebuild Agent"
                 whileHover={{ scale: 1.1 }}
                 whileTap={{ scale: 0.95 }}
               >

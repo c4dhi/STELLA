@@ -117,36 +117,51 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
     }
   }
 
-  const getBuildStatusBadge = (lastBuild: CustomAgentType['lastBuild']) => {
+  // The badge doubles as a link to the log: clicking it expands the row's
+  // AgentBuildStatus, regardless of whether the row itself is click-to-deploy.
+  const getBuildStatusBadge = (agent: CustomAgentType) => {
+    const lastBuild = agent.lastBuild
+    const onClick = (e: React.MouseEvent) => {
+      e.stopPropagation()
+      setExpandedAgent(expandedAgent === agent.id ? null : agent.id)
+    }
+
     if (!lastBuild) {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+        <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200" title="View build log">
           Not Built
-        </span>
+        </button>
       )
     }
 
     switch (lastBuild.status) {
+      case 'pending':
+        return (
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 hover:bg-yellow-200" title="View build log">
+            <Clock className="w-3 h-3" />
+            Queued
+          </button>
+        )
       case 'success':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200" title="View build log">
             <CheckCircle className="w-3 h-3" />
             Built
-          </span>
+          </button>
         )
       case 'building':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 animate-pulse">
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 animate-pulse hover:bg-blue-200" title="View build log">
             <RefreshCw className="w-3 h-3 animate-spin" />
             Building
-          </span>
+          </button>
         )
       case 'failed':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200" title="View build log">
             <AlertTriangle className="w-3 h-3" />
             Build Failed
-          </span>
+          </button>
         )
       default:
         return null
@@ -223,7 +238,7 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
                 <p className="text-sm text-gray-500 line-clamp-1">{agent.description}</p>
                 <div className="flex items-center gap-2 mt-2">
                   {getStatusBadge(agent.validationStatus)}
-                  {getBuildStatusBadge(agent.lastBuild)}
+                  {getBuildStatusBadge(agent)}
                   {agent.sdkProblem && (
                     <span
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700"

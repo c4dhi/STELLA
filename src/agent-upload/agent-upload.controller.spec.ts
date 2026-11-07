@@ -40,6 +40,9 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
       findMany: jest.fn().mockResolvedValue([] as { id: string }[]),
       updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
+    agentBuildLog: {
+      findFirst: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
+    },
     project: { count: jest.fn().mockResolvedValue(0) },
     envVarTemplate: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     agentConfiguration: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
@@ -50,7 +53,11 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
     storePackage: jest.fn().mockResolvedValue({ path: 'p', size: 1, hash: 'h' }),
     readExpertDefaults: jest.fn().mockReturnValue(null),
   }
-  const build = { startBuild: jest.fn().mockResolvedValue({ buildLogId: 'b1' }) }
+  const build = {
+    startBuild: jest.fn().mockResolvedValue({ buildLogId: 'b1' }),
+    getBuildStatus: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
+    getBuildOutput: jest.fn().mockResolvedValue(null as string | null),
+  }
   const storage = { delete: jest.fn().mockResolvedValue(undefined) }
   const agents = {
     stopAgent: jest.fn().mockResolvedValue({}),
@@ -72,6 +79,18 @@ describe('AgentUploadController identity and ownership', () => {
     const data = prisma.agentType.create.mock.calls[0][0].data
     expect(data.userId).toBe('u1')
     expect(data.imageUrl).toBeNull()
+  })
+
+  it('starts the build on its own once the upload is stored', async () => {
+    const { controller, build } = makeUpload()
+    await controller.uploadPackage(zip, user('u1') as any)
+    expect(build.startBuild).toHaveBeenCalledWith('new')
+  })
+
+  it('still returns the upload result if starting the build fails', async () => {
+    const { controller, build } = makeUpload()
+    build.startBuild.mockRejectedValueOnce(new Error('docker daemon unreachable'))
+    await expect(controller.uploadPackage(zip, user('u1') as any)).resolves.toMatchObject({ slug: 'my-agent' })
   })
 
   it('refuses an upload without a signed-in user before storing anything', async () => {
@@ -231,6 +250,12 @@ describe('uploading an agent again', () => {
     expect(res).toMatchObject({ id: 'a1', version: '0.1.0', replacedVersion: '0.0.9' })
   })
 
+  it('a re-upload also starts the build on its own, same as a first upload', async () => {
+    const { controller, build } = makeUpload(mine)
+    await controller.uploadPackage(zip, user('u1') as any)
+    expect(build.startBuild).toHaveBeenCalledWith('a1')
+  })
+
   it('with the same version is refused, and stores nothing', async () => {
     const { controller, prisma, pkg } = makeUpload({ ...mine, version: '0.1.0' })
     await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow('raise metadata.version')
@@ -286,5 +311,34 @@ describe('sharing an agent with projects', () => {
   it('never shares a built-in agent', async () => {
     const { controller } = makeUpload({ ...mine, isBuiltIn: true, userId: null })
     await expect(controller.updateShares('a1', { projectIds: [] }, user('owner') as any)).rejects.toThrow(ForbiddenException)
+  })
+})
+
+describe('the build-logs SSE event', () => {
+  // A plain map() over an async callback emits the unresolved Promise as the
+  // "event" (streamBuildLogs used to do exactly this): the browser's
+  // EventSource requires a `data` field to fire onmessage at all, so every
+  // polled update silently vanished and no card or log view ever updated live.
+  // This asserts the per-tick event actually resolves to real, parseable data.
+  it('resolves to the real build status, not an unawaited promise', async () => {
+    const { controller, prisma, build } = makeUpload()
+    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
+    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'success', imageName: 'img:1', errorMessage: null })
+    build.getBuildOutput.mockResolvedValue('built ok')
+
+    const event = await (controller as any).buildLogEvent('a1')
+
+    expect(typeof event.data).toBe('string')
+    const payload = JSON.parse(event.data)
+    expect(payload).toMatchObject({ status: 'success', imageName: 'img:1', output: 'built ok' })
+  })
+
+  it('reports no_build when the agent has never been built', async () => {
+    const { controller, prisma } = makeUpload()
+    prisma.agentBuildLog.findFirst.mockResolvedValue(null)
+
+    const event = await (controller as any).buildLogEvent('a1')
+
+    expect(event.data).toBe('no_build')
   })
 })
