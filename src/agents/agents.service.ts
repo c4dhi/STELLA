@@ -1,3 +1,6 @@
+import { AGENT_TYPE_MANIFEST_SELECT, manifestOfAgentType, resolveAgentRequirements, type AgentRequirements } from './agent-requirements.js';
+import { agentTypeOrDefault } from './default-agent-type.js';
+import { assertDeployRequest, withAgentDefaults, withEnvDefaults } from './deploy-request.js';
 import { Injectable, NotFoundException, BadRequestException, Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
@@ -19,11 +22,16 @@ import {
 } from './dto/agent-metrics.dto.js';
 import { AgentStatus, Prisma, SessionStatus } from '@prisma/client';
 import { sanitizeAgentConfig } from '../common/utils/sanitize-config.js';
+import { assertDeployableAgentType } from './deployable-agent-type.util.js';
 import { EncryptionService } from '../env-var-templates/encryption.service.js';
 import { EnvVarTemplatesService } from '../env-var-templates/env-var-templates.service.js';
 import { AgentConfigurationsService } from '../agent-configurations/agent-configurations.service.js';
 import { PersonasService } from '../personas/personas.service.js';
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js';
+import { ConnectorsService } from '../connectors/connectors.service.js';
+import { readBindings, type BindingRequest } from '../connectors/connector-bindings.util.js';
+import { CONNECTOR_TOKEN_ENV, issueAgentConnectorToken } from '../connectors/agent-connector-token.util.js';
+import { agentLiveKitCredentials } from './agent-livekit-credentials.js';
 
 /**
  * AgentsService - Manages agent lifecycle.
@@ -53,6 +61,8 @@ export class AgentsService {
     private readonly eventEmitter: EventEmitter2,
     // Platform defaults a system admin sets (TTS playback), applied at every pod creation.
     private readonly platformSettings: PlatformSettingsService,
+    // Validates connector bindings at deploy time (the user must own them).
+    private readonly connectorsService: ConnectorsService,
     @Optional() private agentServerService?: AgentServerService,
     // See the matching comment in SessionsService: typed `any` here (and
     // assigned to the class field below) so TS's emitDecoratorMetadata
@@ -101,26 +111,6 @@ export class AgentsService {
    */
   private sanitizeAgentConfig(config: Record<string, unknown>): Record<string, unknown> {
     return sanitizeAgentConfig(config);
-  }
-
-  /**
-   * Validate that the agent config satisfies requirements for the given agent type.
-   * Called on every create() path so no entry point can skip type-specific validation.
-   *
-   * Currently enforced: stella-v2-agent requires a pipeline_config object.
-   */
-  private validateRuntimeConfigForAgentType(
-    agentTypeSlug: string,
-    runtimeConfig: Record<string, unknown>,
-  ): void {
-    if (agentTypeSlug !== 'stella-v2-agent') return;
-
-    const pipelineConfig = runtimeConfig.pipeline_config;
-    if (!pipelineConfig || typeof pipelineConfig !== 'object' || Array.isArray(pipelineConfig)) {
-      throw new BadRequestException(
-        'stella-v2-agent requires a pipeline configuration (config.pipeline_config).',
-      );
-    }
   }
 
   private encryptManualEnvVarsForStorage(
@@ -281,32 +271,33 @@ export class AgentsService {
     }
     this.assertSessionOpen(session);
 
-    // Determine agent type. Defaults to stella-v2: an omitted agentType used
-    // to land silently on stella-light, which is deprecated — the least
-    // maintained agent was the one you got by not choosing.
-    const agentType = createAgentDto.agentType || 'stella-v2-agent';
+    const agentType = agentTypeOrDefault(createAgentDto.agentType);
 
-    // Security: Validate agent type against allowed list
-    const allowedAgentTypes = ['stella-v2-agent', 'stella-light-agent'];
-    if (!allowedAgentTypes.includes(agentType)) {
-      throw new BadRequestException(`Invalid agent type: ${agentType}. Allowed: ${allowedAgentTypes.join(', ')}`);
-    }
-
-    // Look up AgentType from DB for per-agent resource limits, type scoping and
-    // pipeline-config resolution.
+    // The AgentType row: its manifest decides what this deployment needs, and
+    // its id/version/schemas scope templates and configurations.
     const agentTypeRecord = await this.prisma.agentType.findUnique({
       where: { slug: agentType },
       select: {
+        ...AGENT_TYPE_MANIFEST_SELECT,
         id: true,
-        version: true,
         compilerVersion: true,
-        resourceCpu: true,
-        resourceMemory: true,
-        defaultConfig: true,
-        pipelineSchema: true,
-        configSchema: true,
+        isBuiltIn: true,
+        validationStatus: true,
+        imageUrl: true,
+        sdkVersion: true,
+        userId: true,
+        projectShares: { select: { projectId: true } },
       },
     });
+
+    // Security: see assertDeployableAgentType. An upload deploys for its owner,
+    // and for others only in a project the owner shared it with.
+    assertDeployableAgentType(agentType, agentTypeRecord, {
+      reviewRequired: await this.platformSettings.isAgentReviewRequired(),
+      deployerId: userId,
+      projectId: session.projectId,
+    });
+    const requirements = resolveAgentRequirements(manifestOfAgentType(agentTypeRecord!));
 
     // Security: Sanitize agent name (max 255 chars, no control characters)
     const sanitizedName = createAgentDto.name
@@ -314,18 +305,38 @@ export class AgentsService {
       .replace(/[\x00-\x1F\x7F]/g, ''); // Remove control characters
 
     // Security: Validate and sanitize agent config
-    const agentConfig = this.sanitizeAgentConfig(createAgentDto.config || {});
+    const requestedConfig = this.sanitizeAgentConfig(createAgentDto.config || {});
 
     // Enforce type/version scoping of configuration artifacts BEFORE persisting the
     // agent or creating any pod, so a mismatch returns 400 and leaves no trace.
     // This runs FIRST so that a selected `agentConfigurationId` resolves and injects
-    // `pipeline_config` before the type-specific validator checks for its presence
+    // `pipeline_config` before the requirements check looks for it
     // (the deploy modal passes only the id and intentionally does not inline it).
-    await this.applyScopedConfiguration(createAgentDto, userId, agentTypeRecord, agentConfig);
+    await this.applyScopedConfiguration(createAgentDto, userId, agentTypeRecord, requestedConfig, requirements);
+    const agentConfig = withAgentDefaults(agentType, requirements, requestedConfig);
 
-    // Validate type-specific config requirements for ALL creation paths.
-    // (Previously this only ran for public-project flows in PublicProjectsService.)
-    this.validateRuntimeConfigForAgentType(agentType, agentConfig);
+    // Env vars are resolved now, not in the background pod creation, so a
+    // missing required one is a 400 here instead of a FAILED agent later.
+    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
+      createAgentDto.envVarTemplateId,
+      userId,
+      createAgentDto.envVars,
+    );
+    // Optional vars the agent declares with a default get it when left out.
+    const { env: envVars } = withEnvDefaults(requirements.env, merged);
+    // One check for every path (wizard, public projects, wake): what the
+    // manifest declares is what the deployment must carry.
+    assertDeployRequest(agentType, requirements, agentConfig, envVars);
+
+    // Connectors this deployment may call: the slots the agent declares in its
+    // manifest (`connectors`) plus any extras the user offers. Each
+    // must be the deployer's own or shared with this session's project.
+    const connectorBindings = await this.connectorsService.resolveBindingsForDeploy(
+      userId,
+      session.projectId,
+      createAgentDto.connectorBindings,
+      requirements.connectors,
+    );
 
     // Encrypt manual env vars now so they are persisted before the async pod creation.
     // This guarantees restart() can recover them even if the pod creation fails.
@@ -343,6 +354,11 @@ export class AgentsService {
         envVarTemplateId: createAgentDto.envVarTemplateId || null,  // Store for restarts
         // Keep encrypted manual env vars for restart path parity with template-based deployments.
         manualEnvVarsEncrypted,
+        // Kept for restart and auto-pause/wake, like envVarTemplateId.
+        connectorBindings: connectorBindings.length
+          ? (connectorBindings as unknown as Prisma.InputJsonValue)
+          : Prisma.DbNull,
+        deployedByUserId: userId,
         status: AgentStatus.STARTING,
         healthState: 'initializing',
       },
@@ -372,7 +388,7 @@ export class AgentsService {
     // 4. Create K8s pod asynchronously (don't block response)
     // NOTE: In the new architecture, agents connect directly to LiveKit rooms via SDK
     // No need for session-management-server to join rooms
-    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, userId, agentConfig, agentTypeRecord);
+    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, envVars, agentConfig, requirements, agentTypeRecord?.isBuiltIn ?? false);
 
     return agent;
   }
@@ -386,9 +402,10 @@ export class AgentsService {
     sanitizedName: string,
     createAgentDto: CreateAgentDto,
     agentType: string,
-    userId: string,
+    envVars: Record<string, string>,
     sanitizedConfig: Record<string, unknown>,
-    agentTypeRecord?: { resourceCpu: string | null; resourceMemory: string | null } | null,
+    requirements: AgentRequirements,
+    isBuiltIn: boolean,
   ): Promise<void> {
     try {
       // Get environment variables for LiveKit (agent pod needs these for gRPC config)
@@ -400,16 +417,13 @@ export class AgentsService {
         throw new Error('Missing LIVEKIT_API_KEY or LIVEKIT_API_SECRET');
       }
 
-      // Resolve env vars once here, before touching K8s.
-      // Decrypts the template (if any), merges manual overrides on top, and returns the final map.
+      // env was resolved (template decrypted, manual values on top) and checked in create().
       // KubernetesService receives only the merged plaintext — no business logic leaks into infrastructure.
-      const { merged } = await this.envVarTemplatesService.resolveEnvVars(
-        createAgentDto.envVarTemplateId,
-        userId,
-        createAgentDto.envVars,
-      );
       // The deployment's own playback mode wins; otherwise the platform default.
-      const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, agentId);
+      const resolvedEnvVars = await this.withConnectorToken(
+        agentId,
+        await this.platformSettings.applyToPodEnv(envVars, agentId),
+      );
 
       // Create K8s pod - agent connects directly to LiveKit via SDK
       const { podName, secretName } = await this.k8s.createAgentPod({
@@ -421,14 +435,21 @@ export class AgentsService {
         agentType,
         roomName: session.room?.livekitRoomName || '',
         livekitUrl,
-        livekitApiKey,
-        livekitApiSecret,
+        // Uploaded agents get a token for this room only, not the key and secret (issue 856).
+        ...(await agentLiveKitCredentials({
+          isBuiltIn,
+          apiKey: livekitApiKey,
+          apiSecret: livekitApiSecret,
+          roomName: session.room?.livekitRoomName || '',
+          identity: `agent-${agentId}`,
+          name: sanitizedName,
+        })),
         ttsProvider: this.configService.get<string>('TTS_PROVIDER', 'opensource'),
         agentConfig: sanitizedConfig,
         forceRebuild: createAgentDto.forceRebuild,
         resolvedEnvVars,
-        resourceCpuLimit: agentTypeRecord?.resourceCpu || undefined,
-        resourceMemoryLimit: agentTypeRecord?.resourceMemory || undefined,
+        resources: requirements.resources,
+        clientChannel: requirements.client,
       });
 
       // Update agent with pod info
@@ -490,8 +511,13 @@ export class AgentsService {
         }
       | null,
     agentConfig: Record<string, unknown>,
+    requirements: AgentRequirements,
   ): Promise<void> {
     const { envVarTemplateId, agentConfigurationId, personaId } = createAgentDto;
+
+    if (!requirements.persona && personaId) {
+      throw new BadRequestException('This agent type takes no persona, so a deployment cannot give it one');
+    }
 
     // Persona resolves even when nothing else is scoped: omitting personaId means
     // "the system default", not "no persona", so this runs before the early return.
@@ -502,7 +528,7 @@ export class AgentsService {
     // rather than today's defaults. Resolving here regardless is how a paused
     // Grace came back as STELLA: the wake path has no personaId to pass, so the
     // system default silently overwrote the snapshot.
-    if (!agentConfig.persona) {
+    if (requirements.persona && !agentConfig.persona) {
       const persona = await this.personasService.resolveForDeployConfig(
         agentConfig,
         personaId,
@@ -624,83 +650,6 @@ export class AgentsService {
     };
   }
 
-  /**
-   * Create an agent that runs as a standalone gRPC service.
-   * The agent pod connects back to session-management via gRPC.
-   * @param sessionId - The session ID
-   * @param createAgentDto - Agent creation parameters
-   * @param grpcAddress - The gRPC address where the agent will listen (e.g., "agent-pod:50051")
-   */
-  async createStandaloneAgent(sessionId: string, createAgentDto: CreateAgentDto, grpcAddress?: string) {
-    const session = await this.prisma.session.findUnique({
-      where: { id: sessionId },
-      include: { room: true, project: true },
-    });
-
-    if (!session) {
-      throw new NotFoundException(`Session with ID ${sessionId} not found`);
-    }
-
-    if (!session.room) {
-      throw new Error('Session does not have an associated room');
-    }
-
-    // Determine agent type. Defaults to stella-v2: an omitted agentType used
-    // to land silently on stella-light, which is deprecated — the least
-    // maintained agent was the one you got by not choosing.
-    const agentType = createAgentDto.agentType || 'stella-v2-agent';
-    // Encrypt manual env vars so standalone agents have the same restart behavior as regular agents.
-    const manualEnvVarsEncrypted = this.encryptManualEnvVarsForStorage(createAgentDto.envVars);
-
-    // Create agent record with gRPC address
-    const agent = await this.prisma.agentInstance.create({
-      data: {
-        sessionId,
-        name: createAgentDto.name,
-        icon: createAgentDto.icon || '🤖',
-        agentConfig: (createAgentDto.config || {}) as Prisma.InputJsonValue,
-        agentType,  // Store agent type for restarts
-        envVarTemplateId: createAgentDto.envVarTemplateId || null,  // Store for restarts
-        // Keep encrypted manual env vars for restart path parity with template-based deployments.
-        manualEnvVarsEncrypted,
-        status: AgentStatus.STARTING,
-        healthState: 'initializing',
-        grpcAddress: grpcAddress || null,
-      },
-    });
-
-    this.logger.log(`Created standalone agent ${agent.id} (type: ${agentType}) for session ${sessionId}`);
-
-    // Register pending session with AgentServerService
-    if (this.agentServerService) {
-      const config: Record<string, string> = {
-        sessionId: session.id,
-        roomName: session.room.livekitRoomName,
-        projectId: session.projectId,
-        agentName: createAgentDto.name,
-      };
-
-      this.agentServerService.registerPendingSession(sessionId, agentType, config);
-      this.logger.log(`Registered pending session ${sessionId} for standalone agent`);
-    }
-
-    // NOTE: In the new architecture, agents connect directly to LiveKit rooms via SDK
-    // No need for session-management-server to join rooms
-
-    return agent;
-  }
-
-  /**
-   * Update the gRPC address for an agent (called when agent pod starts and reports its address).
-   */
-  async updateGrpcAddress(agentId: string, grpcAddress: string): Promise<void> {
-    await this.prisma.agentInstance.update({
-      where: { id: agentId },
-      data: { grpcAddress },
-    });
-    this.logger.log(`Updated gRPC address for agent ${agentId}: ${grpcAddress}`);
-  }
-
   async findOne(id: string) {
     const agent = await this.prisma.agentInstance.findUnique({
       where: { id },
@@ -798,6 +747,29 @@ export class AgentsService {
    * Handles room disconnection, K8s resource cleanup, and DB status update.
    * @returns The updated agent instance
    */
+  /**
+   * The agents of one type that count as running (STARTING, RUNNING or
+   * STOPPING), split by whether their pod is really there. A row whose pod is
+   * gone or finished (OOMKilled, completed, never created) is `stale`.
+   */
+  async runningAgentsOfType(agentTypeId: string): Promise<{
+    live: { id: string; deployedByUserId: string | null }[];
+    stale: string[];
+  }> {
+    const rows = await this.prisma.agentInstance.findMany({
+      where: { agentTypeId, status: { in: [AgentStatus.STARTING, AgentStatus.RUNNING, AgentStatus.STOPPING] } },
+      select: { id: true, podName: true, deployedByUserId: true },
+    });
+    const live: { id: string; deployedByUserId: string | null }[] = [];
+    const stale: string[] = [];
+    for (const row of rows) {
+      const pod = row.podName ? await this.k8s.getPodStatus(row.podName) : null;
+      if (isPodAlive(pod)) live.push({ id: row.id, deployedByUserId: row.deployedByUserId });
+      else stale.push(row.id);
+    }
+    return { live, stale };
+  }
+
   async stopAgent(id: string): Promise<any> {
     const agent = await this.prisma.agentInstance.findUnique({
       where: { id },
@@ -828,6 +800,8 @@ export class AgentsService {
       data: {
         status: AgentStatus.STOPPED,
         stoppedAt: new Date(),
+        // The pod is gone; its connector token must not outlive it.
+        connectorTokenHash: null,
         // Clear K8s resource names since they're deleted
         podName: null,
         secretName: null,
@@ -972,7 +946,7 @@ export class AgentsService {
           await this.cleanupK8sResources(agent).catch(() => {});
           await this.prisma.agentInstance.update({
             where: { id: agent.id },
-            data: { status: AgentStatus.STOPPED, stoppedAt: new Date(), healthState: null },
+            data: { status: AgentStatus.STOPPED, stoppedAt: new Date(), connectorTokenHash: null, healthState: null },
           }).catch(e => this.logger.error(`Failed to force-stop agent ${agent.id}: ${e.message}`));
           throw error;
         }
@@ -1028,37 +1002,6 @@ export class AgentsService {
 
     this.logger.log(`Restarting agent ${id} (keeping same ID)`);
 
-    // Delete Kubernetes resources (pod + secret) without updating DB status
-    try {
-      if (agent.podName) {
-        await this.k8s.deletePod(agent.podName);
-      }
-      if (agent.secretName) {
-        await this.k8s.deleteSecret(agent.secretName);
-      }
-    } catch (error) {
-      this.logger.error(`K8s cleanup failed for agent ${id}: ${error.message}`);
-    }
-
-    // Update agent status to STARTING and clear old pod references
-    // Clearing podName is critical: syncAgentStatus() would otherwise query K8s
-    // for the deleted pod, get null back, and overwrite STARTING → STOPPED
-    await this.prisma.agentInstance.update({
-      where: { id },
-      data: {
-        status: AgentStatus.STARTING,
-        stoppedAt: null,
-        podName: null,
-        secretName: null,
-        configMapName: null,
-      },
-    });
-
-    // Emit SSE event so frontend updates in real-time
-    if (this.sessionsService) {
-      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agent.agentType || 'stella-v2-agent');
-    }
-
     // Get environment variables
     const livekitApiKey = this.configService.get<string>('LIVEKIT_API_KEY');
     const livekitApiSecret = this.configService.get<string>('LIVEKIT_API_SECRET');
@@ -1089,23 +1032,26 @@ export class AgentsService {
       );
     }
 
-    // Register pending session so gRPC agent registration can match
-    const agentType = agent.agentType || 'stella-v2-agent';
-    if (this.agentServerService) {
-      const config: Record<string, string> = {
-        sessionId: agent.sessionId,
-        roomName: agent.session.room.livekitRoomName,
-        projectId: agent.session.projectId,
-      };
-      this.agentServerService.registerPendingSession(agent.sessionId, agentType, config);
-      this.logger.log(`Registered pending session ${agent.sessionId} for restarted agent type: ${agentType}`);
-    }
-
+    const agentType = agentTypeOrDefault(agent.agentType);
     // Look up AgentType from DB for per-agent resource limits
     const agentTypeRecord = await this.prisma.agentType.findUnique({
       where: { slug: agentType },
-      select: { resourceCpu: true, resourceMemory: true },
+      select: {
+        ...AGENT_TYPE_MANIFEST_SELECT,
+        isBuiltIn: true,
+        validationStatus: true,
+        imageUrl: true,
+        sdkVersion: true,
+        userId: true,
+      },
     });
+    // Restarts and wakes re-check too: an agent rejected (or put under review)
+    // after it was first deployed must not come back.
+    assertDeployableAgentType(agentType, agentTypeRecord, {
+      reviewRequired: await this.platformSettings.isAgentReviewRequired(),
+    });
+    const requirements = resolveAgentRequirements(manifestOfAgentType(agentTypeRecord!));
+    const agentConfig = (agent.agentConfig as Record<string, unknown>) || {};
 
     // Decrypt the stored manual vars so they can be re-merged through the same resolution
     // path as the original deploy — template vars decrypted + manual vars merged on top.
@@ -1126,14 +1072,67 @@ export class AgentsService {
 
     // Re-resolve env vars using the same code path as create() to guarantee the restarted pod
     // gets an identical secret to the original deployment.
-    const { merged } = await this.envVarTemplatesService.resolveEnvVars(
+    const { merged: resolved } = await this.envVarTemplatesService.resolveEnvVars(
       agent.envVarTemplateId ?? undefined,
       projectMembership.userId,
       storedManualVars,
     );
+    const { env: merged } = withEnvDefaults(requirements.env, resolved);
+    // The same check as a new deploy: a template that lost a required key, or
+    // an agent type whose manifest now asks for more, fails here with a 400.
+    assertDeployRequest(agentType, requirements, agentConfig, merged);
+
+    // Only now take the running agent down: every check above refuses without
+    // touching it, so a refused restart leaves the pod as it was.
+    // Delete Kubernetes resources (pod + secret) without updating DB status
+    try {
+      if (agent.podName) {
+        await this.k8s.deletePod(agent.podName);
+      }
+      if (agent.secretName) {
+        await this.k8s.deleteSecret(agent.secretName);
+      }
+    } catch (error) {
+      this.logger.error(`K8s cleanup failed for agent ${id}: ${error.message}`);
+    }
+
+    // Update agent status to STARTING and clear old pod references
+    // Clearing podName is critical: syncAgentStatus() would otherwise query K8s
+    // for the deleted pod, get null back, and overwrite STARTING → STOPPED
+    await this.prisma.agentInstance.update({
+      where: { id },
+      data: {
+        status: AgentStatus.STARTING,
+        stoppedAt: null,
+        podName: null,
+        secretName: null,
+        configMapName: null,
+      },
+    });
+
+    // Emit SSE event so frontend updates in real-time
+    if (this.sessionsService) {
+      this.sessionsService.emitAgentStarting(agent.sessionId, id, agent.name, agentTypeOrDefault(agent.agentType));
+    }
+
+    // Register pending session so gRPC agent registration can match
+    if (this.agentServerService) {
+      const config: Record<string, string> = {
+        sessionId: agent.sessionId,
+        roomName: agent.session.room.livekitRoomName,
+        projectId: agent.session.projectId,
+      };
+      this.agentServerService.registerPendingSession(agent.sessionId, agentType, config);
+      this.logger.log(`Registered pending session ${agent.sessionId} for restarted agent type: ${agentType}`);
+    }
+
     // Unlike the rest of the env, the platform playback default is read fresh:
     // a woken session is a new pipeline, so it takes the current default.
-    const resolvedEnvVars = await this.platformSettings.applyToPodEnv(merged, id);
+    // A restarted (or woken) pod gets a new connector token; the old one stops working.
+    const resolvedEnvVars = await this.withConnectorToken(
+      id,
+      await this.platformSettings.applyToPodEnv(merged, id),
+    );
 
     // Recreate Kubernetes pod with SAME agent ID
     try {
@@ -1145,8 +1144,15 @@ export class AgentsService {
         agentIcon: agent.icon || '🤖',
         roomName: agent.session.room.livekitRoomName,
         livekitUrl,
-        livekitApiKey,
-        livekitApiSecret,
+        // A restart is a new pod, so an uploaded agent gets a freshly signed token (issue 856).
+        ...(await agentLiveKitCredentials({
+          isBuiltIn: agentTypeRecord?.isBuiltIn ?? false,
+          apiKey: livekitApiKey,
+          apiSecret: livekitApiSecret,
+          roomName: agent.session.room.livekitRoomName,
+          identity: `agent-${id}`,
+          name: agent.name,
+        })),
         ttsProvider: this.configService.get<string>('TTS_PROVIDER', 'opensource'),
         // Intentional asymmetry with env vars (re-resolved above): the persisted
         // agentConfig — including the pipeline_config injected at create() by
@@ -1154,11 +1160,11 @@ export class AgentsService {
         // verbatim on restart. A config later fixed from OUTDATED is NOT picked
         // up here; restart reproduces the original deployment, not the latest
         // configuration. Re-deploy the agent to adopt an updated config.
-        agentConfig: (agent.agentConfig as Record<string, unknown>) || {},
+        agentConfig,
         agentType,
         resolvedEnvVars,
-        resourceCpuLimit: agentTypeRecord?.resourceCpu || undefined,
-        resourceMemoryLimit: agentTypeRecord?.resourceMemory || undefined,
+        resources: requirements.resources,
+        clientChannel: requirements.client,
       });
 
       // Update agent with new pod info
@@ -1201,6 +1207,73 @@ export class AgentsService {
     // Delegate to centralized delete logic (handles stopping if needed)
     await this.deleteAgent(id);
     return { message: 'Agent deleted successfully' };
+  }
+
+  /**
+   * Check, without deploying, that `userId` could deploy this agent type with
+   * these connectors: the same rules as create() for who may deploy an
+   * unreviewed or unbuilt upload, and for connector bindings (each the user's
+   * own or shared with the project, declared slots, required slots bound).
+   * Used when a public project's setup is saved, so a setup that cannot run
+   * fails there and not when a visitor joins.
+   */
+  async checkDeployable(
+    agentTypeId: string,
+    userId: string,
+    projectId: string,
+    requests: BindingRequest[] | undefined,
+  ) {
+    const row = await this.prisma.agentType.findUnique({
+      where: { id: agentTypeId },
+      select: {
+        ...AGENT_TYPE_MANIFEST_SELECT,
+        isBuiltIn: true,
+        validationStatus: true,
+        imageUrl: true,
+        sdkVersion: true,
+        userId: true,
+        projectShares: { select: { projectId: true } },
+      },
+    });
+    if (!row) throw new NotFoundException(`Agent type with ID ${agentTypeId} not found`);
+    assertDeployableAgentType(row.slug, row, {
+      reviewRequired: await this.platformSettings.isAgentReviewRequired(),
+      deployerId: userId,
+      projectId,
+    });
+    const requirements = resolveAgentRequirements(manifestOfAgentType(row));
+    return this.connectorsService.resolveBindingsForDeploy(userId, projectId, requests, requirements.connectors);
+  }
+
+  /**
+   * Issue a fresh connector token for a pod about to be (re)created, when the
+   * instance has connector bindings. Only its hash is stored; the plaintext goes
+   * into the pod's Secret as STELLA_CONNECTOR_TOKEN and is what the SDK sends on
+   * ConnectorService calls. Without bindings the pod gets no token and any stale
+   * hash is cleared.
+   */
+  private async withConnectorToken(
+    agentId: string,
+    envVars: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const instance = await this.prisma.agentInstance.findUnique({
+      where: { id: agentId },
+      select: { connectorBindings: true },
+    });
+    if (readBindings(instance?.connectorBindings).length === 0) {
+      await this.prisma.agentInstance.update({
+        where: { id: agentId },
+        data: { connectorTokenHash: null },
+      });
+      const { [CONNECTOR_TOKEN_ENV]: _dropped, ...rest } = envVars;
+      return rest;
+    }
+    const { token, hash } = issueAgentConnectorToken();
+    await this.prisma.agentInstance.update({
+      where: { id: agentId },
+      data: { connectorTokenHash: hash },
+    });
+    return { ...envVars, [CONNECTOR_TOKEN_ENV]: token };
   }
 
   /**
@@ -1975,4 +2048,16 @@ function percentile(sorted: number[], p: number): number {
   const hi = Math.ceil(idx);
   if (lo === hi) return sorted[lo];
   return Math.round((sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo)) * 100) / 100;
+}
+
+/**
+ * Whether a pod (KubernetesService.getPodStatus) still runs an agent: it exists,
+ * is Pending or Running, and has no container that has terminated.
+ */
+export function isPodAlive(
+  pod: { phase?: string; containerStatuses?: { state?: { terminated?: unknown } }[] } | null,
+): boolean {
+  if (!pod) return false;
+  if (pod.phase !== 'Pending' && pod.phase !== 'Running') return false;
+  return !(pod.containerStatuses ?? []).some((c) => c.state?.terminated);
 }

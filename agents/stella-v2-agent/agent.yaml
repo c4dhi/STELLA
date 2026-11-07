@@ -1,4 +1,4 @@
-version: "1.0"
+version: "2.0"
 
 metadata:
   name: "STELLA V2"
@@ -24,6 +24,8 @@ capabilities:
 
 image:
   dockerfile: "Dockerfile"
+  # The Dockerfile CMD passes a fixed --server address; pods read GRPC_SERVER instead.
+  command: [python, -m, stella_v2_agent]
 
 resources:
   memory:
@@ -33,33 +35,19 @@ resources:
     request: "500m"
     limit: "2000m"
 
-configSchema:
-  type: object
-  x-stella-supports-configurator: true
-  properties:
-    plan:
-      type: object
-      description: "Plan configuration with states, tasks, and deliverables"
-      x-stella-requires-plan: true
-    experts_dir:
-      type: string
-      description: "Path to external experts config directory (overrides built-in)"
-    expert_overrides:
-      type: object
-      description: "Per-expert runtime overrides (e.g., {\"medical\": {\"enabled\": false}})"
-    llm:
-      type: object
-      description: "LLM configuration (model, temperature, etc.)"
-      properties:
-        model:
-          type: string
-          default: "gpt-5.4-mini"
-        temperature:
-          type: number
-          default: 0.7
-  x-stella-env-vars:
+features:
+  persona: true
+  plans:
+    required: true
+    modes: [plan, companion]
+  # Every deployment runs a Configurator configuration (config.pipeline_config).
+  configurator:
+    required: true
+
+env:
+  required:
     - OPENAI_API_KEY
-  x-stella-optional-env-vars:
+  optional:
     - name: INTERRUPT_MODE
       description: "Transcript interrupt behavior: 'none' (turn-based gating, default) or 'smart' (barge-in with re-prompting)"
       default: "none"
@@ -95,6 +83,51 @@ configSchema:
       description: "Baseline speaking rate (0.5-2.0, default 1.0). The agent overrides this per turn when STELLA_TTS_RATE_VARIATION is on. Rate is implemented by resampling, so it shifts pitch too: stay within a few percent of 1.0 unless you want an audibly different speaker."
     - name: TTS_PROGRESS_TICK_MS
       description: "How often (ms) a teleprompter progress envelope is emitted during playback. Default 200. Lower = smoother highlight, more data messages. Leave unset to use the default."
+
+
+# Settings a user may give this agent at deploy. Platform flags live in
+# features/env above, never in here.
+# What the face and the agent send each other beyond speech and chat text.
+client:
+  events:
+    - name: wake
+      description: "The user tapped the sleeping face awake. In companion mode she greets them first."
+    - name: sleep
+      description: "The face fell asleep (its idle timer, or the agent's sleep command)."
+  commands:
+    - name: sleep
+      description: "Put the face to sleep, e.g. after a goodbye or a quiet stretch."
+      data:
+        type: object
+        properties:
+          reason: { type: string }
+    - name: sleep_allowed
+      description: "Whether the face may fall asleep on its own (not inside an activity)."
+      data:
+        type: object
+        properties:
+          allowed: { type: boolean }
+        required: [allowed]
+
+configSchema:
+  type: object
+  properties:
+    experts_dir:
+      type: string
+      description: "Path to external experts config directory (overrides built-in)"
+    expert_overrides:
+      type: object
+      description: "Per-expert runtime overrides (e.g., {\"medical\": {\"enabled\": false}})"
+    llm:
+      type: object
+      description: "LLM configuration (model, temperature, etc.)"
+      properties:
+        model:
+          type: string
+          default: "gpt-5.4-mini"
+        temperature:
+          type: number
+          default: 0.7
 
 defaultConfig: {}
 

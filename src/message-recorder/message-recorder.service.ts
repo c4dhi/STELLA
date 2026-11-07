@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { Message, Prisma } from '@prisma/client';
+import { clientChannelRecord } from './client-channel-record.js';
 
 export interface RecordMessageDto {
   sessionId: string;
@@ -55,6 +56,21 @@ export class MessageRecorderService {
       this.logger.error(`Failed to record message: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * Record one message on the client channel (screen ↔ agent): an event the
+   * screen sent, the agent's reply to it, or a command the agent sent. For a
+   * study this is data: what the participant did, and when.
+   */
+  async recordClientChannelMessage(
+    sessionId: string,
+    participantId: string,
+    envelope: { type: string; data?: unknown },
+  ): Promise<Message | null> {
+    const record = clientChannelRecord(envelope, participantId);
+    if (!record) return null;
+    return this.recordMessage({ sessionId, ...record, timestamp: new Date() });
   }
 
   /**

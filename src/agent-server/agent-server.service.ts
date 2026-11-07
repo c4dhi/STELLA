@@ -79,7 +79,13 @@ export class AgentServerService implements OnModuleDestroy {
   async handleRegisterAgent(
     request: RegisterAgentRequest,
   ): Promise<RegisterAgentResponse> {
-    this.logger.log(`Agent registration request: ${request.agentType} v${request.agentVersion}`);
+    // The SDK floor is enforced at deploy time (MIN_SUPPORTED_SDK_VERSION); here
+    // the version is only recorded, so an old pod that is already running can
+    // still register.
+    const sdkVersion = request.sdkVersion || 'unknown (before 0.10)';
+    this.logger.log(
+      `Agent registration request: ${request.agentType} v${request.agentVersion} (stella-ai-agent-sdk ${sdkVersion})`,
+    );
 
     // Find a pending session that matches this agent type
     let matchedSessionId: string | null = null;

@@ -21,6 +21,7 @@
     "db:push": "npx prisma db push",
     "db:generate": "npx prisma generate",
     "validate:agents": "node --import ./scripts/register-ts-node-esm.mjs scripts/validate-agents.ts",
+    "manifest:schema": "node --import ./scripts/register-ts-node-esm.mjs scripts/export-manifest-schema.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "NODE_OPTIONS=--experimental-vm-modules jest --watch",
@@ -94,6 +95,7 @@
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.4",
     "ts-node": "^10.9.2",
+    "undici": "8.11.2",
     "uuid": "^14.0.3",
     "yauzl": "^3.4.0",
     "zod": "^4.6.7"

@@ -14,6 +14,7 @@ import { QuerySessionsDto } from './dto/query-sessions.dto.js';
 import { Prisma } from '@prisma/client';
 import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service.js';
 import { attachTurnLanguage } from './turn-language.util.js';
+import { clientChannelRecord } from '../message-recorder/client-channel-record.js';
 
 /** Deliverable entry in the transcript summary section */
 interface TranscriptDeliverableSummaryEntry {
@@ -1294,9 +1295,14 @@ export class SessionsService {
       return result;
     }
 
+    // The screen<->agent channel: a readable line, role 'system' (one owner: clientChannelRecord).
+    const channelRecord = clientChannelRecord(messageEnvelope, participantIdentity || 'system');
+
     // Determine message role based on participant identity
     let role: string;
-    if (!participantIdentity) {
+    if (channelRecord) {
+      role = channelRecord.role;
+    } else if (!participantIdentity) {
       role = 'system';
     } else if (participantIdentity.startsWith('agent-')) {
       role = 'assistant';
@@ -1310,7 +1316,9 @@ export class SessionsService {
     let content: string;
 
     // Handle transcript types (both 'transcript' and 'transcript_chunk' for compatibility)
-    if (messageType === 'transcript_chunk' || messageType === 'transcript') {
+    if (channelRecord) {
+      content = channelRecord.content;
+    } else if (messageType === 'transcript_chunk' || messageType === 'transcript') {
       content = typeof messageData === 'string' ? messageData : (messageData.text || '');
     } else if (messageType === 'agent_text') {
       // Agent responses - extract text content

@@ -70,7 +70,13 @@ sdk:
 
     expect(result.valid).toBe(true)
     expect(result.errors).toEqual([])
-    expect(result.manifest?.configSchema?.['x-stella-supports-configurator']).toBe(true)
+    // 1.0 flags land in their 2.0 blocks; the injected plan is not a user setting.
+    expect(result.manifest?.features).toEqual({ persona: true, configurator: { required: false }, plans: { required: true, modes: ['plan'] } })
+    expect(result.manifest?.env).toEqual({
+      required: ['OPENAI_API_KEY'],
+      optional: [{ name: 'INTERRUPT_MODE', description: 'Optional override', default: 'none' }],
+    })
+    expect(result.manifest?.configSchema).toBeUndefined()
   })
 
   it('rejects invalid x-stella optional env var names', () => {
@@ -91,7 +97,7 @@ configSchema:
 `)
 
     expect(result.valid).toBe(false)
-    expect(result.errors.join('\n')).toContain('x-stella-optional-env-vars.0.name')
+    expect(result.errors.join('\n')).toContain('env.optional.0.name')
   })
 
   it('rejects select slots without options in pipeline schema', () => {
@@ -338,7 +344,7 @@ configSchema:
 `)
 
     expect(result.valid).toBe(false)
-    expect(result.errors.join('\n')).toContain('capabilities does not include "plans"')
+    expect(result.errors.join('\n')).toContain('features.plans needs the "plans" capability')
   })
 
   it('accepts x-stella-requires-plan when plans capability is present', () => {
@@ -364,75 +370,91 @@ configSchema:
     expect(result.valid).toBe(true)
   })
 
-  it('rejects experts capability when configSchema does not expose expert config', () => {
+  it('rejects experts capability with the configurator when configSchema does not expose expert config', () => {
     // Cross-field rule applies when configurator support is enabled for expert-capable agents.
     const result = validator.validate(`
-version: "1.0"
+version: "2.0"
 metadata:
   name: "Experts Missing Config Agent"
   slug: "experts-missing-config-agent"
   version: "1.0.0"
-  description: "Experts capability but no expert config"
+  description: "experts"
+capabilities: ["voice", "experts"]
+features:
+  configurator: true
+image:
+  dockerfile: "Dockerfile"
+configSchema:
+  type: object
+  properties:
+    llm:
+      type: object
+pipelineSchema:
+  nodes:
+    - id: expert_pool
+      label: "Experts"
+      position: { row: 0, col: 0 }
+      slots: []
+  edges: []
+  thresholds: []
+`)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.join('\n')).toContain('does not expose expert configuration')
+  })
+
+  it('accepts experts capability with the configurator when configSchema exposes expert config', () => {
+    const result = validator.validate(`
+version: "2.0"
+metadata:
+  name: "Experts Config Agent"
+  slug: "experts-config-agent"
+  version: "1.0.0"
+  description: "experts"
+capabilities: ["voice", "experts"]
+features:
+  configurator: true
+image:
+  dockerfile: "Dockerfile"
+configSchema:
+  type: object
+  properties:
+    expert_overrides:
+      type: object
+pipelineSchema:
+  nodes:
+    - id: expert_pool
+      label: "Experts"
+      position: { row: 0, col: 0 }
+      slots: []
+  edges: []
+  thresholds: []
+`)
+
+    expect(result.errors).toEqual([])
+    expect(result.valid).toBe(true)
+  })
+
+  it('ignores a 1.0 configurator flag without a pipelineSchema, with a warning', () => {
+    // 1.0 accepted it and the wizard simply showed no Configuration step.
+    const result = validator.validate(`
+version: "1.0"
+metadata:
+  name: "Flag Only Agent"
+  slug: "flag-only-agent"
+  version: "1.0.0"
+  description: "flag"
 capabilities: ["voice", "experts"]
 image:
   dockerfile: "Dockerfile"
 configSchema:
   type: object
   x-stella-supports-configurator: true
-  properties:
-    llm:
-      type: object
-`)
-
-    expect(result.valid).toBe(false)
-    expect(result.errors.join('\n')).toContain('x-stella-supports-configurator=true')
-  })
-
-  it('accepts experts capability when configSchema exposes expert config', () => {
-    // Positive case: known expert-related config key is present.
-    const result = validator.validate(`
-version: "1.0"
-metadata:
-  name: "Experts Config Agent"
-  slug: "experts-config-agent"
-  version: "1.0.0"
-  description: "Experts capability with expert config"
-capabilities: ["experts", "voice"]
-image:
-  dockerfile: "Dockerfile"
-configSchema:
-  type: object
-  x-stella-supports-configurator: true
-  properties:
-    expert_overrides:
-      type: object
 `)
 
     expect(result.valid).toBe(true)
-  })
-
-  it('accepts experts capability when expert config is marked with x-stella-expert-config', () => {
-    // Extension marker allows expert config discovery even when property key is custom.
-    const result = validator.validate(`
-version: "1.0"
-metadata:
-  name: "Experts Marker Agent"
-  slug: "experts-marker-agent"
-  version: "1.0.0"
-  description: "Experts capability with extension marker"
-capabilities: ["experts", "voice"]
-image:
-  dockerfile: "Dockerfile"
-configSchema:
-  type: object
-  x-stella-supports-configurator: true
-  properties:
-    specialist_settings:
-      type: object
-      x-stella-expert-config: true
-`)
-
-    expect(result.valid).toBe(true)
+    expect(result.manifest?.features.configurator).toBeUndefined()
+    expect(result.warnings.join('\n')).toContain('has no effect without a pipelineSchema')
   })
 
   it('does not require expert config when experts capability is absent', () => {
@@ -566,7 +588,7 @@ pipelineSchema:
   it('keeps compatibility warnings as warnings', () => {
     // Compatibility/deprecation scenarios should not block parsing when structure is valid.
     const result = validator.validate(`
-version: "2.0"
+version: "1.0"
 metadata:
   name: "Warning Agent"
   slug: "warning-agent"
@@ -583,11 +605,22 @@ resources:
     expect(result.valid).toBe(true)
     expect(result.warnings).toEqual(
       expect.arrayContaining([
-        'Manifest version 2.0 may not be fully supported',
+        expect.stringContaining('Manifest version 1.0 is deprecated'),
         'Both dockerfile and imageUrl specified; dockerfile will be used',
         'Unknown capability: unknown-capability',
         'GPU resources require admin approval',
       ]),
     )
+  })
+
+  it('refuses an unknown capability in a 2.0 manifest', () => {
+    const result = validator.validate(`
+version: "2.0"
+metadata: { name: "A", slug: "a-agent", version: "1.0.0", description: "a" }
+image: { dockerfile: "Dockerfile" }
+capabilities: ["voice", "unknown-capability"]
+`)
+    expect(result.valid).toBe(false)
+    expect(result.errors.join('\n')).toContain('capabilities.1')
   })
 })

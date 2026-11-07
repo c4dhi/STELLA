@@ -1,13 +1,20 @@
+import { defaultAgentType } from '../agents/default-agent-type.js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as k8s from '@kubernetes/client-node';
 import { AgentImageService } from '../agent-image/agent-image.service.js';
 import { buildPodEnvVars, buildSecretStringData } from './utils/agent-config-injection.util.js';
+import type { AgentRequirements } from '../agents/agent-requirements.js';
 import {
   clampCpuLimit,
   clampMemoryLimit,
   DEFAULT_CPU_LIMIT,
   DEFAULT_MEMORY_LIMIT,
+  DEFAULT_CPU_REQUEST,
+  DEFAULT_MEMORY_REQUEST,
+  parseCpuMillicores,
+  parseMemoryBytes,
+  requestWithinLimit,
 } from './utils/resource-clamping.util.js';
 
 export interface AgentPodConfig {
@@ -18,8 +25,11 @@ export interface AgentPodConfig {
   agentIcon: string;
   roomName: string;
   livekitUrl: string;
-  livekitApiKey: string;
-  livekitApiSecret: string;
+  // Built-in agents get the key and secret; uploaded agents only a token
+  // scoped to their room (issue 856). See agentLiveKitCredentials.
+  livekitApiKey?: string;
+  livekitApiSecret?: string;
+  livekitToken?: string;
   ttsProvider: string;
   agentConfig?: Record<string, unknown>;  // Agent-specific config (passed as AGENT_CONFIG env var)
   agentType?: string;       // Agent type (e.g., "stella-light-agent") - determines which image to use
@@ -27,8 +37,13 @@ export interface AgentPodConfig {
   // Pre-resolved env vars: template vars decrypted and merged with manual overrides by the caller.
   // KubernetesService receives the final map and spreads it directly into the K8s Secret.
   resolvedEnvVars: Record<string, string>;
-  resourceCpuLimit?: string;    // CPU limit from AgentType (e.g., "2000m") - falls back to default
-  resourceMemoryLimit?: string; // Memory limit from AgentType (e.g., "2Gi") - falls back to default
+  /** requirements.client, passed to the pod as STELLA_CLIENT_CHANNEL. */
+  clientChannel?: AgentRequirements['client'];
+  /** Requests and limits from the agent type's manifest (see resolveAgentRequirements). Limits are clamped. */
+  resources?: {
+    memory?: { request?: string; limit?: string };
+    cpu?: { request?: string; limit?: string };
+  };
 }
 
 @Injectable()
@@ -47,7 +62,7 @@ export class KubernetesService {
     private agentImageService: AgentImageService,
   ) {
     this.namespace = this.configService.get<string>('KUBERNETES_NAMESPACE', 'default');
-    this.defaultAgentType = this.configService.get<string>('DEFAULT_AGENT_TYPE', 'stella-v2-agent');
+    this.defaultAgentType = defaultAgentType();
     this.imagePullPolicy = this.configService.get<string>('AGENT_IMAGE_PULL_POLICY', 'IfNotPresent');
     // Configurable gRPC server address for agent connections
     // Allows agents to connect from anywhere (K8s, external servers, etc.)
@@ -121,32 +136,35 @@ export class KubernetesService {
     const secretName = `agent-secret-${config.agentId}`;
 
     // Validate and clamp resource limits (security guardrails)
-    const clampedCpu = clampCpuLimit(config.resourceCpuLimit);
-    const clampedMemory = clampMemoryLimit(config.resourceMemoryLimit);
+    const clampedCpu = clampCpuLimit(config.resources?.cpu?.limit);
+    const clampedMemory = clampMemoryLimit(config.resources?.memory?.limit);
 
     // Keep logs explicit about why a caller-provided limit was not used.
     if (clampedCpu.reason === 'invalid') {
-      this.logger.warn(`Invalid resource limit "${config.resourceCpuLimit}", using default "${DEFAULT_CPU_LIMIT}"`);
+      this.logger.warn(`Invalid resource limit "${config.resources?.cpu?.limit}", using default "${DEFAULT_CPU_LIMIT}"`);
     } else if (clampedCpu.reason === 'exceeds_max') {
-      this.logger.warn(`Resource limit "${config.resourceCpuLimit}" exceeds maximum, clamping to default "${DEFAULT_CPU_LIMIT}"`);
+      this.logger.warn(`Resource limit "${config.resources?.cpu?.limit}" exceeds maximum, clamping to default "${DEFAULT_CPU_LIMIT}"`);
     }
 
     if (clampedMemory.reason === 'invalid') {
-      this.logger.warn(`Invalid resource limit "${config.resourceMemoryLimit}", using default "${DEFAULT_MEMORY_LIMIT}"`);
+      this.logger.warn(`Invalid resource limit "${config.resources?.memory?.limit}", using default "${DEFAULT_MEMORY_LIMIT}"`);
     } else if (clampedMemory.reason === 'exceeds_max') {
-      this.logger.warn(`Resource limit "${config.resourceMemoryLimit}" exceeds maximum, clamping to default "${DEFAULT_MEMORY_LIMIT}"`);
+      this.logger.warn(`Resource limit "${config.resources?.memory?.limit}" exceeds maximum, clamping to default "${DEFAULT_MEMORY_LIMIT}"`);
     }
 
     const cpuLimit = clampedCpu.value;
     const memoryLimit = clampedMemory.value;
+    const cpuRequest = requestWithinLimit(config.resources?.cpu?.request, cpuLimit, DEFAULT_CPU_REQUEST, parseCpuMillicores);
+    const memoryRequest = requestWithinLimit(config.resources?.memory?.request, memoryLimit, DEFAULT_MEMORY_REQUEST, parseMemoryBytes);
 
     // Determine agent type (falls back to the configured default agent type)
     const agentType = config.agentType || this.defaultAgentType;
 
     // Ensure agent image exists (builds on-demand if needed)
     this.logger.log(`Ensuring agent image exists for type: ${agentType}`);
-    const agentImage = await this.agentImageService.ensureImageExists(agentType, config.forceRebuild);
-    this.logger.log(`Using agent image: ${agentImage}`);
+    const { image: agentImage, command: agentCommand } =
+      await this.agentImageService.resolveAgentImage(agentType, config.forceRebuild);
+    this.logger.log(`Using agent image: ${agentImage}${agentCommand ? '' : ' (image CMD)'}`);
 
     // Create Secret first
     await this.createSecret(secretName, config);
@@ -192,9 +210,9 @@ export class KubernetesService {
                 drop: ['ALL'],
               },
             },
-            // Run agent module (config from environment variables)
-            // stella-light-agent -> stella_light_agent, stella-v2-agent -> stella_v2_agent
-            command: ['python', '-m', agentType.replace(/-/g, '_')],
+            // Built-ins run `python -m <slug_underscored>`; uploaded agents run
+            // their image's own CMD (command omitted). See resolveAgentImage.
+            ...(agentCommand ? { command: agentCommand } : {}),
             envFrom: [
               {
                 secretRef: {
@@ -214,11 +232,12 @@ export class KubernetesService {
               ttsServiceAddress: this.configService.get<string>('TTS_SERVICE_ADDRESS', 'tts-service:50052'),
               stateMachineAddress: this.configService.get<string>('STATE_MACHINE_ADDRESS', 'session-management-server:50051'),
               nodeEnv: process.env.NODE_ENV || 'local',
+              clientChannel: config.clientChannel,
             }),
             resources: {
               requests: {
-                memory: '512Mi',
-                cpu: '250m',
+                memory: memoryRequest,
+                cpu: cpuRequest,
                 // Note: Agents do NOT need GPU - they communicate with STT/TTS services via gRPC
                 // The STT and TTS services have GPU access via runtimeClassName: nvidia
               },
@@ -263,6 +282,7 @@ export class KubernetesService {
         livekitUrl: config.livekitUrl,
         livekitApiKey: config.livekitApiKey,
         livekitApiSecret: config.livekitApiSecret,
+        livekitToken: config.livekitToken,
         roomName: config.roomName,
         ttsProvider: config.ttsProvider,
         agentConfig: config.agentConfig || {},

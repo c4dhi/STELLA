@@ -274,6 +274,16 @@ export class RoomMonitorService implements OnModuleInit, OnModuleDestroy {
           );
           break;
 
+        case 'client_event':
+        case 'client_event_reply':
+        case 'agent_command':
+          await this.messageRecorder.recordClientChannelMessage(
+            sessionId,
+            participantIdentity || 'system',
+            envelope,
+          );
+          break;
+
         // Ignore these message types (don't record):
         case 'tts_start':
         case 'tts_stop':

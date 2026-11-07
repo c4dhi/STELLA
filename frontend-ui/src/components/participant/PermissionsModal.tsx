@@ -30,6 +30,13 @@ interface PermissionsModalProps {
   isOpen: boolean;
   participantName: string;
   onComplete: () => void;
+  /** The line under the title. Defaults to the join wording. */
+  subtitle?: string;
+  /** The main button. Defaults to "Join Session". */
+  actionLabel?: string;
+  /** Shows a quiet second button, e.g. to stay on the Text face. */
+  cancelLabel?: string;
+  onCancel?: () => void;
 }
 
 type PermissionStatus = 'pending' | 'granted' | 'denied';
@@ -38,6 +45,10 @@ export default function PermissionsModal({
   isOpen,
   participantName,
   onComplete,
+  subtitle = 'Check your camera and microphone before joining',
+  actionLabel = 'Join Session',
+  cancelLabel,
+  onCancel,
 }: PermissionsModalProps) {
   // Permission states
   const [micStatus, setMicStatus] = useState<PermissionStatus>('pending');
@@ -279,7 +290,7 @@ export default function PermissionsModal({
               Set Up Your Devices
             </h2>
             <p className="text-content-secondary dark:text-content-inverse-secondary text-sm">
-              Check your camera and microphone before joining
+              {subtitle}
             </p>
           </div>
 
@@ -435,11 +446,24 @@ export default function PermissionsModal({
 
           {/* Join Button */}
           <GradientButton onClick={handleJoin} disabled={!canJoin}>
-            <span>Join Session</span>
+            <span>{actionLabel}</span>
             <ArrowRight
               className={`w-4 h-4 transition-transform ${canJoin ? 'group-hover:translate-x-1' : ''}`}
             />
           </GradientButton>
+          {onCancel && (
+            <button
+              type="button"
+              onClick={() => {
+                stopStream(micStream);
+                stopStream(cameraStream);
+                onCancel();
+              }}
+              className="mt-3 w-full py-2 text-sm text-content-secondary dark:text-content-inverse-secondary hover:text-content dark:hover:text-content-inverse transition-colors"
+            >
+              {cancelLabel ?? 'Cancel'}
+            </button>
+          )}
         </OnboardingCard>
       </div>
     </OnboardingLayout>

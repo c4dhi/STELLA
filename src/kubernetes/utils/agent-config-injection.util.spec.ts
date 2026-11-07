@@ -1,9 +1,10 @@
 import {
+  CLIENT_CHANNEL_ENV,
   buildPodEnvVars,
+  clientChannelEnv,
   buildPodInjectionFromAgentTypeAndConfiguration,
   buildSecretStringData,
   deriveEffectiveAgentConfig,
-  resolveAgentEnvVarsFromConfigSchema,
 } from './agent-config-injection.util.js'
 
 describe('agent-config-injection util', () => {
@@ -36,7 +37,22 @@ describe('agent-config-injection util', () => {
       { name: 'TTS_SERVICE_ADDRESS', value: 'tts-service:50052' },
       { name: 'STATE_MACHINE_ADDRESS', value: 'session-management-server:50051' },
       { name: 'NODE_ENV', value: 'local' },
+      { name: 'STELLA_CLIENT_CHANNEL', value: '{"events":[],"commands":[]}' },
     ])
+  })
+
+  it('passes the declared client channel as names and data schemas only', () => {
+    const channel = {
+      events: [{ name: 'wake', description: 'tapped awake' }],
+      commands: [{ name: 'sleep_allowed', description: 'may sleep', data: { type: 'object', properties: { allowed: { type: 'boolean' } } } }],
+    }
+    const env = buildPodEnvVars({ ...podEnvInput, clientChannel: channel as any }).find((v) => v.name === CLIENT_CHANNEL_ENV)
+    expect(JSON.parse(env!.value)).toEqual({
+      events: [{ name: 'wake' }],
+      commands: [{ name: 'sleep_allowed', data: { type: 'object', properties: { allowed: { type: 'boolean' } } } }],
+    })
+    // Nothing declared is still set: the SDK then refuses everything.
+    expect(clientChannelEnv(undefined)).toBe('{"events":[],"commands":[]}')
   })
 
   it('derives effective config by deep-merging AgentType defaults with user configuration', () => {
@@ -89,6 +105,29 @@ describe('agent-config-injection util', () => {
     })
   })
 
+  it('gives a token pod LIVEKIT_TOKEN and neither the LiveKit key nor secret (issue 856)', () => {
+    const secret = buildSecretStringData({
+      agentId: 'agent-123',
+      livekitUrl: 'wss://livekit.local',
+      livekitToken: 'scoped.jwt.token',
+      roomName: 'room-a',
+      ttsProvider: 'opensource',
+      agentConfig: {},
+      // Even a template that carries them must not put them back, or swap the token.
+      customEnvVars: { LIVEKIT_API_KEY: 'lk-key', LIVEKIT_API_SECRET: 'lk-secret', LIVEKIT_TOKEN: 'other.room.token', EXTRA: '1' },
+    })
+
+    expect(secret).toEqual({
+      LIVEKIT_URL: 'wss://livekit.local',
+      LIVEKIT_TOKEN: 'scoped.jwt.token',
+      ROOM_NAME: 'room-a',
+      IDENTITY: 'agent-agent-123',
+      TTS_PROVIDER: 'opensource',
+      AGENT_CONFIG: '{}',
+      EXTRA: '1',
+    })
+  })
+
   it('drops empty custom env vars so they fall through to the consumer default', () => {
     // Regression: an optional declared var carried into a template as "" must not
     // be injected — an empty value shadows the agent's built-in default and
@@ -119,13 +158,7 @@ describe('agent-config-injection util', () => {
           llm: { model: 'gpt-4o-mini', temperature: 0.7 },
           pipeline: { input_gate: { max_tokens: 60 } },
         },
-        configSchema: {
-          type: 'object',
-          'x-stella-env-vars': ['OPENAI_API_KEY'],
-          'x-stella-optional-env-vars': [
-            { name: 'TTS_ENABLED', default: 'true' },
-          ],
-        },
+        env: { required: ['OPENAI_API_KEY'], optional: [{ name: 'TTS_ENABLED', default: 'true' }] },
       },
       userConfiguration: {
         configuration: {
@@ -163,28 +196,5 @@ describe('agent-config-injection util', () => {
     expect(payload.appliedOptionalDefaults).toEqual(['TTS_ENABLED'])
     // Required env var is satisfied by provided OPENAI_API_KEY.
     expect(payload.missingRequiredEnvVars).toEqual([])
-  })
-
-  it('resolves required and optional env vars from configSchema', () => {
-    // Required env vars are reported when missing; optional defaults are applied as fallback.
-    const result = resolveAgentEnvVarsFromConfigSchema(
-      {
-        type: 'object',
-        'x-stella-env-vars': ['OPENAI_API_KEY', 'ELEVENLABS_API_KEY'],
-        'x-stella-optional-env-vars': [
-          { name: 'TTS_ENABLED', default: 'true' },
-          { name: 'TRANSCRIPT_DEBOUNCE_MS', default: '300' },
-        ],
-      },
-      { OPENAI_API_KEY: 'sk-test', TTS_ENABLED: 'false' },
-    )
-
-    expect(result.resolvedEnvVars).toEqual({
-      OPENAI_API_KEY: 'sk-test',
-      TTS_ENABLED: 'false',
-      TRANSCRIPT_DEBOUNCE_MS: '300',
-    })
-    expect(result.appliedOptionalDefaults).toEqual(['TRANSCRIPT_DEBOUNCE_MS'])
-    expect(result.missingRequiredEnvVars).toEqual(['ELEVENLABS_API_KEY'])
   })
 })

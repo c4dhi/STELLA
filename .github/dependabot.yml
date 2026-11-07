@@ -53,6 +53,7 @@ updates:
       - "/stt-service"
       - "/tts-service"
       - "/agents/stella-v2-agent"
+      - "/agents/stella-jev-agent"
       - "/agents/stella-ai-agent-sdk"
     schedule:
       interval: "weekly"

@@ -10,6 +10,8 @@ import type {
   RuntimeVariable,
   ExpertDefault,
 } from '../../lib/api-types'
+import { WIZARD_CARD_GRID } from './wizardLayout'
+import { CHOICE_CARD, SelectedBadge } from './wizardChoice'
 
 interface ConfigurationSelectionStepProps {
   agentTypeId: string
@@ -149,7 +151,7 @@ export default function ConfigurationSelectionStep({
   }
 
   return (
-    <div className="grid grid-cols-2 gap-3 max-h-[350px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
+    <div className={`${WIZARD_CARD_GRID} pr-2 pt-1 -mt-1`}>
       {/* Saved configuration cards */}
       {configurations.map((config, index) => {
         const style = getConfigCardStyle(config.id)
@@ -172,15 +174,15 @@ export default function ConfigurationSelectionStep({
               ${isOutdated ? 'opacity-60' : ''}
               ${isSelected
                 ? isDark
-                  ? 'bg-primary-500/20 border-2 border-primary-500 shadow-lg shadow-primary-500/20'
-                  : 'bg-neutral-100 border-2 border-neutral-900 shadow-lg shadow-neutral-900/10'
+                  ? CHOICE_CARD.selected.dark
+                  : CHOICE_CARD.selected.light
                 : isOutdated
                   ? isDark
                     ? 'bg-zinc-800/40 border border-amber-500/30'
                     : 'bg-amber-50/40 border border-amber-300/50'
                 : isDark
-                  ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500 hover:bg-zinc-700/80'
-                  : 'bg-white border border-neutral-200 hover:border-neutral-300 hover:shadow-md'
+                  ? CHOICE_CARD.idle.dark
+                  : CHOICE_CARD.idle.light
               }
             `}
           >
@@ -207,11 +209,7 @@ export default function ConfigurationSelectionStep({
                 </svg>
               </motion.div>
               {/* Selection checkmark */}
-              {isSelected && (
-                <svg className={`w-5 h-5 ${isDark ? 'text-primary-400' : 'text-neutral-900'}`} fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-              )}
+              {isSelected && <SelectedBadge isDark={isDark} />}
             </div>
 
             {/* Icon */}

@@ -5,6 +5,10 @@ import { apiClient } from '../../services/ApiClient'
 import type { EnvVarTemplate } from '../../lib/api-types'
 import { useEnvVarListEditor } from './EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from './EnvVarListEditor/EnvVarListEditor'
+import EnvVarNeedsSummary from './EnvVarNeedsSummary'
+import { envVarHints, type OptionalEnvVar } from '../../lib/deployNeeds'
+import { WIZARD_CARD_GRID } from './wizardLayout'
+import { choiceCardClass, SelectedBadge } from './wizardChoice'
 
 type EnvVarsView = 'select' | 'edit'
 
@@ -33,6 +37,8 @@ interface EnvVarsSelectionStepProps {
   // template list is filtered server-side. Fail fast at the boundary if missing.
   agentTypeId: string
   requiredEnvVars: string[]
+  /** Env vars the agent reads when set; offered as rows that may stay empty. */
+  optionalEnvVars?: OptionalEnvVar[]
   selectedEnvVarTemplate: EnvVarTemplate | null
   onSelectEnvVarTemplate: (template: EnvVarTemplate | null) => void
   envVars: Record<string, string>
@@ -44,6 +50,7 @@ interface EnvVarsSelectionStepProps {
 export default function EnvVarsSelectionStep({
   agentTypeId,
   requiredEnvVars,
+  optionalEnvVars = [],
   selectedEnvVarTemplate,
   onSelectEnvVarTemplate,
   envVars,
@@ -53,6 +60,7 @@ export default function EnvVarsSelectionStep({
 }: EnvVarsSelectionStepProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
+  const optionalNames = optionalEnvVars.map((v) => v.name)
 
   const [envVarTemplates, setEnvVarTemplates] = useState<EnvVarTemplate[]>([])
   const [isLoadingEnvVars, setIsLoadingEnvVars] = useState(false)
@@ -79,7 +87,8 @@ export default function EnvVarsSelectionStep({
         const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
         const templateKeySet = new Set(templateKeys)
         const requiredToFill = requiredEnvVars.filter((key) => !templateKeySet.has(key))
-        editor.reset({ requiredKeys: requiredToFill, templateKeys, initial: envVars })
+        const optionalToOffer = optionalNames.filter((key) => !templateKeySet.has(key))
+        editor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: envVars })
       }
     }
   }, [])
@@ -97,7 +106,27 @@ export default function EnvVarsSelectionStep({
     onSelectEnvVarTemplate(template)
   }
 
+  // The parent's Continue on the select view also opens the editor (as the
+  // deploy dialog does), so a picked template's gaps can still be filled in.
+  const seededByClick = useRef(false)
+  const lastView = useRef(envVarsView)
+  useEffect(() => {
+    if (lastView.current === 'select' && envVarsView === 'edit' && !seededByClick.current) {
+      const templateKeys = selectedEnvVarTemplate?.variableKeys ?? []
+      const templateKeySet = new Set(templateKeys)
+      editor.reset({
+        requiredKeys: requiredEnvVars.filter((key) => !templateKeySet.has(key)),
+        optionalKeys: optionalNames.filter((key) => !templateKeySet.has(key)),
+        templateKeys,
+        initial: {},
+      })
+    }
+    seededByClick.current = false
+    lastView.current = envVarsView
+  }, [envVarsView])
+
   const handleGoToEdit = (template: EnvVarTemplate | null) => {
+    seededByClick.current = true
     onSelectEnvVarTemplate(template)
     // Surface all of the template's variables as editable default rows (blank =
     // use the template value, type to override; merged server-side). Required keys
@@ -105,32 +134,15 @@ export default function EnvVarsSelectionStep({
     const templateKeys = template?.variableKeys ?? []
     const templateKeySet = new Set(templateKeys)
     const requiredToFill = requiredEnvVars.filter((key) => !templateKeySet.has(key))
-    editor.reset({ requiredKeys: requiredToFill, templateKeys, initial: {} })
+    const optionalToOffer = optionalNames.filter((key) => !templateKeySet.has(key))
+    editor.reset({ requiredKeys: requiredToFill, optionalKeys: optionalToOffer, templateKeys, initial: {} })
     onEnvVarsViewChange('edit')
   }
 
   return (
     <div>
-      {/* Required env vars info banner */}
-      {requiredEnvVars.length > 0 && (
-        <div className={`
-          p-3 rounded-xl mb-4
-          ${isDark ? 'bg-amber-500/10 border border-amber-500/20' : 'bg-amber-50 border border-amber-200'}
-        `}>
-          <div className={`text-xs font-medium mb-1 ${isDark ? 'text-amber-400' : 'text-amber-700'}`}>
-            Required Environment Variables
-          </div>
-          <div className={`flex flex-wrap gap-1.5`}>
-            {requiredEnvVars.map(key => (
-              <span key={key} className={`
-                px-2 py-0.5 rounded text-xs font-mono
-                ${isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'}
-              `}>
-                {key}
-              </span>
-            ))}
-          </div>
-        </div>
+      {envVarsView === 'select' && (
+        <EnvVarNeedsSummary required={requiredEnvVars} optional={optionalNames} isDark={isDark} />
       )}
 
       <AnimatePresence mode="wait">
@@ -150,7 +162,7 @@ export default function EnvVarsSelectionStep({
                 </div>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-3 max-h-[300px] overflow-y-auto overflow-x-visible pr-2 pt-1 -mt-1">
+              <div className={`${WIZARD_CARD_GRID} pr-2 pt-1 -mt-1`}>
                 {/* Template cards */}
                 {envVarTemplates.map((template, index) => {
                   const style = getEnvVarCardStyle(index)
@@ -164,22 +176,13 @@ export default function EnvVarsSelectionStep({
                       whileHover={{ y: -2 }}
                       className={`
                         relative p-4 rounded-xl text-left transition-all duration-200
-                        ${isSelected
-                          ? isDark
-                            ? 'bg-primary-500/20 border-2 border-primary-500 shadow-lg shadow-primary-500/20'
-                            : 'bg-neutral-100 border-2 border-neutral-900 shadow-lg shadow-neutral-900/10'
-                          : isDark
-                            ? 'bg-zinc-700/50 border border-zinc-600 hover:border-zinc-500 hover:bg-zinc-700/80'
-                            : 'bg-white border border-neutral-200 hover:border-neutral-300 hover:shadow-md'
-                        }
+                        ${choiceCardClass(isSelected, isDark)}
                       `}
                     >
                       {/* Selection checkmark */}
                       {isSelected && (
                         <div className="absolute top-3 right-3">
-                          <svg className={`w-5 h-5 ${isDark ? 'text-primary-400' : 'text-neutral-900'}`} fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                          </svg>
+                          <SelectedBadge isDark={isDark} />
                         </div>
                       )}
 
@@ -330,8 +333,8 @@ export default function EnvVarsSelectionStep({
               </div>
             )}
 
-            <div className="max-h-[300px] overflow-y-auto pr-2">
-              <EnvVarListEditor editor={editor} isDark={isDark} />
+            <div className="pr-2">
+              <EnvVarListEditor editor={editor} isDark={isDark} hints={envVarHints(optionalEnvVars)} />
             </div>
           </motion.div>
         )}

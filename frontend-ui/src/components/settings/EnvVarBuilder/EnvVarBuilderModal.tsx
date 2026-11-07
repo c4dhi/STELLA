@@ -3,7 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../../store/themeStore'
 import { useToastStore } from '../../../store/toastStore'
 import { apiClient } from '../../../services/ApiClient'
-import { parseDeclaredEnvVars, type EnvVarTemplate, type AgentType } from '../../../lib/api-types'
+import type { EnvVarTemplate, AgentType } from '../../../lib/api-types'
+import { deployNeeds } from '../../../lib/deployNeeds'
+
+/** The env vars an agent type declares (from its requirements), by name. */
+function declaredEnvVars(type: AgentType | undefined): { required: string[]; optional: string[] } {
+  const needs = deployNeeds(type)
+  return { required: needs.requiredEnvVars, optional: needs.optionalEnvVars.map((v) => v.name) }
+}
 import { useEnvVarListEditor } from '../../shared/EnvVarListEditor/useEnvVarListEditor'
 import EnvVarListEditor from '../../shared/EnvVarListEditor/EnvVarListEditor'
 
@@ -94,9 +101,7 @@ export default function EnvVarBuilderModal({
         // Preselect when there's exactly one type; otherwise force an explicit choice.
         const preselected = agentTypes.length === 1 ? agentTypes[0].id : ''
         setAgentTypeId(preselected)
-        const declared = preselected
-          ? parseDeclaredEnvVars(agentTypes[0].configSchema)
-          : { required: [], optional: [] }
+        const declared = declaredEnvVars(preselected ? agentTypes[0] : undefined)
         editor.reset({
           mode: 'create',
           requiredKeys: declared.required,
@@ -131,7 +136,7 @@ export default function EnvVarBuilderModal({
   // Switching agent type prefills that type's declared env vars. Reconcile keeps
   // any value the user already typed; confirm first when content would be reshuffled.
   const handleAgentTypeChange = (id: string) => {
-    const declared = parseDeclaredEnvVars(agentTypes.find((t) => t.id === id)?.configSchema)
+    const declared = declaredEnvVars(agentTypes.find((t) => t.id === id))
     const { hasUserContent, apply } = editor.applyAgentType(declared.required, declared.optional)
     if (hasUserContent) {
       setPendingAgentType({ id, apply })
