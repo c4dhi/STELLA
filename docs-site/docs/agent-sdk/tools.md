@@ -330,7 +330,7 @@ class PlanAgent(BaseAgent):
             self.registry.register(GetWeatherTool())    # plus your own
 ```
 
-These tools are the only way the conversation advances: nothing is completed implicitly. Their usage contract is `STATE_MACHINE_TOOL_GUIDANCE`, which is also each tool's `guidance`. Append it to the prompt of any model that gets these tools; don't write your own version:
+These tools are the only way the conversation advances: nothing is completed implicitly. Their usage contract is `STATE_MACHINE_TOOL_GUIDANCE`, which is also each write tool's `guidance` (the three read tools have none). Append it to the prompt of any model that gets these tools; don't write your own version:
 
 ```python
 from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE, create_state_machine_tools

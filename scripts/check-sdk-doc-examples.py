@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -111,7 +112,7 @@ def main(argv: list[str]) -> int:
             blocks += 1
             for offset, problem in import_problems(code, own):
                 failures += 1
-                print(f"{path.relative_to(ROOT)}:{line + offset - 1}: {problem}")
+                print(f"{os.path.relpath(path, ROOT)}:{line + offset - 1}: {problem}")
     print(f"{blocks} Python blocks checked, {failures} problems", file=sys.stderr)
     return 1 if failures else 0
 
