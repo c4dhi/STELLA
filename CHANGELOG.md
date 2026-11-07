@@ -57,7 +57,6 @@ first: agents uploaded before this release need one rebuild.**
 - **`image.command` in the manifest** sets a pod's start command. Without it the image's own `CMD` runs.
 - **Agent platform standards** (*Contributing → Coding standards → Agent platform*): the rules that keep STELLA free of agent-specific code, and which module owns which concern.
 - **MCP: `platform_settings_get` and `platform_settings_update`** for system admins. An assistant can read the platform switches and turn "Review uploaded agents" on or off. Nobody else sees the two tools, and a call by name answers 403. The MCP switch and the TTS playback default stay UI-only.
-- When speech recognition is still warming up at the start of a session, after a quiet spell, the participant sees "Getting ready to listen…" (in German or English) and the researcher sees an "STT warming up" chip with a timer and a line on the agent card. After 30 seconds it says it is taking longer than usual; if warming up fails, the participant is asked to tell the study team and the researcher's chip turns red. Nothing shows when the model is already warm (#564)
 
 ### Fixed
 
@@ -102,10 +101,6 @@ first: agents uploaded before this release need one rebuild.**
 - Building an uploaded agent no longer runs its Dockerfile path, name or version through a shell. The Dockerfile must be a plain relative path inside the package.
 - An uploaded agent no longer receives the platform's LiveKit key and secret. It gets a token for its own session's room and identity only, so it can't join or listen to other sessions. Built-in agents are unchanged. Because only SDK 0.10.0 and later read the token, STELLA now supports SDK 0.10.0 or later: an uploaded agent built with an older SDK is refused at deploy, restart and wake, and My Agents marks it as needing a rebuild (https://github.com/c4dhi/STELLA/issues/856)
 - **Connectors.** Each user can store outside MCP servers (URL + bearer token) in Settings → Connectors, test them, and see their tools. Agents reach a connector only through the backend, so the token never reaches the agent pod. The owner can share a connector with projects they belong to; members' agents there may then use it, without seeing or editing the token, until it is unshared. Agents declare the connectors they need in the manifest's `connectors` block, and users may offer extra ones; the deploy wizard's Connectors step binds them (`connectorBindings` on the deploy request). Connectors can also be managed from an AI assistant over Stella's MCP server (`connectors_list`, `_get`, `_create`, `_update`, `_test`, `connector_shares_set`; no delete), and `agents_deploy` takes `connectorBindings`. One database migration (`Connector`, `ConnectorProjectShare`, `ConnectorAuditLog`, `AgentInstance.connectorBindings`/`deployedByUserId`/`connectorTokenHash`)
-
-### Upgrade notes
-
-- One database migration runs on its own during the deploy (a column marking which templates have been checked). No template data is changed
 
 ---
 
