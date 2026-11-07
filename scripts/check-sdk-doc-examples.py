@@ -8,6 +8,10 @@ Nothing else in the block runs. A block that is deliberately not runnable
 (an outline, a fragment) is marked by putting `<!-- pseudo-code -->` on the
 line before its fence; such blocks are skipped.
 
+A block titled with a file path (```python title="my_agent/tools.py") stands
+for the reader's own module, so imports of a package defined that way on the
+same page are not looked up.
+
 Usage: python scripts/check-sdk-doc-examples.py [doc paths...]
 Run it in a venv with the SDK installed (pip install -e agents/stella-ai-agent-sdk).
 Exits 1 and lists each problem as file:line when anything fails.
@@ -29,11 +33,13 @@ DEFAULT_PATHS = [
     "docs-site/docs/contributing/coding-standards/python.md",
 ]
 PSEUDO = "<!-- pseudo-code -->"
-FENCE = re.compile(r"^(\s*)```(\w+)?\s*$")
+# A fence may carry attributes after the language, e.g. ```python title="src/agent.py".
+FENCE = re.compile(r"^(\s*)```(\w+)?(?:\s.*)?$")
+TITLE = re.compile(r'title="([\w./-]+)\.py"')
 
 
 def python_blocks(path: Path):
-    """(first line number, code) for each ```python block not marked as pseudo-code."""
+    """(first line number, code, title) for each ```python block not marked as pseudo-code."""
     lines = path.read_text(encoding="utf-8").splitlines()
     i = 0
     while i < len(lines):
@@ -48,11 +54,17 @@ def python_blocks(path: Path):
         prev = next((lines[k].strip() for k in range(i - 1, -1, -1) if lines[k].strip()), "")
         if lang in ("python", "py") and prev != PSEUDO:
             body = [l[len(indent):] if l.startswith(indent) else l for l in lines[start:j]]
-            yield start + 1, "\n".join(body)
+            title = TITLE.search(lines[i])
+            yield start + 1, "\n".join(body), title.group(1) if title else None
         i = j + 1
 
 
-def import_problems(code: str) -> list[tuple[int, str]]:
+def page_packages(titles) -> set[str]:
+    """Top-level packages the page itself defines, from titles like my_agent/agent."""
+    return {t.split("/")[0] for t in titles if t and "/" in t}
+
+
+def import_problems(code: str, own: frozenset[str] = frozenset()) -> list[tuple[int, str]]:
     try:
         tree = ast.parse(code)
     except SyntaxError as e:
@@ -61,11 +73,15 @@ def import_problems(code: str) -> list[tuple[int, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
+                if alias.name.split(".")[0] in own:
+                    continue
                 try:
                     importlib.import_module(alias.name)
                 except Exception as e:  # noqa: BLE001 - report any import failure
                     problems.append((node.lineno, f"import {alias.name}: {type(e).__name__}: {e}"))
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            if node.module.split(".")[0] in own:
+                continue
             try:
                 module = importlib.import_module(node.module)
             except Exception as e:  # noqa: BLE001
@@ -90,9 +106,11 @@ def files(paths: list[str]):
 def main(argv: list[str]) -> int:
     failures = blocks = 0
     for path in files(argv or DEFAULT_PATHS):
-        for line, code in python_blocks(path):
+        page = list(python_blocks(path))
+        own = frozenset(page_packages(title for _, _, title in page))
+        for line, code, _ in page:
             blocks += 1
-            for offset, problem in import_problems(code):
+            for offset, problem in import_problems(code, own):
                 failures += 1
                 print(f"{path.relative_to(ROOT)}:{line + offset - 1}: {problem}")
     print(f"{blocks} Python blocks checked, {failures} problems", file=sys.stderr)
