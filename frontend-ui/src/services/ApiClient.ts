@@ -1271,7 +1271,12 @@ class SessionManagementClient {
 
     const eventSource = new EventSource(urlWithAuth)
 
-    eventSource.onmessage = (e) => {
+    // The backend sends each MessageEvent's `type` as a named SSE `event:`
+    // line ("status" for the initial connected/no_build ping, "build" for
+    // real polls). A named event never reaches `onmessage` - only an
+    // unnamed/default one does - so this has to listen on "build" directly,
+    // not just onmessage, or every real update is silently dropped.
+    const handleBuildEvent = (e: MessageEvent) => {
       try {
         if (e.data && e.data !== 'connected' && e.data !== 'no_build') {
           const data = JSON.parse(e.data)
@@ -1281,6 +1286,8 @@ class SessionManagementClient {
         console.error('[ApiClient] Failed to parse build log event:', err)
       }
     }
+    eventSource.addEventListener('build', handleBuildEvent)
+    eventSource.onmessage = handleBuildEvent
 
     eventSource.onerror = (e) => {
       console.error('[ApiClient] Build log SSE connection error:', e)

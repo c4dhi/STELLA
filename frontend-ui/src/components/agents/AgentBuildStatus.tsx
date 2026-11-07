@@ -21,7 +21,8 @@ export function AgentBuildStatus({ agentTypeId, onBuildComplete }: AgentBuildSta
       try {
         const status = await apiClient.getAgentBuildStatus(agentTypeId)
         setBuildStatus(status)
-        if (status?.status === 'building') {
+        // Queued behind another build, or already running: either way, stream its log live.
+        if (status?.status === 'pending' || status?.status === 'building') {
           setIsBuilding(true)
         }
       } catch (err) {
@@ -94,7 +95,7 @@ export function AgentBuildStatus({ agentTypeId, onBuildComplete }: AgentBuildSta
 
     switch (buildStatus.status) {
       case 'pending':
-        return 'Build pending'
+        return 'Queued'
       case 'building':
         return 'Building...'
       case 'success':
@@ -134,14 +135,15 @@ export function AgentBuildStatus({ agentTypeId, onBuildComplete }: AgentBuildSta
           </span>
         </div>
 
-        {/* Build button */}
+        {/* Rebuild: the first build already started on upload, so this button
+            is always a rebuild, never the first one. */}
         {!isBuilding && (
           <button
             onClick={handleTriggerBuild}
             className="flex items-center gap-1 px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
           >
             <Play className="w-4 h-4" />
-            {buildStatus?.status === 'success' ? 'Rebuild' : 'Build'}
+            Rebuild
           </button>
         )}
       </div>

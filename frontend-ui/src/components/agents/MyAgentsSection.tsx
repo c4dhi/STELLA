@@ -10,6 +10,8 @@ import { reviewNoteText } from '../../lib/agentReview'
 
 interface MyAgentsSectionProps {
   onSelectAgent?: (agent: CustomAgentType) => void
+  /** The id selected elsewhere in the picker, so a deployable upload gets the same visible border a built-in card gets. */
+  selectedId?: string | null
   refreshTrigger?: number
   /** Called with the user's uploads each time they load. */
   onAgentsLoaded?: (agents: CustomAgentType[]) => void
@@ -17,7 +19,7 @@ interface MyAgentsSectionProps {
   hideEmpty?: boolean
 }
 
-export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded, hideEmpty }: MyAgentsSectionProps) {
+export function MyAgentsSection({ onSelectAgent, selectedId, refreshTrigger, onAgentsLoaded, hideEmpty }: MyAgentsSectionProps) {
   const { addToast } = useToastStore()
   const [agents, setAgents] = useState<CustomAgentType[]>([])
   const [loading, setLoading] = useState(true)
@@ -44,6 +46,27 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
   useEffect(() => {
     fetchAgents()
   }, [fetchAgents, refreshTrigger])
+
+  // Without this, a row's badge is only as fresh as the last fetch: a build
+  // that finishes while its card just sits in the list (not expanded) would
+  // otherwise keep reading Queued/Building until something else refetches.
+  const buildingIds = agents
+    .filter((a) => a.lastBuild?.status === 'pending' || a.lastBuild?.status === 'building')
+    .map((a) => a.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!buildingIds) return
+    const cleanups = buildingIds.split(',').map((id) =>
+      apiClient.subscribeToBuildLogs(id, (data) => {
+        if (data.status === 'success' || data.status === 'failed') {
+          fetchAgents()
+        }
+      }),
+    )
+    return () => cleanups.forEach((cleanup) => cleanup())
+  }, [buildingIds, fetchAgents])
 
   const handleDelete = useCallback((agentId: string, agentName: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -72,9 +95,12 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
   // is off. A rejected one never deploys.
   const agentReviewRequired = useFeatureFlagsStore(state => state.agentReviewRequired)
   const loadFeatures = useFeatureFlagsStore(state => state.load)
+  // Refetched on refreshTrigger too, not just on mount: a flag flipped (or a
+  // build finished) between dialog opens must not be judged against a stale
+  // reading, which is what let Felix's already-built upload look undeployable.
   useEffect(() => {
     void loadFeatures()
-  }, [loadFeatures])
+  }, [loadFeatures, refreshTrigger])
   // Mirrors assertDeployableAgentType: allowed by review, built, and built with a supported SDK.
   const canDeploy = (agent: CustomAgentType) =>
     agent.built &&
@@ -118,36 +144,51 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
     }
   }
 
-  const getBuildStatusBadge = (lastBuild: CustomAgentType['lastBuild']) => {
+  // The badge doubles as a link to the log: clicking it expands the row's
+  // AgentBuildStatus, regardless of whether the row itself is click-to-deploy.
+  const getBuildStatusBadge = (agent: CustomAgentType) => {
+    const lastBuild = agent.lastBuild
+    const onClick = (e: React.MouseEvent) => {
+      e.stopPropagation()
+      setExpandedAgent(expandedAgent === agent.id ? null : agent.id)
+    }
+
     if (!lastBuild) {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+        <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200" title="View build log">
           Not Built
-        </span>
+        </button>
       )
     }
 
     switch (lastBuild.status) {
+      case 'pending':
+        return (
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700 hover:bg-yellow-200" title="View build log">
+            <Clock className="w-3 h-3" />
+            Queued
+          </button>
+        )
       case 'success':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 hover:bg-blue-200" title="View build log">
             <CheckCircle className="w-3 h-3" />
             Built
-          </span>
+          </button>
         )
       case 'building':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 animate-pulse">
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 animate-pulse hover:bg-blue-200" title="View build log">
             <RefreshCw className="w-3 h-3 animate-spin" />
             Building
-          </span>
+          </button>
         )
       case 'failed':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+          <button onClick={onClick} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200" title="View build log">
             <AlertTriangle className="w-3 h-3" />
             Build Failed
-          </span>
+          </button>
         )
       default:
         return null
@@ -192,18 +233,22 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
   return (
     <>
       <div className="space-y-3">
-        {agents.map((agent) => (
+        {agents.map((agent) => {
+          const isSelected = canDeploy(agent) && selectedId === agent.id
+          const isExpanded = expandedAgent === agent.id
+          return (
         <div
           key={agent.id}
           className={`
-            border rounded-lg overflow-hidden transition-all
-            ${expandedAgent === agent.id ? 'ring-2 ring-blue-500' : 'hover:border-gray-400'}
+            border-2 rounded-lg overflow-hidden transition-all
+            ${isSelected ? 'border-blue-600 bg-blue-50 shadow-sm' : isExpanded ? 'border-blue-300 ring-2 ring-blue-500' : 'border-gray-200 hover:border-gray-400'}
             ${canDeploy(agent) ? 'cursor-pointer' : ''}
           `}
         >
-          {/* Agent header */}
+          {/* Agent header: no background of its own when selected, so the
+              card's blue tint actually shows through */}
           <div
-            className="p-4 flex items-start justify-between bg-white"
+            className={`p-4 flex items-start justify-between ${isSelected ? '' : 'bg-white'}`}
             onClick={() => {
               if (canDeploy(agent)) {
                 onSelectAgent?.(agent)
@@ -224,7 +269,7 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
                 <p className="text-sm text-gray-500 line-clamp-1">{agent.description}</p>
                 <div className="flex items-center gap-2 mt-2">
                   {getStatusBadge(agent.validationStatus)}
-                  {getBuildStatusBadge(agent.lastBuild)}
+                  {getBuildStatusBadge(agent)}
                   {agent.sdkProblem && (
                     <span
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700"
@@ -268,7 +313,8 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
             </div>
           )}
         </div>
-      ))}
+          )
+        })}
       </div>
 
       <ConfirmDialog

@@ -17,7 +17,7 @@ import {
   Req,
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
-import { Observable, interval, map, takeWhile, concat, of } from 'rxjs'
+import { Observable, interval, map, concatMap, from, takeWhile, concat, of } from 'rxjs'
 import { Request } from 'express'
 import { AgentPackageService } from '../agent-package/agent-package.service.js'
 import { AgentBuildService, BuildStatus, resolveDockerfilePath } from '../agent-build/agent-build.service.js'
@@ -180,6 +180,15 @@ export class AgentUploadController {
         : `Created agent type: ${agentType.slug} (${agentType.id})`,
     )
 
+    // The upload itself succeeded regardless of this; a kickoff failure is
+    // logged, not surfaced as an upload error, and the uploader can still
+    // press Rebuild.
+    try {
+      await this.agentBuildService.startBuild(agentType.id)
+    } catch (err) {
+      this.logger.error(`Failed to start build for ${agentType.slug} (${agentType.id}): ${(err as Error).message}`)
+    }
+
     return {
       id: agentType.id,
       slug: agentType.slug,
@@ -318,27 +327,13 @@ export class AgentUploadController {
       // Send initial status
       of({ type: 'status', data: 'connected' } as MessageEvent),
 
-      // Poll until build completes
+      // Poll until build completes. concatMap actually awaits each tick's
+      // promise before emitting; the previous plain map() over an async
+      // callback emitted the unresolved Promise itself as the "event", so
+      // every polled update went out with no data and the browser's
+      // EventSource silently dropped it (no live update ever reached a client).
       interval(2000).pipe(
-        map(async () => {
-          const status = await this.getBuildStatus(id)
-          if (!status) {
-            return { type: 'status', data: 'no_build' } as MessageEvent
-          }
-
-          const output = await this.agentBuildService.getBuildOutput(status.id)
-
-          return {
-            type: 'build',
-            data: JSON.stringify({
-              status: status.status,
-              imageName: status.imageName,
-              errorMessage: status.errorMessage,
-              output: output?.slice(-5000), // Last 5000 chars
-            }),
-          } as MessageEvent
-        }),
-        map((promise) => promise as unknown as MessageEvent),
+        concatMap(() => from(this.buildLogEvent(id))),
         takeWhile((event) => {
           try {
             const data = JSON.parse((event as any).data || '{}')
@@ -349,6 +344,25 @@ export class AgentUploadController {
         }, true),
       ),
     )
+  }
+
+  private async buildLogEvent(id: string): Promise<MessageEvent> {
+    const status = await this.getBuildStatus(id)
+    if (!status) {
+      return { type: 'status', data: 'no_build' } as MessageEvent
+    }
+
+    const output = await this.agentBuildService.getBuildOutput(status.id)
+
+    return {
+      type: 'build',
+      data: JSON.stringify({
+        status: status.status,
+        imageName: status.imageName,
+        errorMessage: status.errorMessage,
+        output: output?.slice(-5000), // Last 5000 chars
+      }),
+    } as MessageEvent
   }
 
   /**

@@ -130,7 +130,7 @@ export default function AgentLibrarySection() {
   const handleBuild = async (agent: AgentType | CustomAgentType) => {
     try {
       await apiClient.triggerAgentBuild(agent.id)
-      addToast({ message: `Build started for "${agent.name}"`, type: 'success' })
+      addToast({ message: `Rebuild started for "${agent.name}"`, type: 'success' })
       // Refresh to get updated build status
       loadAgents()
     } catch (err) {
@@ -176,8 +176,8 @@ export default function AgentLibrarySection() {
 
       addToast({
         message: response.replacedVersion
-          ? `"${response.name}" ${response.version} replaces ${response.replacedVersion}. Build it to deploy it; until then, its paused agents can't wake`
-          : `"${response.name}" uploaded successfully`,
+          ? `"${response.name}" ${response.version} replaces ${response.replacedVersion} and is building now. Its paused agents can't wake until the build finishes`
+          : `"${response.name}" uploaded — building now`,
         type: 'success',
       })
 
@@ -492,6 +492,7 @@ export default function AgentLibrarySection() {
                             onDelete={ownIds.has(agent.id) ? () => handleDelete(agent) : undefined}
                             onBuild={ownIds.has(agent.id) ? () => handleBuild(agent) : undefined}
                             onShare={ownIds.has(agent.id) ? () => setAgentToShare(agent) : undefined}
+                            onBuildSettled={loadAgents}
                           />
                         ))}
                       </AnimatePresence>

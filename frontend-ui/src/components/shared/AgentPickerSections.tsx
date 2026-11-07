@@ -85,6 +85,7 @@ export default function AgentPickerSections({
         <div className="space-y-3">
           <MyAgentsSection
             onSelectAgent={onSelectCustom}
+            selectedId={selectedId}
             refreshTrigger={refreshTrigger}
             onAgentsLoaded={(agents) => {
               setOwnIds(new Set(agents.map((a) => a.id)))
