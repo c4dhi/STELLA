@@ -25,6 +25,56 @@ export enum AgentValidationStatus {
   REJECTED = 'REJECTED'
 }
 
+/** Which uploads Settings → Agent Review lists. */
+export type AgentReviewState = 'pending' | 'approved' | 'rejected'
+
+/** One build of an uploaded agent, as review shows it. */
+export interface AgentReviewBuild {
+  id: string
+  status: string
+  imageName: string | null
+  errorMessage: string | null
+  startedAt: string
+  completedAt: string | null
+}
+
+/** An uploaded agent in a review list (GET /admin/agent-types/status/:state). */
+export interface AgentReviewItem {
+  /** The latest build, or null when it never started one. */
+  lastBuild: AgentReviewBuild | null
+  id: string
+  slug: string
+  name: string
+  description: string | null
+  icon: string | null
+  version: string
+  authorName: string | null
+  authorEmail: string | null
+  resourceGpu: boolean
+  packageSize: number | null
+  validationStatus: AgentValidationStatus
+  /** The approval notes or the rejection reason. */
+  validationNotes: string | null
+  validatedAt: string | null
+  createdAt: string
+  sdkVersion: string | null
+  capabilities: string[]
+  /** What agent.yaml declares; null when STELLA cannot read it (manifestError says why). */
+  requirements: DeployRequirements | null
+  manifestError: string | null
+  owner: { id: string; email: string; name: string | null } | null
+}
+
+/** What a reviewer opens for one upload (GET /admin/agent-types/:id). */
+export interface AgentReviewDetail extends AgentReviewItem {
+  resourceCpu: string | null
+  resourceMemory: string | null
+  sdkMinVersion: string | null
+  tags: string[]
+  /** The five latest builds, newest first. */
+  buildLogs: AgentReviewBuild[]
+}
+
 export type MessageType = 'text' | 'transcript' | 'system' | 'task_update' | 'deliverable' | 'state_change' | 'participant_event'
 
 export type PodPhase = 'Pending' | 'Running' | 'Succeeded' | 'Failed' | 'Unknown'
@@ -328,6 +378,9 @@ export interface RuntimeVariable {
 
 // Extended AgentType with build info (for my-agents endpoint)
 export interface CustomAgentType extends AgentType {
+  /** What the reviewing admin wrote: approval notes or the rejection reason. */
+  validationNotes?: string | null
+  validatedAt?: string | null
   /** A build succeeded and its image is stored. */
   built: boolean
   /** The SDK the last build installed (null: not built, or built before STELLA recorded it). */

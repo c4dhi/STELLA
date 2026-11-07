@@ -31,6 +31,15 @@ This means a custom agent does not need to be part of the built-in agent set to 
 - **Upgrading.** Before this change, every approved upload was listed for everyone. The upgrade shares each upload with the projects that use it as their public agent, and with the projects where another user has it running or paused. Every other upload starts private to its owner.
 - **Review.** While **Review uploaded agents** is on (the default), an upload needs an admin's approval before anyone can deploy it, its owner included, and before it is listed for the projects it is shared with. With review off, the owner can deploy it once it is built, and sharing is what lets others use it.
 
+### Reviewing uploads (system admins)
+
+Settings → **Agent Review** lists uploaded agents under **Pending**, **Approved** and **Rejected**. Only system admins see it. Pending uploads come oldest first.
+
+- **Each entry starts with the latest build**: built, failed (with the error), building, or not built yet. Then it shows the name, version, slug, who uploaded it and when, the SDK it was built with, and whether it needs a GPU. Last come what its `agent.yaml` asks of a deployment: the keys it needs, its optional settings, connectors, persona and plans. **Builds and resources** opens the five latest builds, the capabilities and the CPU and memory limits.
+- **Approve** takes optional notes. **Reject** needs a reason. The owner sees either one on their agent card in the Agent Library and in the deploy picker.
+- **A decision can be reversed.** An approved agent can be rejected, which stops new deploys. A rejected one can be approved after all.
+- Assistants with an admin's MCP token can do the same with the `agent_reviews_*` tools (see the [MCP tool reference](../mcp/tools.md#agent-review-system-admins)).
+
 ### A new version, and deleting
 
 - **A new version replaces your old one.** Upload the package again with the same `metadata.slug` and a higher `metadata.version`. STELLA replaces your agent in place, so its env var templates, configurations, shares and public projects keep pointing at it.

@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import type { AgentType, CustomAgentType, AgentValidationStatus } from '../../lib/api-types'
+import { reviewNoteText } from '../../lib/agentReview'
 
 interface AgentTypeCardProps {
   agent: AgentType | CustomAgentType
@@ -27,6 +28,8 @@ export default function AgentTypeCard({
   const customAgent = agent as CustomAgentType
   const hasBuildInfo = isCustomAgent && 'lastBuild' in customAgent
   // Someone else's upload can only be deployed in the projects it is shared with.
+  // Only the uploader's own list carries the notes, so this is their card.
+  const reviewNote = isCustomAgent ? reviewNoteText(agent.validationStatus, customAgent.validationNotes) : null
   const sharedIn = ('sharedInProjects' in agent ? agent.sharedInProjects ?? [] : []).map(p => p.name).join(', ')
 
   // Generate gradient colors based on agent name
@@ -66,7 +69,7 @@ export default function AgentTypeCard({
       REJECTED: {
         bg: isDark ? 'bg-red-500/20' : 'bg-red-100',
         text: isDark ? 'text-red-400' : 'text-red-700',
-        label: 'Failed',
+        label: 'Rejected',
       },
     }
 
@@ -159,6 +162,15 @@ export default function AgentTypeCard({
             ) : (
               <p className={`text-body-sm italic ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
                 No description
+              </p>
+            )}
+            {reviewNote && (
+              <p className={`mt-2 text-caption ${
+                agent.validationStatus === 'REJECTED'
+                  ? isDark ? 'text-red-400' : 'text-red-700'
+                  : isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'
+              }`}>
+                {reviewNote}
               </p>
             )}
           </div>

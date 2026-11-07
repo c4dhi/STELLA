@@ -5,7 +5,7 @@ import { useNotificationStore } from '../../store/notificationStore'
 import { useAuthStore } from '../../store/authStore'
 import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
 
-export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin' | 'platform' | 'mcp' | 'connectors'
+export type SettingsSection = 'profile' | 'preferences' | 'personas' | 'plan-builder' | 'agent-configs' | 'env-vars' | 'agent-library' | 'inbox' | 'analytics' | 'admin' | 'platform' | 'mcp' | 'connectors' | 'agent-review'
 
 interface SettingsSidebarProps {
   activeSection: SettingsSection
@@ -144,6 +144,18 @@ const sections: SectionItem[] = [
     icon: (
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M18 20V10M12 20V4M6 20v-6" />
+      </svg>
+    ),
+  },
+  {
+    id: 'agent-review',
+    label: 'Agent Review',
+    description: 'Approve uploaded agents',
+    adminOnly: true,
+    icon: (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <path d="M9 12l2 2 4-4" />
       </svg>
     ),
   },

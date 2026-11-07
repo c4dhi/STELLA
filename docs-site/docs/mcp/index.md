@@ -66,7 +66,7 @@ Which tools need which scope:
 | `mcp:read` (20) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `agents_get`, `agent_logs_get`, `connectors_list`, `connectors_get` |
 | `mcp:write` (18) | `personas_create`, `personas_update`, `plan_templates_create`, `plan_templates_update`, `agent_configurations_create`, `agent_configurations_update`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
 
-System admins also get `platform_settings_get` (`mcp:read`) and `platform_settings_update` (`mcp:write`). Nobody else sees them, and calling one by name answers `403`.
+System admins also get `platform_settings_get` and `agent_reviews_list`/`agent_reviews_get` (`mcp:read`), and `platform_settings_update`, `agent_reviews_approve` and `agent_reviews_reject` (`mcp:write`). Nobody else sees them, and calling one by name answers `403`.
 
 ## The tools
 

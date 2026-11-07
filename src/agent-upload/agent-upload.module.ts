@@ -7,6 +7,7 @@ import { AgentBuildModule } from '../agent-build/agent-build.module.js'
 import { AgentsModule } from '../agents/agents.module.js'
 import { AgentUploadController } from './agent-upload.controller.js'
 import { AgentAdminController } from './agent-admin.controller.js'
+import { AgentReviewService } from './agent-review.service.js'
 
 @Module({
   imports: [
@@ -23,5 +24,7 @@ import { AgentAdminController } from './agent-admin.controller.js'
     AgentsModule,
   ],
   controllers: [AgentUploadController, AgentAdminController],
+  providers: [AgentReviewService],
+  exports: [AgentReviewService],
 })
 export class AgentUploadModule {}

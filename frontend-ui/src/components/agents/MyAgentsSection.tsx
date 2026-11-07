@@ -6,6 +6,7 @@ import { AgentBuildStatus } from './AgentBuildStatus'
 import ConfirmDialog from '../modals/ConfirmDialog'
 import type { CustomAgentType, AgentValidationStatus } from '../../lib/api-types'
 import { useFeatureFlagsStore } from '../../store/featureFlagsStore'
+import { reviewNoteText } from '../../lib/agentReview'
 
 interface MyAgentsSectionProps {
   onSelectAgent?: (agent: CustomAgentType) => void
@@ -234,6 +235,11 @@ export function MyAgentsSection({ onSelectAgent, refreshTrigger, onAgentsLoaded,
                   )}
                   <span className="text-xs text-gray-400">v{agent.version}</span>
                 </div>
+                {reviewNoteText(agent.validationStatus, agent.validationNotes) && (
+                  <p className={`text-xs mt-1 ${agent.validationStatus === 'REJECTED' ? 'text-red-600' : 'text-gray-500'}`}>
+                    {reviewNoteText(agent.validationStatus, agent.validationNotes)}
+                  </p>
+                )}
               </div>
             </div>
 

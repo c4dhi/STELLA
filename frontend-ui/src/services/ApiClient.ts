@@ -69,6 +69,9 @@ import type { AgentShares,
   AdminDashboardMetrics,
   CapacityMeasurement,
   PlatformSettings,
+  AgentReviewDetail,
+  AgentReviewItem,
+  AgentReviewState,
   PlatformFeatures,
   AccessToken,
   AvailableConnector,
@@ -1799,6 +1802,36 @@ class SessionManagementClient {
     return this.request<PlatformSettings>('/admin/platform-settings', {
       method: 'PUT',
       body: JSON.stringify({ agentReviewRequired }),
+    })
+  }
+
+  // ============================================================================
+  // Agent review API (system admins): Settings → Agent Review
+  // ============================================================================
+
+  /** Uploaded agents in one review state; pending ones oldest first. */
+  async getAgentReviews(state: AgentReviewState): Promise<AgentReviewItem[]> {
+    return this.get<AgentReviewItem[]>(`/admin/agent-types/status/${state}`)
+  }
+
+  /** Everything a reviewer looks at for one upload, with its latest builds. */
+  async getAgentReview(agentTypeId: string): Promise<AgentReviewDetail> {
+    return this.get<AgentReviewDetail>(`/admin/agent-types/${encodeURIComponent(agentTypeId)}`)
+  }
+
+  /** Approve an upload so it can deploy. Notes are optional. */
+  async approveAgentReview(agentTypeId: string, notes?: string): Promise<AgentReviewItem> {
+    return this.request<AgentReviewItem>(`/admin/agent-types/${encodeURIComponent(agentTypeId)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    })
+  }
+
+  /** Reject an upload, or withdraw its approval. The uploader sees the reason. */
+  async rejectAgentReview(agentTypeId: string, reason: string): Promise<AgentReviewItem> {
+    return this.request<AgentReviewItem>(`/admin/agent-types/${encodeURIComponent(agentTypeId)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
     })
   }
 
