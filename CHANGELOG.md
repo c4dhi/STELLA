@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Agent cards in the deploy dialogs spilled their tags and deprecation note outside the card. Cards now grow to fit.
 - **Chat history shown twice on the participant screen.** Opening a chat after the agent had spoken showed the greeting and every message so far twice; the stored history is now matched to what the screen already shows.
 - A restart or wake that STELLA refuses (agent type rejected, under review, missing a required env var, or built with an unsupported SDK) now leaves the running agent alone. Before, the pod was deleted first and the agent was left in STARTING with no pod.
 - An agent whose manifest sets a memory or CPU limit below 512Mi / 250m now starts. Pod requests were fixed at those values, so Kubernetes refused the pod (request above limit) and the agent went FAILED without a pod. Requests are now lowered to the limit when the limit is smaller.
@@ -37,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The deploy dialogs no longer upload agent packages. Upload in Settings → Agent Library; the dialogs' Custom section links there.
 - **Built-in and uploaded agents are stored by one mapping.** Before, the seed and the upload endpoint each turned agent.yaml into an AgentType their own way. Each had its own expert reader, and companion experts were handled differently in the two. Now both use one mapping, and each AgentType keeps its full manifest (new `manifest` column; the migration adds it and the next seed or re-upload fills it).
 - **Manifest mistakes are refused instead of ignored.** Unknown keys, unknown capabilities, a resource request above its limit, and a `defaultConfig` that doesn't fit `configSchema` now fail validation. Before, these were dropped or let through silently. Manifest 1.0 files keep the old leniency for unknown capabilities (a warning).
 - **One default agent type.** Every path that deploys without naming a type now asks one place (`DEFAULT_AGENT_TYPE`, default `stella-v2-agent`). The deploy scripts defaulted to `stella-light-agent`. A spec fails the build when an agent slug appears in platform code.

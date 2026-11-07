@@ -952,7 +952,6 @@ export default function ProjectModal({
                   <AgentGalleryStep
                     selectedAgentType={selectedAgentType}
                     onSelectAgentType={setSelectedAgentType}
-                    showUpload={false}
                     projectId={project?.id ?? null}
                   />
                 </motion.div>

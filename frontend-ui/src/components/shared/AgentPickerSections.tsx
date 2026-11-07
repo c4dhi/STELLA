@@ -1,9 +1,11 @@
 /**
  * The agent picker in both deploy dialogs: one list in two sections, custom
  * (uploaded) agents first, then the built-in ones. Every agent follows the same
- * interface, so none gets its own tab or screen.
+ * interface, so none gets its own tab or screen. Uploading happens in
+ * Settings → Agent Library; the picker links there.
  */
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import AgentGalleryCard from '../agents/AgentGalleryCard'
 import { MyAgentsSection } from '../agents'
 import type { AgentType, CustomAgentType } from '../../lib/api-types'
@@ -15,9 +17,7 @@ interface AgentPickerSectionsProps {
   selectedId: string | null
   onSelectType: (type: AgentType) => void
   onSelectCustom: (agent: CustomAgentType) => void
-  refreshTrigger: number
-  /** Shows the upload button at the top of the custom section. */
-  onUpload?: () => void
+  refreshTrigger?: number
   isDark: boolean
 }
 
@@ -28,8 +28,7 @@ export default function AgentPickerSections({
   selectedId,
   onSelectType,
   onSelectCustom,
-  refreshTrigger,
-  onUpload,
+  refreshTrigger = 0,
   isDark,
 }: AgentPickerSectionsProps) {
   // The user's own uploads are listed by MyAgentsSection, with their build and
@@ -57,28 +56,16 @@ export default function AgentPickerSections({
   return (
     <div className="space-y-6">
       <section>
-        <h3 className={heading}>Custom</h3>
+        <div className="flex items-baseline justify-between gap-3 mb-3">
+          <h3 className={`${heading} mb-0`}>Custom</h3>
+          <Link
+            to="/settings/agent-library"
+            className={`text-xs ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-900'} underline-offset-2 hover:underline`}
+          >
+            Upload or manage in Agent Library →
+          </Link>
+        </div>
         <div className="space-y-3">
-          {onUpload && (
-            <button
-              type="button"
-              onClick={onUpload}
-              className={`
-                w-full p-3 rounded-xl text-left text-sm transition-all duration-200
-                border-2 border-dashed hover:border-solid flex items-center gap-3
-                ${isDark
-                  ? 'border-zinc-600 hover:border-primary-500 text-zinc-300 bg-zinc-800/30 hover:bg-zinc-700/50'
-                  : 'border-neutral-300 hover:border-primary-500 text-neutral-600 bg-neutral-50/50 hover:bg-primary-50'
-                }
-              `}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M12 16V4m0 0l-4 4m4-4l4 4" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M3 20h18" strokeLinecap="round" />
-              </svg>
-              Upload a custom agent package (.zip)
-            </button>
-          )}
           <MyAgentsSection
             onSelectAgent={onSelectCustom}
             refreshTrigger={refreshTrigger}
