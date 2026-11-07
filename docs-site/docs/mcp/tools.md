@@ -453,6 +453,7 @@ Reject an uploaded agent, so it cannot deploy, also when it was approved before.
 | `reason` | string | Required, not blank. Shown to the uploader |
 
 **Returns:** the agent, as `agent_reviews_get` shows it.
+
 ## Connectors
 
 Outside MCP servers that agents call through STELLA, for example an interview-question server. The token stays in STELLA: agents only get the tools. See [Connectors](../agent-sdk/connectors.md) for how an agent uses them.

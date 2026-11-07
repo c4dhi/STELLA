@@ -39,6 +39,6 @@ With the chat's processing toggle on, the agent's 🔧 lines show each step: the
 
 ## Deploying it
 
-Upload the package from Settings → Agent Library, build it, and share it with the projects that should use it. Then deploy it like any other agent: pick the ELIAS connector and set `ELIAS_PROJECT_ID`.
+Upload the package from Settings → Agent Library, build it, and share it with the projects that should use it. While **Review uploaded agents** is on (the default), a system admin must approve it in Settings → Agent Review before anyone can deploy it, the uploader included. Then deploy it like any other agent: pick the ELIAS connector and set `ELIAS_PROJECT_ID`.
 
 The package README has the full behaviour, the failure cases and how to run its tests.

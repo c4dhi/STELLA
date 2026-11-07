@@ -191,6 +191,7 @@ describe('AgentReviewCard', () => {
     expect(html).toContain('voice, plans')
     expect(html).toContain('500m')
     expect(html).toContain('1Gi')
-    expect(html).toContain('success')
+    expect(html).toContain('>Built<')
+    expect(html).not.toContain('>success<')
   })
 })
