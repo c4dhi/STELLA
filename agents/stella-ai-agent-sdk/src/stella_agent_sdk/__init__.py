@@ -53,6 +53,7 @@ Environment Variables (set by session-management-server):
     AGENT_IDENTITY: Agent participant identity
     LIVEKIT_API_KEY: API key for JWT
     LIVEKIT_API_SECRET: API secret for JWT
+    LIVEKIT_TOKEN: Ready-made room token; when set, key and secret are not needed
     STT_SERVICE_ADDRESS: External STT service address (gRPC)
     TTS_SERVICE_ADDRESS: External TTS service address (gRPC)
 """
@@ -83,7 +84,12 @@ from stella_agent_sdk.session_config import (
     PersonaConfig,
     SessionConfig,
 )
-from stella_agent_sdk.participants import NON_HUMAN_PREFIXES, is_human_participant
+from stella_agent_sdk.participants import (
+    NON_HUMAN_PREFIXES,
+    SESSION_PARTICIPANT_PREFIX,
+    is_human_participant,
+    is_session_participant,
+)
 from stella_agent_sdk.plan.runtime import PlanRuntime
 from stella_agent_sdk.platform_env import PLATFORM_ENV, PlatformEnvVar
 from stella_agent_sdk.progress import (
@@ -129,6 +135,8 @@ __all__ = [
     # Participants
     "NON_HUMAN_PREFIXES",
     "is_human_participant",
+    "SESSION_PARTICIPANT_PREFIX",
+    "is_session_participant",
     # Plan runtime (state machine + its tools)
     "PlanRuntime",
     # SDK-owned environment variables

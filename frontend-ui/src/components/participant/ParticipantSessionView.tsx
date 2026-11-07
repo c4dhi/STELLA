@@ -24,8 +24,11 @@ import { useStore } from '../../store'
 import ParticipantChatPanel from './ParticipantChatPanel'
 import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
+import { COMPLETION_SCREEN_CAP_MS, completionReadingTimeMs } from '../../lib/completionScreen'
 import SessionTimeoutOverlay from './SessionTimeoutOverlay'
-import { VisualizerType, isTextFace } from '../face/types'
+import { TEXT_FACE, VisualizerType, isTextFace } from '../face/types'
+import PermissionsModal from './PermissionsModal'
+import { checkMicrophonePermission } from '../../lib/mediaDevices'
 import TextFace from './TextFace'
 import { mergeHistory, liveIdOf, correlationIdOf } from '../../lib/chatHistory'
 import { apiClient } from '../../services/ApiClient'
@@ -1150,6 +1153,28 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     }
   }, [room, clientChannel])
 
+  // A session that started on the Text face skipped the device check when the
+  // participant joined. Switching to a voice face asks for the microphone then,
+  // unless the browser already allows it; switching back closes the check.
+  const [deviceCheckOpen, setDeviceCheckOpen] = useState(false)
+  const deviceModeRef = useRef<InteractionMode>(interactionMode)
+  useEffect(() => {
+    const previous = deviceModeRef.current
+    deviceModeRef.current = interactionMode
+    if (interactionMode === 'text') {
+      setDeviceCheckOpen(false)
+      return
+    }
+    if (previous !== 'text') return
+    let cancelled = false
+    void checkMicrophonePermission().then((state) => {
+      if (!cancelled && state !== 'granted') setDeviceCheckOpen(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [interactionMode])
+
   // Voice or text interface: tell the agent on every switch, and take the
   // microphone away on the text side (give it back if that is what took it).
   const mutedForTextRef = useRef(false)
@@ -1220,6 +1245,25 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       setIsMuted(true)
     }
   }, [sessionCompleted, sessionTimedOut, isMuted, room])
+
+  // The completion screen waits until the agent's last message has been heard
+  // and read (lib/completionScreen.ts); the microphone above stops at once.
+  const [showCompletedScreen, setShowCompletedScreen] = useState(false)
+  const lastAgentMessage = useMemo(
+    () => [...messages].reverse().find((m) => m.role === 'assistant'),
+    [messages],
+  )
+  useEffect(() => {
+    if (!sessionCompleted || showCompletedScreen) return
+    const cap = setTimeout(() => setShowCompletedScreen(true), COMPLETION_SCREEN_CAP_MS)
+    return () => clearTimeout(cap)
+  }, [sessionCompleted, showCompletedScreen])
+  useEffect(() => {
+    if (!sessionCompleted || showCompletedScreen) return
+    if (isRemoteSpeaking || lastAgentMessage?.isStreaming) return
+    const read = setTimeout(() => setShowCompletedScreen(true), completionReadingTimeMs(lastAgentMessage?.text))
+    return () => clearTimeout(read)
+  }, [sessionCompleted, showCompletedScreen, isRemoteSpeaking, lastAgentMessage?.isStreaming, lastAgentMessage?.text])
 
   // Handle mouse movement to show/hide controls
   useEffect(() => {
@@ -1713,11 +1757,29 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         </motion.div>
       )}
 
+      {/* Device check on switching from the Text face to a voice face */}
+      {deviceCheckOpen && (
+        <div className="fixed inset-0 z-[60] overflow-y-auto">
+          <PermissionsModal
+            isOpen
+            participantName={sessionData.participantName}
+            subtitle="Voice needs your microphone. Check it before you continue."
+            actionLabel="Continue with voice"
+            cancelLabel="Stay in writing"
+            onComplete={() => setDeviceCheckOpen(false)}
+            onCancel={() => {
+              setDeviceCheckOpen(false)
+              setCurrentVisualizer(TEXT_FACE)
+            }}
+          />
+        </div>
+      )}
+
       {/* Session Completed Overlay */}
-      <SessionCompletedOverlay isVisible={sessionCompleted} participantName={sessionData.participantName} />
+      <SessionCompletedOverlay isVisible={showCompletedScreen} />
 
       {/* Session Timeout Overlay */}
-      <SessionTimeoutOverlay isVisible={sessionTimedOut && !sessionCompleted} failureCode={`f-${sessionData.participantName}`} />
+      <SessionTimeoutOverlay isVisible={sessionTimedOut && !sessionCompleted} />
 
       </div>{/* End fullscreen container wrapper */}
     </motion.div>

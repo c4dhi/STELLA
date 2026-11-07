@@ -426,6 +426,8 @@ Add an outside MCP server. Run `connectors_test` next. Private and cluster-inter
 | Input | Type | Notes |
 |---|---|---|
 | `name` | string, 1–100 | e.g. "ELIAS interview questions" |
+| `icon` | string, ≤ 32, *optional* | An emoji for its card, e.g. "🔌" |
+| `description` | string, ≤ 500, *optional* | What it is for, in the user's words. Shown on its card and in the deploy wizard. An empty string clears it |
 | `handle` | lowercase letters, digits, hyphens, ≤ 40 | How agents address it. Unique per user |
 | `url` | string, ≤ 2048 | The MCP endpoint (Streamable HTTP). A trailing slash and `//` are cleaned up |
 | `authType` | `bearer` or `none`, *optional* | Default `bearer` |
@@ -435,7 +437,7 @@ Add an outside MCP server. Run `connectors_test` next. Private and cluster-inter
 
 ### `connectors_update` · `mcp:write`
 
-Change a connector the user owns. Leave out `token` to keep the stored one. Changing `url`, `authType` or `token` resets the status to `untested`.
+Change a connector the user owns. Leave out `token` to keep the stored one. Changing `url`, `authType` or `token` resets the status to `untested`; changing `icon` or `description` does not.
 
 **Inputs:** `connectorId`, and any of the fields of `connectors_create`.
 

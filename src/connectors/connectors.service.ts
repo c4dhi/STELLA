@@ -41,6 +41,8 @@ import {
 export type ConnectorResponse = {
   id: string;
   name: string;
+  icon: string | null;
+  description: string | null;
   handle: string;
   kind: 'mcp';
   url: string;
@@ -65,6 +67,8 @@ export type ConnectorResponse = {
 export type AvailableConnectorResponse = {
   id: string;
   name: string;
+  icon: string | null;
+  description: string | null;
   handle: string;
   kind: 'mcp';
   url: string;
@@ -103,6 +107,8 @@ export function toConnectorResponse(c: ConnectorWithShares): ConnectorResponse {
   return {
     id: c.id,
     name: c.name,
+    icon: c.icon,
+    description: c.description,
     handle: c.handle,
     kind: 'mcp',
     url: c.url,
@@ -121,6 +127,40 @@ export function toConnectorResponse(c: ConnectorWithShares): ConnectorResponse {
     updatedAt: c.updatedAt,
   };
 }
+
+/** Trimmed, or null when empty: an empty string clears the field. */
+function optionalText(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/** The result of running one tool from Settings (the detail page's "Try it"). */
+// A type alias, not an interface, so it can be returned as an MCP tool result.
+export type ConnectorToolCallResponse = {
+  ok: boolean;
+  /** The server ran the tool but reported an error in its result. */
+  isError: boolean;
+  content: unknown[];
+  structuredContent?: unknown;
+  errorCode?: string;
+  error?: string;
+  durationMs: number;
+};
+
+/** One outbound call, for the detail page's "Recent calls". No arguments. */
+export type ConnectorCallLogEntry = {
+  id: string;
+  operation: string;
+  tool: string | null;
+  success: boolean;
+  errorCode: string | null;
+  durationMs: number;
+  createdAt: Date;
+  /** The agent that made the call; null for a test from Settings. */
+  agentName: string | null;
+};
+
+const RECENT_CALLS_MAX = 50;
 
 /** Settings → Connectors: the signed-in user's own outside MCP servers. */
 @Injectable()
@@ -160,6 +200,8 @@ export class ConnectorsService {
     return rows.map((c) => ({
       id: c.id,
       name: c.name,
+      icon: c.icon,
+      description: c.description,
       handle: c.handle,
       kind: 'mcp' as const,
       url: c.url,
@@ -235,6 +277,8 @@ export class ConnectorsService {
         data: {
           userId,
           name: dto.name.trim(),
+          icon: optionalText(dto.icon),
+          description: optionalText(dto.description),
           handle: dto.handle,
           url,
           authType: AUTH_TO_DB[authType],
@@ -258,6 +302,9 @@ export class ConnectorsService {
     let reachChanged = false;
 
     if (dto.name !== undefined) data.name = dto.name.trim();
+    if (dto.icon !== undefined) data.icon = optionalText(dto.icon);
+    if (dto.description !== undefined)
+      data.description = optionalText(dto.description);
     if (dto.handle !== undefined) data.handle = dto.handle;
     if (dto.url !== undefined) {
       const url = this.cleanUrl(dto.url);
@@ -360,6 +407,106 @@ export class ConnectorsService {
         connector: toConnectorResponse(row),
       };
     }
+  }
+
+  /**
+   * Run one tool as the owner, for "Try it" in Settings. Goes through the same
+   * client as agents' calls, so the token stays on the server; recorded in the
+   * audit log like every other call. A failure is returned, not thrown, so the
+   * page can show it next to the arguments that caused it.
+   */
+  async callTool(
+    id: string,
+    userId: string,
+    tool: string,
+    args: Record<string, unknown> | undefined,
+  ): Promise<ConnectorToolCallResponse> {
+    const connector = await this.owned(id, userId);
+    const started = Date.now();
+    const base = {
+      connectorId: id,
+      userId,
+      operation: 'tools/call' as const,
+      tool,
+      args: args ?? {},
+    };
+    try {
+      const result = await this.mcp.callTool(
+        this.target(connector),
+        tool,
+        args ?? {},
+      );
+      const durationMs = Date.now() - started;
+      await this.audit.record({
+        ...base,
+        success: !result.isError,
+        errorCode: result.isError ? 'tool_error' : undefined,
+        durationMs,
+      });
+      return {
+        ok: !result.isError,
+        isError: result.isError,
+        content: result.content,
+        structuredContent: result.structuredContent,
+        durationMs,
+      };
+    } catch (error) {
+      const failure =
+        error instanceof ConnectorCallError ? error : this.mcp.classify(error);
+      const durationMs = Date.now() - started;
+      await this.audit.record({
+        ...base,
+        success: false,
+        errorCode: failure.code,
+        durationMs,
+      });
+      return {
+        ok: false,
+        isError: false,
+        content: [],
+        errorCode: failure.code,
+        error: failure.message,
+        durationMs,
+      };
+    }
+  }
+
+  /** The connector's latest outbound calls, newest first. Owner only. */
+  async recentCalls(
+    id: string,
+    userId: string,
+    limit = 20,
+  ): Promise<ConnectorCallLogEntry[]> {
+    await this.owned(id, userId);
+    const rows = await this.prisma.connectorAuditLog.findMany({
+      where: { connectorId: id },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(1, limit), RECENT_CALLS_MAX),
+    });
+    const agentIds = [
+      ...new Set(
+        rows.map((r) => r.agentInstanceId).filter((x): x is string => !!x),
+      ),
+    ];
+    const agents = agentIds.length
+      ? await this.prisma.agentInstance.findMany({
+          where: { id: { in: agentIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+    const nameOf = new Map(agents.map((a) => [a.id, a.name]));
+    return rows.map((r) => ({
+      id: r.id,
+      operation: r.operation,
+      tool: r.tool,
+      success: r.success,
+      errorCode: r.errorCode,
+      durationMs: r.durationMs,
+      createdAt: r.createdAt,
+      agentName: r.agentInstanceId
+        ? (nameOf.get(r.agentInstanceId) ?? 'A deleted agent')
+        : null,
+    }));
   }
 
   /**

@@ -952,6 +952,10 @@ model Connector {
   userId              String
   user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   name                String
+  // An emoji shown on the connector's card, e.g. "🗂️". Null shows a default.
+  icon                String?
+  // What the connector is for, in the owner's words. Shown in Settings and the deploy wizard.
+  description         String?
   // Slug the agent uses to address the connector; unique per user.
   handle              String
   kind                ConnectorKind     @default(MCP)

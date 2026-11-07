@@ -21,11 +21,19 @@ The face is set on the invitation (or, for a public link, on the project), the s
 | Face | Locked | What happens |
 |---|---|---|
 | Text | yes | A text-only session. The join page skips the microphone setup and says the conversation is in writing. The participant cannot switch to voice. |
-| Text | no | The session starts in writing. The participant can open the face gallery and move to a voice face at any time, and back. |
+| Text | no | The session starts in writing, and the join page skips the microphone setup here too. The participant can open the face gallery and move to a voice face at any time, and back. |
 | Any other face | no | The session starts by voice. The participant can move to the Text face at any time. |
 | Any other face | yes | Voice only. The chat drawer is still there as a fallback. |
 
 Through the API or MCP, set `visualizerType: "text"` and `visualizerLocked: true` on the invitation for a text-only session.
+
+## Switching to voice later
+
+When a participant who started in writing moves to a voice face, the session opens the device check (microphone and speaker) first, unless the browser already allows the microphone. **Continue with voice** goes on by voice; **Stay in writing** closes the check and goes back to the Text face. A session that starts on a voice face shows the device check on the join page, as before, and skips it when the microphone is already allowed.
+
+## The end of the session
+
+When the agent completes the session, the **Session complete** screen waits until the agent has finished speaking and its last message has fully arrived, then leaves time to read it: a quarter second per word, at least 3 and at most 10 seconds (and never more than 25 seconds after the agent's signal). The screen thanks the participant and says they can close the window. A session that ends at its time limit shows a matching **Session timed out** screen. Neither screen shows a code to paste into a survey any more.
 
 ## What it changes for the agent
 

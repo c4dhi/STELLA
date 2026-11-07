@@ -58,7 +58,7 @@ export const SUPPORTED_BASE_IMAGES = [
  * older SDK cannot be deployed until it is rebuilt with a newer one. Raising it
  * is how STELLA retires old SDKs: change it here and note it in the CHANGELOG.
  */
-export const MIN_SUPPORTED_SDK_VERSION = '0.4.0'
+export const MIN_SUPPORTED_SDK_VERSION = '0.10.0'
 
 /**
  * The stella-ai-agent-sdk this STELLA ships (agents/stella-ai-agent-sdk). An

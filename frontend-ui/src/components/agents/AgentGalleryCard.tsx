@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import type { AgentType } from '../../lib/api-types'
+import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 
 interface AgentGalleryCardProps {
   agentType: AgentType
@@ -25,32 +26,16 @@ export default function AgentGalleryCard({
       onClick={onClick}
       whileTap={{ scale: 0.99 }}
       className={`
-        relative w-full min-h-[160px] flex flex-col p-3 rounded-xl text-left transition-[color,background-color,border-color,box-shadow] duration-200 border-2
+        relative w-full min-h-[160px] flex flex-col p-3 rounded-xl text-left transition-[color,background-color,border-color,box-shadow] duration-200
         ${dimmed ? 'opacity-60 hover:opacity-100' : ''}
-        ${isSelected
-          ? isDark
-            ? 'bg-primary-500/20 border-primary-500 shadow-lg shadow-primary-500/20'
-            : 'bg-neutral-100 border-neutral-900 shadow-lg shadow-neutral-900/10'
-          : isDark
-            ? 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-700/50 hover:border-zinc-600'
-            : 'bg-white border-neutral-200/60 hover:bg-neutral-50 hover:border-neutral-300 shadow-sm'
-        }
+        ${choiceCardClass(isSelected, isDark)}
       `}
     >
       {/* Selection indicator */}
       {isSelected && (
-        <motion.div
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          className={`
-            absolute top-2 right-2 w-4 h-4 rounded-full flex items-center justify-center
-            ${isDark ? 'bg-primary-500' : 'bg-neutral-900'}
-          `}
-        >
-          <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-            <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </motion.div>
+        <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} className="absolute top-2 right-2">
+          <SelectedBadge isDark={isDark} />
+        </motion.span>
       )}
 
       {/* Icon */}

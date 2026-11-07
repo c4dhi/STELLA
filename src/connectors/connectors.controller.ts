@@ -14,6 +14,7 @@ import {
 import { CurrentUser } from '../common/decorators/current-user.decorator.js';
 import { ConnectorsService } from './connectors.service.js';
 import {
+  CallConnectorToolDto,
   CreateConnectorDto,
   SetConnectorSharesDto,
   UpdateConnectorDto,
@@ -54,7 +55,11 @@ export class ConnectorsController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @CurrentUser() user: any, @Body() dto: UpdateConnectorDto) {
+  update(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+    @Body() dto: UpdateConnectorDto,
+  ) {
     return this.connectors.update(id, this.userIdOf(user), dto);
   }
 
@@ -65,7 +70,11 @@ export class ConnectorsController {
 
   /** Replace the projects this connector is shared with. Owner only. */
   @Put(':id/shares')
-  setShares(@Param('id') id: string, @CurrentUser() user: any, @Body() dto: SetConnectorSharesDto) {
+  setShares(
+    @Param('id') id: string,
+    @CurrentUser() user: any,
+    @Body() dto: SetConnectorSharesDto,
+  ) {
     return this.connectors.setShares(id, this.userIdOf(user), dto.projectIds);
   }
 
@@ -75,9 +84,41 @@ export class ConnectorsController {
     return this.connectors.test(id, this.userIdOf(user));
   }
 
+  /** Run one tool with the given arguments, as the owner. For "Try it". */
+  @Post(':id/tools/:tool/call')
+  callTool(
+    @Param('id') id: string,
+    @Param('tool') tool: string,
+    @CurrentUser() user: any,
+    @Body() dto: CallConnectorToolDto,
+  ) {
+    return this.connectors.callTool(
+      id,
+      this.userIdOf(user),
+      tool,
+      dto.arguments,
+    );
+  }
+
+  /** The latest outbound calls (tests, agents' tool calls), newest first. */
+  @Get(':id/calls')
+  recentCalls(
+    @Param('id') id: string,
+    @Query('limit') limit: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    const n = limit ? Number.parseInt(limit, 10) : undefined;
+    return this.connectors.recentCalls(
+      id,
+      this.userIdOf(user),
+      Number.isFinite(n) ? n : undefined,
+    );
+  }
+
   // Participant tokens pass the global guard too; they own no connectors.
   private userIdOf(user: any): string {
-    if (!user?.userId) throw new ForbiddenException('Only signed-in users have connectors');
+    if (!user?.userId)
+      throw new ForbiddenException('Only signed-in users have connectors');
     return user.userId;
   }
 }

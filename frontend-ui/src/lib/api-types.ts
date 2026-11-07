@@ -1868,6 +1868,10 @@ export interface ConnectorTool {
 export interface Connector {
   id: string
   name: string
+  /** An emoji for the card; null shows the default. */
+  icon: string | null
+  /** What it is for, in the owner's words. */
+  description: string | null
   handle: string
   kind: 'mcp'
   url: string
@@ -1888,6 +1892,8 @@ export interface Connector {
 export interface AvailableConnector {
   id: string
   name: string
+  icon: string | null
+  description: string | null
   handle: string
   kind: 'mcp'
   url: string
@@ -1909,6 +1915,10 @@ export interface ConnectorSlot {
 
 export interface CreateConnectorRequest {
   name: string
+  /** An empty string clears it on update. */
+  icon?: string
+  /** An empty string clears it on update. */
+  description?: string
   handle: string
   url: string
   authType?: ConnectorAuthType
@@ -1916,6 +1926,31 @@ export interface CreateConnectorRequest {
 }
 
 export type UpdateConnectorRequest = Partial<CreateConnectorRequest>
+
+/** The result of running one tool from the connector's detail page. */
+export interface ConnectorToolCallResult {
+  ok: boolean
+  /** The server ran the tool but reported an error in its result. */
+  isError: boolean
+  content: unknown[]
+  structuredContent?: unknown
+  errorCode?: string
+  error?: string
+  durationMs: number
+}
+
+/** One outbound call to a connector, from its audit log. */
+export interface ConnectorCallLogEntry {
+  id: string
+  operation: 'initialize' | 'tools/list' | 'tools/call' | string
+  tool: string | null
+  success: boolean
+  errorCode: string | null
+  durationMs: number
+  createdAt: string
+  /** The agent that made the call; null for a test from Settings. */
+  agentName: string | null
+}
 
 export interface ConnectorTestResult {
   ok: boolean

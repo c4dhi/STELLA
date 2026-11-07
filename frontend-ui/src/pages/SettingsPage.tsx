@@ -142,7 +142,9 @@ export default function SettingsPage() {
                 initial="initial"
                 animate="animate"
                 exit="exit"
-                className="h-full pb-8"
+                // min-h, not h: a fixed height let long sections overflow it, so
+                // the bottom padding ended up behind the content, not after it.
+                className="min-h-full pb-12"
               >
                 {renderContent()}
               </motion.div>

@@ -22,7 +22,7 @@ export default function WizardProgress({ current, total, isDark }: WizardProgres
             key={i}
             className={`h-1 flex-1 rounded-full transition-colors duration-300 ${
               i < current
-                ? 'bg-primary-500'
+                ? isDark ? 'bg-primary-500' : 'bg-neutral-900'
                 : isDark ? 'bg-zinc-700' : 'bg-neutral-200'
             }`}
           />

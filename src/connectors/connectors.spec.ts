@@ -585,8 +585,19 @@ describe('ConnectorsService', () => {
       $transaction: jest.fn(async (ops: Promise<unknown>[]) =>
         Promise.all(ops),
       ),
+      connectorAuditLog: {
+        findMany: jest.fn(async (): Promise<any[]> => []),
+      },
+      agentInstance: {
+        findMany: jest.fn(async (): Promise<any[]> => []),
+      },
     };
     const mcp = {
+      callTool: jest.fn(async (): Promise<any> => ({
+        isError: false,
+        content: [{ type: 'text', text: 'Q-07' }],
+        structuredContent: { question_id: 'Q-07' },
+      })),
       probe: jest.fn(async () => ({
         serverInfo: { name: 'elias' },
         tools: [{ name: 'start_interview', description: 'x', inputSchema: {} }],
@@ -736,6 +747,73 @@ describe('ConnectorsService', () => {
     await expect(service.listAvailable('member-2', 'not-mine')).rejects.toThrow(
       /Project not found/,
     );
+  });
+
+  it('stores an icon and description, trimmed, and clears them with an empty string', async () => {
+    const { service, prisma } = make();
+    const created = await service.create('u1', {
+      name: 'ELIAS',
+      icon: '🗂️',
+      description: '  Reads the question bank.  ',
+      handle: 'elias',
+      url: 'https://elias.apps.c4dhi.org/mcp',
+      token: 'tok-123',
+    });
+    expect(created).toMatchObject({ icon: '🗂️', description: 'Reads the question bank.' });
+    await service.update('c1', 'u1', { icon: '', description: ' ' });
+    const data = (prisma.connector.update.mock.calls[0][0] as any).data;
+    expect(data).toMatchObject({ icon: null, description: null });
+    // Neither touches the reach of the connector, so it stays tested.
+    expect(data.status).toBeUndefined();
+  });
+
+  it('runs one tool as the owner with the decrypted token and audits it', async () => {
+    const { service, mcp, audit } = make();
+    const res = await service.callTool('c1', 'u1', 'get_next_question', { participant_id: 'P-1' });
+    expect(res).toMatchObject({ ok: true, isError: false, structuredContent: { question_id: 'Q-07' } });
+    expect(mcp.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({ bearerToken: 'tok-123' }),
+      'get_next_question',
+      { participant_id: 'P-1' },
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'tools/call', tool: 'get_next_question', success: true }),
+    );
+    expect(JSON.stringify(res)).not.toContain('tok-123');
+  });
+
+  it('returns a tool failure instead of throwing, and audits it', async () => {
+    const { service, mcp, audit } = make();
+    mcp.callTool.mockRejectedValueOnce(new ConnectorCallError('tool_not_found', 'No tool "nope"') as never);
+    const res = await service.callTool('c1', 'u1', 'nope', undefined);
+    expect(res).toMatchObject({ ok: false, errorCode: 'tool_not_found', error: 'No tool "nope"' });
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ success: false, errorCode: 'tool_not_found' }));
+    mcp.callTool.mockResolvedValueOnce({ isError: true, content: [{ type: 'text', text: 'bad id' }] });
+    const toolError = await service.callTool('c1', 'u1', 'get_next_question', {});
+    expect(toolError).toMatchObject({ ok: false, isError: true });
+  });
+
+  it("does not run another user's connector", async () => {
+    const { service, mcp } = make();
+    await expect(service.callTool('c1', 'someone-else', 'x', {})).rejects.toThrow(/not found/);
+    await expect(service.recentCalls('c1', 'someone-else')).rejects.toThrow(/not found/);
+    expect(mcp.callTool).not.toHaveBeenCalled();
+  });
+
+  it('lists recent calls newest first with the calling agent’s name, capped at 50', async () => {
+    const { service, prisma } = make();
+    const at = new Date('2026-11-06T09:30:00Z');
+    prisma.connectorAuditLog.findMany.mockResolvedValueOnce([
+      { id: 'a1', operation: 'tools/call', tool: 'save_answer', success: true, errorCode: null, durationMs: 120, createdAt: at, agentInstanceId: 'ag1', argsSummary: { secret: 'x' } },
+      { id: 'a2', operation: 'tools/call', tool: 'get_progress', success: false, errorCode: 'timeout', durationMs: 9000, createdAt: at, agentInstanceId: 'gone' },
+      { id: 'a3', operation: 'initialize', tool: null, success: true, errorCode: null, durationMs: 80, createdAt: at, agentInstanceId: null },
+    ]);
+    prisma.agentInstance.findMany.mockResolvedValueOnce([{ id: 'ag1', name: 'Grace' }]);
+    const calls = await service.recentCalls('c1', 'u1', 500);
+    expect(calls.map((c) => c.agentName)).toEqual(['Grace', 'A deleted agent', null]);
+    expect(calls[0]).not.toHaveProperty('argsSummary');
+    const query = prisma.connectorAuditLog.findMany.mock.calls[0] as any[];
+    expect(query[0]).toMatchObject({ where: { connectorId: 'c1' }, orderBy: { createdAt: 'desc' }, take: 50 });
   });
 
   it('changing the token resets the status and drops the cached connection', async () => {

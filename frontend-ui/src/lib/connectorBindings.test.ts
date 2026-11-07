@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AvailableConnector, ConnectorSlot } from './api-types'
-import { bindingsFromChoices, connectorsForSlot, extraCandidates, initialSlotChoices, missingTools, unboundRequiredSlots } from './connectorBindings'
+import { assignSlots, bindingsFromChoices, initialSelection, missingTools, unboundRequiredSlots } from './connectorBindings'
 
 const slot: ConnectorSlot = {
   slot: 'elias',
@@ -15,6 +15,8 @@ function connector(id: string, tools: string[] | null): AvailableConnector {
   return {
     id,
     name: id,
+    icon: null,
+    description: null,
     handle: id,
     kind: 'mcp',
     url: `https://${id}.test/mcp`,
@@ -36,14 +38,33 @@ describe('connector picker', () => {
     expect(missingTools(slot, untested)).toBeNull()
   })
 
-  it('offers covering connectors first', () => {
-    expect(connectorsForSlot(slot, [partial, untested, full]).map((c) => c.id)).toEqual(['elias', 'new', 'half'])
+  it('preselects the only covering connector and leaves the rest to the user', () => {
+    expect(initialSelection([slot, optional], [partial, full])).toEqual(['elias'])
+    expect(initialSelection([slot], [full, connector('elias2', ['get_interview_guide', 'start_interview'])])).toEqual([])
+    expect(initialSelection([slot], [untested])).toEqual([])
   })
 
-  it('preselects the only covering connector and leaves the rest to the user', () => {
-    expect(initialSlotChoices([slot, optional], [partial, full])).toEqual({ elias: 'elias', notes: '' })
-    expect(initialSlotChoices([slot], [full, connector('elias2', ['get_interview_guide', 'start_interview'])])).toEqual({ elias: '' })
-    expect(initialSlotChoices([slot], [untested])).toEqual({ elias: '' })
+  it('fills each slot from the ticked connectors: covering first, in ticking order, then untested', () => {
+    const second = connector('elias2', ['get_interview_guide', 'start_interview'])
+    expect(assignSlots([slot], [full, second, partial], ['half', 'elias2', 'elias'])).toEqual({ elias: 'elias2' })
+    expect(assignSlots([slot], [partial, untested], ['half', 'new'])).toEqual({ elias: 'new' })
+    expect(assignSlots([slot], [partial], ['half'])).toEqual({ elias: '' })
+    expect(assignSlots([slot], [full], [])).toEqual({ elias: '' })
+  })
+
+  it('never puts one connector in two slots', () => {
+    const twin: typeof slot = { ...slot, slot: 'twin', label: 'Twin' }
+    expect(assignSlots([slot, twin], [full], ['elias'])).toEqual({ elias: 'elias', twin: '' })
+  })
+
+  it('moves a connector that fits two slots to the one nothing else fits', () => {
+    // X covers both slots, Y only the first. Ticked X then Y: Y takes the first
+    // slot and X the second, so both are filled.
+    const first: ConnectorSlot = { ...slot, slot: 'first', requiredTools: ['a'] }
+    const second: ConnectorSlot = { ...slot, slot: 'second', requiredTools: ['b'] }
+    const x = { ...full, id: 'x', tools: [{ name: 'a' }, { name: 'b' }] }
+    const y = { ...full, id: 'y', tools: [{ name: 'a' }] }
+    expect(assignSlots([first, second], [x, y], ['x', 'y'])).toEqual({ first: 'y', second: 'x' })
   })
 
   it('is complete once every required slot is bound', () => {
@@ -52,8 +73,7 @@ describe('connector picker', () => {
     expect(bindingsFromChoices([slot, optional], { elias: 'x', notes: '' })).toEqual([{ connectorId: 'x', slot: 'elias' }])
   })
 
-  it('offers the connectors no slot uses as extras and sends them without a slot', () => {
-    expect(extraCandidates([full, partial, untested], { elias: 'elias' }).map((c) => c.id)).toEqual(['half', 'new'])
+  it('sends the ticked connectors no slot uses without a slot', () => {
     expect(bindingsFromChoices([slot], { elias: 'elias' }, ['new', 'elias'])).toEqual([
       { connectorId: 'elias', slot: 'elias' },
       { connectorId: 'new' },
