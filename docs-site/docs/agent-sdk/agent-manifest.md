@@ -44,9 +44,13 @@ features:
 env:
   required:                          # deploy is refused without these
     - OPENAI_API_KEY
+    - ELIAS_PROJECT_ID
   optional:                          # offered at deploy
     - name: STELLA_LANGUAGE
       description: "Pin the conversation to one language (e.g. 'de')"
+      type: string
+      label: "Language"
+      group: "Conversation"          # the tab it appears in
 
 connectors:                          # outside MCP servers the agent needs
   - slot: elias
@@ -62,21 +66,9 @@ resources:
   memory: { request: "128Mi", limit: "256Mi" }
   cpu: { request: "50m", limit: "250m" }
 
-# What a user may set when deploying this agent (a JSON Schema object).
-configSchema:
-  type: object
-  required: [elias]
-  properties:
-    elias:
-      type: object
-      required: [project_id]
-      properties:
-        project_id:
-          type: string
-          description: "ELIAS project id"
-
-defaultConfig:
-  elias: {}
+# Anything a deployer chooses is an env var above. configSchema and
+# defaultConfig only describe fixed values the agent receives in `config`;
+# this agent needs none, so it leaves both out.
 
 sdk:
   minVersion: "0.10.0"
@@ -90,7 +82,7 @@ sdk:
 | `metadata` | Name, slug, version, description, icon, tags, author. `deprecated` and `deprecationNote` keep an agent deployable but demote it in the gallery. |
 | `capabilities` | What the agent can do. They decide which of its experts it publishes (see below). Unknown values are refused. |
 | `features` | Which platform features STELLA wires up for the agent. `persona` (default `true`), `plans` (`required`, `modes`) and `configurator` (`required`; `true` is short for an optional configuration). Leave a block out to turn the feature off. |
-| `env` | Environment variables the deploying user provides: `required` names, and `optional` entries with a `description` and a `default`. |
+| `env` | Environment variables the deploying user provides: `required` names, and `optional` entries with a `name`, a `description` and a `default`, plus optional display and checking fields (`type`, `label`, `group` for the tab, `advanced`, `min`/`max`/`step`/`unit`, `options`, `format`, `agentDefault`, `unsetLabel`). See [Environment variables](../architecture/environment-variables.md#manifest-declaration). |
 | `connectors` | Outside MCP servers (Connectors) the agent reaches through the SDK by slot name. Users can always offer extra ones on top. |
 | `client` | What the user's screen and the agent may send each other beyond speech and chat text: `events` (screen → agent) and `commands` (agent → screen), each with a `name`, a `description` and an optional JSON Schema for its `data`. See [The client channel](#the-client-channel). |
 | `image` | `dockerfile` (default `Dockerfile`). Uploaded agents are always built by STELLA from it. `command` (optional, exec form, e.g. `[python, -m, my_agent]`) is the pod's start command. Leave it out and the image's own `CMD` runs. |

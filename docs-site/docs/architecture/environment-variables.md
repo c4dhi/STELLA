@@ -93,6 +93,8 @@ WebRTC server configuration for real-time audio/video communication.
 | `LIVEKIT_TURN_ENABLED` | No | `false` | Enable TURN server for NAT traversal in production |
 | `LIVEKIT_TURN_DOMAIN` | No | - | Domain for TURN server (e.g., `turn.yourdomain.com`) |
 
+Since 2.0.0, an uploaded agent's pod gets neither `LIVEKIT_API_KEY` nor `LIVEKIT_API_SECRET`. STELLA sets `LIVEKIT_TOKEN` instead, a token for that session's room and the agent's identity only. Built-in agents still get the key and secret.
+
 **URL Configuration:**
 
 - **Local development**: Both URLs typically point to `ws://localhost:7880`
@@ -258,6 +260,18 @@ Settings for agent deployment and management.
 |----------|----------|---------|-------------|
 | `AGENT_IMAGE` | No | `conversational-ai-server:latest` | Docker image for agent pods |
 | `AGENTS_DIR` | No | `./agents` | Directory containing agent definitions |
+| `DEFAULT_AGENT_TYPE` | No | `stella-v2-agent` | The agent type a deployment gets when it names none: deploy, restart, wake, public projects (`src/agents/default-agent-type.ts`) |
+
+### Connectors
+
+The backend is the MCP client for every connector (see [Connectors](../agent-sdk/connectors.md)).
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CONNECTORS_ALLOW_PRIVATE_HOSTS` | No | `false` | Allow connector URLs on localhost and private or cluster-internal addresses. For local development only |
+| `CONNECTORS_CONNECT_TIMEOUT_MS` | No | `10000` | Time to connect to a connector's MCP server |
+| `CONNECTORS_LIST_TIMEOUT_MS` | No | `15000` | Time to list its tools |
+| `CONNECTORS_CALL_TIMEOUT_MS` | No | `60000` | Time for one tool call |
 
 ---
 
@@ -314,11 +328,13 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `TTS_LANGUAGE` | No | detected | Seed language for TTS (ISO 639-1). Empty = follow the per-turn detected language |
 | `STELLA_TELEPROMPTER_ENABLED` | No | on | Stream the reply dimmed and light each word as it is spoken. Set `false` to disable |
 | `SESSION_END_MODE` | No | `farewell` | What the agent does when the time cap or the organiser ends the session: `farewell`, `wrap_up` (calls `on_session_ending`) or `silent`. An agent may decide this itself by overriding `session_end_mode()`; see [Platform contract](../agent-sdk/platform-contract.md#when-the-session-ends) |
+| `LIVEKIT_TOKEN` | Set by STELLA | – | Uploaded agents only: a token for this session's room and the agent's identity. When it is set, the SDK joins with it and needs neither `LIVEKIT_API_KEY` nor `LIVEKIT_API_SECRET` |
+| `STELLA_CONNECTOR_TOKEN` | Set by STELLA | – | Pods with bound connectors only: a fresh random token per pod start that the SDK sends to call connectors. It stops working when the agent stops, is paused or its session closes. See [Connectors](../agent-sdk/connectors.md) |
 | `STELLA_CLIENT_CHANNEL` | Set by STELLA | – | The `client` block of the agent's `agent.yaml` as JSON: the screen events and agent commands it declares, each with an optional schema for its data. STELLA sets it on every pod, as an empty declaration when there is no `client` block, which refuses every event and command. Left unset (outside STELLA) everything is allowed. See [Platform contract](../agent-sdk/platform-contract.md) |
 
 The SDK also reads two timing settings that neither built-in agent declares in `agent.yaml`: `BARGE_IN_DUCK_TIMEOUT_MS` (default `1200`), after which a duck that was never confirmed as an interruption lifts by itself, so background noise cannot keep the agent quiet; and `STELLA_MUTE_SILENCE_MS` (default `3000`), the silence fed to speech recognition when a participant mutes the microphone, so the sentence in flight is finalized like any pause.
 
-The SDK also reads `BARGE_IN_DUCK_GAIN` (default `0.25`): the volume the agent drops to the moment the user makes a sound, where `1.0` disables ducking. Neither built-in agent declares it in `agent.yaml` yet, so it can't be set from the deploy form and every deployment runs the default.
+The SDK also reads `BARGE_IN_DUCK_GAIN` (default `0.25`): the volume the agent drops to the moment the user makes a sound, where `1.0` disables ducking. All three built-in agents declare it in `agent.yaml` ("Voice level while interrupted"), so it can be set from the deploy form.
 
 ### Turn Management
 
