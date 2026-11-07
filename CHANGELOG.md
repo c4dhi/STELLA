@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Settings → Agent Review, where system admins approve or reject uploaded agents** (#897). Before, approving an upload was only possible through an API call, so shared uploads stayed stuck. The page has Pending, Approved and Rejected tabs. Each upload shows its latest build first, then the owner, version, upload date, SDK and what its `agent.yaml` declares. Approve takes optional notes and Reject needs a reason, and the uploader sees either one on their agent card. A decision can be reversed. The same actions are on MCP for system admins (`agent_reviews_list`, `_get`, `_approve`, `_reject`)
-- **An upload, or uploading a new version, builds on its own.** Before, a build only started when the owner pressed Build after the upload finished. The button is now Rebuild. Only one build of an agent type runs at a time: a second upload while one is already building queues behind it, and a further upload while one is queued supersedes it (shown as "Superseded by a newer upload"), so only the latest upload is ever built next
-- **Build status and log, live, on the agent card** (Settings → Agent Library and the deploy wizard's "My Agents"). Queued, Building, Built or Build Failed shows on the card itself and updates on its own as the build runs, with a link to the log — no manual refresh needed
-
-### Fixed
-
-- An uploaded agent rejected in review was labelled "Failed" in the Agent Library. It now reads "Rejected"
-- **Live build logs never reached the browser.** The backend's log stream resolved each poll's status but sent the unresolved promise as the event instead, so every update went out with no data; separately, the browser only listened for the stream's default message event, but the backend sends each update as a named `build` event, which that listener never receives. Both are fixed — live status and log streaming now work everywhere they're used, including the existing build-log viewer
-
 ---
 
 ## [2.0.0] - 2026-11-07
@@ -69,6 +58,9 @@ first: agents uploaded before this release need one rebuild.**
 - **`image.command` in the manifest** sets a pod's start command. Without it the image's own `CMD` runs.
 - **Agent platform standards** (*Contributing → Coding standards → Agent platform*): the rules that keep STELLA free of agent-specific code, and which module owns which concern.
 - **MCP: `platform_settings_get` and `platform_settings_update`** for system admins. An assistant can read the platform switches and turn "Review uploaded agents" on or off. Nobody else sees the two tools, and a call by name answers 403. The MCP switch and the TTS playback default stay UI-only.
+- **Settings → Agent Review, where system admins approve or reject uploaded agents** (#897). Before, approving an upload was only possible through an API call, so shared uploads stayed stuck. The page has Pending, Approved and Rejected tabs. Each upload shows its latest build first, then the owner, version, upload date, SDK and what its `agent.yaml` declares. Approve takes optional notes and Reject needs a reason, and the uploader sees either one on their agent card. A decision can be reversed. The same actions are on MCP for system admins (`agent_reviews_list`, `_get`, `_approve`, `_reject`)
+- **An upload, or uploading a new version, builds on its own.** Before, a build only started when the owner pressed Build after the upload finished. The button is now Rebuild. Only one build of an agent type runs at a time: a second upload while one is already building queues behind it, and a further upload while one is queued supersedes it (shown as "Superseded by a newer upload"), so only the latest upload is ever built next
+- **Build status and log, live, on the agent card** (Settings → Agent Library and the deploy wizard's "My Agents"). Queued, Building, Built or Build Failed shows on the card itself and updates on its own as the build runs, with a link to the log — no manual refresh needed
 
 ### Fixed
 
@@ -83,6 +75,9 @@ first: agents uploaded before this release need one rebuild.**
 - **Chat history shown twice on the participant screen.** Opening a chat after the agent had spoken showed the greeting and every message so far twice; the stored history is now matched to what the screen already shows.
 - A restart or wake that STELLA refuses (agent type rejected, under review, missing a required env var, or built with an unsupported SDK) now leaves the running agent alone. Before, the pod was deleted first and the agent was left in STARTING with no pod.
 - An agent whose manifest sets a memory or CPU limit below 512Mi / 250m now starts. Pod requests were fixed at those values, so Kubernetes refused the pod (request above limit) and the agent went FAILED without a pod. Requests are now lowered to the limit when the limit is smaller.
+- An uploaded agent rejected in review was labelled "Failed" in the Agent Library. It now reads "Rejected"
+- **Live build logs never reached the browser.** The backend's log stream resolved each poll's status but sent the unresolved promise as the event instead, so every update went out with no data; separately, the browser only listened for the stream's default message event, but the backend sends each update as a named `build` event, which that listener never receives. Both are fixed — live status and log streaming now work everywhere they're used, including the existing build-log viewer
+- **An agent built in Settings still showed as not deployable in the deploy wizard.** The wizard kept the "My Agents" list and the review flag it last loaded; it now reloads both when it opens and after a build finishes
 
 ### Changed
 
@@ -100,6 +95,8 @@ first: agents uploaded before this release need one rebuild.**
 - **Built-in agent images come from their manifests.** The hard-coded image registry and the `python -m <slug>` start command convention are gone. A built-in is built from `agents/<slug>/` with its manifest's Dockerfile, and starts with its manifest's `image.command` or the image's `CMD`. The deploy scripts find agents by their `agent.yaml`. The seed refuses a built-in whose folder isn't named after its slug.
 - Removed `AgentsService.createStandaloneAgent` and `updateGrpcAddress`. Nothing called them, and the first skipped deploy validation.
 - A pod whose agent type has no valid resource limit now gets the manifest default (512Mi, 250m) instead of a separate 2Gi / 2000m fallback.
+- **The agent card opens on Build.** Opening an uploaded agent in Settings → Agent Library now shows its build status and log first. The Overview tab is renamed Capabilities, since that is what it lists, and the button reads Rebuild. In the deploy wizard, a selected uploaded agent gets the same outline as a built-in one, and its build badge opens the log
+- **One Agent SDK section in the docs.** The SDK pages were in two overlapping folders and showed code that could not run: a `stella_sdk` module, an `AudioPipeline` the agent built itself, and classes the SDK never had (`VADConfig`, `@tool`, `TodoItem`, the message classes). *Agent SDK* now holds them all, rewritten against SDK 0.10.0, and CI checks that every example imports against the SDK. **Old `/docs/sdk/...` links no longer work**; the pages are under `/docs/agent-sdk/...` (#887)
 
 ### Security
 
