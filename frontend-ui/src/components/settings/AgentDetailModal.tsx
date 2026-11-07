@@ -36,15 +36,17 @@ export default function AgentDetailModal({
   const isCustomAgent = agent && !agent.isBuiltIn
   const customAgent = agent as CustomAgentType
 
-  // Load build status for custom agents, and open straight to it.
+  // A custom agent opens straight to Build while it's building, failed, or
+  // never built - the thing an uploader needs first. Once it's built, it
+  // opens on Overview as before: only the initial open decides this, so a
+  // build finishing while the user sits on another tab doesn't yank them back.
   useEffect(() => {
     if (isOpen && agent && isCustomAgent) {
-      setActiveTab('build')
-      loadBuildStatus()
+      void loadBuildStatus(true)
     }
   }, [isOpen, agent?.id])
 
-  const loadBuildStatus = async () => {
+  const loadBuildStatus = async (isInitialOpen = false) => {
     if (!agent) return
     try {
       const status = await apiClient.getAgentBuildStatus(agent.id)
@@ -52,6 +54,9 @@ export default function AgentDetailModal({
       // A build already running (started by the upload itself, or queued
       // behind another) streams its log live, the same as one triggered here.
       setIsBuilding(status?.status === 'pending' || status?.status === 'building')
+      if (isInitialOpen) {
+        setActiveTab(status && status.status !== 'success' ? 'build' : 'overview')
+      }
     } catch (err) {
       console.error('Failed to load build status:', err)
     }
