@@ -230,6 +230,13 @@ export default function ProjectModal({
     return s
   }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
 
+  // Start From drops out of the steps when the templates finish loading and
+  // there are none (or the fetch failed). Move on to the settings rather than
+  // leave the wizard on a step it no longer has.
+  useEffect(() => {
+    if (step === 'envtemplate' && !publicSteps.includes('envtemplate')) setStep('envvars')
+  }, [step, publicSteps])
+
   // Get visible step configs (filtered based on requirements)
   const visibleStepConfigs = useMemo(() => {
     return STEPS_CONFIG.filter(s => publicSteps.includes(s.id)).map((s, idx) => ({ ...s, number: idx + 1 }))

@@ -181,6 +181,13 @@ export default function DeployAgentModal({
     return steps
   }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep, isLoadingEnvVars, envVarTemplates.length])
 
+  // Start From drops out of the steps when the templates finish loading and
+  // there are none (or the fetch failed). Move on to the settings rather than
+  // leave the wizard on a step it no longer has.
+  useEffect(() => {
+    if (step === 'envtemplate' && !dynamicSteps.includes('envtemplate')) setStep('envvars')
+  }, [step, dynamicSteps])
+
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
