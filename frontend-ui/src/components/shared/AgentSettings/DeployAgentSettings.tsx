@@ -19,6 +19,7 @@ import { apiClient } from '../../../services/ApiClient'
 import {
   invalidSettings,
   settingsFromEnv,
+  startsOver,
   type DeclaredEnv,
   type EnvVarSetting,
 } from '../../../lib/agentSettings'
@@ -86,8 +87,7 @@ export function useDeploySettings(
   }
   /** Pick where to start; picking the one already picked keeps the edits. */
   const choose = (next: EnvVarTemplate | null) => {
-    if ((next?.id ?? null) === (template?.id ?? null)) return
-    startFrom(next)
+    if (startsOver(template, next)) startFrom(next)
   }
   /** Back to nothing picked and nothing changed, as for a new agent. */
   const clear = () => startFrom(null)

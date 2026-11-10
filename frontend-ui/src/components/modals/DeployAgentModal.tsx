@@ -15,6 +15,7 @@ import type {
   Persona,
 } from '../../lib/api-types'
 import { asksForMode, deployNeeds, effectiveMode } from '../../lib/deployNeeds'
+import { settingsSteps } from '../../lib/agentSettings'
 import ConfigurationSelectionStep from '../shared/ConfigurationSelectionStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
@@ -148,7 +149,6 @@ export default function DeployAgentModal({
     supportsVoiceSelection ? ['TTS_VOICE', 'TTS_LANGUAGE', 'STELLA_LANGUAGE'] : [],
   )
   // Only an agent with saved templates asks where to start; otherwise it starts from its defaults.
-  const showsTemplateStep = isLoadingEnvVars || envVarTemplates.length > 0
 
   const dynamicSteps = useMemo((): Step[] => {
     const steps: Step[] = ['gallery', 'configure']
@@ -177,12 +177,9 @@ export default function DeployAgentModal({
       steps.push('voice')
     }
     // Where the settings start from, then the settings themselves (#892).
-    if (showsTemplateStep) {
-      steps.push('envtemplate')
-    }
-    steps.push('envvars')
+    steps.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length))
     return steps
-  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep, showsTemplateStep])
+  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep, isLoadingEnvVars, envVarTemplates.length])
 
   // Reset state when modal opens
   useEffect(() => {

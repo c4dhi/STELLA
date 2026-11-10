@@ -19,6 +19,7 @@ import type {
   AvailableConnector,
 } from '../../lib/api-types'
 import { deployNeeds } from '../../lib/deployNeeds'
+import { settingsSteps } from '../../lib/agentSettings'
 import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
@@ -187,7 +188,6 @@ export default function ProjectModal({
     // The voice step decides these when it is shown.
     supportsVoiceSelection ? ['TTS_VOICE', 'TTS_LANGUAGE', 'STELLA_LANGUAGE'] : [],
   )
-  const showsTemplateStep = isLoadingEnvVars || envVarTemplates.length > 0
   const selectedAgentTypeId = selectedAgentType?.id
   useEffect(() => {
     setEnvVarTemplates([])
@@ -226,12 +226,9 @@ export default function ProjectModal({
     if (supportsVoiceSelection) {
       s.push('voice')
     }
-    if (showsTemplateStep) {
-      s.push('envtemplate')
-    }
-    s.push('envvars', 'visualizer', 'duration', 'expiration')
+    s.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length), 'visualizer', 'duration', 'expiration')
     return s
-  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection, showsTemplateStep])
+  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
 
   // Get visible step configs (filtered based on requirements)
   const visibleStepConfigs = useMemo(() => {
