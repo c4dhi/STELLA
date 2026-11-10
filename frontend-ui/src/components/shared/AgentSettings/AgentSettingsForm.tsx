@@ -27,6 +27,8 @@ export interface AgentSettingsFormProps {
   /** The Custom tab's content, and how many variables it holds. */
   custom: ReactNode
   customCount: number
+  /** The tab it opens on, when the agent has it. Otherwise the first tab that is not Keys. */
+  initialTab?: string
 }
 
 export default function AgentSettingsForm({
@@ -40,9 +42,12 @@ export default function AgentSettingsForm({
   requireKeys = true,
   custom,
   customCount,
+  initialTab,
 }: AgentSettingsFormProps) {
   const tabs = useMemo(() => settingsTabs(settings), [settings])
-  const [active, setActive] = useState<string>(() => tabs.find((t) => t.id !== 'Keys')?.id ?? tabs[0]?.id ?? 'custom')
+  const [active, setActive] = useState<string>(
+    () => tabs.find((t) => t.id === initialTab)?.id ?? tabs.find((t) => t.id !== 'Keys')?.id ?? tabs[0]?.id ?? 'custom',
+  )
 
   const missingSecret = (s: EnvVarSetting) => requireKeys && s.required && !values[s.name] && !storedSecrets?.has(s.name)
 
