@@ -39,8 +39,10 @@ Environment variable templates store API keys and configuration that agents need
 3. Choose an agent. **Built-in** lists STELLA V2, STELLA Jev and the deprecated STELLA Light; **Custom** lists agents uploaded in Settings → Agent Library and shared with this project
 4. Go through the steps the agent asks for. The wizard shows only what the agent's `agent.yaml` declares:
    - **Persona**, **plan** and **mode**, and a **Configurator configuration**, where the agent uses them
-   - **Settings**: start from the agent's defaults or an environment variable template. Each setting the agent declares is one control (switch, slider, list, number or text), in tabs by topic, with anything else under **Custom**. The step shows what you changed and can save it as a new template. Required keys such as `OPENAI_API_KEY` must be filled in
    - **Connectors**, for an agent that uses outside tools: tick the connectors to use, and a line above the list says what the agent still needs
+   - **Voice & Language**, where the speech provider offers a choice
+   - **Start From**: the agent's defaults or one of your environment variable templates. An agent with no saved templates skips this screen
+   - **Agent Settings**: each setting the agent declares is one control (switch, slider, list, number or text), in tabs by topic, with anything else under **Custom**. The tabs open on **Keys**, and required keys such as `OPENAI_API_KEY` must be filled in before you can deploy. You can save what you set as a new template. **Back** keeps your changes unless you pick a different template
 5. Click **Deploy**. A deploy that is missing something the agent requires is refused with a message that says what
 
 The agent will start in a Kubernetes pod and automatically connect to the LiveKit room.

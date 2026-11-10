@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent settings take two screens in both wizards.** Deploying an agent into
+  a session and setting up a public project first ask where the settings start
+  from (the agent's defaults or one of your templates), then show the settings
+  in tabs, which always open on Keys. Back keeps what you changed unless you
+  pick a different template. An agent with no saved templates goes straight to
+  the tabs. The public setup now uses the same tabs instead of a plain list of
+  variables. (#892)
+
 ---
 
 ## [2.0.0] - 2026-11-07
