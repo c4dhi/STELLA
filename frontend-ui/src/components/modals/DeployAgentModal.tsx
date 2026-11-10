@@ -148,7 +148,6 @@ export default function DeployAgentModal({
     // The voice step decides these when it is shown.
     supportsVoiceSelection ? ['TTS_VOICE', 'TTS_LANGUAGE', 'STELLA_LANGUAGE'] : [],
   )
-  // Only an agent with saved templates asks where to start; otherwise it starts from its defaults.
 
   const dynamicSteps = useMemo((): Step[] => {
     const steps: Step[] = ['gallery', 'configure']

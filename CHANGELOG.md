@@ -7,16 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **Agent settings take two screens in both wizards.** Deploying an agent into
-  a session and setting up a public project first ask where the settings start
-  from (the agent's defaults or one of your templates), then show the settings
-  in tabs, which always open on Keys. Back keeps what you changed unless you
-  pick a different template. An agent with no saved templates goes straight to
-  the tabs. The public setup now uses the same tabs instead of a plain list of
-  variables. (#892)
-
 ---
 
 ## [2.0.0] - 2026-11-07
@@ -92,6 +82,7 @@ first: agents uploaded before this release need one rebuild.**
 ### Changed
 
 - **Agent settings in tabs.** Deploying an agent and editing a configuration template show each setting the agent declares as its own control (switch, slider, list, number or text), in tabs by topic, with anything undeclared under "Custom". A deploy starts from the agent's defaults or a template, shows what changed, and can save the result as a new template. The agents' manifests now give every optional setting a type, label and tab, declare `BARGE_IN_DUCK_GAIN`, and state the right default for `BARGE_IN_MIN_SPEECH_MS` (600 ms) (#585, #548)
+- **Agent settings take two screens in both wizards.** Deploying an agent into a session and setting up a public project first ask where the settings start from (the agent's defaults or one of your templates), then show the settings in tabs, which always open on Keys. Back keeps what you changed unless you pick a different template. An agent with no saved templates goes straight to the tabs. The public setup now uses the same tabs instead of a plain list of variables (#892)
 - **The deploy wizard's Connectors step is one list to tick**, with no categories. STELLA fills the agent's declared slots from the ticked connectors (those covering a slot's tools first, matched so as many slots as possible are covered, then untested ones; never one connector for two slots) and binds the rest as extras.
 - **The device check appears only when voice needs it.** A participant who joins on the Text face, locked or not, skips it. Switching from Text to a voice face opens it in the session, unless the browser already allows the microphone, with **Stay in writing** to go back. Where a browser cannot report the microphone permission, a microphone the page can already see counts as allowed.
 - **The participant's end screens no longer show a code.** The completion code and the time-limit failure code (from the Prolific study flow) are gone; both screens thank the participant and say they can close the window. The **Session complete** screen also waits until the agent's last message has been heard and read (3 to 10 s by length, 25 s at most) instead of covering it at once.
