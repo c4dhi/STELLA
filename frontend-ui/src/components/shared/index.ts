@@ -5,7 +5,6 @@ export { default as SessionDurationSelectionStep, DEFAULT_SESSION_DURATION_OPTIO
 export type { SessionDurationOption } from './SessionDurationSelectionStep'
 export { default as AgentGalleryStep } from './AgentGalleryStep'
 export { default as PlanSelectionStep } from './PlanSelectionStep'
-export { default as EnvVarsSelectionStep } from './EnvVarsSelectionStep'
 export { default as ConfigurationSelectionStep } from './ConfigurationSelectionStep'
 export { default as PersonaSelectionStep } from './PersonaSelectionStep'
 export { default as ModeSelectionStep } from './ModeSelectionStep'

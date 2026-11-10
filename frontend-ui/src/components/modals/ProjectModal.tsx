@@ -19,6 +19,7 @@ import type {
   AvailableConnector,
 } from '../../lib/api-types'
 import { deployNeeds } from '../../lib/deployNeeds'
+import { settingsSteps } from '../../lib/agentSettings'
 import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
@@ -31,12 +32,12 @@ import {
   PlanSelectionStep,
   VisualizerSelectionStep,
   ExpirationSelectionStep,
-  EnvVarsSelectionStep,
   DEFAULT_EXPIRATION_OPTIONS,
   SessionDurationSelectionStep,
 } from '../shared'
 import { WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
 import { choiceCardClass } from '../shared/wizardChoice'
+import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
 
 interface ProjectModalProps {
   isOpen: boolean
@@ -46,9 +47,8 @@ interface ProjectModalProps {
   onProjectUpdated?: (project: Project) => void
 }
 
-type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'connectors' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
+type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'connectors' | 'envtemplate' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
 type ProjectType = 'private' | 'public'
-type EnvVarsView = 'select' | 'edit'
 
 // Predefined timeout options for auto-stop
 const TIMEOUT_OPTIONS = [
@@ -68,7 +68,8 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'plan', number: 5, label: 'Plan' },
   { id: 'connectors', number: 7, label: 'Connectors' },
   { id: 'voice', number: 8, label: 'Voice & Language' },
-  { id: 'envvars', number: 7, label: 'Env Vars' },
+  { id: 'envtemplate', number: 7, label: 'Start From' },
+  { id: 'envvars', number: 7, label: 'Agent Settings' },
   { id: 'visualizer', number: 8, label: 'Visualizer' },
   { id: 'duration', number: 9, label: 'Session Duration' },
   { id: 'expiration', number: 10, label: 'Expiration' },
@@ -116,10 +117,9 @@ export default function ProjectModal({
   const [personaPickedByUser, setPersonaPickedByUser] = useState(false)
   const [personas, setPersonas] = useState<Persona[]>([])
 
-  // Env var state (EnvVarsSelectionStep handles fetching templates)
-  const [selectedEnvVarTemplate, setSelectedEnvVarTemplate] = useState<EnvVarTemplate | null>(null)
-  const [envVars, setEnvVars] = useState<Record<string, string>>({})
-  const [envVarsView, setEnvVarsView] = useState<EnvVarsView>('select')
+  // The picked agent's env var templates (#892): with any, the wizard first asks where the settings start from.
+  const [envVarTemplates, setEnvVarTemplates] = useState<EnvVarTemplate[]>([])
+  const [isLoadingEnvVars, setIsLoadingEnvVars] = useState(false)
 
   // Voice/language for the agent every participant gets. '' = provider default
   // voice / Auto language. Persisted into publicAgentConfig.envVars, the same
@@ -182,6 +182,27 @@ export default function ProjectModal({
     [ttsCapabilities, planLanguage],
   )
 
+  // The settings draft outlives both settings screens, as in the deploy dialog (#892).
+  const settingsDraft = useDeploySettings(
+    selectedAgentType?.requirements?.env,
+    // The voice step decides these when it is shown.
+    supportsVoiceSelection ? ['TTS_VOICE', 'TTS_LANGUAGE', 'STELLA_LANGUAGE'] : [],
+  )
+  const selectedAgentTypeId = selectedAgentType?.id
+  useEffect(() => {
+    setEnvVarTemplates([])
+    settingsDraft.clear()
+    if (!selectedAgentTypeId) return
+    let cancelled = false
+    setIsLoadingEnvVars(true)
+    apiClient.listEnvVarTemplates(selectedAgentTypeId)
+      .then((list) => !cancelled && setEnvVarTemplates(list))
+      .catch((err) => console.error('Failed to fetch env var templates:', err))
+      .finally(() => !cancelled && setIsLoadingEnvVars(false))
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgentTypeId, isOpen])
+
   // Dynamic steps for public project (excluding basic)
   const publicSteps = useMemo((): Step[] => {
     const s: Step[] = ['agent', 'configure']
@@ -205,9 +226,16 @@ export default function ProjectModal({
     if (supportsVoiceSelection) {
       s.push('voice')
     }
-    s.push('envvars', 'visualizer', 'duration', 'expiration')
+    s.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length), 'visualizer', 'duration', 'expiration')
     return s
-  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection])
+  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
+
+  // Start From drops out of the steps when the templates finish loading and
+  // there are none (or the fetch failed). Move on to the settings rather than
+  // leave the wizard on a step it no longer has.
+  useEffect(() => {
+    if (step === 'envtemplate' && !publicSteps.includes('envtemplate')) setStep('envvars')
+  }, [step, publicSteps])
 
   // Get visible step configs (filtered based on requirements)
   const visibleStepConfigs = useMemo(() => {
@@ -300,9 +328,6 @@ export default function ProjectModal({
         // persona is deliberately agent-type independent (#467).
         setSelectedPersona(null)
         setPersonaPickedByUser(false)
-        setSelectedEnvVarTemplate(null)
-        setEnvVars({})
-        setEnvVarsView('select')
         setTtsVoice('')
         setTtsLanguage('')
         setVisualizerType(undefined)
@@ -331,12 +356,6 @@ export default function ProjectModal({
 
   const handleBack = () => {
     if (step === 'basic') return
-
-    // In the env var editor, Back returns to the template picker first.
-    if (step === 'envvars' && envVarsView === 'edit') {
-      setEnvVarsView('select')
-      return
-    }
 
     const currentIndex = publicSteps.indexOf(step as any)
     if (currentIndex === 0) {
@@ -367,13 +386,6 @@ export default function ProjectModal({
       } else {
         setStep('agent')
       }
-      return
-    }
-
-    // As in the deploy dialog: Continue on the env var picker opens the editor,
-    // so variables a template lacks (required or optional) can still be set.
-    if (step === 'envvars' && envVarsView === 'select') {
-      setEnvVarsView('edit')
       return
     }
 
@@ -410,13 +422,12 @@ export default function ProjectModal({
         // Optional: skipping means the system default, which is what every
         // public project got before this step existed.
         return true
-      case 'envvars': {
-        // Picking a template (or none) opens the editor next, so the select view can always continue.
-        if (envVarsView === 'select') return true
-        // In the editor, every required var the template doesn't hold must be typed in.
-        const fromTemplate = new Set(selectedEnvVarTemplate?.variableKeys ?? [])
-        return needs.requiredEnvVars.filter((key) => !fromTemplate.has(key)).every((key) => envVars[key]?.trim())
-      }
+      case 'envtemplate':
+        // Required keys block only the settings screen (#892).
+        return !isLoadingEnvVars
+      case 'envvars':
+        // Every required key is provided and every setting fits.
+        return settingsDraft.state.ready
       case 'voice':
         // Both choices are optional — Auto / provider default is a valid answer.
         return true
@@ -429,7 +440,7 @@ export default function ProjectModal({
       default:
         return false
     }
-  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, selectedEnvVarTemplate, envVarsView, needs.requiredEnvVars, envVars, isEditMode, project, agentInactivityTimeout, needs, connectorSlots, slotChoices, ownConnectors])
+  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, isLoadingEnvVars, settingsDraft.state.ready, isEditMode, project, agentInactivityTimeout, needs, connectorSlots, slotChoices, ownConnectors])
 
   const handleSubmit = async () => {
     if (!name.trim()) {
@@ -492,14 +503,14 @@ export default function ProjectModal({
             agentConfig.personaId = selectedPersona.id
           }
 
-          if (selectedEnvVarTemplate) {
-            agentConfig.envVarTemplateId = selectedEnvVarTemplate.id
+          if (settingsDraft.state.templateId) {
+            agentConfig.envVarTemplateId = settingsDraft.state.templateId
           }
 
           // Include manual env vars / overrides for public deployment.
           // Skip masked placeholders coming from template preview.
           const filteredEnvVars: Record<string, string> = {}
-          for (const [key, value] of Object.entries(envVars)) {
+          for (const [key, value] of Object.entries(settingsDraft.state.envVars)) {
             if (value && value !== '••••••••' && value.trim() !== '') {
               filteredEnvVars[key] = value
             }
@@ -572,7 +583,8 @@ export default function ProjectModal({
       case 'voice': return 'Voice & Language'
       case 'plan': return 'Select Plan'
       case 'connectors': return 'Connectors'
-      case 'envvars': return 'Environment Variables'
+      case 'envtemplate': return 'Start From'
+      case 'envvars': return 'Agent Settings'
       case 'visualizer': return 'Choose Visualizer'
       case 'duration': return 'Session Duration'
       case 'expiration': return 'Set Expiration'
@@ -590,7 +602,8 @@ export default function ProjectModal({
       case 'voice': return 'Choose the voice and language every participant\'s agent uses'
       case 'plan': return 'Select a conversation plan for this agent'
       case 'connectors': return 'Outside tools every participant\'s agent may use, with your credentials'
-      case 'envvars': return 'Configure API keys and secrets for this agent'
+      case 'envtemplate': return `Start from ${selectedAgentType?.name || 'the agent'}'s defaults or one of your saved templates`
+      case 'envvars': return `Settings ${selectedAgentType?.name || 'the agent'} declares, plus any custom variables`
       case 'visualizer': return 'Set a default visualizer for participants'
       case 'duration': return 'Optionally cap how long each session runs after the agent starts speaking'
       case 'expiration': return 'Set how long the public link remains valid'
@@ -1126,6 +1139,25 @@ export default function ProjectModal({
                 </motion.div>
               )}
 
+              {/* Where the settings start from (#892) */}
+              {step === 'envtemplate' && (
+                <motion.div
+                  key="envtemplate"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <EnvTemplatePicker
+                    draft={settingsDraft}
+                    templates={envVarTemplates}
+                    isLoading={isLoadingEnvVars}
+                    isDark={isDark}
+                  />
+                </motion.div>
+              )}
+
               {/* Environment Variables Step */}
               {step === 'envvars' && (
                 <motion.div
@@ -1136,17 +1168,15 @@ export default function ProjectModal({
                   transition={{ duration: 0.2 }}
                   className="p-6"
                 >
-                  <EnvVarsSelectionStep
-                    agentTypeId={selectedAgentType?.id ?? ''}
-                    requiredEnvVars={needs.requiredEnvVars}
-                    optionalEnvVars={needs.optionalEnvVars}
-                    selectedEnvVarTemplate={selectedEnvVarTemplate}
-                    onSelectEnvVarTemplate={setSelectedEnvVarTemplate}
-                    envVars={envVars}
-                    onEnvVarsChange={setEnvVars}
-                    envVarsView={envVarsView}
-                    onEnvVarsViewChange={setEnvVarsView}
-                  />
+                  {selectedAgentType && (
+                    <DeployAgentSettings
+                      draft={settingsDraft}
+                      agentTypeId={selectedAgentType.id}
+                      templates={envVarTemplates}
+                      onTemplatesChange={setEnvVarTemplates}
+                      isDark={isDark}
+                    />
+                  )}
                 </motion.div>
               )}
 

@@ -214,3 +214,24 @@ export function migrationNotes(
     }
   })
 }
+
+/**
+ * The tab the settings open on: `preferred` when the agent has it, otherwise
+ * the first tab that is not Keys (the template editor's habit), then any.
+ */
+export function firstSettingsTab(tabs: SettingsTab[], preferred?: string): string {
+  return tabs.find((t) => t.id === preferred)?.id ?? tabs.find((t) => t.id !== 'Keys')?.id ?? tabs[0]?.id ?? 'custom'
+}
+
+/**
+ * The wizard's settings screens (#892): where to start, only when the agent has
+ * saved templates (or they are still loading), then the settings.
+ */
+export function settingsSteps(templatesLoading: boolean, templateCount: number): ('envtemplate' | 'envvars')[] {
+  return templatesLoading || templateCount > 0 ? ['envtemplate', 'envvars'] : ['envvars']
+}
+
+/** Whether picking `next` starts the settings over: only a different starting point does. */
+export function startsOver(current: { id: string } | null, next: { id: string } | null): boolean {
+  return (current?.id ?? null) !== (next?.id ?? null)
+}

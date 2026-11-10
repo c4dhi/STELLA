@@ -15,6 +15,7 @@ import type {
   Persona,
 } from '../../lib/api-types'
 import { asksForMode, deployNeeds, effectiveMode } from '../../lib/deployNeeds'
+import { settingsSteps } from '../../lib/agentSettings'
 import ConfigurationSelectionStep from '../shared/ConfigurationSelectionStep'
 import VoiceSelectionStep from '../shared/VoiceSelectionStep'
 import { planDeclaredLanguage, showsVoiceStep, languageEnvVars } from '../../lib/sessionLanguage'
@@ -24,7 +25,7 @@ import type { AvailableConnector } from '../../lib/api-types'
 import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
 import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
 import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
-import DeployAgentSettings, { type DeploySettingsState } from '../shared/AgentSettings/DeployAgentSettings'
+import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
 
 interface DeployAgentModalProps {
   isOpen: boolean
@@ -34,7 +35,7 @@ interface DeployAgentModalProps {
   projectId?: string
 }
 
-type Step = 'gallery' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'connectors' | 'voice' | 'plan' | 'envvars'
+type Step = 'gallery' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'connectors' | 'voice' | 'plan' | 'envtemplate' | 'envvars'
 
 export default function DeployAgentModal({
   isOpen,
@@ -64,8 +65,6 @@ export default function DeployAgentModal({
   // Env var template state
   const [envVarTemplates, setEnvVarTemplates] = useState<EnvVarTemplate[]>([])
   const [isLoadingEnvVars, setIsLoadingEnvVars] = useState(false)
-  // The settings step's result (#585): the template it starts from and what was changed on top.
-  const [deploySettings, setDeploySettings] = useState<DeploySettingsState>({ templateId: undefined, envVars: {}, ready: true })
 
   // Agent configuration state (pipeline configurator)
   const [mode, setMode] = useState<AgentMode>('plan')
@@ -142,6 +141,14 @@ export default function DeployAgentModal({
     [ttsCapabilities, planLanguage],
   )
 
+  // The settings draft outlives both settings screens (#892): Back to the
+  // template screen and on again keeps the edits.
+  const settingsDraft = useDeploySettings(
+    selectedType?.requirements?.env,
+    // The voice step decides these when it is shown.
+    supportsVoiceSelection ? ['TTS_VOICE', 'TTS_LANGUAGE', 'STELLA_LANGUAGE'] : [],
+  )
+
   const dynamicSteps = useMemo((): Step[] => {
     const steps: Step[] = ['gallery', 'configure']
     if (needs.configurator && selectedType?.pipelineSchema) {
@@ -168,10 +175,17 @@ export default function DeployAgentModal({
     if (supportsVoiceSelection) {
       steps.push('voice')
     }
-    // Always show env vars step (templates or manual entry)
-    steps.push('envvars')
+    // Where the settings start from, then the settings themselves (#892).
+    steps.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length))
     return steps
-  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep])
+  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep, isLoadingEnvVars, envVarTemplates.length])
+
+  // Start From drops out of the steps when the templates finish loading and
+  // there are none (or the fetch failed). Move on to the settings rather than
+  // leave the wizard on a step it no longer has.
+  useEffect(() => {
+    if (step === 'envtemplate' && !dynamicSteps.includes('envtemplate')) setStep('envvars')
+  }, [step, dynamicSteps])
 
   // Reset state when modal opens
   useEffect(() => {
@@ -186,7 +200,6 @@ export default function DeployAgentModal({
       setPersonaPickedByUser(false)
       setMode('plan')
       setActivityPlanIds([])
-      setDeploySettings({ templateId: undefined, envVars: {}, ready: true })
       setSelectedConfiguration(null)
       setTtsVoice('')
       setTtsLanguage('')
@@ -219,16 +232,23 @@ export default function DeployAgentModal({
     }
   }, [isOpen])
 
-  // Fetch env var templates
+  // The picked agent's env var templates, fetched when it is picked so the
+  // wizard knows whether to ask where the settings start from. A new agent
+  // starts its settings over.
+  const selectedTypeId = selectedType?.id
   useEffect(() => {
-    if (step === 'envvars' && envVarTemplates.length === 0) {
-      setIsLoadingEnvVars(true)
-      apiClient.listEnvVarTemplates(selectedType?.id)
-        .then(setEnvVarTemplates)
-        .catch((err) => console.error('Failed to fetch env var templates:', err))
-        .finally(() => setIsLoadingEnvVars(false))
-    }
-  }, [step, envVarTemplates.length, selectedType?.id])
+    setEnvVarTemplates([])
+    settingsDraft.clear()
+    if (!selectedTypeId) return
+    let cancelled = false
+    setIsLoadingEnvVars(true)
+    apiClient.listEnvVarTemplates(selectedTypeId)
+      .then((list) => !cancelled && setEnvVarTemplates(list))
+      .catch((err) => console.error('Failed to fetch env var templates:', err))
+      .finally(() => !cancelled && setIsLoadingEnvVars(false))
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTypeId, isOpen])
 
   // Update icon when agent type is selected
   useEffect(() => {
@@ -288,9 +308,12 @@ export default function DeployAgentModal({
         return !!selectedPlan || !needs.planRequired
       case 'connectors':
         return unboundRequiredSlots(connectorSlots, slotChoices).length === 0
+      case 'envtemplate':
+        // Required keys block only the settings screen (#892).
+        return !isLoadingEnvVars
       case 'envvars':
         // Every required key is provided and every setting fits (#585).
-        return deploySettings.ready
+        return settingsDraft.state.ready
       default:
         return true
     }
@@ -337,7 +360,7 @@ export default function DeployAgentModal({
       // Filter out placeholder values (masked template values) and empty strings
       // Only send env vars that the user has actually modified or added
       const filteredEnvVars: Record<string, string> = {}
-      for (const [key, value] of Object.entries(deploySettings.envVars)) {
+      for (const [key, value] of Object.entries(settingsDraft.state.envVars)) {
         // Secrets must be single-line values; remove accidental Enter/newline characters.
         const singleLineValue = value.replace(/[\r\n]/g, '')
         // Skip masked placeholder values from template prefill
@@ -359,7 +382,7 @@ export default function DeployAgentModal({
         icon,
         Object.keys(config).length > 0 ? config : undefined,
         selectedType.slug,
-        deploySettings.templateId,
+        settingsDraft.state.templateId,
         Object.keys(filteredEnvVars).length > 0 ? filteredEnvVars : undefined,
         selectedConfiguration?.id,
         needs.persona ? selectedPersona?.id : undefined,
@@ -393,6 +416,7 @@ export default function DeployAgentModal({
       case 'mode': return 'How should it run?'
       case 'activities': return 'Available Activities'
       case 'plan': return 'Select a Plan'
+      case 'envtemplate': return 'Start From'
       case 'envvars': return 'Agent Settings'
     }
   }
@@ -408,6 +432,7 @@ export default function DeployAgentModal({
       case 'mode': return 'Follow one plan from the start, or talk freely and run activities on request'
       case 'activities': return 'Plans the companion can offer when the user asks what they can do'
       case 'plan': return `Choose a conversation plan for ${selectedType?.name || 'the agent'}`
+      case 'envtemplate': return `Start from ${selectedType?.name || 'the agent'}'s defaults or one of your saved templates`
       case 'envvars': return `Settings ${selectedType?.name || 'the agent'} declares, plus any custom variables`
     }
   }
@@ -702,6 +727,22 @@ export default function DeployAgentModal({
                     onPlanTemplatesChange={setPlanTemplates}
                   />
                 </motion.div>
+              ) : step === 'envtemplate' ? (
+                <motion.div
+                  key="envtemplate"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <EnvTemplatePicker
+                    draft={settingsDraft}
+                    templates={envVarTemplates}
+                    isLoading={isLoadingEnvVars}
+                    isDark={isDark}
+                  />
+                </motion.div>
               ) : step === 'envvars' ? (
                 <motion.div
                   key="envvars"
@@ -713,15 +754,11 @@ export default function DeployAgentModal({
                 >
                   {selectedType && (
                     <DeployAgentSettings
+                      draft={settingsDraft}
                       agentTypeId={selectedType.id}
-                      env={selectedType.requirements?.env}
                       templates={envVarTemplates}
                       onTemplatesChange={setEnvVarTemplates}
-                      isLoading={isLoadingEnvVars}
                       isDark={isDark}
-                      // The voice step decides these when it is shown.
-                      hiddenKeys={supportsVoiceSelection ? ['TTS_VOICE', 'TTS_LANGUAGE', 'STELLA_LANGUAGE'] : []}
-                      onChange={setDeploySettings}
                     />
                   )}
                 </motion.div>
