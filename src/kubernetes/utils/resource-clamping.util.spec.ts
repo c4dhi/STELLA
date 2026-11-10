@@ -3,6 +3,9 @@ import {
   DEFAULT_MEMORY_LIMIT,
   clampCpuLimit,
   clampMemoryLimit,
+  parseCpuMillicores,
+  parseMemoryBytes,
+  requestWithinLimit,
 } from './resource-clamping.util.js'
 
 describe('resource-clamping util', () => {
@@ -30,5 +33,22 @@ describe('resource-clamping util', () => {
     expect(clampMemoryLimit('5Gi')).toEqual({ value: DEFAULT_MEMORY_LIMIT, reason: 'exceeds_max' })
     expect(clampMemoryLimit('ten')).toEqual({ value: DEFAULT_MEMORY_LIMIT, reason: 'invalid' })
     expect(clampMemoryLimit(undefined)).toEqual({ value: DEFAULT_MEMORY_LIMIT, reason: 'missing' })
+  })
+})
+
+describe('requestWithinLimit', () => {
+  it('keeps a valid request at or below the limit', () => {
+    expect(requestWithinLimit('50m', '250m', '250m', parseCpuMillicores)).toBe('50m')
+    expect(requestWithinLimit('256Mi', '256Mi', '512Mi', parseMemoryBytes)).toBe('256Mi')
+  })
+
+  it('lowers a request above the limit to the limit, since Kubernetes refuses that pod', () => {
+    expect(requestWithinLimit('1Gi', '256Mi', '512Mi', parseMemoryBytes)).toBe('256Mi')
+    expect(requestWithinLimit(undefined, '256Mi', '512Mi', parseMemoryBytes)).toBe('256Mi')
+  })
+
+  it('uses the default for a missing or invalid request', () => {
+    expect(requestWithinLimit(undefined, '2Gi', '512Mi', parseMemoryBytes)).toBe('512Mi')
+    expect(requestWithinLimit('lots', '2000m', '250m', parseCpuMillicores)).toBe('250m')
   })
 })

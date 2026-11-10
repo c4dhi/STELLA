@@ -12,9 +12,11 @@ STELLA supports multiple agent types, each designed for different use cases. All
 | Agent | Description | Best For |
 |-------|-------------|----------|
 | **stella-v2** | Streamlined 5-stage pipeline with deterministic arbitration and configurable pipeline | Configurable deployments, lower latency, predictable behavior |
-| **stella-agent** | Full-featured agent with LLM-based aggregation pipeline | Production conversations requiring high quality |
+| **[stella-jev-agent](./stella-jev.md)** | stella-v2 without the bridge: one Jev call decides the experts and barge-in, and asks back when what was heard isn't believable. Sends conversation text to TypeSafe | Research use. Needs `TYPESAFE_API_KEY` |
 | **stella-light-agent** | ⚠️ **Deprecated** — superseded by stella-v2 | Nothing new. Use stella-v2 with a lean expert configuration |
-| **echo-agent** | Simple test agent that echoes back messages | Testing and development |
+| **[ELIAS-Interviewer](./elias-interviewer.md)** | Uploaded, not built in: runs an ELIAS interview guide word for word and writes each turn to ELIAS through a connector | ELIAS interviews. Upload it in Settings → Agent Library |
+
+STELLA V2, STELLA Jev and STELLA Light are built in. Any other agent is uploaded with its own `agent.yaml` (see [Agent manifest](../agent-sdk/agent-manifest.md) and [Agent validation](../deployment/agent-validation.md)). The older `stella-agent` and `echo-agent` are archived (`archive/agents/`) and can't be deployed.
 
 ## Architecture
 
@@ -49,27 +51,15 @@ Use `stella-v2` when you need:
 - Reusable pipeline configurations across deployments
 - Bridge generation for reduced perceived latency in voice conversations
 
-### stella-agent
+### stella-jev-agent
 
-Use the full-featured `stella-agent` when you need:
-- High-quality speech recognition
-- Advanced conversation capabilities
-- Custom tool integration
-- Complex dialogue flows
-- Production deployments
+Use `stella-jev-agent` for research on STELLA V2's pipeline without the bridge, where one Jev call decides the experts and barge-in. It sends conversation text to TypeSafe and needs `TYPESAFE_API_KEY`. See [STELLA Jev](./stella-jev.md).
 
 ### stella-light-agent (deprecated)
 
 **Do not choose this for new work.** It is superseded by `stella-v2` and no longer developed; existing deployments keep running.
 
 If you wanted it for lower cost, use `stella-v2` with only the experts you need enabled — the Expert Pool node has a per-expert on/off switch. You get comparable per-turn cost and keep the bridge (so the agent starts speaking immediately instead of waiting in silence), analytics, and companion mode. See [stella-light-agent](./stella-light-agent.md) for the full rationale and a migration table.
-
-### echo-agent
-
-Use `echo-agent` for:
-- Testing LiveKit connectivity
-- Verifying audio pipeline
-- Development debugging
 
 ## Common Configuration
 
@@ -78,9 +68,10 @@ All agents support these common environment variables:
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `LIVEKIT_URL` | LiveKit server URL | Yes |
-| `LIVEKIT_API_KEY` | LiveKit API key | Yes |
-| `LIVEKIT_API_SECRET` | LiveKit API secret | Yes |
+| `LIVEKIT_API_KEY` | LiveKit API key | Built-in agents (uploaded agents get `LIVEKIT_TOKEN` instead, from SDK 0.10.0) |
+| `LIVEKIT_API_SECRET` | LiveKit API secret | Built-in agents |
 | `OPENAI_API_KEY` | OpenAI API key for LLM | Yes |
+| `TYPESAFE_API_KEY` | TypeSafe API key for Jev | stella-jev-agent only |
 | `ROOM_NAME` | LiveKit room to join | Yes |
 | `PARTICIPANT_IDENTITY` | Agent's identity in the room | Yes |
 

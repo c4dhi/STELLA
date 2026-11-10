@@ -18,6 +18,14 @@ Consistent code style makes the codebase easier to read and maintain. This guide
 
 ## Standards by Component
 
+### [Agent platform](./agent-platform.md)
+
+How STELLA and its agents stay decoupled. Read it before touching deploy, upload, the manifest, the SDK or the deploy wizard:
+- `agent.yaml` is the single source of truth
+- One owner module per concern
+- No agent slugs in platform code
+- Versioned contracts and the SDK support window
+
 ### [TypeScript (Backend)](./typescript.md)
 
 NestJS backend code conventions including:

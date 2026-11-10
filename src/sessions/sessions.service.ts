@@ -14,6 +14,7 @@ import { QuerySessionsDto } from './dto/query-sessions.dto.js';
 import { Prisma } from '@prisma/client';
 import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service.js';
 import { attachTurnLanguage } from './turn-language.util.js';
+import { clientChannelRecord } from '../message-recorder/client-channel-record.js';
 
 /** Deliverable entry in the transcript summary section */
 interface TranscriptDeliverableSummaryEntry {
@@ -64,6 +65,17 @@ interface MessageEvent {
   id?: string;
   type?: string;
 }
+
+/**
+ * Message types that count as transcript lines (what session_transcript_get
+ * returns by default, i.e. includeDebug: false) — as opposed to internal
+ * bookkeeping rows (analytics, state, debug). Used both to fetch the
+ * transcript and to size `messageCount` so the two stay in agreement.
+ */
+export const TRANSCRIPT_MESSAGE_TYPES = [
+  'user_text', 'transcript', 'transcript_chunk', 'agent_text',
+  'participant_joined', 'participant_left', 'participant_event',
+];
 
 @Injectable()
 export class SessionsService {
@@ -151,7 +163,7 @@ export class SessionsService {
           select: {
             agents: true,
             participants: true,
-            messages: true,
+            messages: { where: { messageType: { in: TRANSCRIPT_MESSAGE_TYPES } } },
           },
         },
       },
@@ -197,7 +209,7 @@ export class SessionsService {
             select: {
               agents: true,
               participants: true,
-              messages: true,
+              messages: { where: { messageType: { in: TRANSCRIPT_MESSAGE_TYPES } } },
             },
           },
         },
@@ -241,7 +253,7 @@ export class SessionsService {
           },
           _count: {
             select: {
-              messages: true,
+              messages: { where: { messageType: { in: TRANSCRIPT_MESSAGE_TYPES } } },
               events: true,
             },
           },
@@ -894,10 +906,7 @@ export class SessionsService {
     const limit = options.limit || 50;
 
     // Define message types to include (matching getChatHistory logic)
-    const chatMessageTypes = [
-      'user_text', 'transcript', 'transcript_chunk', 'agent_text',
-      'participant_joined', 'participant_left', 'participant_event'
-    ];
+    const chatMessageTypes = TRANSCRIPT_MESSAGE_TYPES;
     const debugMessageTypes = [
       'debug', 'decision_stream', 'expert_status', 'prompt_execution',
       'safety_check', 'plan_progress_update', 'plan_deliverable_update',
@@ -1294,9 +1303,14 @@ export class SessionsService {
       return result;
     }
 
+    // The screen<->agent channel: a readable line, role 'system' (one owner: clientChannelRecord).
+    const channelRecord = clientChannelRecord(messageEnvelope, participantIdentity || 'system');
+
     // Determine message role based on participant identity
     let role: string;
-    if (!participantIdentity) {
+    if (channelRecord) {
+      role = channelRecord.role;
+    } else if (!participantIdentity) {
       role = 'system';
     } else if (participantIdentity.startsWith('agent-')) {
       role = 'assistant';
@@ -1310,7 +1324,9 @@ export class SessionsService {
     let content: string;
 
     // Handle transcript types (both 'transcript' and 'transcript_chunk' for compatibility)
-    if (messageType === 'transcript_chunk' || messageType === 'transcript') {
+    if (channelRecord) {
+      content = channelRecord.content;
+    } else if (messageType === 'transcript_chunk' || messageType === 'transcript') {
       content = typeof messageData === 'string' ? messageData : (messageData.text || '');
     } else if (messageType === 'agent_text') {
       // Agent responses - extract text content

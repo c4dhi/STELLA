@@ -63,6 +63,9 @@ const VisualizerRenderer: React.FC<VisualizerRendererProps> = ({
         />
       );
 
+    // The Text face is a whole screen of its own (participant TextFace), not an
+    // animation behind the controls.
+    case 'text':
     default:
       return null;
   }

@@ -180,4 +180,4 @@ Re-run `./scripts/start-k8s.sh --setup` to check your LiveKit URLs and credentia
 
 - [Build Your Own Agent](./build-your-own-agent.md) - Build a custom voice AI agent
 - [Architecture Overview](../architecture/overview.md) - Understand how STELLA works
-- [Agent SDK Reference](../sdk/overview.md) - Explore the Python SDK
+- [Agent SDK Reference](../agent-sdk/overview.md) - Explore the Python SDK

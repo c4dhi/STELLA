@@ -16,7 +16,7 @@ import {
 const configurationField = z
   .record(z.string(), z.unknown())
   .describe(
-    "Sparse overrides of the agent type's pipeline defaults. See the pipelineSchema in agent_types_list " +
+    "Sparse overrides of the agent type's pipeline defaults. See the configSchema from agent_types_get " +
       'and an existing configuration for the shape.',
   );
 

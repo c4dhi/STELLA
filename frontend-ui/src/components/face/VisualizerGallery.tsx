@@ -14,6 +14,8 @@ interface VisualizerGalleryProps {
   onClose: () => void;
   currentVisualizer: VisualizerType;
   onSelect: (visualizer: VisualizerType) => void;
+  /** Faces this view cannot show (the organizer's preview has no Text face). */
+  exclude?: VisualizerType[];
 }
 
 const VisualizerGallery: React.FC<VisualizerGalleryProps> = ({
@@ -21,6 +23,7 @@ const VisualizerGallery: React.FC<VisualizerGalleryProps> = ({
   onClose,
   currentVisualizer,
   onSelect,
+  exclude = [],
 }) => {
   return (
     <AnimatePresence>
@@ -57,7 +60,7 @@ const VisualizerGallery: React.FC<VisualizerGalleryProps> = ({
 
               {/* Visualizer Cards */}
               <div className="flex flex-col gap-3">
-                {VISUALIZER_CONFIGS.map((config) => (
+                {VISUALIZER_CONFIGS.filter((config) => !exclude.includes(config.id)).map((config) => (
                   <button
                     key={config.id}
                     onClick={() => {

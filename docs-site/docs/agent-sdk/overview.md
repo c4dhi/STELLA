@@ -5,179 +5,93 @@ title: "📚 Overview"
 
 # 📚 Agent SDK Overview
 
-The STELLA Agent SDK lets you build custom voice agents without rebuilding infrastructure. Focus on your agent's logic—STELLA handles everything else.
+The STELLA Agent SDK (`stella-ai-agent-sdk`, imported as `stella_agent_sdk`) is the communication layer between your agent and STELLA. You write a subclass of `BaseAgent` that turns user input into replies. The SDK does the rest: it joins the LiveKit room, sends the user's audio to the STT service, sends your replies to the TTS service, publishes text to the screen, and registers the agent with the session-management server.
 
-## Why Use the Agent SDK?
+The SDK has no LLM, RAG or expert logic of its own. Which model you call, and how, is up to your agent.
 
-| STELLA Handles | You Build |
-|----------------|-----------|
-| Audio pipeline (STT → TTS) | Conversation logic |
-| WebRTC streaming | Custom tools |
-| Session lifecycle | Business rules |
-| Deployment & scaling | Prompts & workflows |
-
-**The result:** Deploy production-ready voice agents in hours, not weeks. No infrastructure maintenance, no audio engineering—just your agent logic.
-
-## What is the Agent SDK?
-
-The Agent SDK is a Python framework that provides:
-
-- **LiveKit Integration**: Connect to rooms, publish/subscribe audio
-- **Audio Pipeline**: STT, LLM, and TTS orchestration
-- **Message Protocol**: Structured data channel communication
-- **Progress Tracking**: Todo lists and status updates
-- **Tool Execution**: Custom function/tool support
-- **Chat History**: Access conversation transcripts for context building
+| The SDK handles | You write |
+|-----------------|-----------|
+| LiveKit room connection, audio in and out | `process()`: input in, replies out |
+| Speech-to-text and text-to-speech (gRPC services) | Prompts and LLM calls |
+| Sentence splitting, playback, barge-in | Your own tools |
+| Session lifecycle, registration, health | What to do at session start and end |
+| Typed session config, plans, connectors, chat history | Which of these your agent uses |
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Your Custom Agent                       │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │                    Business Logic                       │ │
-│  │         (Custom handlers, tools, prompts)              │ │
-│  └────────────────────────────────────────────────────────┘ │
-│                            │                                 │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │                     Agent SDK                           │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             │ │
-│  │  │ BaseAgent│  │ Audio    │  │ Message  │             │ │
-│  │  │          │  │ Pipeline │  │ Protocol │             │ │
-│  │  └──────────┘  └──────────┘  └──────────┘             │ │
-│  └────────────────────────────────────────────────────────┘ │
-│                            │                                 │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │                   LiveKit Client                        │ │
-│  │        (Audio tracks, Data channels, RTC)              │ │
-│  └────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+│                    LiveKit Room                             │
+│  ┌──────────┐                        ┌──────────────────┐   │
+│  │  User    │ ◄─── audio/data ─────► │  Agent (SDK)     │   │
+│  └──────────┘                        └────────┬─────────┘   │
+└────────────────────────────────────────────────┼────────────┘
+                                                 │ gRPC
+                      ┌──────────────────────────┼──────────┐
+                      │   Kubernetes Cluster     │          │
+                      │  ┌───────────┐    ┌──────▼──────┐   │
+                      │  │ STT Svc   │    │  TTS Svc    │   │
+                      │  └───────────┘    └─────────────┘   │
+                      └─────────────────────────────────────┘
 ```
 
-## Key Components
+For every final transcript (or typed chat message) the SDK calls your `process()` with an `AgentInput`. What `process()` yields as `AgentOutput` is published to the screen and spoken.
 
-### BaseAgent
-
-The foundation class that all agents extend:
+## The smallest agent
 
 ```python
-from stella_sdk import BaseAgent
+import asyncio
+from typing import AsyncIterator
 
-class MyAgent(BaseAgent):
-    async def on_message(self, message):
-        # Handle incoming messages
+from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent, run_agent_from_env
+
+
+class EchoAgent(BaseAgent):
+    async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
+        yield AgentOutput.text_final(input.session_id, f"You said: {input.text}")
+
+    async def on_interrupt(self, session_id: str) -> None:
         pass
 
-    async def on_audio(self, audio_data):
-        # Handle incoming audio
-        pass
-```
 
-### Audio Pipeline
-
-Manages the STT → LLM → TTS flow:
-
-```python
-from stella_sdk import AudioPipeline, STTProvider, TTSProvider
-
-pipeline = AudioPipeline(
-    stt=STTProvider.SHERPA,
-    tts=TTSProvider.KOKORO
-)
-```
-
-### Message Types
-
-Structured messages for data channel communication:
-
-```python
-from stella_sdk import TranscriptMessage, StatusMessage
-
-# Send transcript update
-await agent.send(TranscriptMessage(
-    text="Hello!",
-    is_final=True
-))
-
-# Send status update
-await agent.send(StatusMessage(
-    status="thinking"
-))
-```
-
-### Tools
-
-Custom functions the agent can call:
-
-```python
-from stella_sdk import Tool
-
-@tool
-async def search_database(query: str) -> str:
-    """Search the database for information."""
-    results = await db.search(query)
-    return results
-```
-
-### Chat History
-
-Access conversation transcripts for context building. STELLA automatically records all session messages—your agent can retrieve them without any setup:
-
-```python
-# Get recent conversation history
-history = await self.get_chat_history(limit=20)
-
-# Use for LLM context
-for msg in history:
-    print(f"{msg.role}: {msg.content}")
-```
-
-See [Accessing Chat History](../guides/build-your-own-agent.md#accessing-chat-history) for the full API.
-
-## Quick Example
-
-```python
-from stella_sdk import BaseAgent, AudioPipeline
-
-class SimpleAgent(BaseAgent):
-    def __init__(self):
-        super().__init__()
-        self.pipeline = AudioPipeline()
-
-    async def on_connect(self):
-        await self.send_status("ready")
-
-    async def on_transcript(self, text: str, is_final: bool):
-        if is_final:
-            response = await self.generate_response(text)
-            await self.speak(response)
-
-    async def generate_response(self, user_input: str) -> str:
-        # Your LLM logic here
-        return f"You said: {user_input}"
-
-# Run the agent
 if __name__ == "__main__":
-    agent = SimpleAgent()
-    agent.run()
+    asyncio.run(run_agent_from_env(EchoAgent()))
 ```
+
+`process()` and `on_interrupt()` are the only abstract methods. `run_agent_from_env()` is the only entry point: it reads its connection settings from environment variables that STELLA sets on the agent pod (see [Getting Started](./getting-started.md#run-it-locally) to set them by hand).
+
+## What the SDK gives an agent
+
+| Name | What it is | Read more |
+|------|------------|-----------|
+| `BaseAgent` | The class you subclass: `process()`, lifecycle hooks, helpers | [Base Agent](./base-agent.md) |
+| `AgentInput`, `AgentOutput` | What `process()` receives and yields (`AgentOutput.text_chunk`, `text_final`, `status`, `progress_update`, …) | [Message Types](./message-types.md) |
+| `run_agent_from_env` | Connects everything and runs the agent | [Getting Started](./getting-started.md) |
+| `self.audio` | The audio pipeline (`audio_in()`, `publish_text()`, `speak()`, `stop_speaking()`), for agents that run their own loop | [Audio Pipeline](./audio-pipeline.md) |
+| `self.session`, `self.persona`, `self.plan` | `AGENT_CONFIG`, typed (`SessionConfig`, `PersonaConfig`) | [Platform Contract](./platform-contract.md#session-config) |
+| `self.plan_runtime` | The plan state machine and its tools (`PlanRuntime`) | [Platform Contract](./platform-contract.md#plans-selfplan_runtime) |
+| `BaseTool`, `ToolRegistry`, `ToolExecutor`, `ToolCall`, `ToolResult` | Tools for your LLM | [Tools](./tools.md) |
+| `self.connectors` | Outside MCP servers, called through STELLA's backend (`ConnectorsClient`) | [Connectors](./connectors.md) |
+| `ProgressState`, `ProgressGroup`, `ProgressItem` | The task panel on the user's screen | [Progress Tracking](./progress-tracking.md) |
+| `self.get_chat_history()` | The session's recorded messages, as `ChatMessage` objects | [Base Agent](./base-agent.md#chat-history) |
+| `stella_agent_sdk.prompts` | The versioned `{{placeholder}}` prompt compiler | [Prompt Compiler](./prompt-compiler.md) |
+
+The package's `__all__` in `stella_agent_sdk/__init__.py` is the full public API. An agent is described to STELLA by its [`agent.yaml`](./agent-manifest.md), not by code.
 
 ## Installation
 
+The SDK needs Python 3.10 or newer.
+
 ```bash
-pip install stella-agent-sdk
+pip install "stella-ai-agent-sdk>=0.10.0"
 ```
 
-Or add to your `requirements.txt`:
+STELLA refuses to deploy an agent built with an SDK older than it supports, so pin at least the version in your manifest's `sdk.minVersion`.
 
-```
-stella-agent-sdk>=1.0.0
-```
+## Next steps
 
-## Next Steps
-
-- [Getting Started](./getting-started.md) - Create your first custom agent
-- [Base Agent](./base-agent.md) - Deep dive into the BaseAgent class
-- [Message Types](./message-types.md) - All available message types
-- [Audio Pipeline](./audio-pipeline.md) - Configure STT/TTS providers
-- [Building Custom Agents](./building-custom-agent.md) - Complete tutorial
+- [Getting Started](./getting-started.md): write, run and package a first agent
+- [Base Agent](./base-agent.md): every hook and helper on `BaseAgent`
+- [Platform Contract](./platform-contract.md): what STELLA hands the agent, and what it expects back
+- [The agent manifest](./agent-manifest.md): `agent.yaml`
+- [Building Custom Agents](./building-custom-agent.md): a longer tutorial

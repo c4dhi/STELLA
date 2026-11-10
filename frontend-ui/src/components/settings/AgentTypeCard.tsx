@@ -1,6 +1,9 @@
+import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
+import { apiClient } from '../../services/ApiClient'
 import type { AgentType, CustomAgentType, AgentValidationStatus } from '../../lib/api-types'
+import { reviewNoteText } from '../../lib/agentReview'
 
 interface AgentTypeCardProps {
   agent: AgentType | CustomAgentType
@@ -8,6 +11,10 @@ interface AgentTypeCardProps {
   onView: () => void
   onDelete?: () => void
   onBuild?: () => void
+  /** Only the owner shares an upload with projects. */
+  onShare?: () => void
+  /** Called once a build this card is showing as queued/building finishes, so the list can refetch and show the real result. */
+  onBuildSettled?: () => void
 }
 
 export default function AgentTypeCard({
@@ -16,6 +23,8 @@ export default function AgentTypeCard({
   onView,
   onDelete,
   onBuild,
+  onShare,
+  onBuildSettled,
 }: AgentTypeCardProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
@@ -23,6 +32,26 @@ export default function AgentTypeCard({
   const isCustomAgent = !agent.isBuiltIn
   const customAgent = agent as CustomAgentType
   const hasBuildInfo = isCustomAgent && 'lastBuild' in customAgent
+  const liveBuildStatus = hasBuildInfo ? customAgent.lastBuild?.status : undefined
+
+  // The card's badge otherwise only reflects whatever was true at the last
+  // list fetch: without this, a build that finishes while the card is just
+  // sitting in the list (not expanded) never stops showing Queued/Building.
+  useEffect(() => {
+    if (!hasBuildInfo || !customAgent.id) return
+    if (liveBuildStatus !== 'pending' && liveBuildStatus !== 'building') return
+
+    const cleanup = apiClient.subscribeToBuildLogs(customAgent.id, (data) => {
+      if (data.status === 'success' || data.status === 'failed') {
+        onBuildSettled?.()
+      }
+    })
+    return cleanup
+  }, [hasBuildInfo, customAgent.id, liveBuildStatus, onBuildSettled])
+  // Someone else's upload can only be deployed in the projects it is shared with.
+  // Only the uploader's own list carries the notes, so this is their card.
+  const reviewNote = isCustomAgent ? reviewNoteText(agent.validationStatus, customAgent.validationNotes) : null
+  const sharedIn = ('sharedInProjects' in agent ? agent.sharedInProjects ?? [] : []).map(p => p.name).join(', ')
 
   // Generate gradient colors based on agent name
   const colorIndex = agent.name.charCodeAt(0) % 5
@@ -61,7 +90,7 @@ export default function AgentTypeCard({
       REJECTED: {
         bg: isDark ? 'bg-red-500/20' : 'bg-red-100',
         text: isDark ? 'text-red-400' : 'text-red-700',
-        label: 'Failed',
+        label: 'Rejected',
       },
     }
 
@@ -91,6 +120,59 @@ export default function AgentTypeCard({
         transition={{ repeat: Infinity, duration: 1 }}
         title={`Build: ${buildStatus}`}
       />
+    )
+  }
+
+  // The build status, visible on the card face (not just the corner dot), so
+  // an upload's progress is readable without opening it. Clicking it opens
+  // the detail view, which jumps straight to the build log.
+  const getBuildStatusLabel = () => {
+    if (!hasBuildInfo || !customAgent.lastBuild) return null
+
+    const statusConfig: Record<string, { bg: string; text: string; label: string }> = {
+      pending: {
+        bg: isDark ? 'bg-yellow-500/20' : 'bg-yellow-100',
+        text: isDark ? 'text-yellow-400' : 'text-yellow-700',
+        label: 'Queued',
+      },
+      building: {
+        bg: isDark ? 'bg-blue-500/20' : 'bg-blue-100',
+        text: isDark ? 'text-blue-400' : 'text-blue-700',
+        label: 'Building',
+      },
+      success: {
+        bg: isDark ? 'bg-green-500/20' : 'bg-green-100',
+        text: isDark ? 'text-green-400' : 'text-green-700',
+        label: 'Built',
+      },
+      failed: {
+        bg: isDark ? 'bg-red-500/20' : 'bg-red-100',
+        text: isDark ? 'text-red-400' : 'text-red-700',
+        label: 'Build failed',
+      },
+    }
+    const status = customAgent.lastBuild.status
+    const config = statusConfig[status] ?? statusConfig.pending
+
+    return (
+      <motion.button
+        onClick={(e) => {
+          e.stopPropagation()
+          onView()
+        }}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${config.bg} ${config.text}`}
+        title="View build log"
+        whileHover={{ scale: 1.05 }}
+      >
+        {status === 'building' && (
+          <motion.span
+            className="w-1.5 h-1.5 rounded-full bg-current"
+            animate={{ scale: [1, 1.4, 1] }}
+            transition={{ repeat: Infinity, duration: 1 }}
+          />
+        )}
+        {config.label}
+      </motion.button>
     )
   }
 
@@ -146,6 +228,7 @@ export default function AgentTypeCard({
                 {agent.name}
               </h3>
               {getStatusBadge()}
+              {getBuildStatusLabel()}
             </div>
             {agent.description ? (
               <p className={`text-body-sm line-clamp-2 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
@@ -154,6 +237,15 @@ export default function AgentTypeCard({
             ) : (
               <p className={`text-body-sm italic ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
                 No description
+              </p>
+            )}
+            {reviewNote && (
+              <p className={`mt-2 text-caption ${
+                agent.validationStatus === 'REJECTED'
+                  ? isDark ? 'text-red-400' : 'text-red-700'
+                  : isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'
+              }`}>
+                {reviewNote}
               </p>
             )}
           </div>
@@ -204,7 +296,7 @@ export default function AgentTypeCard({
 
         {/* Footer */}
         <div className={`flex items-center justify-between pt-4 border-t ${isDark ? 'border-border-dark/50' : 'border-border/50'}`}>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             {agent.isBuiltIn ? (
               <span className={`inline-flex items-center gap-1 text-caption ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -213,12 +305,19 @@ export default function AgentTypeCard({
                 Built-in
               </span>
             ) : (
-              <span className={`inline-flex items-center gap-1 text-caption ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <span
+                className={`inline-flex items-center gap-1 min-w-0 text-caption ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}
+                title={sharedIn ? `Deployable in ${sharedIn}` : undefined}
+              >
+                <svg className="flex-shrink-0" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                   <circle cx="12" cy="7" r="4" />
                 </svg>
-                Custom
+                <span className="truncate">
+                  {agent.sharedWithYou && agent.ownerName
+                    ? `Shared by ${agent.ownerName}${sharedIn ? ` · in ${sharedIn}` : ''}`
+                    : 'Custom'}
+                </span>
               </span>
             )}
             <span className={`text-caption ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
@@ -250,12 +349,30 @@ export default function AgentTypeCard({
                   ? 'text-content-inverse-secondary hover:text-primary hover:bg-primary/10'
                   : 'text-content-secondary hover:text-primary hover:bg-primary/10'
                 }`}
-                title="Build Agent"
+                title="Rebuild Agent"
                 whileHover={{ scale: 1.1 }}
                 whileTap={{ scale: 0.95 }}
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+                </svg>
+              </motion.button>
+            )}
+            {isCustomAgent && onShare && (
+              <motion.button
+                onClick={onShare}
+                className={`p-2 rounded-lg transition-colors ${isDark
+                  ? 'text-content-inverse-secondary hover:text-primary hover:bg-primary/10'
+                  : 'text-content-secondary hover:text-primary hover:bg-primary/10'
+                }`}
+                title="Share with projects"
+                aria-label="Share with projects"
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+                  <path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4" />
                 </svg>
               </motion.button>
             )}

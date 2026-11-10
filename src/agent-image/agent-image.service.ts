@@ -1,3 +1,6 @@
+import { builtInDockerfilePath } from '../agent-package/agent-directory.js';
+import type { AgentManifest } from '../agent-package/schemas/agent-manifest.schema.js';
+import { manifestOfAgentType } from '../agents/agent-requirements.js';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { exec, execSync, ExecException } from 'child_process';
@@ -6,7 +9,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { createHash, Hash } from 'crypto';
 import { fileURLToPath } from 'url';
-import { AgentTypeService, AgentTypeInfo as DbAgentTypeInfo } from '../agent-type/agent-type.service.js';
+import { AgentTypeService, type AgentTypeInfo, type AgentTypeViewer } from '../agent-type/agent-type.service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,19 +22,22 @@ export interface AgentImageConfig {
   tag: string;
 }
 
-// Extended type info for gallery display
-export interface AgentTypeInfo {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  icon: string | null;
-  version: string;
-  isBuiltIn: boolean;
-  capabilities: string[];
-  defaultConfig: Record<string, unknown>;
-  configSchema: Record<string, unknown> | null;  // JSON Schema for agent config (includes x-stella-* extensions)
+/**
+ * How a built-in agent's image is built: named after its slug, from the
+ * Dockerfile its manifest names, with the backend root as context. Every
+ * built-in is found this way; there is no list of them in code.
+ */
+export function builtInImageConfig(manifest: AgentManifest): AgentImageConfig {
+  return {
+    imageName: manifest.metadata.slug,
+    dockerfilePath: builtInDockerfilePath(manifest),
+    contextPath: '.',
+    tag: 'latest',
+  };
 }
+
+// The gallery shape is owned by AgentTypeService.
+export type { AgentTypeInfo } from '../agent-type/agent-type.service.js';
 
 @Injectable()
 export class AgentImageService {
@@ -49,23 +55,6 @@ export class AgentImageService {
   // old ones, so without a sweep the image store grows without bound.
   // Override with AGENT_IMAGE_KEEP_VERSIONS.
   private readonly keepConfigImageVersions: number;
-
-  // Registry of known agent types and their build contexts
-  // Paths are relative to stella-backend/ directory (the new context)
-  private readonly agentRegistry: Map<string, AgentImageConfig> = new Map([
-    ['stella-light-agent', {
-      imageName: 'stella-light-agent',
-      dockerfilePath: 'agents/stella-light-agent/Dockerfile',
-      contextPath: '.',
-      tag: 'latest',
-    }],
-    ['stella-v2-agent', {
-      imageName: 'stella-v2-agent',
-      dockerfilePath: 'agents/stella-v2-agent/Dockerfile',
-      contextPath: '.',
-      tag: 'latest',
-    }],
-  ]);
 
   // Track images currently being built to avoid duplicate builds
   private readonly buildingImages: Map<string, Promise<string>> = new Map();
@@ -168,26 +157,57 @@ export class AgentImageService {
   }
 
   /**
-   * Register a new agent type for on-demand building.
+   * The image a pod for this agent type runs, and the command to start it,
+   * both from the agent type's manifest:
+   *
+   * - The command is `image.command` when declared; otherwise the image's own
+   *   CMD runs.
+   * - A **built-in** type is built on demand from `agents/<slug>/` with its
+   *   manifest's Dockerfile (see builtInImageConfig).
+   * - An **uploaded** type runs the image its build stored in `AgentType.imageUrl`.
+   *
+   * Who may deploy what is decided before this (assertDeployableAgentType, at
+   * deploy and at restart/wake). This only refuses what can never run: an
+   * unknown type, a rejected one, or one with no build.
    */
-  registerAgentType(agentType: string, config: AgentImageConfig): void {
-    this.agentRegistry.set(agentType, config);
-    this.logger.log(`Registered agent type: ${agentType} -> ${config.imageName}:${config.tag}`);
+  async resolveAgentImage(
+    agentType: string,
+    forceRebuild = false,
+  ): Promise<{ image: string; command?: string[] }> {
+    const record = await this.agentTypeService.findBySlug(agentType);
+    if (!record) {
+      throw new Error(`Unknown agent type: ${agentType}`);
+    }
+    if (record.validationStatus === 'REJECTED') {
+      throw new Error(`Agent type ${agentType} was rejected in review`);
+    }
+    const manifest = manifestOfAgentType(record);
+    const command = manifest.image.command ? [...manifest.image.command] : undefined;
+
+    if (record.isBuiltIn) {
+      return { image: await this.ensureImageExists(builtInImageConfig(manifest), forceRebuild), command };
+    }
+    if (!record.imageUrl) {
+      throw new Error(`Agent type ${agentType} has no built image yet`);
+    }
+    return { image: record.imageUrl, command };
   }
 
-  /**
-   * Get all registered agent types.
-   */
-  getRegisteredAgentTypes(): string[] {
-    return Array.from(this.agentRegistry.keys());
+  /** The build config of a built-in agent type, read from its stored manifest. */
+  private async builtInImageConfigFor(agentType: string): Promise<AgentImageConfig> {
+    const record = await this.agentTypeService.findBySlug(agentType);
+    if (!record?.isBuiltIn) {
+      throw new Error(`Unknown built-in agent type: ${agentType}`);
+    }
+    return builtInImageConfig(manifestOfAgentType(record));
   }
 
   /**
    * Get all registered agent types with metadata from database.
    * Throws error if database is not seeded - no fallback to prevent silent failures.
    */
-  async getAgentTypesWithInfo(): Promise<AgentTypeInfo[]> {
-    const dbTypes = await this.agentTypeService.getAgentTypesForGallery();
+  async getAgentTypesWithInfo(viewer?: AgentTypeViewer): Promise<AgentTypeInfo[]> {
+    const dbTypes = await this.agentTypeService.getAgentTypesForGallery(viewer);
 
     if (dbTypes.length === 0) {
       this.logger.error('No agent types found in database. Database must be seeded.');
@@ -211,11 +231,8 @@ export class AgentImageService {
    * This method is idempotent - if the image is already being built,
    * it will wait for that build to complete rather than starting a new one.
    */
-  async ensureImageExists(agentType: string, forceRebuild = false): Promise<string> {
-    const config = this.agentRegistry.get(agentType);
-    if (!config) {
-      throw new Error(`Unknown agent type: ${agentType}. Available types: ${this.getRegisteredAgentTypes().join(', ')}`);
-    }
+  async ensureImageExists(config: AgentImageConfig, forceRebuild = false): Promise<string> {
+    const agentType = config.imageName;
 
     // Legacy/static tag for environments where we cannot build locally.
     // (e.g., no Docker socket mounted and images are expected to be pre-built externally)
@@ -485,17 +502,14 @@ export class AgentImageService {
    * Force rebuild an agent image.
    */
   async rebuildImage(agentType: string): Promise<string> {
-    return this.ensureImageExists(agentType, true);
+    return this.ensureImageExists(await this.builtInImageConfigFor(agentType), true);
   }
 
   /**
    * Remove an agent image from local cache.
    */
   async removeImage(agentType: string): Promise<void> {
-    const config = this.agentRegistry.get(agentType);
-    if (!config) {
-      throw new Error(`Unknown agent type: ${agentType}`);
-    }
+    const config = await this.builtInImageConfigFor(agentType);
 
     const imagesToRemove = new Set<string>([`${config.imageName}:${config.tag}`]);
     if (this.hasDockerSocket) {
@@ -694,7 +708,7 @@ export class AgentImageService {
     hash.update(dockerfileContent);
 
     const sourcePaths = new Set<string>([
-      `agents/${agentType}`,
+      path.posix.dirname(config.dockerfilePath),
       'agents/stella-ai-agent-sdk',
       ...this.extractCopySources(dockerfileContent),
     ]);

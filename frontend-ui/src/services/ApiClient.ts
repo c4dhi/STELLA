@@ -1,7 +1,7 @@
 // Centralized API client for Session Management Server
 // Based on session-management-server/docs/FRONTEND_INTEGRATION.md
 
-import type {
+import type { AgentShares,
   Project,
   ProjectWithCounts,
   ProjectWithSessions,
@@ -69,8 +69,18 @@ import type {
   AdminDashboardMetrics,
   CapacityMeasurement,
   PlatformSettings,
+  AgentReviewDetail,
+  AgentReviewItem,
+  AgentReviewState,
   PlatformFeatures,
   AccessToken,
+  AvailableConnector,
+  Connector,
+  ConnectorCallLogEntry,
+  ConnectorTestResult,
+  ConnectorToolCallResult,
+  CreateConnectorRequest,
+  UpdateConnectorRequest,
   CreateAccessTokenRequest,
   AccessTokenAccess,
   CreateAccessTokenResponse,
@@ -512,8 +522,23 @@ class SessionManagementClient {
   // Agents API
   // ============================================================================
 
-  async getAgentTypes(): Promise<AgentType[]> {
-    return this.get<AgentType[]>('/agent-types')
+  /**
+   * The agents you can deploy: built-ins, your uploads, and uploads shared
+   * with a project you are in (only with `projectId`, when given).
+   */
+  async getAgentTypes(projectId?: string): Promise<AgentType[]> {
+    return this.get<AgentType[]>(projectId ? `/agent-types?projectId=${encodeURIComponent(projectId)}` : '/agent-types')
+  }
+
+  async getAgentShares(agentTypeId: string): Promise<AgentShares> {
+    return this.get<AgentShares>(`/agent-types/${agentTypeId}/shares`)
+  }
+
+  async updateAgentShares(agentTypeId: string, projectIds: string[]): Promise<{ projectIds: string[] }> {
+    return this.request<{ projectIds: string[] }>(`/agent-types/${agentTypeId}/shares`, {
+      method: 'PUT',
+      body: JSON.stringify({ projectIds }),
+    })
   }
 
   /** Voices and languages the active TTS provider can synthesize. */
@@ -1227,8 +1252,8 @@ class SessionManagementClient {
   /**
    * Delete a custom agent.
    */
-  async deleteCustomAgent(agentTypeId: string): Promise<{ success: boolean }> {
-    return this.post<{ success: boolean }>(`/agent-types/${agentTypeId}/delete`)
+  async deleteCustomAgent(agentTypeId: string): Promise<{ success: boolean; stoppedAgents: number }> {
+    return this.post<{ success: boolean; stoppedAgents: number }>(`/agent-types/${agentTypeId}/delete`)
   }
 
   /**
@@ -1246,7 +1271,12 @@ class SessionManagementClient {
 
     const eventSource = new EventSource(urlWithAuth)
 
-    eventSource.onmessage = (e) => {
+    // The backend sends each MessageEvent's `type` as a named SSE `event:`
+    // line ("status" for the initial connected/no_build ping, "build" for
+    // real polls). A named event never reaches `onmessage` - only an
+    // unnamed/default one does - so this has to listen on "build" directly,
+    // not just onmessage, or every real update is silently dropped.
+    const handleBuildEvent = (e: MessageEvent) => {
       try {
         if (e.data && e.data !== 'connected' && e.data !== 'no_build') {
           const data = JSON.parse(e.data)
@@ -1256,6 +1286,8 @@ class SessionManagementClient {
         console.error('[ApiClient] Failed to parse build log event:', err)
       }
     }
+    eventSource.addEventListener('build', handleBuildEvent)
+    eventSource.onmessage = handleBuildEvent
 
     eventSource.onerror = (e) => {
       console.error('[ApiClient] Build log SSE connection error:', e)
@@ -1769,6 +1801,47 @@ class SessionManagementClient {
     })
   }
 
+  /**
+   * Whether uploaded agents need an admin's approval before they deploy. Off:
+   * a user deploys their own upload as soon as it is built.
+   */
+  async setAgentReviewRequired(agentReviewRequired: boolean): Promise<PlatformSettings> {
+    return this.request<PlatformSettings>('/admin/platform-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ agentReviewRequired }),
+    })
+  }
+
+  // ============================================================================
+  // Agent review API (system admins): Settings → Agent Review
+  // ============================================================================
+
+  /** Uploaded agents in one review state; pending ones oldest first. */
+  async getAgentReviews(state: AgentReviewState): Promise<AgentReviewItem[]> {
+    return this.get<AgentReviewItem[]>(`/admin/agent-types/status/${state}`)
+  }
+
+  /** Everything a reviewer looks at for one upload, with its latest builds. */
+  async getAgentReview(agentTypeId: string): Promise<AgentReviewDetail> {
+    return this.get<AgentReviewDetail>(`/admin/agent-types/${encodeURIComponent(agentTypeId)}`)
+  }
+
+  /** Approve an upload so it can deploy. Notes are optional. */
+  async approveAgentReview(agentTypeId: string, notes?: string): Promise<AgentReviewItem> {
+    return this.request<AgentReviewItem>(`/admin/agent-types/${encodeURIComponent(agentTypeId)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    })
+  }
+
+  /** Reject an upload, or withdraw its approval. The uploader sees the reason. */
+  async rejectAgentReview(agentTypeId: string, reason: string): Promise<AgentReviewItem> {
+    return this.request<AgentReviewItem>(`/admin/agent-types/${encodeURIComponent(agentTypeId)}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    })
+  }
+
   // ============================================================================
   // Platform features API
   // ============================================================================
@@ -1793,6 +1866,60 @@ class SessionManagementClient {
 
   async revokeAccessToken(id: string): Promise<AccessToken> {
     return this.delete<AccessToken>(`/me/access-tokens/${id}`)
+  }
+
+  // ============================================================================
+  // Connectors (outside MCP servers your agents may call; STELLA as client)
+  // ============================================================================
+
+  async listConnectors(): Promise<Connector[]> {
+    return this.get<Connector[]>('/me/connectors')
+  }
+
+  async createConnector(data: CreateConnectorRequest): Promise<Connector> {
+    return this.post<Connector>('/me/connectors', data)
+  }
+
+  async updateConnector(id: string, data: UpdateConnectorRequest): Promise<Connector> {
+    return this.request<Connector>(`/me/connectors/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteConnector(id: string): Promise<{ deleted: true }> {
+    return this.delete<{ deleted: true }>(`/me/connectors/${id}`)
+  }
+
+  /** Replace the projects a connector is shared with ([] unshares it everywhere). Owner only. */
+  async setConnectorShares(id: string, projectIds: string[]): Promise<Connector> {
+    return this.request<Connector>(`/me/connectors/${id}/shares`, {
+      method: 'PUT',
+      body: JSON.stringify({ projectIds }),
+    })
+  }
+
+  /** Connectors the user may bind when deploying in this project: own + shared with it. */
+  async listAvailableConnectors(projectId: string): Promise<AvailableConnector[]> {
+    return this.get<AvailableConnector[]>(`/me/connectors/available?projectId=${encodeURIComponent(projectId)}`)
+  }
+
+  /** MCP initialize + tools/list against the server; stores the tool list. */
+  async testConnector(id: string): Promise<ConnectorTestResult> {
+    return this.post<ConnectorTestResult>(`/me/connectors/${id}/test`)
+  }
+
+  /** Run one tool as the owner ("Try it"). A failure comes back in the result, not as an error. */
+  async callConnectorTool(id: string, tool: string, args: Record<string, unknown>): Promise<ConnectorToolCallResult> {
+    return this.post<ConnectorToolCallResult>(
+      `/me/connectors/${id}/tools/${encodeURIComponent(tool)}/call`,
+      { arguments: args },
+    )
+  }
+
+  /** The connector's latest calls, newest first. */
+  async listConnectorCalls(id: string, limit = 20): Promise<ConnectorCallLogEntry[]> {
+    return this.get<ConnectorCallLogEntry[]>(`/me/connectors/${id}/calls?limit=${limit}`)
   }
 
   // ============================================================================

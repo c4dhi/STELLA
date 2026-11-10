@@ -32,6 +32,7 @@ export class AgentGrpcController {
       agentType: request.agentType,
       agentVersion: request.agentVersion,
       capabilities: request.capabilities || {},
+      sdkVersion: request.sdkVersion || undefined,
     });
 
     return {

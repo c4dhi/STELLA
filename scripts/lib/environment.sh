@@ -386,7 +386,7 @@ display_config_table() {
 set_defaults() {
     # Kubernetes configuration
     export KUBERNETES_NAMESPACE="${KUBERNETES_NAMESPACE:-ai-agents}"
-    export DEFAULT_AGENT_TYPE="${DEFAULT_AGENT_TYPE:-stella-light-agent}"
+    export DEFAULT_AGENT_TYPE="${DEFAULT_AGENT_TYPE:-stella-v2-agent}"  # matches src/agents/default-agent-type.ts
 
     # Port offset: auto +100 for non-default namespace, 0 otherwise
     export PORT_OFFSET="${PORT_OFFSET:-0}"

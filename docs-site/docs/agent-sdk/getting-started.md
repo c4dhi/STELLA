@@ -5,227 +5,192 @@ title: "🏁 Getting Started"
 
 # 🏁 Getting Started with the Agent SDK
 
-This guide walks you through creating your first custom agent using the STELLA Agent SDK.
+This page builds a small LLM agent, runs it against a local LiveKit, and packages it for STELLA.
 
 ## Prerequisites
 
-- Python 3.9+
-- A running STELLA backend
-- LiveKit server access
+- Python 3.10 or newer
+- For running locally: a LiveKit server and STELLA's STT and TTS services (a local STELLA started with `./scripts/start-k8s.sh` has all three)
+- An OpenAI API key, for this example's LLM
 
-## Installation
-
-```bash
-pip install stella-agent-sdk
-```
-
-## Project Setup
-
-Create a new directory for your agent:
-
-```bash
-mkdir my-custom-agent
-cd my-custom-agent
-```
-
-Create the project structure:
+## Project layout
 
 ```
-my-custom-agent/
-├── agent.py           # Main agent code
-├── requirements.txt   # Dependencies
-├── Dockerfile         # Container configuration
-└── config.yaml        # Agent configuration
+my-agent/
+├── agent.py           # the agent
+├── agent.yaml         # the manifest: what STELLA knows about the agent
+├── requirements.txt
+└── Dockerfile
 ```
 
-## Your First Agent
+## The agent
 
-Create `agent.py`:
+`agent.py`:
 
 ```python
 import asyncio
-from stella_sdk import BaseAgent, AudioPipeline
+import logging
+import os
+import uuid
+from typing import Any, AsyncIterator, Dict, List
 
-class MyFirstAgent(BaseAgent):
-    """A simple agent that responds to user messages."""
+from openai import AsyncOpenAI
 
-    def __init__(self):
+from stella_agent_sdk import AgentInput, AgentOutput, BaseAgent, run_agent_from_env
+
+logging.basicConfig(level=logging.INFO)
+
+
+class MyAgent(BaseAgent):
+    def __init__(self) -> None:
         super().__init__()
-        self.pipeline = AudioPipeline()
-        self.conversation_history = []
+        self.client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        self.history: List[Dict[str, str]] = []
 
-    async def on_connect(self):
-        """Called when agent connects to the room."""
-        print(f"Connected to room: {self.room_name}")
-        await self.send_status("ready")
-
-        # Optional: Send a greeting
-        greeting = "Hello! I'm your AI assistant. How can I help you?"
-        await self.speak(greeting)
-
-    async def on_disconnect(self):
-        """Called when agent disconnects."""
-        print("Disconnected from room")
-
-    async def on_transcript(self, text: str, is_final: bool):
-        """Called when user speech is transcribed."""
-        if not is_final:
-            # Partial transcript - could update UI
-            return
-
-        # Final transcript - generate response
-        print(f"User said: {text}")
-
-        # Add to conversation history
-        self.conversation_history.append({
-            "role": "user",
-            "content": text
-        })
-
-        # Generate and speak response
-        response = await self.generate_response(text)
-        await self.speak(response)
-
-        # Add response to history
-        self.conversation_history.append({
-            "role": "assistant",
-            "content": response
-        })
-
-    async def on_data_message(self, message: dict):
-        """Called when receiving a data channel message."""
-        if message.get("type") == "user_text":
-            # Handle text input
-            await self.on_transcript(message["data"], is_final=True)
-
-    async def generate_response(self, user_input: str) -> str:
-        """Generate a response using OpenAI."""
-        from openai import AsyncOpenAI
-
-        client = AsyncOpenAI()
-
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            *self.conversation_history
-        ]
-
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            stream=False
+    async def on_session_start(self, session_id: str, config: Dict[str, Any]) -> None:
+        await super().on_session_start(session_id, config)  # fills self.session
+        self.model = self.session.config.get("model", "gpt-4o-mini")
+        persona = self.persona
+        self.system_prompt = (
+            persona.system_prompt if persona and persona.system_prompt
+            else "You are a helpful assistant. Keep answers short: they are spoken."
         )
+        self.history = []
 
-        return response.choices[0].message.content
+    async def process(self, input: AgentInput) -> AsyncIterator[AgentOutput]:
+        self.history.append({"role": "user", "content": input.text})
+        yield AgentOutput.thinking(input.session_id)
 
-    async def speak(self, text: str):
-        """Convert text to speech and publish to room."""
-        await self.send_transcript(text, speaker="assistant")
-        audio = await self.pipeline.text_to_speech(text)
-        await self.publish_audio(audio)
+        transcript_id = f"response_{uuid.uuid4().hex[:8]}"
+        reply = ""
+        stream = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "system", "content": self.system_prompt}, *self.history],
+            stream=True,
+        )
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                reply += chunk.choices[0].delta.content
+                # Each chunk carries the whole reply so far, not just the new token.
+                yield AgentOutput.text_chunk(input.session_id, reply, transcript_id=transcript_id)
+
+        yield AgentOutput.text_chunk(input.session_id, reply, transcript_id=transcript_id, is_final=True)
+        self.history.append({"role": "assistant", "content": reply})
+
+    async def on_interrupt(self, session_id: str) -> None:
+        pass
+
+    async def on_session_end(self, session_id: str) -> Dict[str, Any]:
+        await super().on_session_end(session_id)
+        return {"turns": len(self.history) // 2}
 
 
 if __name__ == "__main__":
-    agent = MyFirstAgent()
-    agent.run()
+    asyncio.run(run_agent_from_env(MyAgent()))
 ```
 
-## Configuration
+What happens here:
 
-Create `config.yaml`:
+- `process()` is called once per user turn. It yields a status (`AgentOutput.thinking`), then the reply as it streams in.
+- All chunks of one reply share a `transcript_id`, and each chunk's text is the **accumulated** reply so far. The SDK publishes it to the screen, splits it into sentences and speaks each sentence as soon as it is complete. Text under one `transcript_id` may only grow. `AgentOutput.text_final(session_id, text)` sends a reply in one piece instead.
+- `on_session_start` calls `super()` so that `self.session` and `self.persona` are filled from `AGENT_CONFIG`. `self.session.config` holds the agent's own settings (its `defaultConfig` in `agent.yaml`).
+- When the user interrupts and the interruption is committed, the SDK drops what was not yet spoken; a typed interruption also stops it reading from `process()` at the next `yield`. See [Base Agent](./base-agent.md#barge-in).
+
+## The manifest
+
+`agent.yaml` tells STELLA what the agent is and what it needs. A minimal one:
 
 ```yaml
-agent:
-  name: my-first-agent
-  version: 1.0.0
+version: "2.0"
 
-livekit:
-  url: ${LIVEKIT_URL}
-  api_key: ${LIVEKIT_API_KEY}
-  api_secret: ${LIVEKIT_API_SECRET}
+metadata:
+  name: "My Agent"
+  slug: "my-agent"
+  version: "0.1.0"
+  description: "A small LLM agent"
+  icon: "🤖"
 
-openai:
-  api_key: ${OPENAI_API_KEY}
-  model: gpt-4o
+capabilities: [voice, text]
 
-audio:
-  stt_provider: sherpa
-  tts_provider: kokoro
+env:
+  required:
+    - OPENAI_API_KEY
+
+image:
+  dockerfile: "Dockerfile"
+
+sdk:
+  minVersion: "0.10.0"
 ```
 
-## Dependencies
+Every block and rule is on [The agent manifest](./agent-manifest.md).
 
-Create `requirements.txt`:
+## Dependencies and Dockerfile
+
+`requirements.txt`:
 
 ```
-stella-agent-sdk>=1.0.0
+stella-ai-agent-sdk>=0.10.0
 openai>=1.0.0
-livekit>=0.10.0
 ```
 
-## Dockerfile
-
-Create `Dockerfile`:
+`Dockerfile`:
 
 ```dockerfile
 FROM python:3.11-slim
 
-WORKDIR /app
+# livekit-rtc needs libgobject from libglib2.0
+RUN apt-get update && apt-get install -y --no-install-recommends libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy agent code
 COPY . .
 
-# Run the agent
+ENV PYTHONUNBUFFERED=1
 CMD ["python", "agent.py"]
 ```
 
-## Running Locally
+## Run it locally
 
-Set environment variables:
+On an agent pod STELLA sets every variable `run_agent_from_env()` reads. By hand, these five are required:
 
 ```bash
 export LIVEKIT_URL=ws://localhost:7880
+export ROOM_NAME=my-room
+export AGENT_IDENTITY=agent-my-agent
 export LIVEKIT_API_KEY=devkey
-export LIVEKIT_API_SECRET=secret
+export LIVEKIT_API_SECRET=devsecret
 export OPENAI_API_KEY=sk-...
-export ROOM_NAME=test-room
-export PARTICIPANT_IDENTITY=my-agent
-```
-
-Run the agent:
-
-```bash
 python agent.py
 ```
 
-## Building and Deploying
+`LIVEKIT_TOKEN` (a ready-made room token) replaces the key and secret. The optional ones, with their in-cluster defaults:
 
-Build the Docker image:
+| Variable | Default | What it is |
+|----------|---------|------------|
+| `STT_SERVICE_ADDRESS` | `stt-service:50051` | STT gRPC service |
+| `TTS_SERVICE_ADDRESS` | `tts-service:50052` | TTS gRPC service |
+| `TTS_ENABLED` | `true` | `false` turns the agent into a text-only chatbot |
+| `SESSION_SERVER_URL` | `http://session-management-server:3000` | Used for chat history |
+| `GRPC_SERVER` | `session-management-server:50051` | Where the agent registers |
+| `SESSION_ID` | `ROOM_NAME` | The session's database id |
+| `AGENT_CONFIG` | `{}` | Session config JSON, typed as `self.session` |
+| `AGENT_TYPE`, `AGENT_VERSION` | class name, `1.0.0` | What the agent registers as; STELLA sets them from `agent.yaml` |
+| `AGENT_NAME`, `AGENT_ID`, `AGENT_ICON` | `Agent`, `AGENT_IDENTITY`, `🤖` | How the agent is shown on screen |
 
-```bash
-docker build -t my-custom-agent:latest .
-```
+The voice pipeline's tuning variables belong to the SDK; see [Platform Contract](./platform-contract.md#environment-variables-the-sdk-owns).
 
-Deploy to STELLA by updating the agent image configuration:
+Outside STELLA nothing registers the session, so registration logs a warning; the agent still runs. To talk to it, join the same room from a LiveKit client.
 
-```bash
-# In your .env or ConfigMap
-AGENT_IMAGE=my-custom-agent:latest
-```
+## Put it on STELLA
 
-## Testing Your Agent
+STELLA builds the image itself from the package's `Dockerfile`. Zip `agent.yaml`, the `Dockerfile` and your code, and upload the zip in **Settings → Agent Library**. The steps, review and sharing are in [Build your own agent](../guides/build-your-own-agent.md#upload-it-to-stella) and [Agent validation](../deployment/agent-validation.md).
 
-1. Start STELLA: `./scripts/start-k8s.sh`
-2. Create a session in the Frontend UI
-3. Deploy your custom agent
-4. Interact via voice or text
+## Next steps
 
-## Next Steps
-
-- [Base Agent](./base-agent.md) - Learn about all BaseAgent methods
-- [Audio Pipeline](./audio-pipeline.md) - Configure STT/TTS
-- [Message Types](./message-types.md) - Understand the message protocol
-- [Tools](./tools.md) - Add custom tool support
+- [Base Agent](./base-agent.md): every hook and helper
+- [Message Types](./message-types.md): everything `process()` can yield
+- [Tools](./tools.md): give your LLM tools
+- [Platform Contract](./platform-contract.md): session config, plans, session end

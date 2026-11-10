@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
 import { AccessTokensModule } from '../access-tokens/access-tokens.module.js';
+import { AgentUploadModule } from '../agent-upload/agent-upload.module.js';
 import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module.js';
 import { AgentImageModule } from '../agent-image/agent-image.module.js';
 import { AgentsModule } from '../agents/agents.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { ConnectorsModule } from '../connectors/connectors.module.js';
 import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
 import { InvitationsModule } from '../invitations/invitations.module.js';
 import { McpOAuthModule } from '../mcp-oauth/mcp-oauth.module.js';
@@ -21,10 +23,13 @@ import { McpServerFactory } from './mcp-server.factory.js';
 import { McpController } from './mcp.controller.js';
 import { MCP_TOOL_PROVIDERS } from './mcp.types.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
+import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
 import { CatalogTools } from './tools/catalog.tools.js';
+import { ConnectorsTools } from './tools/connectors.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
+import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 
 // Adding a domain: write a *.tools.ts provider and list it here.
@@ -35,6 +40,9 @@ const TOOL_PROVIDERS = [
   AgentConfigurationsTools,
   SessionsTools,
   AgentsTools,
+  PlatformSettingsTools,
+  AgentReviewsTools,
+  ConnectorsTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
@@ -54,6 +62,8 @@ const TOOL_PROVIDERS = [
     InvitationsModule,
     AgentsModule,
     EnvVarTemplatesModule,
+    ConnectorsModule,
+    AgentUploadModule,
   ],
   controllers: [McpController],
   providers: [
