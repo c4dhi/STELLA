@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A deploy no longer goes red while a slow but healthy speech model is still
+  loading. `start-k8s` now waits for each service as long as its own start-up
+  check allows (10 minutes for TTS and STT, plus 2 for the pod to come up),
+  instead of a separate guess that gave TTS 5. Each service's line in the
+  deploy log now says how long it took to be ready. (#895)
+
 ---
 
 ## [2.0.0] - 2026-11-07

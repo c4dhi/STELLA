@@ -20,18 +20,60 @@ get_deployment_name() {
     esac
 }
 
-# Get timeout for a deployment
-# Note: STT/TTS have longer timeouts for first-time model downloads (init containers)
+# Get timeout for a deployment: the longer of a floor and what the
+# deployment's own startupProbe allows (see startup_probe_budget). A model load
+# has no fixed duration -- a cold Qwen3 load on the L4 took 366 s, from page
+# cache 8 s -- so the wait follows the manifest instead of a second guess (#151).
 get_service_timeout() {
     local deploy="$1"
+    local floor
     case "$deploy" in
-        "session-management-server") echo 600 ;;  # migrations, then probes; matches the deploy workflows (#105)
-        "frontend-ui") echo 120 ;;
-        "stt-service") echo 600 ;;  # 10 min for model downloads
-        "tts-service") echo 300 ;;  # 5 min for model downloads
-        "message-recorder") echo 60 ;;
-        *) echo 120 ;;
+        "session-management-server") floor=600 ;;  # migrations, then probes; matches the deploy workflows (#105)
+        "frontend-ui") floor=120 ;;
+        "stt-service") floor=600 ;;  # first-time model downloads (init containers)
+        "tts-service") floor=300 ;;  # first-time model downloads (init containers)
+        "message-recorder") floor=60 ;;
+        *) floor=120 ;;
     esac
+    local budget
+    budget=$(startup_probe_budget "$deploy")
+    if (( budget > 0 && budget + STARTUP_WAIT_MARGIN > floor )); then
+        echo $(( budget + STARTUP_WAIT_MARGIN ))
+    else
+        echo "$floor"
+    fi
+}
+
+# On top of the startupProbe budget: scheduling, image pull, and the first
+# readiness check after the startupProbe hands over.
+STARTUP_WAIT_MARGIN=120
+
+# Seconds the deployment's startupProbe lets it take to start
+# (periodSeconds x failureThreshold, Kubernetes defaults 10 and 3), read from
+# k8s/*-<deployment>.yaml. 0 when it has no manifest or no startupProbe.
+startup_probe_budget() {
+    local deploy="$1"
+    local k8s_dir
+    k8s_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../k8s" 2>/dev/null && pwd)" || { echo 0; return; }
+    local manifest
+    manifest=$(ls "$k8s_dir"/*-"$deploy".yaml 2>/dev/null | head -n1)
+    [[ -n "$manifest" ]] || { echo 0; return; }
+    awk '
+        function flush() { if (inprobe) { b = period * threshold; if (b > best) best = b }; inprobe = 0 }
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*startupProbe:/ {
+            flush(); inprobe = 1; period = 10; threshold = 3
+            match($0, /^[[:space:]]*/); indent = RLENGTH; next
+        }
+        inprobe {
+            if (NF == 0) next
+            match($0, /^[[:space:]]*/)
+            if (RLENGTH <= indent) { flush(); next }
+            if ($1 == "periodSeconds:") period = $2 + 0
+            if ($1 == "failureThreshold:") threshold = $2 + 0
+        }
+        END { flush(); print best + 0 }
+    ' "$manifest"
 }
 
 # All services list
@@ -1411,6 +1453,7 @@ wait_for_services() {
 
         # Start rollout status check in background
         echo -ne "   ${ARROW} ${display_name}... "
+        local started=$SECONDS
 
         kubectl rollout status "deployment/$deploy" -n "$KUBERNETES_NAMESPACE" --timeout="${timeout}s" >/dev/null 2>&1 &
         local pid=$!
@@ -1429,11 +1472,12 @@ wait_for_services() {
         wait $pid
         local exit_code=$?
         set -e
+        local took=$(( SECONDS - started ))
 
         if [[ $exit_code -eq 0 ]]; then
-            printf "\r   ${ARROW} ${display_name}... ${GREEN}${CHECK}${NC}    \n"
+            printf "\r   ${ARROW} ${display_name}... ${GREEN}${CHECK}${NC} ${took} s    \n"
         else
-            printf "\r   ${ARROW} ${display_name}... ${RED}${CROSS}${NC}    \n"
+            printf "\r   ${ARROW} ${display_name}... ${RED}${CROSS}${NC} ${took} s of ${timeout} s    \n"
             failed_services="${failed_services}${deploy} "
         fi
     done
