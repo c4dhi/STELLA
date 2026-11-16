@@ -47,7 +47,7 @@ const config: Config = {
           lastVersion: 'current',
           versions: {
             current: {
-              label: '2.0.0',
+              label: '2.0.1',
               path: '',
               // banner: 'unreleased', // Enable this after creating first versioned release
             },
