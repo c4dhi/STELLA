@@ -39,6 +39,11 @@ class RoomManager:
     - Output: 24kHz, 16-bit, mono (to user via TTS)
     """
 
+    # Incoming audio held for the STT stream: 3000 LiveKit frames of 10 ms is
+    # 30 s, about 3 MB at 48 kHz. Longer than any STT reconnect backoff, so a
+    # healthy reconnect loses nothing; a dead STT stream can no longer grow it.
+    AUDIO_QUEUE_MAX_FRAMES = int(os.getenv("STELLA_AUDIO_QUEUE_MAX_FRAMES", "3000"))
+
     def __init__(
         self,
         livekit_url: str,
@@ -82,8 +87,16 @@ class RoomManager:
         self._audio_track: Optional[rtc.LocalAudioTrack] = None
         self._connected = False
 
-        # Audio stream management
-        self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        # Audio stream management. Bounded: when nothing drains it (the STT
+        # stream gave up, or is reconnecting), it keeps the newest audio and
+        # drops the oldest instead of growing until the pod is killed (#922).
+        self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue(
+            maxsize=self.AUDIO_QUEUE_MAX_FRAMES
+        )
+        self._audio_frames_dropped = 0
+        # Streams being closed after their track went away; held so the close
+        # task is not garbage-collected before it finishes.
+        self._closing_streams: set = set()
         self._subscribed_tracks: Dict[str, rtc.RemoteAudioTrack] = {}
         self._audio_streams: Dict[str, rtc.AudioStream] = {}
         self._stream_tasks: Dict[str, asyncio.Task] = {}
@@ -385,7 +398,7 @@ class RoomManager:
                     print(f"[ROOM] Received {frame_count} audio frames from {identity}")
 
                 self._last_real_frame_at = time.monotonic()
-                await self._audio_queue.put(frame.data.tobytes())
+                self._enqueue_audio(frame.data.tobytes())
 
         except asyncio.CancelledError:
             print(f"[ROOM] Audio stream task cancelled for {identity}")
@@ -406,12 +419,13 @@ class RoomManager:
         """Handle track unsubscription."""
         if participant.identity in self._subscribed_tracks:
             del self._subscribed_tracks[participant.identity]
-        if participant.identity in self._audio_streams:
-            del self._audio_streams[participant.identity]
         if participant.identity in self._stream_tasks:
             self._stream_tasks[participant.identity].cancel()
             del self._stream_tasks[participant.identity]
             logger.info(f"Unsubscribed from audio track from {participant.identity}")
+        stream = self._audio_streams.pop(participant.identity, None)
+        if stream is not None:
+            self._close_audio_stream(stream)
 
         # If no audio sources remain, signal end-of-audio to consumers so the
         # in-flight STT utterance finalizes instead of stalling on the unmute
@@ -427,6 +441,50 @@ class RoomManager:
                     self._audio_queue.put_nowait(b"")
                 except (asyncio.QueueEmpty, asyncio.QueueFull):
                     pass
+
+    def _close_audio_stream(self, stream: Any) -> None:
+        """Close a stream whose track went away.
+
+        Dropping our reference is not enough: the stream's own task keeps
+        receiving frames into an unbounded queue that nobody reads any more.
+        Each reconnect of the owl iPad left one such stream behind, so memory
+        grew faster with every reconnect until the pod was OOM-killed (#922).
+        """
+        async def close() -> None:
+            try:
+                await stream.aclose()
+            except Exception as e:
+                logger.warning(f"[ROOM] Closing an audio stream failed: {e}")
+
+        try:
+            task = asyncio.get_running_loop().create_task(close())
+        except RuntimeError:
+            logger.debug("[ROOM] No running loop; cannot close audio stream")
+            return
+        self._closing_streams.add(task)
+        task.add_done_callback(self._closing_streams.discard)
+
+    def _enqueue_audio(self, chunk: bytes) -> None:
+        """Queue incoming audio, dropping the oldest chunk when full."""
+        try:
+            self._audio_queue.put_nowait(chunk)
+            return
+        except asyncio.QueueFull:
+            pass
+        try:
+            self._audio_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            self._audio_queue.put_nowait(chunk)
+        except asyncio.QueueFull:
+            return
+        self._audio_frames_dropped += 1
+        if self._audio_frames_dropped in (1, 100) or self._audio_frames_dropped % 6000 == 0:
+            logger.warning(
+                f"[ROOM] Audio queue full ({self._audio_queue.maxsize} chunks): nothing is "
+                f"reading it; dropped {self._audio_frames_dropped} oldest chunks so far"
+            )
 
     def _on_participant_connected(self, participant: rtc.RemoteParticipant) -> None:
         """Handle participant joining."""
@@ -529,7 +587,7 @@ class RoomManager:
         try:
             while remaining > 0 and self._connected:
                 if time.monotonic() - self._last_real_frame_at >= self.MUTE_GAP_MS / 1000.0:
-                    self._audio_queue.put_nowait(silence)
+                    self._enqueue_audio(silence)
                 await asyncio.sleep(step_s)
                 remaining -= step_s
         except asyncio.CancelledError:
