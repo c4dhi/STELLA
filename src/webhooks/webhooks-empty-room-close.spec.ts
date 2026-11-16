@@ -13,7 +13,7 @@ describe('empty-room auto-close follows the session setting', () => {
   function setup(session: { status: string; closeWhenEmpty: boolean | null; projectCloses: boolean }) {
     const prisma: any = {
       session: {
-        findUnique: jest.fn(async (args: any) => ({
+        findUnique: jest.fn(async () => ({
           id: 's1',
           status: session.status,
           hasHumanParticipant: true,
@@ -21,7 +21,6 @@ describe('empty-room auto-close follows the session setting', () => {
           closeWhenEmpty: session.closeWhenEmpty,
           project: { closeSessionWhenEmpty: session.projectCloses },
           room: { livekitRoomName: 'room-1' },
-          ...(args?.select ? {} : {}),
         })),
         update: jest.fn(async () => ({})),
       },

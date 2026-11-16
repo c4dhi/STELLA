@@ -94,6 +94,7 @@ export class SessionsTools implements McpToolProvider {
               isPublic: project.isPublic,
               agentInactivityTimeoutMinutes:
                 project.agentInactivityTimeoutMinutes,
+              closeSessionWhenEmpty: project.closeSessionWhenEmpty,
               activeSessions: project.activeSessions,
               activeAgents: project.activeAgents,
               totalSessions: project.totalSessions,
@@ -142,6 +143,8 @@ export class SessionsTools implements McpToolProvider {
               status: session.status,
               createdAt: session.createdAt,
               closedAt: session.closedAt,
+              closeWhenEmpty: session.closeWhenEmpty,
+              keptOpenAt: session.keptOpenAt,
               hasHumanParticipant: session.hasHumanParticipant,
               humanJoinedAt: session.humanJoinedAt,
               humanLeftAt: session.humanLeftAt,
