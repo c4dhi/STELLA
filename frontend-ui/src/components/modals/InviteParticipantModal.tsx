@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Check, Copy, Link2 } from 'lucide-react'
@@ -9,6 +9,9 @@ import type { VisualizerType } from '../face/types'
 import { VisualizerSelectionStep, ExpirationSelectionStep, INVITATION_EXPIRATION_OPTIONS, SessionDurationSelectionStep } from '../shared'
 import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 import WizardProgress from '../shared/WizardProgress'
+import DiscardChangesDialog from '../shared/DiscardChangesDialog'
+import { useDiscardGuard } from '../../hooks/useDiscardGuard'
+import { isInviteParticipantModalDirty } from './InviteParticipantModal.dirty'
 
 interface InviteParticipantModalProps {
   isOpen: boolean
@@ -108,12 +111,44 @@ export default function InviteParticipantModal({
     setCopied(false)
   }
 
+  const isDirty = useMemo(() => isInviteParticipantModalDirty({
+    step,
+    hasResult: result !== null,
+    invitationType,
+    participantName,
+    customMessage,
+    hasVisualizerType: visualizerType !== undefined,
+    visualizerLocked,
+    hasExpiresInHours: expiresInHours !== undefined,
+    hasMaxSessionDuration: maxSessionDurationSeconds !== null,
+  }), [step, result, invitationType, participantName, customMessage, visualizerType, visualizerLocked, expiresInHours, maxSessionDurationSeconds])
+
+  const performClose = () => {
+    resetForm()
+    onClose()
+  }
+
+  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(isDirty, performClose)
+
   const handleClose = () => {
     if (!isSubmitting) {
-      resetForm()
-      onClose()
+      requestClose()
     }
   }
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (showDiscardConfirm) {
+        keepEditing()
+      } else if (!isSubmitting) {
+        requestClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, showDiscardConfirm, isSubmitting, requestClose, keepEditing])
 
   const getStepNumber = (s: Step): number => {
     const stepConfig = STEPS.find(st => st.id === s)
@@ -758,6 +793,14 @@ export default function InviteParticipantModal({
             </div>
             )}
           </motion.div>
+
+          <DiscardChangesDialog
+            open={showDiscardConfirm}
+            isDark={isDark}
+            onKeepEditing={keepEditing}
+            onDiscard={confirmDiscard}
+            message="You have unsaved invitation setup. If you close now, it will be lost."
+          />
         </motion.div>
       )}
     </AnimatePresence>,

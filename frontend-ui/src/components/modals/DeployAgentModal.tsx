@@ -26,6 +26,9 @@ import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlot
 import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
 import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
+import DiscardChangesDialog from '../shared/DiscardChangesDialog'
+import { useDiscardGuard } from '../../hooks/useDiscardGuard'
+import { isDeployAgentModalDirty } from './DeployAgentModal.dirty'
 
 interface DeployAgentModalProps {
   isOpen: boolean
@@ -398,12 +401,38 @@ export default function DeployAgentModal({
     }
   }
 
+  const isDirty = useMemo(() => isDeployAgentModalDirty({
+    step,
+    hasSelectedType: selectedType !== null,
+    name,
+  }), [step, selectedType, name])
+
+  const performClose = () => {
+    setError(null)
+    onClose()
+  }
+
+  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(isDirty, performClose)
+
   const handleClose = () => {
     if (!isSubmitting) {
-      setError(null)
-      onClose()
+      requestClose()
     }
   }
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (showDiscardConfirm) {
+        keepEditing()
+      } else if (!isSubmitting) {
+        requestClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, showDiscardConfirm, isSubmitting, requestClose, keepEditing])
 
   const getStepTitle = (): string => {
     switch (step) {
@@ -869,6 +898,14 @@ export default function DeployAgentModal({
               </div>
             </div>
           </motion.div>
+
+          <DiscardChangesDialog
+            open={showDiscardConfirm}
+            isDark={isDark}
+            onKeepEditing={keepEditing}
+            onDiscard={confirmDiscard}
+            message="You have unsaved agent setup. If you close now, it will be lost."
+          />
         </motion.div>
       )}
     </AnimatePresence>
