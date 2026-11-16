@@ -41,7 +41,7 @@ export interface SessionEvent {
     | 'join.session_created' | 'join.agent_deploying' | 'join.agent_starting'
     | 'join.agent_ready' | 'join.invitation_created' | 'join.complete' | 'join.failed'
     // Project-level session lifecycle events
-    | 'session.created' | 'session.closed' | 'session.deleted';
+    | 'session.created' | 'session.closed' | 'session.deleted' | 'session.kept_open';
   sessionId: string;
   projectId?: string;      // For project-level event filtering
   sessionName?: string;    // For display in notifications
@@ -205,6 +205,9 @@ export class SessionsService {
         where,
         include: {
           room: true,
+          // The latest agent, so a session kept open after its agent stopped can
+          // offer Restart agent from the list (#162).
+          agents: { select: { id: true, name: true, status: true }, orderBy: { createdAt: 'desc' }, take: 1 },
           _count: {
             select: {
               agents: true,
@@ -238,6 +241,8 @@ export class SessionsService {
         where: { id },
         include: {
           room: true,
+          // What "as the project" means in Edit Session (#162)
+          project: { select: { closeSessionWhenEmpty: true } },
           agents: {
             orderBy: {
               createdAt: 'desc',
@@ -1623,6 +1628,20 @@ export class SessionsService {
       sessionId,
       projectId,
       sessionName: sessionName || undefined,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Everyone has left and the session was kept open (#162): tell the project's
+   * dashboards, which show it with Restart agent.
+   */
+  @OnEvent('session.kept_open')
+  onSessionKeptOpen(payload: { sessionId: string; projectId: string }): void {
+    this.emitProjectEvent({
+      type: 'session.kept_open',
+      sessionId: payload.sessionId,
+      projectId: payload.projectId,
       timestamp: new Date().toISOString(),
     });
   }

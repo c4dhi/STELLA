@@ -1,12 +1,18 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
+import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
+import { sessionCloseChoice, sessionCloseChoices } from '../../lib/closeWhenEmpty'
 
 interface EditSessionModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (name: string | null) => Promise<void>
+  onSubmit: (name: string | null, closeWhenEmpty: boolean | null) => Promise<void>
   currentName: string | null
+  /** The session's own setting for when everyone has left; null follows the project (#162). */
+  currentCloseWhenEmpty: boolean | null
+  /** What the project does when everyone has left. */
+  projectCloses: boolean
   sessionId: string
 }
 
@@ -15,8 +21,13 @@ export default function EditSessionModal({
   onClose,
   onSubmit,
   currentName,
+  currentCloseWhenEmpty,
+  projectCloses,
 }: EditSessionModalProps) {
   const [name, setName] = useState(currentName || '')
+  const [closeWhenEmpty, setCloseWhenEmpty] = useState<boolean | null>(currentCloseWhenEmpty)
+  const choices = sessionCloseChoices(projectCloses)
+  const picked = sessionCloseChoice(closeWhenEmpty)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { resolvedTheme } = useThemeStore()
@@ -26,6 +37,9 @@ export default function EditSessionModal({
   useEffect(() => {
     setName(currentName || '')
   }, [currentName])
+  useEffect(() => {
+    setCloseWhenEmpty(currentCloseWhenEmpty)
+  }, [currentCloseWhenEmpty])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -35,8 +49,8 @@ export default function EditSessionModal({
     // If name is empty, set it to null (clear the name)
     const nameToSubmit = trimmedName || null
 
-    if (nameToSubmit === currentName) {
-      setError('Please enter a different name or clear it')
+    if (nameToSubmit === currentName && closeWhenEmpty === currentCloseWhenEmpty) {
+      setError('Nothing has changed')
       return
     }
 
@@ -44,7 +58,7 @@ export default function EditSessionModal({
     setError(null)
 
     try {
-      await onSubmit(nameToSubmit)
+      await onSubmit(nameToSubmit, closeWhenEmpty)
       onClose()
     } catch (err: any) {
       setError(err.message || 'Failed to update session')
@@ -56,6 +70,7 @@ export default function EditSessionModal({
   const handleClose = () => {
     if (!loading) {
       setName(currentName || '') // Reset to original name
+      setCloseWhenEmpty(currentCloseWhenEmpty)
       setError(null)
       onClose()
     }
@@ -102,7 +117,7 @@ export default function EditSessionModal({
                 Edit Session
               </h2>
               <p className={`text-body mt-1 ${isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'}`}>
-                Update the name of your session (optional)
+                Update the name and settings of your session
               </p>
             </div>
 
@@ -129,6 +144,35 @@ export default function EditSessionModal({
                 }`}>
                   {name.length}/255 characters
                 </div>
+              </div>
+
+              {/* When everyone has left (#162) */}
+              <div>
+                <label className={`block text-label uppercase mb-2 ${
+                  isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'
+                }`}>
+                  When everyone has left
+                </label>
+                <div className="space-y-2">
+                  {choices.map((c) => (
+                    <button
+                      key={c.value}
+                      type="button"
+                      onClick={() => setCloseWhenEmpty(c.closeWhenEmpty)}
+                      disabled={loading}
+                      aria-pressed={picked === c.value}
+                      className={`relative w-full p-3 rounded-xl text-left text-sm font-medium disabled:opacity-60 ${
+                        isDark ? 'text-zinc-100' : 'text-neutral-900'
+                      } ${choiceCardClass(picked === c.value, isDark)}`}
+                    >
+                      {c.label}
+                      {picked === c.value && <SelectedBadge isDark={isDark} className="absolute top-3 right-3" />}
+                    </button>
+                  ))}
+                </div>
+                <p className={`mt-2 text-caption ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
+                  Keep open: the participant's invitation keeps working after the agent stops. Close: it stops working.
+                </p>
               </div>
 
               {/* Error message */}

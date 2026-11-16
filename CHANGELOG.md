@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The participant invitation link now shows as a QR code too, in the invite dialog and in a participant's connection info, so a phone can scan its way in instead of typing the link. Revoking an invitation greys the QR out the same way it already did the link (#163)
 
+### Changed
+
+- **A session no longer closes when everyone has left.** Before, once the
+  participant and the agent had both gone, the session closed and the
+  participant's invitation stopped working, so a crashed agent cost a study
+  participant their place. Now a session stays open and the invitation keeps
+  working. The sessions list shows that everyone has left, with a **Restart
+  agent** button that starts the agent again with the settings it had. A
+  project's settings ("When everyone has left") can switch back to closing,
+  and Edit Session can set it for one session. This applies to existing
+  projects too. A new public project starts on "close", because every
+  visitor starts their own session; the choice can be changed during setup.
+  Closing a session yourself, or reaching its maximum length, still closes
+  it. (#920)
+
 ### Fixed
 
 - Deploying an agent or inviting a participant now asks before discarding what you started. Clicking outside the dialog, pressing Escape or the close button only closes right away when nothing was entered; otherwise it asks to keep editing or discard, the same guard the Agent Configurator already had (#919)

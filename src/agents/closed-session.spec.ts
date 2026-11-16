@@ -56,3 +56,13 @@ describe('AgentsService in a closed session', () => {
     },
   );
 });
+
+describe('AgentsService in a session kept open after everyone left (#162)', () => {
+  it('lets Restart agent through the closed-session guard to the deploy step', async () => {
+    const { s } = service();
+    // Stop right after the guard: the deploy step's first read is the LiveKit config.
+    s.configService = { get: jest.fn(() => undefined) };
+    await expect(s.restartAgent('open')).rejects.toThrow(/Missing required environment variables/);
+    await expect(s.restartAgent('open')).rejects.not.toThrow(/agents can only start in an active session/);
+  });
+});
