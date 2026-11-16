@@ -12,6 +12,7 @@ import WizardProgress from '../shared/WizardProgress'
 import DiscardChangesDialog from '../shared/DiscardChangesDialog'
 import { useDiscardGuard } from '../../hooks/useDiscardGuard'
 import { isInviteParticipantModalDirty } from './InviteParticipantModal.dirty'
+import JoinQrCode from '../shared/JoinQrCode'
 
 interface InviteParticipantModalProps {
   isOpen: boolean
@@ -614,6 +615,14 @@ export default function InviteParticipantModal({
                       <span className={`text-xs font-medium tracking-wider uppercase ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>
                         Invitation Link
                       </span>
+                    </div>
+
+                    <div className="mb-4">
+                      <JoinQrCode
+                        value={result.joinUrl}
+                        isDark={isDark}
+                        participantName={result.invitation.participantName}
+                      />
                     </div>
 
                     <div className={`

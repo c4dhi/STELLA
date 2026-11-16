@@ -6,6 +6,7 @@ import { apiClient } from '../../services/ApiClient'
 import { useThemeStore } from '../../store/themeStore'
 import type { ParticipantConnectionInfoResponse, InvitationStatus } from '../../lib/api-types'
 import { getRuntimeConfig } from '../../config/runtime'
+import JoinQrCode from '../shared/JoinQrCode'
 
 interface ParticipantDetails {
   createdAt: string           // When invitation was created
@@ -262,6 +263,15 @@ export default function ParticipantConnectionModal({
 
                   {/* Invitation Link - Always show, but disable copy when revoked */}
                   <div>
+                    <div className="mb-4">
+                      <JoinQrCode
+                        value={webJoinUrl}
+                        isDark={isDark}
+                        revoked={isRevoked}
+                        participantName={connectionInfo.participantName}
+                      />
+                    </div>
+
                     <label className={`block text-xs font-light tracking-wider uppercase mb-2 ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
                       Invitation Link {isRevoked && <span className={isDark ? 'text-red-400' : 'text-red-500'}>(Disabled)</span>}
                     </label>
