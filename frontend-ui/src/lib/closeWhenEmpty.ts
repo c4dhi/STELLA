@@ -35,3 +35,18 @@ export function keptOpenNotice(session: {
   if (session.status !== 'ACTIVE' || !session.keptOpenAt) return null
   return { since: session.keptOpenAt, agentId: session.agents?.[0]?.id ?? null }
 }
+
+/**
+ * What the project's choice becomes when the organiser picks a project type
+ * while creating it: a public project closes empty sessions (every visitor
+ * starts their own, nobody comes back to it), a private one keeps them open.
+ * Once the organiser has picked a choice themselves, that choice stays.
+ */
+export function closesOnTypeChange(
+  projectType: 'private' | 'public',
+  current: boolean,
+  chosenByOrganiser: boolean,
+): boolean {
+  if (chosenByOrganiser) return current
+  return projectType === 'public'
+}

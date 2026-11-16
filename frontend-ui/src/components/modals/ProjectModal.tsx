@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Globe, Lock, Check, Copy, ExternalLink, Clock, Power } from 'lucide-react'
 import CloseWhenEmptySetting from '../shared/CloseWhenEmptySetting'
+import { closesOnTypeChange } from '../../lib/closeWhenEmpty'
 import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import EmojiPicker from '../EmojiPicker'
@@ -101,6 +102,9 @@ export default function ProjectModal({
   const [agentInactivityTimeout, setAgentInactivityTimeout] = useState<number | null>(5)
   // When everyone has left a session (#162): keep it open unless set otherwise.
   const [closeSessionWhenEmpty, setCloseSessionWhenEmpty] = useState(false)
+  // Set once the organiser picks keep/close themselves; until then the choice
+  // follows the project type (public closes, private keeps open).
+  const [closeChosen, setCloseChosen] = useState(false)
   const [customTimeout, setCustomTimeout] = useState('')
   const [showCustomInput, setShowCustomInput] = useState(false)
 
@@ -252,6 +256,11 @@ export default function ProjectModal({
 
   const getTotalSteps = () => visibleStepConfigs.length
 
+  const pickProjectType = (type: ProjectType) => {
+    setProjectType(type)
+    setCloseSessionWhenEmpty((current) => closesOnTypeChange(type, current, closeChosen))
+  }
+
   const isPublicWizard = !isEditMode && projectType === 'public' && step !== 'basic'
 
   // Reset state when modal opens
@@ -322,6 +331,7 @@ export default function ProjectModal({
         setProjectType('private')
         setAgentInactivityTimeout(5)
         setCloseSessionWhenEmpty(false)
+        setCloseChosen(false)
         setCustomTimeout('')
         setShowCustomInput(false)
         setSelectedAgentType(null)
@@ -743,7 +753,7 @@ export default function ProjectModal({
                       <div className="grid grid-cols-2 gap-3">
                         {/* Private Option */}
                         <button
-                          onClick={() => setProjectType('private')}
+                          onClick={() => pickProjectType('private')}
                           disabled={isSubmitting}
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
@@ -774,7 +784,7 @@ export default function ProjectModal({
 
                         {/* Public Option */}
                         <button
-                          onClick={() => setProjectType('public')}
+                          onClick={() => pickProjectType('public')}
                           disabled={isSubmitting}
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
@@ -937,7 +947,7 @@ export default function ProjectModal({
                   {/* When everyone has left (#162) */}
                   <CloseWhenEmptySetting
                     closes={closeSessionWhenEmpty}
-                    onChange={setCloseSessionWhenEmpty}
+                    onChange={(closes) => { setCloseSessionWhenEmpty(closes); setCloseChosen(true) }}
                     disabled={isSubmitting}
                     isDark={isDark}
                   />

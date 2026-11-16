@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AgentStatus, SessionStatus } from './api-types'
-import { keptOpenNotice, sessionCloseChoice, sessionCloseChoices } from './closeWhenEmpty'
+import { keptOpenNotice, sessionCloseChoice, sessionCloseChoices, closesOnTypeChange } from './closeWhenEmpty'
 
 const base = {
   status: SessionStatus.ACTIVE,
@@ -33,5 +33,17 @@ describe('the session setting', () => {
   it('names what "as the project" means', () => {
     expect(sessionCloseChoices(false)[0]).toEqual({ value: 'project', label: 'As the project (keep open)', closeWhenEmpty: null })
     expect(sessionCloseChoices(true)[0].label).toBe('As the project (close)')
+  })
+})
+
+describe('closesOnTypeChange (#162: public projects default to close)', () => {
+  it('defaults a public project to close and a private one to keep open', () => {
+    expect(closesOnTypeChange('public', false, false)).toBe(true)
+    expect(closesOnTypeChange('private', true, false)).toBe(false)
+  })
+
+  it('keeps a choice the organiser made, whichever type they then pick', () => {
+    expect(closesOnTypeChange('public', false, true)).toBe(false)
+    expect(closesOnTypeChange('private', true, true)).toBe(true)
   })
 })
