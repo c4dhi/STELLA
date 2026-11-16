@@ -17,9 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent** button that starts the agent again with the settings it had. A
   project's settings ("When everyone has left") can switch back to closing,
   and Edit Session can set it for one session. This applies to existing
-  projects too. A new public project starts on "close", because every visitor
-  starts their own session; the choice can be changed during setup. Closing a session yourself, or reaching its maximum length,
-  still closes it. (#920)
+  projects too. A new public project starts on "close", because every
+  visitor starts their own session; the choice can be changed during setup.
+  Closing a session yourself, or reaching its maximum length, still closes
+  it. (#920)
 
 ---
 
