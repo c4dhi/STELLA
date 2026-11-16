@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A session no longer closes when everyone has left.** Before, once the
+  participant and the agent had both gone, the session closed and the
+  participant's invitation stopped working, so a crashed agent cost a study
+  participant their place. Now a session stays open and the invitation keeps
+  working. The sessions list shows that everyone has left, with a **Restart
+  agent** button that starts the agent again with the settings it had. A
+  project's settings ("When everyone has left") can switch back to closing,
+  and Edit Session can set it for one session. This applies to existing
+  projects too. Closing a session yourself, or reaching its maximum length,
+  still closes it. (#920)
+
 ---
 
 ## [2.0.0] - 2026-11-07

@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Users } from 'lucide-react'
+import { Users, AlertTriangle, RotateCcw } from 'lucide-react'
+import { keptOpenNotice } from '../lib/closeWhenEmpty'
 import { apiClient } from '../services/ApiClient'
 import { useThemeStore } from '../store/themeStore'
 import CreateSessionModal from '../components/modals/CreateSessionModal'
@@ -208,6 +209,11 @@ export default function SessionsDashboard() {
           // Remove session from local state
           setSessions(prev => prev.filter(s => s.id !== event.sessionId))
           break
+
+        case 'session.kept_open':
+          // Everyone left and the session stayed open (#162): reload to show the notice
+          loadData()
+          break
       }
     }
 
@@ -239,17 +245,34 @@ export default function SessionsDashboard() {
   }
 
   // Handle session update
-  const handleUpdateSession = async (name: string | null) => {
+  const handleUpdateSession = async (name: string | null, closeWhenEmpty: boolean | null) => {
     if (!editingSession) return
 
     try {
-      const updatedSession = await apiClient.updateSession(editingSession.id, { name: name || undefined })
+      const updatedSession = await apiClient.updateSession(editingSession.id, { name: name || undefined, closeWhenEmpty })
       setSessions(prev =>
-        prev.map(s => (s.id === editingSession.id ? { ...s, name: updatedSession.name } : s))
+        prev.map(s => (s.id === editingSession.id
+          ? { ...s, name: updatedSession.name, closeWhenEmpty: updatedSession.closeWhenEmpty ?? null }
+          : s))
       )
       addToast({ message: 'Session updated successfully', type: 'success' })
     } catch (err) {
       throw err // Let modal handle the error
+    }
+  }
+
+  // Restart the agent of a session kept open after everyone left (#162)
+  const [restartingSessionId, setRestartingSessionId] = useState<string | null>(null)
+  const handleRestartAgent = async (sessionId: string, agentId: string) => {
+    setRestartingSessionId(sessionId)
+    try {
+      await apiClient.restartAgent(agentId)
+      setSessions(prev => prev.map(s => (s.id === sessionId ? { ...s, keptOpenAt: null } : s)))
+      addToast({ message: 'Agent restarting', type: 'success' })
+    } catch (err) {
+      addToast({ message: err instanceof Error ? err.message : 'Could not restart the agent', type: 'error' })
+    } finally {
+      setRestartingSessionId(null)
     }
   }
 
@@ -649,6 +672,37 @@ export default function SessionsDashboard() {
                     }`}>
                       Created {new Date(session.createdAt).toLocaleString()}
                     </p>
+
+                    {/* Kept open after everyone left (#162) */}
+                    {(() => {
+                      const notice = keptOpenNotice(session)
+                      if (!notice) return null
+                      const time = new Date(notice.since).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      return (
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className={`mt-4 flex flex-col sm:flex-row sm:items-center gap-3 rounded-lg px-3 py-2.5 border ${
+                            isDark ? 'bg-amber-500/10 border-amber-500/30' : 'bg-amber-50 border-amber-200'
+                          }`}
+                        >
+                          <AlertTriangle className={`w-4 h-4 shrink-0 hidden sm:block ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
+                          <div className={`flex-1 text-body-sm ${isDark ? 'text-amber-200' : 'text-amber-800'}`}>
+                            <span className="font-medium">The agent stopped and everyone had left by {time}.</span>{' '}
+                            The session and the participant's invitation are still open.
+                          </div>
+                          {notice.agentId && (
+                            <button
+                              onClick={() => void handleRestartAgent(session.id, notice.agentId!)}
+                              disabled={restartingSessionId === session.id}
+                              className="btn-primary text-ui-sm py-2 inline-flex items-center gap-1.5 self-start sm:self-auto disabled:opacity-60"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              {restartingSessionId === session.id ? 'Restarting…' : 'Restart agent'}
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
 
                   {/* Actions */}
@@ -760,6 +814,8 @@ export default function SessionsDashboard() {
           onClose={() => setEditingSession(null)}
           onSubmit={handleUpdateSession}
           currentName={editingSession.name}
+          currentCloseWhenEmpty={editingSession.closeWhenEmpty ?? null}
+          projectCloses={project?.closeSessionWhenEmpty ?? false}
           sessionId={editingSession.id}
         />
       )}
