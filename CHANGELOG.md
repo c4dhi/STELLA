@@ -5,11 +5,25 @@ All notable changes to STELLA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.1] - 2026-11-17
+
+Sessions that last. A session in a private project now stays open when
+everyone has left, so a crashed agent no longer costs a participant their
+invitation, and STELLA Jev no longer runs out of memory after about an hour.
+Also: the participant link as a QR code, and setup dialogs that ask before
+throwing away what you entered. Ships Agent SDK 0.10.1.
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy (whether a project or session closes when everyone has left, and when a session was kept open). Nothing backs up for you first
+- **Sessions in private projects, existing ones included, no longer close when everyone has left.** Public projects keep closing empty sessions. Switch a project in its settings ("When everyone has left") if you want the other behaviour
+- **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
+- **Rebuild uploaded agents to get the memory fix.** They keep working without it, but only an image built with Agent SDK 0.10.1 has it. Agent SDK 0.10.1 is on PyPI before this release reaches production
+- No new required setting
 
 ### Added
 
-- The participant invitation link now shows as a QR code too, in the invite dialog and in a participant's connection info, so a phone can scan its way in instead of typing the link. Revoking an invitation greys the QR out the same way it already did the link (#163)
+- The participant invitation link now shows as a QR code too, in the invite dialog and in a participant's connection info, so a phone can scan its way in instead of typing the link. Revoking an invitation greys the QR out the same way it already did the link (#921)
 
 ### Changed
 
@@ -30,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Deploying an agent or inviting a participant now asks before discarding what you started. Clicking outside the dialog, pressing Escape or the close button only closes right away when nothing was entered; otherwise it asks to keep editing or discard, the same guard the Agent Configurator already had (#919)
+- **STELLA Jev no longer runs out of memory after about an hour.** Each time a participant's audio reconnected, the agent kept the old audio stream filling up in the background, so a long session reached its memory limit and the agent was stopped. The agent now closes the old stream, and the incoming audio queue holds at most 30 seconds (`STELLA_AUDIO_QUEUE_MAX_FRAMES`). The fix is in Agent SDK 0.10.1, so every built-in agent has it, and uploaded agents get it with a rebuild (#922)
+- Agent SDK 0.10.1 (`pip install stella-ai-agent-sdk==0.10.1`), fixes only: audio streams are closed on unsubscribe and the incoming audio queue is bounded. Details in the [SDK changelog](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md)
 
 ---
 

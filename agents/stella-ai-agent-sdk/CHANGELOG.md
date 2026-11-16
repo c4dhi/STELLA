@@ -9,7 +9,9 @@ platform's changelog lives [at the repository root](https://github.com/c4dhi/STE
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.1] - 2026-11-17
+
+Ships with STELLA 2.0.1. Fixes only.
 
 ### Fixed
 
