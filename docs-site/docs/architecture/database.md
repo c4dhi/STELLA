@@ -77,6 +77,10 @@ model Project {
   publicExpiresAt        DateTime?
   publicEnabled          Boolean    @default(true)
 
+  // Whether a session closes once everyone has left; false keeps it open.
+  // Sessions follow this unless they set closeWhenEmpty themselves.
+  closeSessionWhenEmpty  Boolean    @default(false)
+
   // Relations
   sessions           Session[]
   memberships        ProjectMembership[]
@@ -103,6 +107,8 @@ model Session {
   status    SessionStatus @default(ACTIVE) // ACTIVE, CLOSED
   createdAt DateTime      @default(now())
   closedAt  DateTime?
+  closeWhenEmpty Boolean?  // null = as the project's closeSessionWhenEmpty
+  keptOpenAt     DateTime? // everyone left and the session was kept open; cleared when someone joins
 
   // Relations
   room         Room?
@@ -292,7 +298,7 @@ model Invitation {
 | `PENDING` | Waiting for participant |
 | `ACCEPTED` | Participant joined |
 | `EXPIRED` | Time-based expiration |
-| `REVOKED` | Manually revoked |
+| `REVOKED` | Revoked by hand, or because the session closed |
 
 ## Messages & Events
 

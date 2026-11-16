@@ -101,5 +101,8 @@ To verify the hard deadline (agent never finishes its wrap-up):
   session's `maxSessionDurationSeconds` stays null; session runs indefinitely and no
   `session_end` is ever published.
 - **Inactivity ≠ close**: leaving the room only **pauses** agents
-  (`agentInactivityTimeoutMinutes`); the session stays `ACTIVE`. Only the cap, a plan
-  finish, or a manual close moves it to `CLOSED`.
+  (`agentInactivityTimeoutMinutes`). When everyone has left, the session stays
+  `ACTIVE` unless it closes when empty (`Session.closeWhenEmpty`, or else the
+  project's `closeSessionWhenEmpty`; a public project created in the app, or
+  upgraded from before 2.0.1, closes by default). Otherwise
+  only the cap, a plan finish, or a manual close moves it to `CLOSED`.
