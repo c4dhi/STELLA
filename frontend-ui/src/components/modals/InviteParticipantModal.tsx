@@ -598,7 +598,7 @@ export default function InviteParticipantModal({
                       <JoinQrCode
                         value={result.joinUrl}
                         isDark={isDark}
-                        downloadFileName={`invite-${result.invitation.participantName}.png`}
+                        participantName={result.invitation.participantName}
                       />
                     </div>
 

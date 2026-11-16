@@ -268,7 +268,7 @@ export default function ParticipantConnectionModal({
                         value={webJoinUrl}
                         isDark={isDark}
                         revoked={isRevoked}
-                        downloadFileName={`invite-${connectionInfo.participantName}.png`}
+                        participantName={connectionInfo.participantName}
                       />
                     </div>
 
