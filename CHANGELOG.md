@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Deploying an agent or inviting a participant now asks before discarding what you started. Clicking outside the dialog, pressing Escape or the close button only closes right away when nothing was entered; otherwise it asks to keep editing or discard, the same guard the Agent Configurator already had (#919)
+
 ---
 
 ## [2.0.0] - 2026-11-07

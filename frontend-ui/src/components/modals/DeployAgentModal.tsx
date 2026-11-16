@@ -412,27 +412,15 @@ export default function DeployAgentModal({
     onClose()
   }
 
-  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(isDirty, performClose)
+  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(
+    isDirty, performClose, { isOpen, blocked: isSubmitting },
+  )
 
   const handleClose = () => {
     if (!isSubmitting) {
       requestClose()
     }
   }
-
-  useEffect(() => {
-    if (!isOpen) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      if (showDiscardConfirm) {
-        keepEditing()
-      } else if (!isSubmitting) {
-        requestClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, showDiscardConfirm, isSubmitting, requestClose, keepEditing])
 
   const getStepTitle = (): string => {
     switch (step) {

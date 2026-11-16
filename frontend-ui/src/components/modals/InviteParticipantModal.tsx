@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Check, Copy, Link2 } from 'lucide-react'
@@ -128,27 +128,15 @@ export default function InviteParticipantModal({
     onClose()
   }
 
-  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(isDirty, performClose)
+  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(
+    isDirty, performClose, { isOpen, blocked: isSubmitting },
+  )
 
   const handleClose = () => {
     if (!isSubmitting) {
       requestClose()
     }
   }
-
-  useEffect(() => {
-    if (!isOpen) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      if (showDiscardConfirm) {
-        keepEditing()
-      } else if (!isSubmitting) {
-        requestClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, showDiscardConfirm, isSubmitting, requestClose, keepEditing])
 
   const getStepNumber = (s: Step): number => {
     const stepConfig = STEPS.find(st => st.id === s)
