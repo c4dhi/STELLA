@@ -9,6 +9,7 @@ import type { VisualizerType } from '../face/types'
 import { VisualizerSelectionStep, ExpirationSelectionStep, INVITATION_EXPIRATION_OPTIONS, SessionDurationSelectionStep } from '../shared'
 import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 import WizardProgress from '../shared/WizardProgress'
+import JoinQrCode from '../shared/JoinQrCode'
 
 interface InviteParticipantModalProps {
   isOpen: boolean
@@ -591,6 +592,14 @@ export default function InviteParticipantModal({
                       <span className={`text-xs font-medium tracking-wider uppercase ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>
                         Invitation Link
                       </span>
+                    </div>
+
+                    <div className="mb-4">
+                      <JoinQrCode
+                        value={result.joinUrl}
+                        isDark={isDark}
+                        downloadFileName={`invite-${result.invitation.participantName}.png`}
+                      />
                     </div>
 
                     <div className={`

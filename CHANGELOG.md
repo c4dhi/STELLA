@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The participant invitation link now shows as a QR code too, in the invite dialog and in a participant's connection info, so a phone can scan its way in instead of typing the link. Revoking an invitation greys the QR out the same way it already did the link (#163)
+
 ---
 
 ## [2.0.0] - 2026-11-07
