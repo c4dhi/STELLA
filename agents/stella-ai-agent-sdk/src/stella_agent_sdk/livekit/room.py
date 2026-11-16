@@ -332,8 +332,9 @@ class RoomManager:
         logger.info(f"Setting up audio stream for existing track from {identity}")
         self._subscribed_tracks[identity] = track
 
-        # Create audio stream for this track
-        audio_stream = rtc.AudioStream(track)
+        # Create audio stream for this track. Its own queue is bounded too, in
+        # case a future path drops a stream without closing it (#922).
+        audio_stream = rtc.AudioStream(track, capacity=self.AUDIO_QUEUE_MAX_FRAMES)
         self._audio_streams[identity] = audio_stream
 
         # Start a task to read from this stream and put frames into the queue
@@ -362,7 +363,7 @@ class RoomManager:
             self._subscribed_tracks[participant.identity] = track
 
             # Create audio stream for this track
-            audio_stream = rtc.AudioStream(track)
+            audio_stream = rtc.AudioStream(track, capacity=self.AUDIO_QUEUE_MAX_FRAMES)
             self._audio_streams[participant.identity] = audio_stream
 
             # Start a task to read from this stream and put frames into the queue
