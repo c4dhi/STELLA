@@ -46,11 +46,11 @@ Choose **Export**. The wizard asks whether to include metrics and logs (not need
 
 ## The upgrade
 
-Fetch the release, check out its tag, for example `v2.0.0`, and install that release's Node packages:
+Fetch the release, check out its tag, for example `v2.0.1`, and install that release's Node packages:
 
 ```bash
 git fetch --tags
-git checkout v2.0.0
+git checkout v2.0.1
 npm ci
 ```
 
@@ -74,11 +74,20 @@ All pods should be `Running` and ready, and started just now (the `AGE` column):
 kubectl -n ai-agents get pods
 ```
 
-Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v2.0.0`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
+Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v2.0.1`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
 
 ## Manual steps per version
 
 Run the steps of every version you pass, oldest first. A version not listed here needs none.
+
+### 2.0.1
+
+The deploy applies one new database migration on its own (whether a project or a session closes once everyone has left, and when a session was kept open), so back up first as described above. The migration sets existing private projects to keep their sessions open and existing public projects to keep closing them.
+
+After the upgrade:
+
+- **Restart every running STELLA Jev agent** (or any built-in agent in a long session) from its session, so it runs the image with the memory fix. An agent that is already running keeps the image it started with.
+- **Rebuild uploaded agents to get the memory fix.** They keep working without a rebuild, but only an image built with Agent SDK 0.10.1 has the fix. Open **Settings → Agent Library** and build each one again.
 
 ### 2.0.0
 

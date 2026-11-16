@@ -9,7 +9,14 @@ platform's changelog lives [at the repository root](https://github.com/c4dhi/STE
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.1] - 2026-11-17
+
+Ships with STELLA 2.0.1. Fixes only.
+
+### Fixed
+
+- **Agent memory grew with every reconnect until the pod was OOM-killed** (#922). When a participant's audio track went away, `RoomManager` dropped its `rtc.AudioStream` without closing it, and the stream kept filling an unbounded queue that nothing read. The owl iPad reconnects every few minutes, so a Grace (stella-jev-agent) session hit the 2 GiB limit in about an hour. The stream is now closed on unsubscribe, and each stream's own queue is bounded.
+- **The incoming audio queue is bounded.** It holds at most 30 s of audio (`STELLA_AUDIO_QUEUE_MAX_FRAMES`, default `3000` frames of 10 ms) and drops the oldest audio when full, logging a warning. Before, a speech-recognition stream that had given up let it grow by about 360 MB an hour. Agents get both fixes only through a rebuilt image.
 
 ## [0.10.0] - 2026-11-07
 

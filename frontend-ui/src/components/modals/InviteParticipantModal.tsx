@@ -9,6 +9,10 @@ import type { VisualizerType } from '../face/types'
 import { VisualizerSelectionStep, ExpirationSelectionStep, INVITATION_EXPIRATION_OPTIONS, SessionDurationSelectionStep } from '../shared'
 import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 import WizardProgress from '../shared/WizardProgress'
+import DiscardChangesDialog from '../shared/DiscardChangesDialog'
+import { useDiscardGuard } from '../../hooks/useDiscardGuard'
+import { isInviteParticipantModalDirty } from './InviteParticipantModal.dirty'
+import JoinQrCode from '../shared/JoinQrCode'
 
 interface InviteParticipantModalProps {
   isOpen: boolean
@@ -108,10 +112,30 @@ export default function InviteParticipantModal({
     setCopied(false)
   }
 
+  const isDirty = useMemo(() => isInviteParticipantModalDirty({
+    step,
+    hasResult: result !== null,
+    invitationType,
+    participantName,
+    customMessage,
+    hasVisualizerType: visualizerType !== undefined,
+    visualizerLocked,
+    hasExpiresInHours: expiresInHours !== undefined,
+    hasMaxSessionDuration: maxSessionDurationSeconds !== null,
+  }), [step, result, invitationType, participantName, customMessage, visualizerType, visualizerLocked, expiresInHours, maxSessionDurationSeconds])
+
+  const performClose = () => {
+    resetForm()
+    onClose()
+  }
+
+  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(
+    isDirty, performClose, { isOpen, blocked: isSubmitting },
+  )
+
   const handleClose = () => {
     if (!isSubmitting) {
-      resetForm()
-      onClose()
+      requestClose()
     }
   }
 
@@ -593,6 +617,14 @@ export default function InviteParticipantModal({
                       </span>
                     </div>
 
+                    <div className="mb-4">
+                      <JoinQrCode
+                        value={result.joinUrl}
+                        isDark={isDark}
+                        participantName={result.invitation.participantName}
+                      />
+                    </div>
+
                     <div className={`
                       p-3 rounded-xl text-sm font-mono break-all mb-4
                       ${isDark ? 'bg-zinc-800/80 text-zinc-300 border border-zinc-700/50' : 'bg-white text-neutral-600 border border-neutral-200'}
@@ -758,6 +790,14 @@ export default function InviteParticipantModal({
             </div>
             )}
           </motion.div>
+
+          <DiscardChangesDialog
+            open={showDiscardConfirm}
+            isDark={isDark}
+            onKeepEditing={keepEditing}
+            onDiscard={confirmDiscard}
+            message="You have unsaved invitation setup. If you close now, it will be lost."
+          />
         </motion.div>
       )}
     </AnimatePresence>,

@@ -599,14 +599,15 @@ export default function SessionView() {
   }, [session?.room?.livekitRoomName, transport, setStatus])
 
   // Handle session name update
-  const handleUpdateSessionName = async (name: string | null) => {
+  const handleUpdateSessionName = async (name: string | null, closeWhenEmpty: boolean | null) => {
     if (!sessionId) return
 
     try {
-      const updatedSession = await apiClient.updateSession(sessionId, { name: name || undefined })
+      const renamed = name !== (session?.name ?? null)
+      const updatedSession = await apiClient.updateSession(sessionId, { name: name || undefined, closeWhenEmpty })
       setSession(updatedSession)
       addToast({
-        message: name ? `Session renamed to "${name}"` : 'Session name cleared',
+        message: !renamed ? 'Session updated' : name ? `Session renamed to "${name}"` : 'Session name cleared',
         type: 'success'
       })
     } catch (err) {
@@ -844,6 +845,8 @@ export default function SessionView() {
           onClose={() => setIsEditModalOpen(false)}
           onSubmit={handleUpdateSessionName}
           currentName={session.name}
+          currentCloseWhenEmpty={session.closeWhenEmpty ?? null}
+          projectCloses={session.project?.closeSessionWhenEmpty ?? false}
           sessionId={session.id}
         />
       )}

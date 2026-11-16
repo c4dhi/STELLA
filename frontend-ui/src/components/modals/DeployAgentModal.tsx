@@ -26,6 +26,9 @@ import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlot
 import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
 import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
+import DiscardChangesDialog from '../shared/DiscardChangesDialog'
+import { useDiscardGuard } from '../../hooks/useDiscardGuard'
+import { isDeployAgentModalDirty } from './DeployAgentModal.dirty'
 
 interface DeployAgentModalProps {
   isOpen: boolean
@@ -398,10 +401,24 @@ export default function DeployAgentModal({
     }
   }
 
+  const isDirty = useMemo(() => isDeployAgentModalDirty({
+    step,
+    hasSelectedType: selectedType !== null,
+    name,
+  }), [step, selectedType, name])
+
+  const performClose = () => {
+    setError(null)
+    onClose()
+  }
+
+  const { showConfirm: showDiscardConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(
+    isDirty, performClose, { isOpen, blocked: isSubmitting },
+  )
+
   const handleClose = () => {
     if (!isSubmitting) {
-      setError(null)
-      onClose()
+      requestClose()
     }
   }
 
@@ -869,6 +886,14 @@ export default function DeployAgentModal({
               </div>
             </div>
           </motion.div>
+
+          <DiscardChangesDialog
+            open={showDiscardConfirm}
+            isDark={isDark}
+            onKeepEditing={keepEditing}
+            onDiscard={confirmDiscard}
+            message="You have unsaved agent setup. If you close now, it will be lost."
+          />
         </motion.div>
       )}
     </AnimatePresence>

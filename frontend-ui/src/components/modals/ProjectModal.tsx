@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Globe, Lock, Check, Copy, ExternalLink, Clock, Power } from 'lucide-react'
+import CloseWhenEmptySetting from '../shared/CloseWhenEmptySetting'
+import { closesOnTypeChange } from '../../lib/closeWhenEmpty'
 import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
 import EmojiPicker from '../EmojiPicker'
@@ -98,6 +100,11 @@ export default function ProjectModal({
 
   // Auto-stop timeout
   const [agentInactivityTimeout, setAgentInactivityTimeout] = useState<number | null>(5)
+  // When everyone has left a session (#162): keep it open unless set otherwise.
+  const [closeSessionWhenEmpty, setCloseSessionWhenEmpty] = useState(false)
+  // Set once the organiser picks keep/close themselves; until then the choice
+  // follows the project type (public closes, private keeps open).
+  const [closeChosen, setCloseChosen] = useState(false)
   const [customTimeout, setCustomTimeout] = useState('')
   const [showCustomInput, setShowCustomInput] = useState(false)
 
@@ -249,6 +256,11 @@ export default function ProjectModal({
 
   const getTotalSteps = () => visibleStepConfigs.length
 
+  const pickProjectType = (type: ProjectType) => {
+    setProjectType(type)
+    setCloseSessionWhenEmpty((current) => closesOnTypeChange(type, current, closeChosen))
+  }
+
   const isPublicWizard = !isEditMode && projectType === 'public' && step !== 'basic'
 
   // Reset state when modal opens
@@ -303,6 +315,7 @@ export default function ProjectModal({
         setName(project.name)
         const timeout = project.agentInactivityTimeoutMinutes ?? null
         setAgentInactivityTimeout(timeout)
+        setCloseSessionWhenEmpty(project.closeSessionWhenEmpty ?? false)
 
         // Check if current timeout is a custom value
         const isPreset = TIMEOUT_OPTIONS.some(opt => opt.value === timeout)
@@ -317,6 +330,8 @@ export default function ProjectModal({
         setName('')
         setProjectType('private')
         setAgentInactivityTimeout(5)
+        setCloseSessionWhenEmpty(false)
+        setCloseChosen(false)
         setCustomTimeout('')
         setShowCustomInput(false)
         setSelectedAgentType(null)
@@ -404,7 +419,8 @@ export default function ProjectModal({
           // In edit mode, check if there are changes
           const hasChanges =
             name !== project?.name ||
-            agentInactivityTimeout !== (project?.agentInactivityTimeoutMinutes ?? null)
+            agentInactivityTimeout !== (project?.agentInactivityTimeoutMinutes ?? null) ||
+            closeSessionWhenEmpty !== (project?.closeSessionWhenEmpty ?? false)
           return name.trim().length > 0 && name.length <= 255 && hasChanges
         }
         return name.trim().length > 0 && name.length <= 255
@@ -440,7 +456,7 @@ export default function ProjectModal({
       default:
         return false
     }
-  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, isLoadingEnvVars, settingsDraft.state.ready, isEditMode, project, agentInactivityTimeout, needs, connectorSlots, slotChoices, ownConnectors])
+  }, [step, name, selectedAgentType, agentName, selectedPlan, selectedConfiguration, isLoadingEnvVars, settingsDraft.state.ready, isEditMode, project, agentInactivityTimeout, closeSessionWhenEmpty, needs, connectorSlots, slotChoices, ownConnectors])
 
   const handleSubmit = async () => {
     if (!name.trim()) {
@@ -466,6 +482,7 @@ export default function ProjectModal({
         const updatedProject = await apiClient.updateProject(project.id, {
           name: name !== project.name ? name : undefined,
           agentInactivityTimeoutMinutes: agentInactivityTimeout,
+          closeSessionWhenEmpty,
         })
         onProjectUpdated?.(updatedProject)
         onClose()
@@ -474,6 +491,7 @@ export default function ProjectModal({
         const newProject = await apiClient.createProject({
           name,
           agentInactivityTimeoutMinutes: agentInactivityTimeout,
+          closeSessionWhenEmpty,
         })
 
         // If public, update the public config
@@ -735,7 +753,7 @@ export default function ProjectModal({
                       <div className="grid grid-cols-2 gap-3">
                         {/* Private Option */}
                         <button
-                          onClick={() => setProjectType('private')}
+                          onClick={() => pickProjectType('private')}
                           disabled={isSubmitting}
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
@@ -766,7 +784,7 @@ export default function ProjectModal({
 
                         {/* Public Option */}
                         <button
-                          onClick={() => setProjectType('public')}
+                          onClick={() => pickProjectType('public')}
                           disabled={isSubmitting}
                           className={`
                             relative p-4 rounded-xl text-left transition-all duration-200
@@ -925,6 +943,14 @@ export default function ProjectModal({
                       </p>
                     </div>
                   </div>
+
+                  {/* When everyone has left (#162) */}
+                  <CloseWhenEmptySetting
+                    closes={closeSessionWhenEmpty}
+                    onChange={(closes) => { setCloseSessionWhenEmpty(closes); setCloseChosen(true) }}
+                    disabled={isSubmitting}
+                    isDark={isDark}
+                  />
                 </motion.div>
               )}
 

@@ -108,6 +108,8 @@ export interface Project {
   createdAt: string
   updatedAt: string
   agentInactivityTimeoutMinutes?: number | null
+  /** When everyone has left a session: true closes it, false keeps it open (#162). */
+  closeSessionWhenEmpty?: boolean
 }
 
 export interface ProjectWithCounts extends Project {
@@ -146,6 +148,10 @@ export interface Session {
   status: SessionStatus
   createdAt: string
   closedAt: string | null
+  /** When everyone has left: true closes, false keeps open, null follows the project (#162). */
+  closeWhenEmpty?: boolean | null
+  /** Set when everyone left and the session was kept open; cleared when somebody joins. */
+  keptOpenAt?: string | null
 }
 
 export interface Room {
@@ -160,6 +166,8 @@ export interface SessionWithRoom extends Session {
 }
 
 export interface SessionDetail extends SessionWithRoom {
+  /** What the project does when everyone has left (#162). */
+  project?: { closeSessionWhenEmpty: boolean }
   agents: AgentInstance[]
   participants: Participant[]
   _count: {
@@ -169,6 +177,8 @@ export interface SessionDetail extends SessionWithRoom {
 }
 
 export interface SessionListItem extends SessionWithRoom {
+  /** The latest agent only, for Restart agent (#162). */
+  agents?: { id: string; name: string; status: AgentStatus }[]
   _count: {
     agents: number
     participants: number
@@ -271,6 +281,7 @@ export interface Timeline {
 export interface CreateProjectDto {
   name: string // 1-255 characters
   agentInactivityTimeoutMinutes?: number | null
+  closeSessionWhenEmpty?: boolean
 }
 
 export interface CreateSessionDto {
@@ -463,6 +474,7 @@ export type ProjectSessionEventType =
   | 'session.created'
   | 'session.closed'
   | 'session.deleted'
+  | 'session.kept_open'
 
 export interface ProjectSessionEvent {
   type: ProjectSessionEventType

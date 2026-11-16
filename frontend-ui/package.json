@@ -39,6 +39,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "@vitest/mocker": "^5.0.5",
     "autoprefixer": "^10.6.1",
+    "jsdom": "^29.1.1",
     "oxlint": "1.89.0",
     "postcss": "^8.5.18",
     "prettier": "^3.9.10",
