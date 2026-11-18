@@ -13,7 +13,6 @@ import type {
   EnvVarTemplate,
   UpdatePublicConfigDto,
   PublicAgentConfig,
-  ProjectWithCounts,
   Project,
   AgentConfiguration,
   TtsCapabilities,
@@ -44,7 +43,7 @@ import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../sh
 interface ProjectModalProps {
   isOpen: boolean
   onClose: () => void
-  project?: ProjectWithCounts  // If provided = edit mode, else = create mode
+  project?: Project  // If provided = edit mode, else = create mode
   onProjectCreated?: (projectId: string) => void
   onProjectUpdated?: (project: Project) => void
 }

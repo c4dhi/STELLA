@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **An offline banner on every screen.** While your device has no connection, a pill at the top says you're offline, and it shows "Back online" for a moment once the connection returns. It covers participant pages too. It only notices your own connection, not the server being unreachable ([#944](https://github.com/c4dhi/STELLA/issues/944))
+- **Edit a project from its sessions screen.** A pencil next to the project name opens the same Project Settings window as the start screen, so you can rename the project without going back ([#943](https://github.com/c4dhi/STELLA/issues/943))
 
 ### Fixed
 
