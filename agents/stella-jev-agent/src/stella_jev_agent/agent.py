@@ -234,8 +234,8 @@ class StellaJevAgent(StellaV2Agent):
             return None
         self.expert_pool.last_scope = None
         unsaved = scope.unsaved()
-        if unsaved:
-            logger.warning(f"Extraction saved nothing for Jev's pick {unsaved!r}")
+        if unsaved or scope.refused:
+            logger.warning(f"Extraction did not follow Jev's pick: unsaved {unsaved!r}, refused {scope.refused!r}")
             self._extraction_events.append(("extraction_declined_pick", {
                 "elapsed_ms": self._elapsed_ms(), "tasks": unsaved, "refused": scope.refused,
             }))

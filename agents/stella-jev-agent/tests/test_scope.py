@@ -125,3 +125,22 @@ def test_a_picked_task_left_unsaved_is_named():
     machine, tools = _tools(scope)
     asyncio.run(tools["batch_update"].execute(deliverables=[{"key": "water", "value": "2 l", "reasoning": ""}], tasks=[]))
     assert scope.unsaved() == ["Vorstellung"]
+
+
+def test_a_refused_write_is_logged_even_when_the_pick_was_saved():
+    from stella_jev_agent.agent import StellaJevAgent
+    scope = Scope.of({"task": WATER, "correction": False})
+    machine, tools = _tools(scope)
+    asyncio.run(tools["batch_update"].execute(
+        deliverables=[{"key": "water", "value": "2 l", "reasoning": ""}, {"key": "walk", "value": "nie", "reasoning": ""}],
+        tasks=[],
+    ))
+    agent = StellaJevAgent.__new__(StellaJevAgent)
+    agent.expert_pool = SimpleNamespace(last_scope=scope)
+    agent._extraction_events = []
+    agent._elapsed_ms = lambda: 0.0
+    output = agent._extraction_followed("s")
+    assert "refused walk" in output.content
+    assert [(name, data["tasks"], data["refused"]) for name, data in agent._extraction_events] == [
+        ("extraction_declined_pick", [], ["walk"]),
+    ]
