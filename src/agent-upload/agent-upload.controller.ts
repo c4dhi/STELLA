@@ -53,6 +53,22 @@ export function assertOwnsAgent(agentType: { userId: string | null }, req: Authe
   if (agentType.userId !== userId) throw new ForbiddenException('You do not own this agent')
 }
 
+/**
+ * Who may see an agent's builds (log, status, history): whoever sees the agent
+ * in their library. That is its owner, a member of a project it is shared
+ * with, or a system admin. A built-in has no owner, so only admins.
+ */
+export function canSeeAgentBuilds(
+  agentType: { isBuiltIn: boolean; userId: string | null },
+  who: { userId: string; isSystemAdmin?: boolean; memberOf: string[]; sharedWith: string[] },
+): boolean {
+  if (who.isSystemAdmin) return true
+  if (agentType.isBuiltIn || !agentType.userId) return false
+  if (agentType.userId === who.userId) return true
+  const shared = new Set(who.sharedWith)
+  return who.memberOf.some((projectId) => shared.has(projectId))
+}
+
 @Controller('agent-types')
 export class AgentUploadController {
   private readonly logger = new Logger(AgentUploadController.name)
@@ -297,40 +313,16 @@ export class AgentUploadController {
    */
   @Get(':id/build-status')
   async getBuildStatus(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<BuildStatus | null> {
-    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
-    if (!agentType) {
-      throw new NotFoundException('Agent type not found')
-    }
-    await this.assertCanSeeBuildData(agentType, req)
-
+    await this.visibleBuilds(id, req)
     return this.latestBuildStatus(id)
   }
 
-  /**
-   * Whether the signed-in user may see this agent's build data: its owner, a
-   * member of a project it is shared with, or a system admin — the same
-   * people who already see the agent in their library and open its detail
-   * window, which loads this on every open (review on #179 / PR 975).
-   * `assertOwnsAgent` alone would 403 a shared project member who previously
-   * saw the agent's status fine. Built-in agents have no owner, so only
-   * admins qualify.
-   */
-  private async assertCanSeeBuildData(agentType: { id: string; userId: string | null }, req: AuthenticatedRequest): Promise<void> {
-    const userId = requireUserId(req)
-    if (req.user?.isSystemAdmin) return
-    if (agentType.userId === userId) return
-    const shared = await this.prisma.agentTypeProjectShare.findFirst({
-      where: { agentTypeId: agentType.id, project: { memberships: { some: { userId } } } },
-    })
-    if (!shared) throw new ForbiddenException('You do not have access to this agent')
-  }
-
-  /** Looks up the latest build log for an agent type and its output, with no
-   *  access check of its own — callers that are reachable without one (the
+  /** Looks up the latest build log for an agent type and its output (#961),
+   *  with no access check of its own — callers reachable without one (the
    *  SSE stream below) must not be newly gated by adding output here. */
-  private async latestBuildStatus(agentTypeId: string): Promise<BuildStatus | null> {
+  private async latestBuildStatus(id: string): Promise<BuildStatus | null> {
     const latestBuild = await this.prisma.agentBuildLog.findFirst({
-      where: { agentTypeId },
+      where: { agentTypeId: id },
       orderBy: { startedAt: 'desc' },
     })
     if (!latestBuild) {
@@ -351,7 +343,8 @@ export class AgentUploadController {
    * GET /agent-types/:id/build-history
    */
   @Get(':id/build-history')
-  async getBuildHistory(@Param('id') id: string) {
+  async getBuildHistory(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    await this.visibleBuilds(id, req)
     return this.agentBuildService.getBuildHistory(id)
   }
 
@@ -360,7 +353,9 @@ export class AgentUploadController {
    * GET /agent-types/:id/build-logs (SSE)
    */
   @Sse(':id/build-logs')
-  streamBuildLogs(@Param('id') id: string): Observable<MessageEvent> {
+  async streamBuildLogs(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<Observable<MessageEvent>> {
+    // Checked before the stream opens: a refusal is an ordinary 403/404.
+    await this.visibleBuilds(id, req)
     // Poll for build status every 2 seconds
     return concat(
       // Send initial status
@@ -453,6 +448,26 @@ export class AgentUploadController {
     ])
     this.logger.log(`Agent type ${agentType.slug} shared with ${projectIds.length} project(s)`)
     return { projectIds }
+  }
+
+  /** 404 for an unknown agent, 403 unless the caller may see its builds (`canSeeAgentBuilds`). */
+  private async visibleBuilds(id: string, req: AuthenticatedRequest): Promise<void> {
+    const userId = requireUserId(req)
+    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
+    if (!agentType) throw new NotFoundException('Agent type not found')
+    const [memberships, shares] = req.user?.isSystemAdmin || agentType.userId === userId
+      ? [[], []]
+      : await Promise.all([
+          this.prisma.projectMembership.findMany({ where: { userId }, select: { projectId: true } }),
+          this.prisma.agentTypeProjectShare.findMany({ where: { agentTypeId: id }, select: { projectId: true } }),
+        ])
+    const allowed = canSeeAgentBuilds(agentType, {
+      userId,
+      isSystemAdmin: req.user?.isSystemAdmin,
+      memberOf: memberships.map((m) => m.projectId),
+      sharedWith: shares.map((s) => s.projectId),
+    })
+    if (!allowed) throw new ForbiddenException('You cannot see this agent\'s builds')
   }
 
   /** The caller's own upload: sharing is the owner's alone, not an admin's. */
