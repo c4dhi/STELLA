@@ -112,3 +112,5 @@ STELLA is released under the [MIT License](LICENSE) — © Universität St. Gall
 (HSG) & University of Zurich (UZH). It runs on your own hardware and is free to
 use, modify, and redistribute. See [`NOTICE.md`](NOTICE.md) for third-party
 component attributions.
+
+<!-- CI verification for #178: docs-only change, should not trigger backend tests -->
