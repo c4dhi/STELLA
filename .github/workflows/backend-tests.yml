@@ -15,7 +15,7 @@ on:
   push:
     branches: [main, development]
   pull_request:
-    branches: [main, development, feat/ci-backend-tests-178]
+    branches: [main, development]
   workflow_dispatch:
 
 permissions:
