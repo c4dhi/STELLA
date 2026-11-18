@@ -16,6 +16,10 @@ interface JoinQrCodeProps {
 /** A revoked invitation's QR still renders (dimmed, with the ban icon), but never encodes the real link. */
 const REVOKED_PLACEHOLDER = 'revoked'
 
+/** The canvas always draws at this resolution; `size` only scales how big it appears, via CSS, so a compact
+ *  on-screen QR (e.g. next to the status box) doesn't download as a smaller, blurrier PNG than the full-size one. */
+const CANVAS_RESOLUTION = 192
+
 function toSafeFilename(name: string | null | undefined): string {
   const slug = (name ?? '')
     .trim()
@@ -42,7 +46,13 @@ export default function JoinQrCode({ value, isDark, revoked = false, participant
     <div className="flex flex-col items-center gap-3">
       <div className="relative">
         <div className={`p-3 rounded-xl inline-flex ${isDark ? 'bg-white' : 'bg-white border border-neutral-200/60'}`}>
-          <QRCodeCanvas ref={canvasRef} value={encodedValue} size={size} level="M" />
+          <QRCodeCanvas
+            ref={canvasRef}
+            value={encodedValue}
+            size={CANVAS_RESOLUTION}
+            level="M"
+            style={{ width: size, height: size }}
+          />
         </div>
         {revoked && (
           <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-white/85">
