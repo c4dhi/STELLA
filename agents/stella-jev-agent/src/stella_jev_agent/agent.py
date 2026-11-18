@@ -109,6 +109,9 @@ class StellaJevAgent(StellaV2Agent):
                 yield output
                 if stage == "expert_pool_done":
                     yield self._jev_event(input.session_id, output.metadata["turn_id"], pool_start_ms)
+                    decision = self._jev_decision(input.session_id)
+                    if decision is not None:
+                        yield decision
         for stage, fields in self._extraction_events:
             yield AgentOutput.analytics_event(input.session_id, stage, turn_id, **fields)
         self._extraction_events = []
@@ -134,9 +137,11 @@ class StellaJevAgent(StellaV2Agent):
                 self._state_before_forecast = self._last_state_id
                 self._last_state_id = target
                 return predicted
-        if not target and forecast.done_task and self._plan_config:
-            # Otherwise the reply still has the answered task as current, and probes it again.
-            moved_on = context_within(sm_context, self._plan_config, forecast.done_task, forecast.keys)
+        done = getattr(forecast, "done_tasks", None) or ([forecast.done_task] if getattr(forecast, "done_task", None) else [])
+        if not target and done and self._plan_config:
+            # Otherwise the reply still has the answered task as current, and probes it again,
+            # or asks about something the person has already mentioned.
+            moved_on = context_within(sm_context, self._plan_config, done, forecast.keys)
             if moved_on:
                 return moved_on
         return await super()._resolve_response_context(sm_context, *args, **kwargs)
@@ -153,6 +158,9 @@ class StellaJevAgent(StellaV2Agent):
         self._extraction_started_ms = self._elapsed_ms()
         late = await self.expert_pool.finish_extraction()
         self._record_extraction(late, forecast)
+        followed = self._extraction_followed(session_id)
+        if followed is not None:
+            yield followed
         async for output in super()._process_post_response(session_id, list(expert_verdicts) + late):
             yield output
 
@@ -176,6 +184,70 @@ class StellaJevAgent(StellaV2Agent):
                 "forecast": forecast.next_state,
                 "reached": reached,
             }))
+
+    def _title(self, state_id: Any) -> str:
+        for state in (self._plan_config or {}).get("states", []):
+            if state.get("id") == state_id:
+                return str(state.get("title") or state_id)
+        return str(state_id)
+
+    def _jev_decision(self, session_id: str) -> Optional[AgentOutput]:
+        """Which task Jev says was answered, and where that sends the reply, in the session chat."""
+        pool = self.expert_pool
+        answer = getattr(pool, "last_answer", None)
+        if answer is None:
+            return None
+        pick, forecast = pool.last_pick, pool.forecast
+        also = [p for p in getattr(pool, "last_picks", []) if p is not pick]
+        if pick is None and also:
+            said = "no main answer"
+        elif pick is None:
+            said = f"nothing to record ({answer['choice']} {answer['p']:.2f})"
+        elif pick["correction"]:
+            said = f"corrects \"{pick['task'].get('description')}\" ({pick['p']:.2f})"
+        else:
+            said = f"answered \"{pick['task'].get('description')}\" ({pick['p']:.2f})"
+        for extra in also:
+            how = "also corrects" if extra["correction"] else "also mentioned"
+            said += f", {how} \"{extra['task'].get('description')}\" ({extra['p']:.2f})"
+        if getattr(getattr(pool, "_ask_back", None), "now", False):
+            reply = "asks back first, so nothing is saved yet"
+        elif forecast.next_state == END:
+            reply = "the plan ends"
+        elif forecast.next_state:
+            reply = f"moves on to the state \"{self._title(forecast.next_state)}\""
+        elif forecast.done_task:
+            reply = "moves on to the next task"
+        else:
+            reply = "stays on the current task"
+        return AgentOutput.debug(
+            session_id, f"Jev: {said}, reply {reply}", component="jev",
+            choice=answer["choice"], p=answer["p"], task_id=pick and pick["task_id"],
+            correction=bool(pick and pick["correction"]), next_state=forecast.next_state,
+            also=[{"task_id": p["task_id"], "p": p["p"], "correction": p["correction"]} for p in also],
+        )
+
+    def _extraction_followed(self, session_id: str) -> Optional[AgentOutput]:
+        """What extraction saved for Jev's pick. Saving nothing leaves the task open for the next turn."""
+        scope = getattr(self.expert_pool, "last_scope", None)
+        if scope is None:
+            return None
+        self.expert_pool.last_scope = None
+        unsaved = scope.unsaved()
+        if unsaved:
+            logger.warning(f"Extraction saved nothing for Jev's pick {unsaved!r}")
+            self._extraction_events.append(("extraction_declined_pick", {
+                "elapsed_ms": self._elapsed_ms(), "tasks": unsaved, "refused": scope.refused,
+            }))
+        text = f"Extraction saved {', '.join(scope.written)}" if scope.written else "Extraction saved nothing"
+        if unsaved and scope.written:
+            text += f", nothing for {', '.join(unsaved)}"
+        if scope.refused:
+            text += f", refused {', '.join(scope.refused)} (not Jev's pick)"
+        return AgentOutput.debug(
+            session_id, f"{text} for \"{scope.task}\"", component="jev",
+            written=scope.written, refused=scope.refused, unsaved=unsaved, correction=scope.correction,
+        )
 
     def _jev_event(self, session_id: str, turn_id: str, pool_start_ms: float) -> AgentOutput:
         """Whether Jev decided this turn. A session on the fallback otherwise looks normal."""

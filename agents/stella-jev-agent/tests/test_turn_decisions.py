@@ -421,3 +421,24 @@ def test_the_jev_client_can_be_closed_at_the_end_of_a_session():
     asyncio.run(jev.close())
     assert client.closed and jev._client is None
     assert hasattr(AsyncTypeSafeClient, "aclose"), "the real client has it too"
+
+
+def test_jevs_task_decision_is_posted_to_the_chat(monkeypatch: pytest.MonkeyPatch):
+    agent = _agent_with(monkeypatch, V2_TURN, {"answered": True, "latency_ms": 170.0})
+    agent._plan_config = {"states": [{"id": "b", "title": "Check-in"}]}
+    agent.expert_pool.last_answer = {"choice": "task_0", "p": 0.86}
+    agent.expert_pool.last_pick = {"task": {"description": "Wasser trinken"}, "task_id": "t1", "p": 0.86, "correction": False}
+    agent.expert_pool.forecast = SimpleNamespace(next_state="b", done_task="t1", keys=["water"])
+    outputs = asyncio.run(_outputs(agent))
+    debug = [o for o in outputs if o.type.value == "debug"]
+    assert [o.content for o in debug] == ['Jev: answered "Wasser trinken" (0.86), reply moves on to the state "Check-in"']
+    assert debug[0].metadata["task_id"] == "t1"
+
+
+def test_a_turn_without_a_task_question_posts_no_decision(monkeypatch: pytest.MonkeyPatch):
+    agent = _agent_with(monkeypatch, V2_TURN, {"answered": True, "latency_ms": 170.0})
+    assert not [o for o in asyncio.run(_outputs(agent)) if o.type.value == "debug"]
+
+
+async def _outputs(agent):
+    return [o async for o in agent.process(SimpleNamespace(session_id="s", metadata={}))]
