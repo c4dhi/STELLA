@@ -358,7 +358,7 @@ describe('build-status (#961: the window still has something to show after reope
     await expect(controller.getBuildStatus('a1', user('someone-else') as any)).rejects.toThrow(ForbiddenException)
   })
 
-  it('allows a member of a project the agent is shared with, same as the owner (#185 review on #179)', async () => {
+  it('allows a member of a project the agent is shared with, same as the owner', async () => {
     const { controller, prisma, build } = makeUpload(mine)
     prisma.agentTypeProjectShare.findFirst.mockResolvedValue({ id: 'share1' })
     prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
