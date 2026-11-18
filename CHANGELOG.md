@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Plan Builder's manual editor works on a phone.** At phone width the 440 px editor panel pushed Save Changes off the screen, so a plan couldn't be saved there. Below tablet-landscape width the name and description now wrap to their own row, so X-ray and Save Changes stay on screen. The state editor sits full width under the canvas, and picking a state brings it into view. Desktop is unchanged; this matches the pipeline configurator (#182). (#189)
 - **STELLA Jev: the reply and the plan stay in step.** Jev decides which task a message answered and the reply moves on from it, but extraction used to decide on its own what to save, so Grace could ask again for something already saved, or move on from something never saved. Extraction now saves only what Jev picked. Tasks in the same state mentioned in passing are saved too (unconfirmed), and Grace doesn't ask about them again; a correction of a value already collected in this state overwrites it. When Jev is unsure, nothing is saved and the question comes again. Jev's decision and what was saved show as debug lines in the session chat. New Pipeline Configurator settings `forecast_threshold` and `also_threshold`. Jev agent only (#177)
 
 ## [2.0.1] - 2026-11-17
