@@ -834,7 +834,7 @@ export default function AgentSidebar({ sessionId, initialAgents = [], onDeployCl
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="w-64 xl:w-80 flex flex-col"
+        className="w-full md:w-64 xl:w-80 flex flex-col"
       >
         {/* Agents Panel */}
         <div
