@@ -36,7 +36,7 @@ describe('empty-room auto-close follows the session setting', () => {
   it('closes an empty session whose project closes empty sessions', async () => {
     const { service, sessions } = setup({ status: 'ACTIVE', closeWhenEmpty: null, projectCloses: true });
     await service.handleParticipantInactivity('s1', 'participant-1');
-    expect(sessions.close).toHaveBeenCalledWith('s1');
+    expect(sessions.close).toHaveBeenCalledWith('s1', 'automatic');
   });
 
   it('keeps an empty session open when its project keeps sessions open', async () => {
@@ -67,12 +67,12 @@ describe('empty-room auto-close follows the session setting', () => {
 
     const close = setup({ status: 'ACTIVE', closeWhenEmpty: true, projectCloses: false });
     await close.service.handleParticipantInactivity('s1', 'agent-a1');
-    expect(close.sessions.close).toHaveBeenCalledWith('s1');
+    expect(close.sessions.close).toHaveBeenCalledWith('s1', 'automatic');
   });
 
   it.each([true, false])('a CLOSING session still finishes closing when its last agent leaves (closeWhenEmpty=%s)', async (closeWhenEmpty) => {
     const { service, sessions } = setup({ status: 'CLOSING', closeWhenEmpty, projectCloses: closeWhenEmpty });
     await service.finalizeClosingSessionOnAgentLeave('s1', 'agent-a1', 'room-1');
-    expect(sessions.close).toHaveBeenCalledWith('s1');
+    expect(sessions.close).toHaveBeenCalledWith('s1', 'automatic');
   });
 });

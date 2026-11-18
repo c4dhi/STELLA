@@ -232,46 +232,50 @@ export default function ParticipantConnectionModal({
               {isWebParticipant ? (
                 /* Web Participant View - Show invitation link or revoked status */
                 <div className="space-y-6">
-                  {/* Status Banner */}
-                  {isRevoked ? (
-                    <div className={`
-                      p-6 rounded-xl text-center
-                      ${isDark ? 'bg-red-500/10 border border-red-500/20' : 'bg-red-50 border border-red-100'}
-                    `}>
-                      <Ban className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-red-400' : 'text-red-500'}`} />
-                      <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
-                        Access has been revoked
-                      </p>
-                      <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
-                        This participant can no longer access the session
-                      </p>
-                    </div>
-                  ) : (
-                    <div className={`
-                      p-6 rounded-xl text-center
-                      ${isDark ? 'bg-cyan-500/10 border border-cyan-500/20' : 'bg-cyan-50 border border-cyan-100'}
-                    `}>
-                      <Globe className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-cyan-400' : 'text-cyan-500'}`} />
-                      <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
-                        This participant joined via web browser
-                      </p>
-                      <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
-                        Share the link below if they need to reconnect
-                      </p>
-                    </div>
-                  )}
+                  {/* Status Banner, with the QR beside it so this doesn't cost the modal an extra row. */}
+                  {/* flex-col-reverse: on mobile the QR (second in DOM) renders above the banner, per Felix's request. */}
+                  <div className="flex flex-col-reverse sm:flex-row gap-4 items-stretch">
+                    {isRevoked ? (
+                      <div className={`
+                        flex-1 p-6 rounded-xl text-center flex flex-col justify-center
+                        ${isDark ? 'bg-red-500/10 border border-red-500/20' : 'bg-red-50 border border-red-100'}
+                      `}>
+                        <Ban className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-red-400' : 'text-red-500'}`} />
+                        <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
+                          Access has been revoked
+                        </p>
+                        <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
+                          This participant can no longer access the session
+                        </p>
+                      </div>
+                    ) : (
+                      <div className={`
+                        flex-1 p-6 rounded-xl text-center flex flex-col justify-center
+                        ${isDark ? 'bg-cyan-500/10 border border-cyan-500/20' : 'bg-cyan-50 border border-cyan-100'}
+                      `}>
+                        <Globe className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-cyan-400' : 'text-cyan-500'}`} />
+                        <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
+                          This participant joined via web browser
+                        </p>
+                        <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
+                          Share the link below if they need to reconnect
+                        </p>
+                      </div>
+                    )}
 
-                  {/* Invitation Link - Always show, but disable copy when revoked */}
-                  <div>
-                    <div className="mb-4">
+                    <div className="flex-shrink-0 flex items-center justify-center">
                       <JoinQrCode
                         value={webJoinUrl}
                         isDark={isDark}
                         revoked={isRevoked}
                         participantName={connectionInfo.participantName}
+                        size={112}
                       />
                     </div>
+                  </div>
 
+                  {/* Invitation Link - Always show, but disable copy when revoked */}
+                  <div>
                     <label className={`block text-xs font-light tracking-wider uppercase mb-2 ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
                       Invitation Link {isRevoked && <span className={isDark ? 'text-red-400' : 'text-red-500'}>(Disabled)</span>}
                     </label>

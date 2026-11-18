@@ -52,6 +52,7 @@ function wire(store: Store) {
       }),
     },
     invitation: { updateMany: jest.fn(async () => ({ count: 0 })) },
+    $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
     participant: { updateMany: jest.fn(async () => ({ count: 0 })) },
   };
 
