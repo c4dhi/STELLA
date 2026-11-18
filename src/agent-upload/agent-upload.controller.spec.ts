@@ -26,6 +26,7 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
   const prisma = {
     agentTypeProjectShare: {
       findMany: jest.fn().mockResolvedValue([] as { projectId: string }[]),
+      findFirst: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       upsert: jest.fn().mockResolvedValue({}),
     },
@@ -351,10 +352,25 @@ describe('build-status (#961: the window still has something to show after reope
     expect(status).toMatchObject({ status: 'failed', errorMessage: 'boom', buildOutput: 'Step 1/5 ...\nERROR: boom' })
   })
 
-  it('refuses a user who does not own the agent', async () => {
-    const { controller, prisma } = makeUpload(mine)
+  it('refuses a user who neither owns the agent nor shares a project with it', async () => {
+    const { controller } = makeUpload(mine)
 
     await expect(controller.getBuildStatus('a1', user('someone-else') as any)).rejects.toThrow(ForbiddenException)
+  })
+
+  it('allows a member of a project the agent is shared with, same as the owner (#185 review on #179)', async () => {
+    const { controller, prisma, build } = makeUpload(mine)
+    prisma.agentTypeProjectShare.findFirst.mockResolvedValue({ id: 'share1' })
+    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
+    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'success' })
+    build.getBuildOutput.mockResolvedValue('built ok')
+
+    const status = await controller.getBuildStatus('a1', user('project-member') as any)
+
+    expect(status).toMatchObject({ status: 'success', buildOutput: 'built ok' })
+    expect(prisma.agentTypeProjectShare.findFirst).toHaveBeenCalledWith({
+      where: { agentTypeId: 'a1', project: { memberships: { some: { userId: 'project-member' } } } },
+    })
   })
 
   it('allows a system admin who does not own the agent', async () => {

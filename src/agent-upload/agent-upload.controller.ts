@@ -301,9 +301,28 @@ export class AgentUploadController {
     if (!agentType) {
       throw new NotFoundException('Agent type not found')
     }
-    assertOwnsAgent(agentType, req)
+    await this.assertCanSeeBuildData(agentType, req)
 
     return this.latestBuildStatus(id)
+  }
+
+  /**
+   * Whether the signed-in user may see this agent's build data: its owner, a
+   * member of a project it is shared with, or a system admin — the same
+   * people who already see the agent in their library and open its detail
+   * window, which loads this on every open (review on #179 / PR 975).
+   * `assertOwnsAgent` alone would 403 a shared project member who previously
+   * saw the agent's status fine. Built-in agents have no owner, so only
+   * admins qualify.
+   */
+  private async assertCanSeeBuildData(agentType: { id: string; userId: string | null }, req: AuthenticatedRequest): Promise<void> {
+    const userId = requireUserId(req)
+    if (req.user?.isSystemAdmin) return
+    if (agentType.userId === userId) return
+    const shared = await this.prisma.agentTypeProjectShare.findFirst({
+      where: { agentTypeId: agentType.id, project: { memberships: { some: { userId } } } },
+    })
+    if (!shared) throw new ForbiddenException('You do not have access to this agent')
   }
 
   /** Looks up the latest build log for an agent type and its output, with no
