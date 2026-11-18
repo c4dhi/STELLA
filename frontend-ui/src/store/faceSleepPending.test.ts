@@ -43,4 +43,11 @@ describe('faceSleepPending (#149)', () => {
     s().clearFaceSleepPending()
     expect(s().faceSleepPending).toBe(false)
   })
+
+  it('does not carry a goodbye into the next session', () => {
+    s().triggerFaceState('sleep')
+    s().resetFaceForSession()
+    expect(s().faceSleepPending).toBe(false)
+    expect(s().faceSleepAllowed).toBe(true)
+  })
 })

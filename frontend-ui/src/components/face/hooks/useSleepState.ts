@@ -271,10 +271,13 @@ export const useSleepState = ({
     const { lastBusyAt } = busyRef.current;
     const isBusy = lastBusyAt > 0 && now - lastBusyAt < BUSY_HOLD_MS;
 
-    const wasPending = sleepPendingRef.current;
+    // Pending at any point this tick, including a command honoured in the
+    // same step it arrives: that too must be reported as handled.
+    let wasPending = sleepPendingRef.current;
     if (live.sleepCommandSeq !== seenSleepSeqRef.current) {
       seenSleepSeqRef.current = live.sleepCommandSeq;
       sleepPendingRef.current = true;
+      wasPending = true;
     }
     // The user speaking cancels a pending sleep. They asked her to go to sleep
     // and then carried on talking, which is a change of mind — and honouring

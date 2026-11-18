@@ -219,8 +219,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   // What one session's agent told the face must not carry into the next one
   // opened in the same page load.
   useEffect(() => {
-    useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
-    useStore.getState().applySttStatus({ state: 'ready' })
+    useStore.getState().resetFaceForSession()
   }, [sessionData.sessionId])
 
   useEffect(() => {

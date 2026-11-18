@@ -111,6 +111,8 @@ type MediaActions = {
   applyAgentCommand: (data: { command?: string; allowed?: boolean }) => void
   /** The pending sleep was honoured, or the user carried on and cancelled it. */
   clearFaceSleepPending: () => void
+  /** A new session opens: nothing the last session's agent told the face carries over. */
+  resetFaceForSession: () => void
   /** Act on an `stt_status` envelope. */
   applySttStatus: (data: SttStatusEnvelope) => void
   setAudioLevel: (v: number) => void
@@ -354,6 +356,7 @@ export const useStore = create<
     faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 },
   }, tag)),
   clearFaceSleepPending: () => set(s => (s.faceSleepPending ? { faceSleepPending: false } : s)),
+  resetFaceForSession: () => set({ faceSleepAllowed: true, faceSleepPending: false, sttStatus: nextSttStatus({ state: 'ready' }) }),
   setFaceSleepPhase: (phase) =>
     set(s => (s.faceSleepPhase === phase ? s : { faceSleepPhase: phase })),
   applyAgentCommand: (data) => {
