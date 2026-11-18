@@ -1,0 +1,85 @@
+name: Backend tests
+
+# The server had no automated check at all: a change to src/auth, src/sessions,
+# or anywhere else under src/ could merge with nothing run against it (#952).
+# This runs the whole jest suite — no DB or K8s needed, every spec mocks its
+# collaborators — on every PR that touches server code.
+#
+# The job jest actually runs in (`test`) is path-filtered, so it never runs on
+# a docs-only or frontend-only PR. Branch protection can't require that job
+# directly: GitHub leaves a required check stuck "Waiting for status to be
+# reported" forever on any PR that never triggers it. `backend-tests` always
+# runs instead, and is what branch protection requires; it only fails when
+# `test` ran and didn't pass.
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'src/**'
+              - 'prisma/**'
+              - 'test/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - 'tsconfig.build.json'
+              - '.github/workflows/backend-tests.yml'
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Several specs import @prisma/client (no database involved).
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run backend test suite
+        run: npm test
+
+  backend-tests:
+    name: Backend tests
+    needs: [changes, test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check result
+        run: |
+          if [[ "${{ needs.changes.result }}" != "success" ]]; then
+            echo "Could not determine which paths changed; failing closed."
+            exit 1
+          fi
+          if [[ "${{ needs.changes.outputs.backend }}" == "true" && "${{ needs.test.result }}" != "success" ]]; then
+            echo "Backend test suite failed or did not complete."
+            exit 1
+          fi
+          echo "OK — ${{ needs.changes.outputs.backend == 'true' && 'tests ran and passed' || 'no backend paths changed' }}."
