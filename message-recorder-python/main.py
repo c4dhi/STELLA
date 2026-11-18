@@ -40,7 +40,10 @@ class MessageRecorderService:
     """Main service coordinator"""
 
     def __init__(self):
-        self.message_client = MessageClient(base_url=SESSION_SERVER_URL)
+        self.message_client = MessageClient(
+            base_url=SESSION_SERVER_URL,
+            internal_key=os.getenv('INTERNAL_API_KEY'),
+        )
         self.room_manager = RoomManager(
             livekit_url=LIVEKIT_URL,
             message_client=self.message_client

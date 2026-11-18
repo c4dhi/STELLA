@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Agents keep reading the chat history after their first hour.** An agent's room token expired after an hour (a day for uploaded agents), and from then on the agent could no longer load the conversation so far, even though it kept talking. The history API now accepts an agent's own token for as long as that agent runs, and refuses it once the agent stops or the session closes. Backend only: running agents are fixed by the upgrade, without a rebuild ([#923](https://github.com/c4dhi/STELLA/issues/923))
 - **A session that reopens gives its invitations back.** When a session closed on its own (the room went empty, the plan ended, the time ran out), its invitations were revoked, and when somebody rejoined and the session opened again, they stayed revoked: the participant's link no longer worked in a live session. Now an automatic close notes what each invitation was, and reopening restores it (or marks it expired if its own expiry has passed). Invitations revoked by hand, or by **Close session**, stay revoked ([#930](https://github.com/c4dhi/STELLA/issues/930))
 
+### Security
+
+- **The message recorder's monitoring endpoints need an internal key.** Anyone who could reach the backend could post log lines and connection status into the session dashboard, and an unknown log level made the request fail with an error. Now the recorder sends a shared internal key that the deploy keeps in the cluster (`INTERNAL_API_KEY`, created on its own), requests without it are refused, and only the known log levels are accepted ([#889](https://github.com/c4dhi/STELLA/issues/889))
+
 ### Upgrade notes
 
 - **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy: a new nullable column on invitations. Invitations revoked before the upgrade are not restored
