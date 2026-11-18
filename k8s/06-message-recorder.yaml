@@ -35,7 +35,7 @@ spec:
         - name: INTERNAL_API_KEY  # shared with the backend's internal endpoints (#145)
           valueFrom:
             secretKeyRef:
-              name: stella-ai-secrets
+              name: stella-internal-key
               key: internal-api-key
         - name: POLL_INTERVAL
           value: "10"  # Poll every 10 seconds

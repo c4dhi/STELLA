@@ -403,17 +403,6 @@ create_secrets() {
 
     local db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public"
 
-    # The internal key for the recorder → backend monitoring endpoints (#145).
-    # INTERNAL_API_KEY from .env wins; otherwise keep the one already in the
-    # cluster, so a redeploy never changes it under running pods; otherwise
-    # make one.
-    local internal_key="${INTERNAL_API_KEY:-}"
-    if [[ -z "$internal_key" ]]; then
-        internal_key=$(kubectl get secret stella-ai-secrets -n "$KUBERNETES_NAMESPACE" \
-            -o jsonpath='{.data.internal-api-key}' 2>/dev/null | base64 --decode 2>/dev/null || true)
-    fi
-    [[ -z "$internal_key" ]] && internal_key=$(openssl rand -hex 32)
-
     kubectl create secret generic stella-ai-secrets -n "$KUBERNETES_NAMESPACE" \
         --from-literal=postgres-db="$POSTGRES_DB" \
         --from-literal=postgres-user="$POSTGRES_USER" \
@@ -428,10 +417,29 @@ create_secrets() {
         --from-literal=elevenlabs-api-key="${ELEVENLABS_API_KEY:-}" \
         --from-literal=huggingface-token="${HF_TOKEN:-}" \
         --from-literal=env-var-encryption-key="${ENV_VAR_ENCRYPTION_KEY:-}" \
-        --from-literal=internal-api-key="$internal_key" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
+    ensure_internal_key_secret
+
     verbose "Secrets created"
+}
+
+# The key the message recorder sends to the backend's internal monitoring
+# endpoints (#145), in a secret of its own: stella-ai-secrets is re-applied
+# from k8s/03-secrets.yaml and from the .env on every deploy, and kubectl
+# apply drops keys the newest apply doesn't carry, so a key kept there would
+# change on each redeploy under pods that weren't restarted. Nothing else
+# applies stella-internal-key: INTERNAL_API_KEY from .env sets it, otherwise
+# it is created once and then left alone.
+ensure_internal_key_secret() {
+    if [[ -n "${INTERNAL_API_KEY:-}" ]]; then
+        kubectl create secret generic stella-internal-key -n "$KUBERNETES_NAMESPACE" \
+            --from-literal=internal-api-key="$INTERNAL_API_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    elif ! kubectl get secret stella-internal-key -n "$KUBERNETES_NAMESPACE" >/dev/null 2>&1; then
+        kubectl create secret generic stella-internal-key -n "$KUBERNETES_NAMESPACE" \
+            --from-literal=internal-api-key="$(openssl rand -hex 32)" >/dev/null
+    fi
 }
 
 # =============================================================================
@@ -1465,6 +1473,7 @@ show_dry_run_deployment() {
     echo -e "   ${ARROW} Would apply: k8s/03-secrets.yaml"
     echo -e "   ${ARROW} Would apply: k8s/05-rbac.yaml"
     echo -e "   ${ARROW} Would create: stella-ai-secrets"
+    echo -e "   ${ARROW} Would create: stella-internal-key (only if missing)"
     echo -e "   ${ARROW} Would apply: configmap"
     echo -e "   ${ARROW} Would apply: k8s/01-postgres.yaml"
     echo -e "   ${ARROW} Would apply: session-management-server"
