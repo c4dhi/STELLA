@@ -5,6 +5,12 @@ All notable changes to STELLA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Edit a project from its sessions screen.** A pencil next to the project name opens the same Project Settings window as the start screen, so you can rename the project without going back ([#943](https://github.com/c4dhi/STELLA/issues/943))
+
 ## [2.0.1] - 2026-11-17
 
 Sessions that last. A session in a private project now stays open when
