@@ -32,6 +32,25 @@ TASK_ANSWERED_INSTRUCTION = (
 )
 
 
+
+def also_instruction(forecast: Any) -> str:
+    """What the message settled besides its answer, so the reply neither asks it again nor ignores it."""
+    lines = []
+    mentioned = getattr(forecast, "mentioned", None) or []
+    corrected = getattr(forecast, "corrected", None) or []
+    if mentioned:
+        lines.append(
+            f"The user also mentioned {', '.join(mentioned)} in passing. That counts as answered: "
+            "don't ask about it again. You may pick it up naturally if it fits."
+        )
+    if corrected:
+        lines.append(
+            f"The user just corrected what they said earlier about {', '.join(corrected)}; the new "
+            "version is in what they said. Acknowledge the correction briefly and carry on."
+        )
+    return "\n".join(lines)
+
+
 class JevResponseGenerator(ResponseGenerator):
     """Writes the reply as V2 does, except on a turn that asks back."""
 
@@ -60,11 +79,14 @@ class JevResponseGenerator(ResponseGenerator):
             directive.routing_directive = "\n".join(
                 filter(None, [directive.routing_directive, AFTER_ASK_BACK_INSTRUCTION])
             )
-        elif forecast and forecast.done_task and not forecast.next_state:
+        else:
             # V2's own line for this looks at the current task, which has moved on.
-            directive.routing_directive = "\n".join(
-                filter(None, [directive.routing_directive, TASK_ANSWERED_INSTRUCTION])
-            )
+            answered = forecast and forecast.done_task and not forecast.next_state
+            directive.routing_directive = "\n".join(filter(None, [
+                directive.routing_directive,
+                TASK_ANSWERED_INSTRUCTION if answered else "",
+                also_instruction(forecast) if forecast else "",
+            ]))
         return super().generate(directive=directive, prepend=prepend, **kwargs)
 
 
