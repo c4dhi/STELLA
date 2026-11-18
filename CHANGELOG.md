@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The deploy wizards (Deploy agent, public project setup) always show the Connectors step**, even with no connectors yet — before, someone with none never found out connectors exist. With none, it says so in one line, linking to Settings → Connectors (opens in a new tab, so the wizard's progress isn't lost). A required slot with nothing to fill it still disables Continue, pointing at the same link ([#891](https://github.com/c4dhi/STELLA/issues/891))
+
 ### Upgrade notes
 
 - **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
