@@ -267,7 +267,9 @@ export function useTeleprompter({ interactionMode = 'voice' }: TeleprompterOptio
   // ahead of a voice that is never coming (#149).
   const cueTranscriptRef = useRef('')
   const textInterfaceRef = useRef(interactionMode === 'text')
-  textInterfaceRef.current = interactionMode === 'text'
+  useEffect(() => {
+    textInterfaceRef.current = interactionMode === 'text'
+  }, [interactionMode])
   const textByTranscriptRef = useRef<Map<string, string>>(new Map())
   const prefersReducedMotionRef = useRef(
     typeof window !== 'undefined' &&

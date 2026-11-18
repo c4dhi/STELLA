@@ -183,6 +183,15 @@ interface UseSleepStateOptions {
   force?: boolean;
   /** `[sleep]` from the agent — a new seq is a new request (#face-sleep). */
   sleepCommandSeq?: number;
+  /**
+   * A commanded sleep that nothing has honoured or cancelled yet (#149). Read
+   * once, at mount: a face that appears after the command — the participant
+   * switching back from the text interface — never saw the seq change, and
+   * would otherwise take the old command as already handled.
+   */
+  sleepPending?: boolean;
+  /** The pending sleep was honoured or dropped, so whoever holds it can let go. */
+  onSleepHandled?: () => void;
   /** The agent lets her sleep; see SleepInput.sleepAllowed. */
   sleepAllowed?: boolean;
 }
@@ -203,12 +212,18 @@ export const useSleepState = ({
   sleepAfterMs = SLEEP_AFTER_MS,
   force = false,
   sleepCommandSeq = 0,
+  sleepPending = false,
+  onSleepHandled,
   sleepAllowed = true,
 }: UseSleepStateOptions): SleepControls => {
   const stateRef = useRef<SleepState>(initialSleepState(Date.now()));
   const wakeRequestedRef = useRef(false);
   // A commanded sleep, held until it can actually be honoured. See sleepRequested.
-  const sleepPendingRef = useRef(false);
+  const sleepPendingRef = useRef(sleepPending);
+  const onSleepHandledRef = useRef(onSleepHandled);
+  useEffect(() => {
+    onSleepHandledRef.current = onSleepHandled;
+  }, [onSleepHandled]);
   const seenSleepSeqRef = useRef(sleepCommandSeq);
   // Speech flags are recomputed every frame from an RMS threshold tuned to
   // drive the mouth, so they flicker across the line on room tone. The idle
@@ -256,6 +271,7 @@ export const useSleepState = ({
     const { lastBusyAt } = busyRef.current;
     const isBusy = lastBusyAt > 0 && now - lastBusyAt < BUSY_HOLD_MS;
 
+    const wasPending = sleepPendingRef.current;
     if (live.sleepCommandSeq !== seenSleepSeqRef.current) {
       seenSleepSeqRef.current = live.sleepCommandSeq;
       sleepPendingRef.current = true;
@@ -290,6 +306,7 @@ export const useSleepState = ({
     // coming round was dropped on the floor and the reply that asked for it had
     // no effect — with nothing anywhere to say why.
     if (next.phase === 'asleep') sleepPendingRef.current = false;
+    if (wasPending && !sleepPendingRef.current) onSleepHandledRef.current?.();
     stateRef.current = next;
 
     const isYawning = isYawningAt(next, now);
