@@ -19,6 +19,33 @@ import { PeerTransport } from '../services/PeerTransport'
 import { progressUpdateToTodoList } from '../lib/progressConversion'
 import { nextSttStatus, type SttStatus, type SttStatusEnvelope } from '../lib/sttStatus'
 
+/**
+ * Whether an agent's task list still has something running (#977): a
+ * companion has no plan states to count, so it is active only while it
+ * names an activity; a plan agent is active while states remain.
+ */
+export function agentActivityEnded(todoList: TodoList): boolean {
+  if (todoList.companion) return !todoList.companion.active_activity
+  return todoList.remaining_states === 0
+}
+
+/** Whether any agent still has something running — the panel should be visible. */
+export function anyActivityActive(entries: Iterable<TodoList>): boolean {
+  for (const tl of entries) {
+    if (!agentActivityEnded(tl)) return true
+  }
+  return false
+}
+
+/**
+ * Whether this update is a genuinely new activity starting for an agent that
+ * had none (or whose last one had ended) — the point at which a pin from a
+ * past activity stops applying (#977).
+ */
+export function isNewActivityStarting(previous: TodoList | undefined, next: TodoList): boolean {
+  return (!previous || agentActivityEnded(previous)) && !agentActivityEnded(next)
+}
+
 type ConnectionState = {
   status: 'idle' | 'connecting' | 'connected' | 'error'
   rttMs?: number
@@ -215,6 +242,15 @@ type TaskState = {
   currentTaskId: string | null
   processingMode: StateType | null
   showTaskPanel: boolean
+  /**
+   * The user reopened the panel (TaskPanel Toggle Button, ChatView.tsx) while
+   * every agent's activity had already ended. Keeps it open through that same
+   * activity ending again — e.g. a late progress_update that re-asserts the
+   * already-ended state — without requiring them to keep clicking it. Cleared
+   * the moment any agent starts a genuinely new activity, so it never pins
+   * the panel open past the one they actually asked to keep looking at.
+   */
+  taskPanelPinnedOpen: boolean
   lastDeliverableUpdate: {
     key: string
     value: any
@@ -579,6 +615,7 @@ export const useStore = create<
   currentTaskId: null,
   processingMode: null,
   showTaskPanel: false,
+  taskPanelPinnedOpen: false,
   lastDeliverableUpdate: null,
   lastStateChange: null,
   // New notification and update tracking
@@ -596,13 +633,21 @@ export const useStore = create<
   setAgentTaskList: (agentId, todoList, agentName) => set((state) => {
     const newMap = new Map(state.agentTaskLists)
     const isUpdate = state.agentTaskLists.has(agentId)
+    const previous = state.agentTaskLists.get(agentId)
     newMap.set(agentId, { ...todoList, agentName })
 
     console.log(`[TaskPanel] ${isUpdate ? 'Updated' : 'Added'} task list for agent "${agentName || agentId}"`)
 
+    // A new activity starting (this agent had none, or its last one had
+    // ended, and now it does) clears any pin from a previous activity —
+    // "since that list started" protects only the activity it was set for.
+    const isNewActivity = isNewActivityStarting(previous, todoList)
+    const anyActive = anyActivityActive(newMap.values())
+
     return {
       agentTaskLists: newMap,
-      showTaskPanel: true,
+      showTaskPanel: anyActive || state.taskPanelPinnedOpen,
+      taskPanelPinnedOpen: isNewActivity ? false : state.taskPanelPinnedOpen,
       // Set first agent as legacy todoList for backward compat
       todoList: state.todoList || todoList
     }
@@ -701,13 +746,19 @@ export const useStore = create<
     get().setAgentTaskList(agentId, todoList, agentName)
   },
 
-  setTodoList: (todoList) => set({
-    todoList,
-    showTaskPanel: true,
-    planProgress: todoList.progress_percentage,
-    currentStateId: todoList.current_state?.id || null,
-    currentTaskId: todoList.current_task?.id || null,
-    processingMode: todoList.current_state?.type || null
+  setTodoList: (todoList) => set((state) => {
+    // Always called right after setAgentTaskList/addLiveTaskUpdate for the
+    // same update (SessionView.tsx), so agentTaskLists already reflects it —
+    // read the same anyActive signal rather than forcing the panel open again.
+    const anyActive = anyActivityActive(state.agentTaskLists.values())
+    return {
+      todoList,
+      showTaskPanel: anyActive || state.taskPanelPinnedOpen,
+      planProgress: todoList.progress_percentage,
+      currentStateId: todoList.current_state?.id || null,
+      currentTaskId: todoList.current_task?.id || null,
+      processingMode: todoList.current_state?.type || null
+    }
   }),
   setAllDeliverableStates: (states) => set({ allDeliverableStates: states }),
   updateDeliverable: (key, value, stateId, confidence, sourceMessage, reasoning, acceptanceCriteria) => set((state) => {
@@ -872,7 +923,11 @@ export const useStore = create<
     }
   }),
 
-  setShowTaskPanel: (show) => set({ showTaskPanel: show }),
+  // The only call site (ChatView.tsx's Task Panel Toggle Button) is the user
+  // asking for it back, typically after it auto-hid — pin it open through
+  // the rest of that ended activity rather than letting the next update hide
+  // it under them again.
+  setShowTaskPanel: (show) => set({ showTaskPanel: show, taskPanelPinnedOpen: show }),
 
   clearTasks: () => set({
     agentTaskLists: new Map(),
@@ -884,6 +939,7 @@ export const useStore = create<
     currentTaskId: null,
     processingMode: null,
     showTaskPanel: false,
+    taskPanelPinnedOpen: false,
     lastDeliverableUpdate: null,
     lastStateChange: null,
     notifications: [],
