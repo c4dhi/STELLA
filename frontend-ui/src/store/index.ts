@@ -108,11 +108,13 @@ type MediaActions = {
   triggerFaceState: (tag: string) => void
   setFaceSleepPhase: (phase: 'awake' | 'asleep' | 'waking') => void
   /** Act on an `agent_command` envelope. A command this client does not know is ignored. */
-  applyAgentCommand: (data: { command?: string; allowed?: boolean }) => void
+  applyAgentCommand: (data: { command?: string; allowed?: boolean; enabled?: boolean }) => void
   /** The pending sleep was honoured, or the user carried on and cancelled it. */
   clearFaceSleepPending: () => void
   /** A new session opens: nothing the last session's agent told the face carries over. */
   resetFaceForSession: () => void
+  /** Whether the agent speaks its replies; false when it runs with TTS off (`stella.speech`, #180). */
+  agentSpeaks: boolean
   /** Act on an `stt_status` envelope. */
   applySttStatus: (data: SttStatusEnvelope) => void
   setAudioLevel: (v: number) => void
@@ -356,11 +358,15 @@ export const useStore = create<
     faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 },
   }, tag)),
   clearFaceSleepPending: () => set(s => (s.faceSleepPending ? { faceSleepPending: false } : s)),
-  resetFaceForSession: () => set({ faceSleepAllowed: true, faceSleepPending: false, sttStatus: nextSttStatus({ state: 'ready' }) }),
+  agentSpeaks: true,
+  resetFaceForSession: () => set({ faceSleepAllowed: true, faceSleepPending: false, agentSpeaks: true, sttStatus: nextSttStatus({ state: 'ready' }) }),
   setFaceSleepPhase: (phase) =>
     set(s => (s.faceSleepPhase === phase ? s : { faceSleepPhase: phase })),
   applyAgentCommand: (data) => {
-    if (data.command === 'sleep_allowed') {
+    if (data.command === 'stella.speech') {
+      // The platform's own: whether this agent speaks at all (#180).
+      set({ agentSpeaks: data.enabled !== false })
+    } else if (data.command === 'sleep_allowed') {
       // Held awake drops a pending sleep rather than saving it up — the same
       // rule the face applies while it is on screen.
       const allowed = data.allowed !== false

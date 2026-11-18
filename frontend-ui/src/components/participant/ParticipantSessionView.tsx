@@ -189,6 +189,9 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
 
   // Transcripts
   const [userTranscript, setUserTranscript] = useState('')
+  // An agent with TTS off says so (`stella.speech`, #180): its cues then fire
+  // at the end of each reply's text.
+  const agentSpeaks = useStore(s => s.agentSpeaks)
   // Teleprompter (#241): the shared word-by-word highlight engine, identical to
   // the organizer chat (ChatView). We feed it agent_speech_progress + agent_text
   // events below; it returns the live cursor used to highlight the spoken bubble
@@ -205,7 +208,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     faceGesture,
     faceState,
     clearSpoken: clearTeleprompterText,
-  } = useTeleprompter({ interactionMode })
+  } = useTeleprompter({ interactionMode, speaks: agentSpeaks })
   const [messages, setMessages] = useState<ParticipantMessage[]>([])
 
   // Emotion tags (#face-emotions): publish what the cursor resolves to the
