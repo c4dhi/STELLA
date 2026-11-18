@@ -463,14 +463,18 @@ export default function PipelineView({ schema, configuration, selectedNodeId, on
         onNodeClick={handleNodeClick}
         onPaneClick={onPaneClick}
         fitView
-        fitViewOptions={{ padding: 0.25, minZoom: 0.5, maxZoom: 1.2 }}
+        // minZoom lowered from 0.5 (#970): on a narrow canvas (tablet/phone,
+        // the sidebar now stacking below rather than beside it) fitting every
+        // stage needs to zoom out further than that. fitView only zooms out
+        // as far as it needs to, so this is a no-op at desktop widths.
+        fitViewOptions={{ padding: 0.25, minZoom: 0.25, maxZoom: 1.2 }}
         nodesDraggable={false}
         nodesConnectable={false}
         elementsSelectable={true}
         panOnDrag={true}
         zoomOnScroll={false}
         zoomOnPinch={true}
-        minZoom={0.3}
+        minZoom={0.2}
         maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
       >
