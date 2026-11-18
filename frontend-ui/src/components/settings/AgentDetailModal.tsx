@@ -15,17 +15,6 @@ const TAB_LABELS: Record<'build' | 'overview' | 'config', string> = {
   config: 'Config',
 }
 
-/**
- * What the Build tab should show as its (non-live) log on opening (#961): the
- * last build's stored output when nothing is currently running, so a window
- * reopened later still has something to read or copy. A running build
- * streams its own log live instead — nothing to seed it with here.
- */
-export function storedBuildLog(status: AgentBuildStatus | null, isBuilding: boolean): string[] {
-  if (isBuilding || !status?.buildOutput) return []
-  return [status.buildOutput]
-}
-
 interface AgentDetailModalProps {
   isOpen: boolean
   agent: AgentType | CustomAgentType | null
@@ -71,9 +60,7 @@ export default function AgentDetailModal({
       setBuildStatus(status)
       // A build already running (started by the upload itself, or queued
       // behind another) streams its log live, the same as one triggered here.
-      const building = status?.status === 'pending' || status?.status === 'building'
-      setIsBuilding(building)
-      setBuildLogs(storedBuildLog(status, building))
+      setIsBuilding(status?.status === 'pending' || status?.status === 'building')
     } catch (err) {
       console.error('Failed to load build status:', err)
     }

@@ -427,9 +427,6 @@ export interface AgentBuildStatus {
   errorMessage?: string
   startedAt: string
   completedAt?: string
-  // The stored output of this build (#961), so a window reopened after the
-  // build finished still has something to show. Never present in a list.
-  buildOutput?: string
 }
 
 // Agent build trigger response

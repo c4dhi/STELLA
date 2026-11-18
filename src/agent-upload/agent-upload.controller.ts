@@ -289,42 +289,22 @@ export class AgentUploadController {
   }
 
   /**
-   * Get build status for an agent, including its stored output (#961) so a
-   * window reopened after the build finished still has something to show —
-   * a build still running keeps streaming live over build-logs instead.
-   * Only ever on this single latest-build lookup, never on build-history.
+   * Get build status for an agent.
    * GET /agent-types/:id/build-status
    */
   @Get(':id/build-status')
-  async getBuildStatus(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<BuildStatus | null> {
-    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
-    if (!agentType) {
-      throw new NotFoundException('Agent type not found')
-    }
-    assertOwnsAgent(agentType, req)
-
-    return this.latestBuildStatus(id)
-  }
-
-  /** Looks up the latest build log for an agent type and its output, with no
-   *  access check of its own — callers that are reachable without one (the
-   *  SSE stream below) must not be newly gated by adding output here. */
-  private async latestBuildStatus(agentTypeId: string): Promise<BuildStatus | null> {
+  async getBuildStatus(@Param('id') id: string): Promise<BuildStatus | null> {
+    // Get latest build log for this agent
     const latestBuild = await this.prisma.agentBuildLog.findFirst({
-      where: { agentTypeId },
+      where: { agentTypeId: id },
       orderBy: { startedAt: 'desc' },
     })
+
     if (!latestBuild) {
       return null
     }
 
-    const status = await this.agentBuildService.getBuildStatus(latestBuild.id)
-    if (!status) {
-      return null
-    }
-
-    const buildOutput = await this.agentBuildService.getBuildOutput(latestBuild.id)
-    return { ...status, buildOutput: buildOutput ?? undefined }
+    return this.agentBuildService.getBuildStatus(latestBuild.id)
   }
 
   /**
@@ -367,10 +347,12 @@ export class AgentUploadController {
   }
 
   private async buildLogEvent(id: string): Promise<MessageEvent> {
-    const status = await this.latestBuildStatus(id)
+    const status = await this.getBuildStatus(id)
     if (!status) {
       return { type: 'status', data: 'no_build' } as MessageEvent
     }
+
+    const output = await this.agentBuildService.getBuildOutput(status.id)
 
     return {
       type: 'build',
@@ -378,7 +360,7 @@ export class AgentUploadController {
         status: status.status,
         imageName: status.imageName,
         errorMessage: status.errorMessage,
-        output: status.buildOutput?.slice(-5000), // Last 5000 chars
+        output: output?.slice(-5000), // Last 5000 chars
       }),
     } as MessageEvent
   }

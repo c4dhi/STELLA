@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals'
-import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common'
 import { AgentUploadController } from './agent-upload.controller.js'
 import { AgentAdminController } from './agent-admin.controller.js'
 import { AgentReviewService } from './agent-review.service.js'
@@ -325,53 +325,6 @@ describe('sharing an agent with projects', () => {
   it('never shares a built-in agent', async () => {
     const { controller } = makeUpload({ ...mine, isBuiltIn: true, userId: null })
     await expect(controller.updateShares('a1', { projectIds: [] }, user('owner') as any)).rejects.toThrow(ForbiddenException)
-  })
-})
-
-describe('build-status (#961: the window still has something to show after reopening)', () => {
-  const mine = { id: 'a1', userId: 'owner1', isBuiltIn: false }
-
-  it('returns null when the agent has never been built', async () => {
-    const { controller, prisma } = makeUpload(mine)
-    prisma.agentBuildLog.findFirst.mockResolvedValue(null)
-
-    const status = await controller.getBuildStatus('a1', user('owner1') as any)
-
-    expect(status).toBeNull()
-  })
-
-  it('includes the stored output of the latest build, for its owner', async () => {
-    const { controller, prisma, build } = makeUpload(mine)
-    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
-    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'failed', errorMessage: 'boom' })
-    build.getBuildOutput.mockResolvedValue('Step 1/5 ...\nERROR: boom')
-
-    const status = await controller.getBuildStatus('a1', user('owner1') as any)
-
-    expect(status).toMatchObject({ status: 'failed', errorMessage: 'boom', buildOutput: 'Step 1/5 ...\nERROR: boom' })
-  })
-
-  it('refuses a user who does not own the agent', async () => {
-    const { controller, prisma } = makeUpload(mine)
-
-    await expect(controller.getBuildStatus('a1', user('someone-else') as any)).rejects.toThrow(ForbiddenException)
-  })
-
-  it('allows a system admin who does not own the agent', async () => {
-    const { controller, prisma, build } = makeUpload(mine)
-    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
-    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'success' })
-    build.getBuildOutput.mockResolvedValue('built ok')
-
-    const status = await controller.getBuildStatus('a1', user('admin', true) as any)
-
-    expect(status).toMatchObject({ status: 'success', buildOutput: 'built ok' })
-  })
-
-  it('404s for an agent type that does not exist', async () => {
-    const { controller } = makeUpload(null)
-
-    await expect(controller.getBuildStatus('missing', user('owner1') as any)).rejects.toThrow(NotFoundException)
   })
 })
 
