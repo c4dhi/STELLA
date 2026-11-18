@@ -14,6 +14,8 @@ export function OfflineBanner() {
   const offline = banner === 'offline'
 
   return (
+    // Below sm the pill sits under the headers: 78px clears the tallest one (the
+    // session header, two lines of title at py-3) with a few px to spare.
     <div className="pointer-events-none fixed inset-x-0 top-[78px] sm:top-3 z-[9998] flex justify-center px-4 sm:px-16" aria-live="polite">
       <AnimatePresence>
         {banner !== 'hidden' && (
@@ -32,7 +34,8 @@ export function OfflineBanner() {
             <span>
               {offline ? (
                 <>
-                  You're offline<span className="hidden sm:inline">: changes won't save until the connection is back</span>
+                  {/* The long text only from lg: between sm and lg it would reach the titles and buttons in the headers. */}
+                  You're offline<span className="hidden lg:inline">: changes won't save until the connection is back</span>
                 </>
               ) : (
                 'Back online'
