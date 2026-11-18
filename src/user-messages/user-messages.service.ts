@@ -157,6 +157,40 @@ export class UserMessagesService {
   }
 
   /**
+   * Create an agent-build-failure message for whoever should hear about it:
+   * the user who started the build, or the agent's owner if nobody did.
+   */
+  async createAgentBuildFailedMessage(
+    recipientId: string,
+    agentTypeId: string,
+    agentName: string,
+    errorSummary: string,
+  ): Promise<void> {
+    const message = await this.prisma.userMessage.create({
+      data: {
+        userId: recipientId,
+        type: UserMessageType.AGENT_BUILD_FAILED,
+        title: `Build failed: ${agentName}`,
+        body: errorSummary,
+        relatedEntityId: agentTypeId,
+        relatedEntityType: 'AgentType',
+      },
+    });
+
+    this.logger.log(`Created build-failure message for user ${recipientId} (agent ${agentTypeId})`);
+
+    const enrichedMessage = await this.enrichMessage(message);
+    const unreadCount = await this.getUnreadCount(recipientId);
+    this.emitUserEvent(recipientId, {
+      type: 'message.created',
+      userId: recipientId,
+      message: enrichedMessage,
+      unreadCount: unreadCount.count,
+      timestamp: new Date(),
+    });
+  }
+
+  /**
    * Delete messages related to a specific entity
    */
   async deleteMessagesByEntity(

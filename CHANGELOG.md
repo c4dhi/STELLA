@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A failed agent build now tells you.** Whoever started the build (or the agent's owner, if nobody did) gets a toast on any page and an inbox message with the agent's name, the first line of the error, and a link straight to the build log. A successful build still sends nothing (#896)
+
 ### Upgrade notes
 
 - **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with

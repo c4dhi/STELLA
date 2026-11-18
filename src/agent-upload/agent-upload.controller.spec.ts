@@ -85,7 +85,7 @@ describe('AgentUploadController identity and ownership', () => {
   it('starts the build on its own once the upload is stored', async () => {
     const { controller, build } = makeUpload()
     await controller.uploadPackage(zip, user('u1') as any)
-    expect(build.startBuild).toHaveBeenCalledWith('new')
+    expect(build.startBuild).toHaveBeenCalledWith('new', 'u1')
   })
 
   it('still returns the upload result if starting the build fails', async () => {
@@ -267,7 +267,7 @@ describe('uploading an agent again', () => {
   it('a re-upload also starts the build on its own, same as a first upload', async () => {
     const { controller, build } = makeUpload(mine)
     await controller.uploadPackage(zip, user('u1') as any)
-    expect(build.startBuild).toHaveBeenCalledWith('a1')
+    expect(build.startBuild).toHaveBeenCalledWith('a1', 'u1')
   })
 
   it('with the same version is refused, and stores nothing', async () => {

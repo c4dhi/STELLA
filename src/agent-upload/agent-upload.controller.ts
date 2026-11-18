@@ -184,7 +184,7 @@ export class AgentUploadController {
     // logged, not surfaced as an upload error, and the uploader can still
     // press Rebuild.
     try {
-      await this.agentBuildService.startBuild(agentType.id)
+      await this.agentBuildService.startBuild(agentType.id, userId)
     } catch (err) {
       this.logger.error(`Failed to start build for ${agentType.slug} (${agentType.id}): ${(err as Error).message}`)
     }
@@ -280,7 +280,7 @@ export class AgentUploadController {
     assertOwnsAgent(agentType, req)
 
     // Start build
-    const result = await this.agentBuildService.startBuild(id)
+    const result = await this.agentBuildService.startBuild(id, requireUserId(req))
 
     return {
       buildLogId: result.buildLogId,
