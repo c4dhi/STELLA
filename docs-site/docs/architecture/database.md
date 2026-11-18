@@ -286,6 +286,7 @@ model Invitation {
 
   // Status
   status    InvitationStatus @default(PENDING)
+  statusBeforeAutoRevoke InvitationStatus? // set by an automatic close, see below
   expiresAt DateTime?
   acceptedAt DateTime?
   participantId String? @unique
@@ -299,6 +300,8 @@ model Invitation {
 | `ACCEPTED` | Participant joined |
 | `EXPIRED` | Time-based expiration |
 | `REVOKED` | Revoked by hand, or because the session closed |
+
+A session that closes on its own (the room went empty, the plan ended, its maximum length ran out) revokes its pending and accepted invitations and keeps each one's earlier status in `statusBeforeAutoRevoke`. If somebody rejoins and the session reopens, those invitations get that status back, or `EXPIRED` if their own expiry passed in the meantime, so the participant's link works again. Invitations revoked by hand, or by **Close session**, have no earlier status and stay revoked.
 
 ## Messages & Events
 

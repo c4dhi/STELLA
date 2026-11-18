@@ -15,6 +15,7 @@ import { Prisma } from '@prisma/client';
 import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service.js';
 import { attachTurnLanguage } from './turn-language.util.js';
 import { clientChannelRecord } from '../message-recorder/client-channel-record.js';
+import { REVOKED_BY_CLOSE, restoredStatus, restoresOnReopen, type CloseCause } from '../invitations/auto-revoke.js';
 
 /** Deliverable entry in the transcript summary section */
 interface TranscriptDeliverableSummaryEntry {
@@ -393,6 +394,35 @@ export class SessionsService {
   }
 
   /**
+   * Give back the invitations an automatic close revoked, when the session
+   * reopens (#170). Each goes back to the status it had, or to EXPIRED if its
+   * own expiry passed meanwhile. Invitations revoked by hand or by a manual
+   * close carry no earlier status and stay revoked.
+   */
+  async restoreAutoRevokedInvitations(sessionId: string): Promise<number> {
+    const revoked = await this.prisma.invitation.findMany({
+      where: { sessionId, status: 'REVOKED', statusBeforeAutoRevoke: { not: null } },
+      select: { id: true, statusBeforeAutoRevoke: true, expiresAt: true },
+    });
+    if (revoked.length === 0) return 0;
+    const now = new Date();
+    await this.prisma.$transaction(
+      revoked.map((inv) =>
+        this.prisma.invitation.updateMany({
+          // Still REVOKED: a hand revoke in between clears the earlier status anyway.
+          where: { id: inv.id, status: 'REVOKED' },
+          data: {
+            status: restoredStatus(inv.statusBeforeAutoRevoke!, inv.expiresAt, now),
+            statusBeforeAutoRevoke: null,
+          },
+        }),
+      ),
+    );
+    this.logger.log(`Session ${sessionId}: gave back ${revoked.length} invitation(s) revoked by its automatic close`);
+    return revoked.length;
+  }
+
+  /**
    * Graceful close (issue #198) — used by the auto-end paths (e.g. the max-duration
    * cap) so the agent is *not* cut off mid-sentence.
    *
@@ -471,7 +501,7 @@ export class SessionsService {
     // farewell and leaves), the webhook finalize closes it first and this close()
     // no-ops (idempotent).
     setTimeout(() => {
-      void this.close(id).catch((error) =>
+      void this.close(id, 'automatic').catch((error) =>
         this.logger.error(
           `Force-close after grace window failed for session ${id}: ${(error as Error).message}`,
         ),
@@ -505,7 +535,7 @@ export class SessionsService {
    * closing turn first should drive `CLOSING` + the interrupt themselves and only
    * then call `close()` to finalize.
    */
-  async close(id: string) {
+  async close(id: string, cause: CloseCause = 'manual') {
     const session = await this.prisma.session.findUnique({
       where: { id },
       include: { room: { select: { livekitRoomName: true } } },
@@ -536,18 +566,23 @@ export class SessionsService {
     // Stop all running agents using centralized function
     await this.agentsService.stopAllSessionAgents(id);
 
-    // Revoke all pending/accepted invitations
-    const revokedInvitations = await this.prisma.invitation.updateMany({
-      where: {
-        sessionId: id,
-        status: { in: ['PENDING', 'ACCEPTED'] },
-      },
-      data: { status: 'REVOKED' },
-    });
+    // Revoke all pending/accepted invitations. An automatic close notes each
+    // one's status, so reopening the session gives it back (#170); a manual
+    // close does not, and its invitations stay revoked.
+    const restore = restoresOnReopen(cause);
+    const revoked = await this.prisma.$transaction(
+      REVOKED_BY_CLOSE.map((before) =>
+        this.prisma.invitation.updateMany({
+          where: { sessionId: id, status: before },
+          data: { status: 'REVOKED', statusBeforeAutoRevoke: restore ? before : null },
+        }),
+      ),
+    );
+    const revokedCount = revoked.reduce((n, r) => n + r.count, 0);
 
-    if (revokedInvitations.count > 0) {
+    if (revokedCount > 0) {
       this.logger.log(
-        `Session ${id}: auto-revoked ${revokedInvitations.count} invitation(s)`,
+        `Session ${id}: revoked ${revokedCount} invitation(s) on ${cause} close${restore ? ' (given back if it reopens)' : ''}`,
       );
     }
 
