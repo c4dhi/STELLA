@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Copy an uploaded agent's build log with one button.** The Build tab's log now has a Copy button below it, confirming with "Copied"; it's disabled while there's no log yet ([#899](https://github.com/c4dhi/STELLA/issues/899))
+
 ### Upgrade notes
 
 - **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
