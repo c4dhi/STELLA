@@ -16,10 +16,21 @@ import StellaFace from '../components/face/StellaFace'
 import { EXPRESSIONS, GESTURES, STATES } from '../components/face/animations/emotionRegistry'
 import { useStore } from '../store'
 
+/** The face's size: 520 px, or the screen's width less a 16 px margin each side (#184). */
+export function previewFaceSize(viewportWidth: number, max = 520): number {
+  return Math.max(160, Math.min(max, viewportWidth - 32))
+}
+
 const EXPRESSION_TAGS = Object.keys(EXPRESSIONS)
 const GESTURE_TAGS = Object.keys(GESTURES)
 
 export default function FacePreviewPage() {
+  const [faceSize, setFaceSize] = useState(() => previewFaceSize(window.innerWidth))
+  useEffect(() => {
+    const onResize = () => setFaceSize(previewFaceSize(window.innerWidth))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const triggerFaceState = useStore(s => s.triggerFaceState)
@@ -64,7 +75,7 @@ export default function FacePreviewPage() {
     <div className="min-h-screen bg-black text-white flex flex-col">
       <div className="flex-1 flex items-center justify-center">
         <StellaFace
-          size={520}
+          size={faceSize}
           isUserSpeaking={listening}
           isRemoteSpeaking={speaking}
           audioLevel={audioLevel}
