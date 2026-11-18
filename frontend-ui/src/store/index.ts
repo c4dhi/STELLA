@@ -248,6 +248,16 @@ type TaskState = {
   currentHistoricalTimestamp: number | null
   // Per-card hide/show (soft hide — data preserved in timeline)
   hiddenAgentIds: Set<string>
+
+  // Whether the agent's current turn has finished being heard (#894). True
+  // whenever there is nothing to wait for: text-only sessions, and between
+  // turns in a voice session. False from the moment speech starts scheduling
+  // until the teleprompter's schedule plays out, so a state/todo-list update
+  // that arrives mid-speech can wait for the words it belongs to.
+  agentSpeechSettled: boolean
+  // Task-panel updates queued while agentSpeechSettled was false, flushed in
+  // order once it flips back to true. See runWhenSpeechSettled.
+  pendingTaskUpdates: Array<() => void>
 }
 type TaskActions = {
   // Multi-agent actions
@@ -270,6 +280,10 @@ type TaskActions = {
   handleStateChange: (data: StateChangeNotification) => void
   setShowTaskPanel: (show: boolean) => void
   clearTasks: () => void
+  // #894: apply `fn` now if the agent's current turn has already been heard,
+  // otherwise hold it until setAgentSpeechSettled(true) flushes the queue.
+  runWhenSpeechSettled: (fn: () => void) => void
+  setAgentSpeechSettled: (settled: boolean) => void
   // New notification and update actions
   addNotification: (notification: Omit<UpdateNotification, 'id' | 'timestamp' | 'read'>) => void
   markNotificationRead: (id: string) => void
@@ -591,6 +605,8 @@ export const useStore = create<
   isTaskPanelInHistoryMode: false,
   currentHistoricalTimestamp: null,
   hiddenAgentIds: new Set<string>(),
+  agentSpeechSettled: true,
+  pendingTaskUpdates: [],
 
   // Multi-agent actions
   setAgentTaskList: (agentId, todoList, agentName) => set((state) => {
@@ -874,6 +890,24 @@ export const useStore = create<
 
   setShowTaskPanel: (show) => set({ showTaskPanel: show }),
 
+  runWhenSpeechSettled: (fn) => {
+    if (get().agentSpeechSettled) {
+      fn()
+    } else {
+      set((state) => ({ pendingTaskUpdates: [...state.pendingTaskUpdates, fn] }))
+    }
+  },
+
+  setAgentSpeechSettled: (settled) => {
+    if (!settled) {
+      set({ agentSpeechSettled: false })
+      return
+    }
+    const pending = get().pendingTaskUpdates
+    set({ agentSpeechSettled: true, pendingTaskUpdates: [] })
+    pending.forEach((fn) => fn())
+  },
+
   clearTasks: () => set({
     agentTaskLists: new Map(),
     todoList: null,
@@ -890,7 +924,9 @@ export const useStore = create<
     recentUpdates: [],
     focusMode: false,
     lastUpdateTimestamp: null,
-    hiddenAgentIds: new Set<string>()
+    hiddenAgentIds: new Set<string>(),
+    agentSpeechSettled: true,
+    pendingTaskUpdates: []
   }),
 
   // New notification and update actions

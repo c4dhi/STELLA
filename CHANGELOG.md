@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The plan panel stays in step with the chat.** In a voice session, the panel used to jump to the agent's new state the instant the backend reported it — which is before the reply announcing that state has finished being spoken, sometimes by several seconds. It now waits for the current turn's speech to actually finish playing before updating. Text-only sessions are unaffected, since there the two were already in order (#894)
 - **STELLA Jev: the reply and the plan stay in step.** Jev decides which task a message answered and the reply moves on from it, but extraction used to decide on its own what to save, so Grace could ask again for something already saved, or move on from something never saved. Extraction now saves only what Jev picked. Tasks in the same state mentioned in passing are saved too (unconfirmed), and Grace doesn't ask about them again; a correction of a value already collected in this state overwrites it. When Jev is unsure, nothing is saved and the question comes again. Jev's decision and what was saved show as debug lines in the session chat. New Pipeline Configurator settings `forecast_threshold` and `also_threshold`. Jev agent only (#177)
 
 ## [2.0.1] - 2026-11-17

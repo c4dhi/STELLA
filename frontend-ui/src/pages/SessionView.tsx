@@ -86,6 +86,7 @@ export default function SessionView() {
   const setAllDeliverableStates = useStore(s => s.setAllDeliverableStates)
   const setProcessingMode = useStore(s => s.setProcessingMode)
   const addNotification = useStore(s => s.addNotification)
+  const runWhenSpeechSettled = useStore(s => s.runWhenSpeechSettled)
 
   // Face modal state
   const isFaceModalOpen = useStore(s => s.isFaceModalOpen)
@@ -381,19 +382,24 @@ export default function SessionView() {
           agentIcon
         }
 
-        // Route to multi-agent system with timeline tracking for live updates
-        addLiveTaskUpdate(agentId, todoListWithAgent, agentName)
+        // Applied once the agent's current turn has actually been heard
+        // (#894), so the panel never jumps ahead of what the user is
+        // listening to or reading.
+        runWhenSpeechSettled(() => {
+          // Route to multi-agent system with timeline tracking for live updates
+          addLiveTaskUpdate(agentId, todoListWithAgent, agentName)
 
-        // Keep legacy support for backward compatibility
-        setTodoList(data.todo_list)
+          // Keep legacy support for backward compatibility
+          setTodoList(data.todo_list)
 
-        if (data.all_deliverable_states) {
-          setAllDeliverableStates(data.all_deliverable_states)
-        }
+          if (data.all_deliverable_states) {
+            setAllDeliverableStates(data.all_deliverable_states)
+          }
 
-        if (data.context?.current_processing_mode) {
-          setProcessingMode(data.context.current_processing_mode)
-        }
+          if (data.context?.current_processing_mode) {
+            setProcessingMode(data.context.current_processing_mode)
+          }
+        })
       } catch (error) {
         console.error('Error handling state machine update:', error)
       }
@@ -442,7 +448,8 @@ export default function SessionView() {
     }
 
     const handleStateMachineStateChange = (data: any) => {
-      handleStateChange(data)
+      // #894: hold the state change until the turn announcing it has been heard.
+      runWhenSpeechSettled(() => handleStateChange(data))
     }
 
     // Handle generic progress updates from SDK (new format)
@@ -467,15 +474,18 @@ export default function SessionView() {
         const agentId = data.metadata?.agent_id || 'default-agent'
         const agentName = data.metadata?.agent_name || 'Agent'
 
-        // Route to multi-agent system
-        addLiveTaskUpdate(agentId, todoList, agentName)
-        setTodoList(todoList)
+        // #894: held until the turn this describes has actually been heard.
+        runWhenSpeechSettled(() => {
+          // Route to multi-agent system
+          addLiveTaskUpdate(agentId, todoList, agentName)
+          setTodoList(todoList)
 
-        // Set processing mode based on current group's execution mode
-        const currentGroup = data.groups?.find(g => g.id === data.current_group_id)
-        if (currentGroup) {
-          setProcessingMode(resolveStateType(currentGroup))
-        }
+          // Set processing mode based on current group's execution mode
+          const currentGroup = data.groups?.find(g => g.id === data.current_group_id)
+          if (currentGroup) {
+            setProcessingMode(resolveStateType(currentGroup))
+          }
+        })
       } catch (error) {
         console.error('Error handling progress update:', error)
       }
