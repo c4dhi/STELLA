@@ -82,6 +82,10 @@ The participant picks a face in the face gallery. The Text face is the text inte
 
 No agent code is needed: `speak()`, `speak_line()` and the sentence queue all follow the mode. `self.audio.interaction_mode` tells an agent which one is on.
 
+### Whether the agent speaks: `stella.speech`
+
+The other way round, the SDK tells the screen whether the agent speaks at all. Once it is ready, and again to everyone who joins later, it sends the command `stella.speech` with `{"enabled": true | false}`, which is false when the agent runs with `TTS_ENABLED=false`. With nothing spoken, no speech progress ever arrives, so the screen fires a reply's state and emotion cues (a `[sleep]` after a goodbye, for example) once the reply's text is in, as it does on the text interface. No agent code is needed, and no manifest declares it.
+
 ## When the session ends
 
 When the time cap runs out or the organiser ends the session, the SDK asks the agent what to do with `session_end_mode()`:

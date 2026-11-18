@@ -211,7 +211,22 @@ export interface Teleprompter {
   clearSpoken: () => void
 }
 
-export function useTeleprompter(): Teleprompter {
+export interface TeleprompterOptions {
+  /**
+   * Which interface the participant is using (#149). In 'text' the agent
+   * speaks nothing, so no progress envelope ever arrives and the published
+   * text is the only progress there is — the same as a session with TTS off.
+   */
+  interactionMode?: 'voice' | 'text'
+  /**
+   * Whether the agent speaks its replies (#180). False for an agent running
+   * with TTS off, which says so with `stella.speech`: no progress envelope
+   * will come, so cues fire at the end of the text as in the text interface.
+   */
+  speaks?: boolean
+}
+
+export function useTeleprompter({ interactionMode = 'voice', speaks = true }: TeleprompterOptions = {}): Teleprompter {
   const [spokenChar, setSpokenChar] = useState(0)
   const [spokenTranscriptId, setSpokenTranscriptId] = useState('')
   const [frozenSpoken, setFrozenSpoken] = useState<Record<string, number>>({})
@@ -252,6 +267,17 @@ export function useTeleprompter(): Teleprompter {
   // detection through beginTranscript() keyed on this, so the faster agent_text
   // stream can never reset a turn whose highlight is already advancing.
   const transcriptIdRef = useRef('')
+  // The transcript whose cues the cue cursor walks. The same as the highlight
+  // binding while replies are spoken; for a reply nobody will hear it is bound
+  // here alone, so the face still gets its cues without the bubble dimming
+  // ahead of a voice that is never coming (#149).
+  const cueTranscriptRef = useRef('')
+  // Nothing of the reply will be spoken: the text interface, or an agent with
+  // TTS off. Either way the text is the only progress there is.
+  const unspokenRef = useRef(interactionMode === 'text' || !speaks)
+  useEffect(() => {
+    unspokenRef.current = interactionMode === 'text' || !speaks
+  }, [interactionMode, speaks])
   const textByTranscriptRef = useRef<Map<string, string>>(new Map())
   const prefersReducedMotionRef = useRef(
     typeof window !== 'undefined' &&
@@ -263,7 +289,7 @@ export function useTeleprompter(): Teleprompter {
   // loop and from every path that moves the cursor without one (reduced motion,
   // and a TTS-off session where there is no audio to track).
   const syncCues = useCallback((cursor: number) => {
-    const cues = cuesByTranscriptRef.current.get(transcriptIdRef.current)
+    const cues = cuesByTranscriptRef.current.get(cueTranscriptRef.current)
     if (!cues || cues.length === 0) return
     const previous = cueCursorRef.current
     if (cursor <= previous) return
@@ -384,6 +410,7 @@ export function useTeleprompter(): Teleprompter {
     (transcriptId: string) => {
       if (!transcriptId || transcriptIdRef.current === transcriptId) return
       transcriptIdRef.current = transcriptId
+      cueTranscriptRef.current = transcriptId
       resetSchedule()
       // Position only — the previous reply ended its own expression when the
       // agent stopped speaking (see the watchdog below).
@@ -401,10 +428,37 @@ export function useTeleprompter(): Teleprompter {
     [resetSchedule, rewindCues, relaxExpression]
   )
 
+  // A reply in the text interface is never spoken (#149): no progress envelope
+  // will arrive and no cursor will move, so the published text IS its progress.
+  //
+  // Keyed on the interface, not on "no progress seen yet": the first spoken
+  // reply of a session also arrives before its first progress, and treating it
+  // as unspoken would fire all of its cues — a closing [sleep] included — the
+  // moment its text landed.
+  const syncUnspoken = useCallback(
+    (transcriptId: string) => {
+      if (cueTranscriptRef.current !== transcriptId) {
+        cueTranscriptRef.current = transcriptId
+        rewindCues()
+        // With no audio a new message is the only turn boundary there is, so
+        // it is what lets the previous reply's expression go (see beginTranscript).
+        relaxExpression()
+      }
+      const text = textByTranscriptRef.current.get(transcriptId)
+      if (text) syncCues(text.length)
+    },
+    [rewindCues, relaxExpression, syncCues]
+  )
+
   const noteAgentText = useCallback(
     (transcriptId: string, text: string) => {
       if (!transcriptId) return
       textByTranscriptRef.current.set(transcriptId, text)
+      // Text interface: never spoken, never highlighted — see syncUnspoken.
+      if (unspokenRef.current) {
+        syncUnspoken(transcriptId)
+        return
+      }
       // Once live, bind each new reply on its first chunk so it renders dimmed
       // ahead of the voice and lights up as the audio catches up.
       if (!activeRef.current) {
@@ -415,7 +469,7 @@ export function useTeleprompter(): Teleprompter {
       beginTranscript(transcriptId)
       setSpokenText(text)
     },
-    [beginTranscript, syncCues]
+    [beginTranscript, syncCues, syncUnspoken]
   )
 
   const noteEmotionCues = useCallback(
@@ -426,6 +480,10 @@ export function useTeleprompter(): Teleprompter {
       const ordered = [...cues].sort((a, b) => a.char - b.char)
       cuesByTranscriptRef.current.set(transcriptId, ordered)
       setCuesByTranscript(prev => ({ ...prev, [transcriptId]: ordered }))
+      if (unspokenRef.current) {
+        syncUnspoken(transcriptId)
+        return
+      }
       // With TTS off there is no audio to track and no cursor will ever move,
       // so nothing past offset 0 would ever fire. Fall back to the text itself:
       // published text IS the progress in that mode.
@@ -434,7 +492,7 @@ export function useTeleprompter(): Teleprompter {
         if (text) syncCues(text.length)
       }
     },
-    [syncCues]
+    [syncCues, syncUnspoken]
   )
 
   const applyProgress = useCallback(

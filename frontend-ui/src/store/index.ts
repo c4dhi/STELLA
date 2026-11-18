@@ -1,5 +1,6 @@
 
 import { create } from 'zustand'
+import { resolveState } from '../components/face/animations/emotionRegistry'
 import { generateUUID } from '../lib/uuid'
 import type {
   TranscriptChunk,
@@ -78,6 +79,13 @@ type MediaState = {
    * command. True until an agent says otherwise.
    */
   faceSleepAllowed: boolean
+  /**
+   * A `[sleep]` from the agent that nothing has honoured or cancelled yet
+   * (#149). Held here rather than in the face because the face may not be on
+   * screen when it arrives — the goodbye can come while the participant is in
+   * the text interface — and has to find it waiting when it mounts.
+   */
+  faceSleepPending: boolean
   /** Speech recognition still warming up, or failed to (#564); null when listening works. */
   sttStatus: SttStatus | null
   // Agent readiness state - controls audio processing
@@ -100,7 +108,13 @@ type MediaActions = {
   triggerFaceState: (tag: string) => void
   setFaceSleepPhase: (phase: 'awake' | 'asleep' | 'waking') => void
   /** Act on an `agent_command` envelope. A command this client does not know is ignored. */
-  applyAgentCommand: (data: { command?: string; allowed?: boolean }) => void
+  applyAgentCommand: (data: { command?: string; allowed?: boolean; enabled?: boolean }) => void
+  /** The pending sleep was honoured, or the user carried on and cancelled it. */
+  clearFaceSleepPending: () => void
+  /** A new session opens: nothing the last session's agent told the face carries over. */
+  resetFaceForSession: () => void
+  /** Whether the agent speaks its replies; false when it runs with TTS off (`stella.speech`, #180). */
+  agentSpeaks: boolean
   /** Act on an `stt_status` envelope. */
   applySttStatus: (data: SttStatusEnvelope) => void
   setAudioLevel: (v: number) => void
@@ -285,6 +299,15 @@ type TaskActions = {
   clearTaskTimeline: () => void
 }
 
+/** A face state that is `sleep` also leaves a pending sleep behind, unless held awake. */
+function withSleepPending<T extends object>(
+  s: { faceSleepAllowed: boolean },
+  update: T,
+  tag: string
+): T | (T & { faceSleepPending: true }) {
+  return resolveState(tag) === 'sleep' && s.faceSleepAllowed ? { ...update, faceSleepPending: true } : update
+}
+
 export const useStore = create<
   ConnectionState & ConnectionActions & MediaState & MediaActions & LLMConfigState & LLMConfigActions & ChatState & ChatActions & TaskState & TaskActions
 >((set, get) => ({
@@ -314,6 +337,7 @@ export const useStore = create<
   faceState: null,
   faceSleepPhase: 'awake',
   faceSleepAllowed: true,
+  faceSleepPending: false,
   sttStatus: null,
   agentReady: false, // Audio disabled until agent is ready
   setMicGranted: (v) => set({ micGranted: v }),
@@ -330,18 +354,28 @@ export const useStore = create<
   triggerFaceGesture: (tag) => set(s => ({
     faceGesture: { tag, seq: (s.faceGesture?.seq ?? 0) + 1 },
   })),
-  triggerFaceState: (tag) => set(s => ({
+  triggerFaceState: (tag) => set(s => withSleepPending(s, {
     faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 },
-  })),
+  }, tag)),
+  clearFaceSleepPending: () => set(s => (s.faceSleepPending ? { faceSleepPending: false } : s)),
+  agentSpeaks: true,
+  resetFaceForSession: () => set({ faceSleepAllowed: true, faceSleepPending: false, agentSpeaks: true, sttStatus: nextSttStatus({ state: 'ready' }) }),
   setFaceSleepPhase: (phase) =>
     set(s => (s.faceSleepPhase === phase ? s : { faceSleepPhase: phase })),
   applyAgentCommand: (data) => {
-    if (data.command === 'sleep_allowed') {
-      set({ faceSleepAllowed: data.allowed !== false })
+    if (data.command === 'stella.speech') {
+      // The platform's own: whether this agent speaks at all (#180).
+      set({ agentSpeaks: data.enabled !== false })
+    } else if (data.command === 'sleep_allowed') {
+      // Held awake drops a pending sleep rather than saving it up — the same
+      // rule the face applies while it is on screen.
+      const allowed = data.allowed !== false
+      set(allowed ? { faceSleepAllowed: true } : { faceSleepAllowed: false, faceSleepPending: false })
     } else if (data.command) {
       // Every other command is a face state by name; the face drops one it
       // does not know.
-      set(s => ({ faceState: { tag: data.command as string, seq: (s.faceState?.seq ?? 0) + 1 } }))
+      const tag = data.command
+      set(s => withSleepPending(s, { faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 } }, tag))
     }
   },
   applySttStatus: (data) => set({ sttStatus: nextSttStatus(data) }),

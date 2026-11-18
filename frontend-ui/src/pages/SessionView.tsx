@@ -124,7 +124,9 @@ export default function SessionView() {
   // What one session's agent told the face must not carry into the next one
   // opened in the same page load.
   useEffect(() => {
-    useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
+    // One reset for both views (#180): sleep allowed, no pending sleep, the
+    // agent assumed to speak until it says otherwise, STT ready.
+    useStore.getState().resetFaceForSession()
   }, [sessionId])
 
   // Load session details, then participants (serialized to avoid connection burst)
