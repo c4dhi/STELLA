@@ -108,7 +108,7 @@ export class WebhooksService {
     // CLOSING → CLOSED, revokes invitations, marks participants left and emits
     // session.closed exactly once (status-guarded, so concurrent webhook
     // deliveries are idempotent).
-    await this.sessionsService.close(sessionId);
+    await this.sessionsService.close(sessionId, 'automatic');
     this.logger.log(`Session ${sessionId} finalized to CLOSED after last agent disconnected`);
   }
 
@@ -201,6 +201,8 @@ export class WebhooksService {
         });
         session.status = 'ACTIVE';
         session.closedAt = null;
+        // The invitations its automatic close revoked work again (#170).
+        await this.sessionsService.restoreAutoRevokedInvitations(sessionId);
         this.logger.log(
           `Re-activated session ${sessionId} (was ${previousStatus}) on human rejoin: ${participantIdentity}`,
         );
@@ -302,7 +304,7 @@ export class WebhooksService {
           // Route empty-room auto-close through the single authoritative closer so it
           // follows ACTIVE → CLOSING → CLOSED (and revokes invitations, marks
           // participants left, emits session.closed) like every other close path.
-          await this.sessionsService.close(sessionId);
+          await this.sessionsService.close(sessionId, 'automatic');
           this.logger.log(`Session ${sessionId} closed — all participants left after human interaction`);
         } else {
           // Kept open (#162): the session stays ACTIVE and its invitations valid,

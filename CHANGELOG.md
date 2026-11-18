@@ -5,6 +5,16 @@ All notable changes to STELLA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A session that reopens gives its invitations back.** When a session closed on its own (the room went empty, the plan ended, the time ran out), its invitations were revoked, and when somebody rejoined and the session opened again, they stayed revoked: the participant's link no longer worked in a live session. Now an automatic close notes what each invitation was, and reopening restores it (or marks it expired if its own expiry has passed). Invitations revoked by hand, or by **Close session**, stay revoked ([#930](https://github.com/c4dhi/STELLA/issues/930))
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy: a new nullable column on invitations. Invitations revoked before the upgrade are not restored
+
 ## [2.0.1] - 2026-11-17
 
 Sessions that last. A session in a private project now stays open when
