@@ -5,6 +5,12 @@ All notable changes to STELLA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **One tab icon for the app and the docs.** Both now show the STELLA logo, the purple circle with the white star, in every browser tab and bookmark, sharp at small sizes and in light and dark browsers. On an iPhone or iPad home screen it is a purple square with the star. Before, the app and the docs each had a different icon ([#857](https://github.com/c4dhi/STELLA/issues/857))
+
 ## [2.0.1] - 2026-11-17
 
 Sessions that last. A session in a private project now stays open when
