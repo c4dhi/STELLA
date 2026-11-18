@@ -198,7 +198,7 @@ export default function AgentConfiguratorModal({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Configuration name..."
-              className={`flex-1 lg:max-w-[220px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
+              className={`flex-1 min-w-0 lg:max-w-[220px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
                 isDark
                   ? 'bg-surface-dark-secondary border border-border-dark text-content-inverse placeholder:text-content-inverse-tertiary focus:border-border-dark-secondary'
                   : 'bg-surface-secondary border border-border text-content placeholder:text-content-tertiary focus:border-border-secondary'
@@ -209,7 +209,7 @@ export default function AgentConfiguratorModal({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Description (optional)"
-              className={`flex-1 lg:max-w-[280px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
+              className={`flex-1 min-w-0 lg:max-w-[280px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
                 isDark
                   ? 'bg-surface-dark-secondary border border-border-dark text-content-inverse placeholder:text-content-inverse-tertiary focus:border-border-dark-secondary'
                   : 'bg-surface-secondary border border-border text-content placeholder:text-content-tertiary focus:border-border-secondary'
@@ -244,7 +244,7 @@ export default function AgentConfiguratorModal({
         <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
           {/* Pipeline visualization — fixed height below lg so ReactFlow has
               room to fit the whole pipeline at a readable zoom */}
-          <div className="h-[50vh] shrink-0 lg:h-auto lg:flex-1 lg:min-w-0">
+          <div className="h-[36vh] shrink-0 lg:h-auto lg:flex-1 lg:min-w-0">
             <PipelineView
               schema={pipelineSchema}
               configuration={configuration}
@@ -254,9 +254,15 @@ export default function AgentConfiguratorModal({
             />
           </div>
 
-          {/* Expert sidebar (always visible) — full width below the canvas
-              on narrow screens, a fixed-width column beside it from lg up */}
-          <div className={`w-full lg:w-[440px] lg:shrink-0 border-t lg:border-t-0 lg:border-l overflow-hidden ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+          {/* Expert sidebar (always visible) — full width below the canvas on
+              narrow screens, a fixed-width column beside it from lg up. Its
+              own height is explicit (not auto) below lg too: ExpertSidebar's
+              root is h-full, which against an auto-height parent in a column
+              flex container resolves to whatever sliver is left over rather
+              than its actual content height, squeezing its list down to
+              nothing — so it gets a real height to fill instead, and scrolls
+              internally rather than relying on the whole body's scroll. */}
+          <div className={`w-full h-[42vh] shrink-0 lg:h-auto lg:w-[440px] lg:shrink-0 border-t lg:border-t-0 lg:border-l overflow-hidden ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
             <ExpertSidebar
               experts={state.experts}
               poolExperts={state.poolExperts}
