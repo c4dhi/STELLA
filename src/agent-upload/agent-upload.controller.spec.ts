@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals'
-import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common'
 import { AgentUploadController } from './agent-upload.controller.js'
 import { AgentAdminController } from './agent-admin.controller.js'
 import { AgentReviewService } from './agent-review.service.js'
@@ -26,6 +26,7 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
   const prisma = {
     agentTypeProjectShare: {
       findMany: jest.fn().mockResolvedValue([] as { projectId: string }[]),
+      findFirst: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       upsert: jest.fn().mockResolvedValue({}),
     },
@@ -58,6 +59,7 @@ function makeUpload(agentRecord: Record<string, unknown> | null = null, m = mani
     startBuild: jest.fn().mockResolvedValue({ buildLogId: 'b1' }),
     getBuildStatus: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
     getBuildOutput: jest.fn().mockResolvedValue(null as string | null),
+    getBuildHistory: jest.fn().mockResolvedValue([] as unknown[]),
   }
   const storage = { delete: jest.fn().mockResolvedValue(undefined) }
   const agents = {
@@ -328,6 +330,33 @@ describe('sharing an agent with projects', () => {
   })
 })
 
+describe('build-status (#961: the window still has something to show after reopening)', () => {
+  const mine = { id: 'a1', userId: 'owner1', isBuiltIn: false }
+
+  it('returns null when the agent has never been built', async () => {
+    const { controller, prisma } = makeUpload(mine)
+    prisma.agentBuildLog.findFirst.mockResolvedValue(null)
+
+    const status = await controller.getBuildStatus('a1', user('owner1') as any)
+
+    expect(status).toBeNull()
+  })
+
+  it('includes the stored output of the latest build, for whoever may see it', async () => {
+    const { controller, prisma, build } = makeUpload(mine)
+    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
+    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'failed', errorMessage: 'boom' })
+    build.getBuildOutput.mockResolvedValue('Step 1/5 ...\nERROR: boom')
+
+    const status = await controller.getBuildStatus('a1', user('owner1') as any)
+
+    expect(status).toMatchObject({ status: 'failed', errorMessage: 'boom', buildOutput: 'Step 1/5 ...\nERROR: boom' })
+  })
+
+  // Who may call getBuildStatus at all (owner / shared project member / admin
+  // / stranger / unknown agent) is covered by 'who may see an agent build'.
+})
+
 describe('the build-logs SSE event', () => {
   // A plain map() over an async callback emits the unresolved Promise as the
   // "event" (streamBuildLogs used to do exactly this): the browser's
@@ -354,5 +383,60 @@ describe('the build-logs SSE event', () => {
     const event = await (controller as any).buildLogEvent('a1')
 
     expect(event.data).toBe('no_build')
+  })
+})
+
+describe('who may see an agent build', () => {
+  // The build log, status and history only checked that the caller was signed
+  // in: anyone who knew an agent's id could read its build output. They now
+  // follow who sees the agent: its owner, members of a project it is shared
+  // with, and admins. Everyone else is refused before any build data is read.
+  const upload = { id: 'a1', isBuiltIn: false, userId: 'owner' }
+  const sharedWith = (prisma: any, projectId: string, memberId: string) => {
+    prisma.agentTypeProjectShare.findMany.mockResolvedValue([{ projectId }])
+    prisma.projectMembership.findMany.mockImplementation(({ where }: any) =>
+      Promise.resolve(where.userId === memberId ? [{ projectId }] : []),
+    )
+  }
+  const calls = (controller: AgentUploadController, req: any) => ({
+    status: () => controller.getBuildStatus('a1', req),
+    history: () => controller.getBuildHistory('a1', req),
+    logs: () => controller.streamBuildLogs('a1', req),
+  })
+
+  it.each(['status', 'history', 'logs'] as const)('refuses a stranger the build %s, before reading it', async (which) => {
+    const { controller, prisma, build } = makeUpload(upload)
+    sharedWith(prisma, 'p1', 'member')
+    await expect(calls(controller, user('stranger'))[which]()).rejects.toThrow(ForbiddenException)
+    expect(prisma.agentBuildLog.findFirst).not.toHaveBeenCalled()
+    expect(build.getBuildHistory).not.toHaveBeenCalled()
+  })
+
+  it.each(['status', 'history', 'logs'] as const)('answers 404 for an unknown agent on the build %s', async (which) => {
+    const { controller } = makeUpload(null)
+    await expect(calls(controller, user('owner'))[which]()).rejects.toThrow(NotFoundException)
+  })
+
+  it.each([
+    ['its owner', user('owner')],
+    ['a member of a project it is shared with', user('member')],
+    ['an admin', user('admin', true)],
+  ])('lets %s see the build', async (_who, req) => {
+    const { controller, prisma, build } = makeUpload(upload)
+    sharedWith(prisma, 'p1', 'member')
+    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
+    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'success' })
+    build.getBuildHistory.mockResolvedValue([{ id: 'log1' }])
+
+    await expect(controller.getBuildStatus('a1', req as any)).resolves.toEqual({ id: 'log1', status: 'success' })
+    await expect(controller.getBuildHistory('a1', req as any)).resolves.toEqual([{ id: 'log1' }])
+    const stream = await controller.streamBuildLogs('a1', req as any)
+    expect(typeof stream.subscribe).toBe('function')
+  })
+
+  it('keeps a built-in agent build to admins', async () => {
+    const { controller } = makeUpload({ id: 'a1', isBuiltIn: true, userId: null })
+    await expect(controller.getBuildStatus('a1', user('someone') as any)).rejects.toThrow(ForbiddenException)
+    await expect(controller.getBuildStatus('a1', user('admin', true) as any)).resolves.toBeNull()
   })
 })

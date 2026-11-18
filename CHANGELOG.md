@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Build tab remembers the last build.** Reopening an agent's Build tab used to show nothing unless a build was running at that exact moment. It now loads the last build's stored log, status and time straight away; a build still in progress streams live as before (#961)
+
 ### Upgrade notes
 
 - **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
