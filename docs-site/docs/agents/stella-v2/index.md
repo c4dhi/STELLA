@@ -89,9 +89,9 @@ Users create **Pipeline Configurations** — named, reusable presets that overri
 |----------|---------|-------------|
 | `INTERRUPT_MODE` | `"none"` | `"none"` for turn-based gating, `"smart"` for barge-in with re-prompting |
 | `TTS_ENABLED` | `"true"` | Set to `"false"` for text-only mode |
-| `TRANSCRIPT_DEBOUNCE_MS` | `"300"` | Debounce window (ms) for aggregating rapid successive final transcripts. `0` to disable |
+| `TRANSCRIPT_DEBOUNCE_MS` | `"0"` | Debounce window (ms) for aggregating rapid successive final transcripts. `0` to disable |
 | `STELLA_EXPERTS_DIR` | — | External directory for expert JSON configs (overrides built-in) |
-| `EXPERT_TIMEOUT_MS` | `"3000"` | Timeout per expert in milliseconds |
+| `EXPERT_TIMEOUT_MS` | `"15000"` | Timeout per expert in milliseconds |
 
 ## Resource Requirements
 

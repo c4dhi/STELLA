@@ -32,6 +32,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+#: Per-expert timeout when EXPERT_TIMEOUT_MS is unset. agent.yaml shows the
+#: same value (pinned by tests/test_manifest_defaults.py).
+DEFAULT_EXPERT_TIMEOUT_MS = 15000
+
 
 class ExpertPool:
     """Runs selected experts in parallel and collects their verdicts.
@@ -55,7 +59,7 @@ class ExpertPool:
         self._runner = ExpertRunner(llm_service, compiler_version=compiler_version)
         self._registry = expert_registry
         self._tool_registry = tool_registry
-        self._timeout_ms = int(os.environ.get("EXPERT_TIMEOUT_MS", "15000"))
+        self._timeout_ms = int(os.environ.get("EXPERT_TIMEOUT_MS", str(DEFAULT_EXPERT_TIMEOUT_MS)))
 
     def set_tool_registry(self, tool_registry: ToolRegistry) -> None:
         """Set or update the tool registry (called after session start)."""
