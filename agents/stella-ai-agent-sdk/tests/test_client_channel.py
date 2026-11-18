@@ -290,3 +290,5 @@ def test_platform_commands_need_no_manifest_declaration():
     channel = ClientChannel(events={}, commands={})   # inside STELLA, nothing declared
     assert channel.command_problem(SPEECH_COMMAND, {"enabled": False}) is None
     assert channel.command_problem("sleep", {}) is not None
+    # Only the SDK's own: a misspelt platform name is refused, not waved through.
+    assert channel.command_problem("stella.spech", {"enabled": False}) is not None

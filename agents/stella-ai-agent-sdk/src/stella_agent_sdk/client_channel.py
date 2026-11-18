@@ -50,6 +50,10 @@ INTERACTION_MODES = ("voice", "text")
 SPEECH_COMMAND = "stella.speech"
 TTS_ENABLED_ENV = "TTS_ENABLED"
 
+# The commands the SDK itself sends: no manifest declares them. A misspelt
+# ``stella.…`` name is still refused like any undeclared command.
+PLATFORM_COMMANDS = frozenset({SPEECH_COMMAND})
+
 
 def tts_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
     """Whether this agent speaks its replies: anything but ``TTS_ENABLED=false``."""
@@ -109,9 +113,9 @@ class ClientChannel:
         return self._problem("event", self.events, name, data)
 
     def command_problem(self, name: str, data: Mapping[str, Any]) -> Optional[str]:
-        """Why the agent may not send this command, or None. Platform commands
-        (``stella.…``) are the SDK's own and need no declaration."""
-        if name.startswith(PLATFORM_PREFIX):
+        """Why the agent may not send this command, or None. The SDK's own
+        commands (``PLATFORM_COMMANDS``) need no declaration."""
+        if name in PLATFORM_COMMANDS:
             return None
         return self._problem("command", self.commands, name, data)
 
