@@ -57,7 +57,7 @@ export class AgentReconcilerService {
         await this.k8s.deleteSecret(pod.secretName)
       }
       for (const agentId of actions.markStopped) {
-        this.logger.warn(`${act ? 'Marking' : 'Would mark (log-only)'} agent ${agentId} STOPPED: RUNNING with no pod for over 10 minutes`)
+        this.logger.warn(`${act ? 'Marking' : 'Would mark (log-only)'} agent ${agentId} STOPPED: RUNNING, and its pod was missing on two sweeps in a row`)
         if (!act) continue
         // Only if it is still RUNNING: a wake may have restarted it meanwhile.
         await this.prisma.agentInstance.updateMany({

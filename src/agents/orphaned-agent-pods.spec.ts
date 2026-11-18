@@ -108,6 +108,13 @@ describe('the orphaned-pod reconciler decision', () => {
     expect(second.markStopped).toEqual(['ghost']);
   });
 
+  it('retires it on the next sweep even when the 10-minute timer fires a little early', () => {
+    const rows = [{ id: 'ghost', status: 'RUNNING', stoppedAt: null }];
+    const first = orphanAgentActions([], rows, new Map(), now);
+    const early = new Date(now.getTime() + 10 * 60_000 - 5);
+    expect(orphanAgentActions([], rows, first.missingSince, early).markStopped).toEqual(['ghost']);
+  });
+
   it('forgets a missing pod that comes back, and never marks a starting agent', () => {
     const rows = [
       { id: 'back', status: 'RUNNING', stoppedAt: null },

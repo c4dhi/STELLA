@@ -6,8 +6,8 @@
  *   `stoppedGraceMs` ago, is deleted with its secret.
  * - A pod whose agent is RUNNING, STARTING or STOPPING is never touched, so a
  *   live call is never ended.
- * - A RUNNING row whose pod has been missing for more than `missingGraceMs`
- *   (seen missing on two sweeps that far apart) is marked STOPPED.
+ * - A RUNNING row whose pod two sweeps in a row found missing (at least
+ *   `missingGraceMs` apart) is marked STOPPED.
  */
 
 export interface AgentPodRef {
@@ -38,7 +38,13 @@ export interface OrphanActions {
 }
 
 export const STOPPED_GRACE_MS = 5 * 60_000
-export const MISSING_GRACE_MS = 10 * 60_000
+/**
+ * A RUNNING row is retired once two sweeps have both found its pod missing.
+ * Sweeps are 10 minutes apart and that gap jitters by milliseconds either
+ * way, so the grace sits a minute under the interval: "more than 10 minutes"
+ * would otherwise fail on the second sweep about half the time (seen live, #188).
+ */
+export const MISSING_GRACE_MS = 9 * 60_000
 
 const ENDED = new Set(['STOPPED', 'FAILED'])
 
