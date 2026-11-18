@@ -51,6 +51,17 @@ const TELEPROMPTER_CLIENT_LAG_MS = 60
 // SDK has buffered ahead. Generous enough to leave genuine lookahead alone.
 const TELEPROMPTER_REBASE_TOLERANCE_MS = 600
 
+// How long to wait, after the schedule says this segment's speech has
+// finished, before treating speech as actually settled (#894 review).
+// TTS synthesizes and sends one sentence at a time, so there is a genuine
+// audible gap between sentences while the next one is still being
+// synthesized — settling the instant a segment's schedule runs out flips
+// speechSettled in that gap, mid-reply, which is exactly the case this
+// ticket is about. scheduleSettleCheck re-arms this on every new segment, so
+// it only fires once nothing new has arrived for this long after the
+// schedule ran out.
+const SPEECH_QUIET_WINDOW_MS = 500
+
 /** A span of speech scheduled on the wall clock (performance.now() ms). */
 interface Segment {
   charStart: number
@@ -209,6 +220,14 @@ export interface Teleprompter {
    * barge-in that the agent resumes is restored unchanged by {@link applyProgress}.
    */
   clearSpoken: () => void
+  /**
+   * True whenever there is nothing left to hear: text-only sessions (speech
+   * never starts), and the gap between turns in a voice session. False from
+   * the moment a turn's speech is scheduled until the schedule plays out, so
+   * a consumer can hold a state update until the words it describes have
+   * actually been heard (#894).
+   */
+  speechSettled: boolean
 }
 
 export function useTeleprompter(): Teleprompter {
@@ -243,6 +262,12 @@ export function useTeleprompter(): Teleprompter {
   const scheduledUntilRef = useRef(0) // wall-clock ms the schedule reaches
   const frozenRef = useRef(false) // barge-in froze the cursor; hold position
   const rafRef = useRef<number | null>(null)
+  // speechSettled (#894): a plain setTimeout watcher on scheduledUntilRef,
+  // deliberately NOT driven by the rAF tick loop — prefers-reduced-motion
+  // skips that loop entirely (see applyProgress), but the audio still plays
+  // for the same duration, so this needs its own clock.
+  const [speechSettled, setSpeechSettled] = useState(true)
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Flips true the first time a progress envelope arrives (teleprompter live
   // this session). Until then agent bubbles render normally, so a TTS-off
   // session is never left permanently dimmed.
@@ -367,6 +392,37 @@ export function useTeleprompter(): Teleprompter {
     }
   }, [])
 
+  // speechSettled watcher (#894): cancel whatever settle check was pending —
+  // a new segment pushed the target further out, or there's nothing to wait
+  // for any more.
+  const clearSettleTimer = useCallback(() => {
+    if (settleTimerRef.current != null) {
+      clearTimeout(settleTimerRef.current)
+      settleTimerRef.current = null
+    }
+  }, [])
+
+  const markUnsettled = useCallback(() => {
+    clearSettleTimer()
+    setSpeechSettled(false)
+  }, [clearSettleTimer])
+
+  const markSettledNow = useCallback(() => {
+    clearSettleTimer()
+    setSpeechSettled(true)
+  }, [clearSettleTimer])
+
+  // Re-arm the watcher for the current scheduledUntilRef, replacing any
+  // earlier one (segments chain, so each call pushes the target further out).
+  const scheduleSettleCheck = useCallback(() => {
+    clearSettleTimer()
+    const remaining = Math.max(0, scheduledUntilRef.current + SPEECH_QUIET_WINDOW_MS - performance.now())
+    settleTimerRef.current = setTimeout(() => {
+      settleTimerRef.current = null
+      setSpeechSettled(true)
+    }, remaining)
+  }, [clearSettleTimer])
+
   const clearFrozen = useCallback((transcriptId: string) => {
     setFrozenSpoken(prev => {
       if (prev[transcriptId] == null) return prev
@@ -463,11 +519,11 @@ export function useTeleprompter(): Teleprompter {
         // continues on the SAME message from where it stopped, over the
         // remaining audio. Harmless for a fresh sentence (already unfrozen).
         frozenRef.current = false
-        if (prefersReducedMotionRef.current) {
-          setSpokenChar(target) // no animation — step straight to this tick's target
-          syncCues(target)
-          return
-        }
+        markUnsettled()
+        // Computed before the reduced-motion branch so scheduledUntilRef (and
+        // the settle watcher) track the real audio duration regardless of
+        // whether the word-by-word highlight animates — the audio plays for
+        // the same length of time either way (#894).
         const now = performance.now()
         const { startAt, endAt, rebase } = planSegment({
           now,
@@ -475,9 +531,15 @@ export function useTeleprompter(): Teleprompter {
           durationMs: data.duration_ms ?? 0,
           scheduledUntil: scheduledUntilRef.current,
         })
+        scheduledUntilRef.current = endAt
+        scheduleSettleCheck()
+        if (prefersReducedMotionRef.current) {
+          setSpokenChar(target) // no animation — step straight to this tick's target
+          syncCues(target)
+          return
+        }
         if (rebase) segmentsRef.current = segmentsRef.current.filter(s => s.startAt <= now)
         segmentsRef.current.push({ charStart: spoken, charEnd: target, startAt, endAt })
-        scheduledUntilRef.current = endAt
         ensureLoop()
       } else if (state === 'spoken') {
         // The schedule normally carries the cursor to the end on its own.
@@ -504,9 +566,11 @@ export function useTeleprompter(): Teleprompter {
         frozenRef.current = true
         setSpokenChar(spoken)
         setFrozenSpoken(prev => ({ ...prev, [transcriptId]: spoken }))
+        // Nothing left to wait for: playback has genuinely stopped (#894).
+        markSettledNow()
       }
     },
-    [beginTranscript, clearFrozen, ensureLoop, resetSchedule, resetCues, syncCues]
+    [beginTranscript, clearFrozen, ensureLoop, resetSchedule, resetCues, syncCues, markUnsettled, markSettledNow, scheduleSettleCheck]
   )
 
   /**
@@ -559,10 +623,11 @@ export function useTeleprompter(): Teleprompter {
     setSpokenText('')
   }, [])
 
-  // Cancel any pending animation frame on unmount.
+  // Cancel any pending animation frame or settle timer on unmount.
   useEffect(
     () => () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+      if (settleTimerRef.current != null) clearTimeout(settleTimerRef.current)
     },
     []
   )
@@ -580,5 +645,6 @@ export function useTeleprompter(): Teleprompter {
     faceState,
     cuesByTranscript,
     clearSpoken,
+    speechSettled,
   }
 }
