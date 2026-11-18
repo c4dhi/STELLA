@@ -146,7 +146,7 @@ export default function ParticipantConnectionModal({
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.95 }}
           className={`
-            backdrop-blur-xl rounded-[20px] w-full max-w-4xl p-8
+            backdrop-blur-xl rounded-[20px] w-full max-w-4xl p-5 md:p-8 max-h-full overflow-y-auto md:max-h-none md:overflow-visible
             ${isDark
               ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
               : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
