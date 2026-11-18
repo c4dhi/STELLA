@@ -592,7 +592,7 @@ export default function SessionsDashboard() {
               >
                 {/* Phones (#184): the actions drop under the details, so the row
                     never runs past the screen. */}
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 sm:gap-0">
                   <div className="flex-1 min-w-0">
                     {/* Session Name & Status */}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
