@@ -188,7 +188,7 @@ pytest -v
 
 ### Test Structure
 
-Test `process()` directly, with a fake model client: no room, no STT or TTS, and no API key. This tests the agent from [Getting Started](../../agent-sdk/getting-started.md), saved as `my_agent/agent.py`:
+Test `process()` directly, with a fake model client: no room, no STT or TTS, and no API key. This tests the agent from [Getting Started](../../agent-sdk/getting-started.md), saved as `my_agent/agent.py` (with an empty `my_agent/__init__.py`), where Getting Started calls it `agent.py`:
 
 <!-- reader-package: my_agent -->
 
