@@ -61,7 +61,7 @@ export default function ConnectorsStep({ slots, available, loading, loadError, s
 
       {available.length === 0 ? (
         <p className={muted}>
-          You have no connectors yet — add one in{' '}
+          Connectors let an agent use outside tools and data through an MCP server. You have none yet — add one in{' '}
           <Link
             to="/settings/connectors"
             target="_blank"

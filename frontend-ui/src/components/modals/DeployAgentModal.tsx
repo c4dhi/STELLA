@@ -390,9 +390,7 @@ export default function DeployAgentModal({
         needs.persona ? selectedPersona?.id : undefined,
         runsPlans ? runMode : undefined,
         runsPlans && runMode === 'companion' ? activityPlanIds : undefined,
-        connectorSlots.length > 0 || selectedConnectors.length > 0
-          ? bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors)
-          : undefined,
+        bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors),
       )
       onClose()
     } catch (err) {
