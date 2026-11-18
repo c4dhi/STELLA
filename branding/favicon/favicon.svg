@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="2 2 28 28" fill="none">
+  <!-- STELLA logo (docs-site/static/img/stella-logo.svg) cropped to its circle, so the
+       circle fills the tab icon. Master for every favicon file (#133, GitHub 857). -->
+  <defs>
+    <linearGradient id="stellaFaviconGradient" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a855f7"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <circle cx="16" cy="16" r="14" fill="url(#stellaFaviconGradient)"/>
+  <path d="M16 8L18.5 13.5L24 14L20 18L21 24L16 21L11 24L12 18L8 14L13.5 13.5L16 8Z" fill="#fff"/>
+</svg>

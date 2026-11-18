@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180">
+  <!-- iPhone/iPad home-screen icon: an opaque square (iOS rounds the corners itself and
+       fills transparency with black), the logo's gradient and star (#133). -->
+  <defs>
+    <linearGradient id="stellaTouchGradient" x1="0" y1="0" x2="180" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a855f7"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="180" height="180" fill="url(#stellaTouchGradient)"/>
+  <!-- The logo's star (32-unit grid, 16 units across), scaled to 96 px and centred. -->
+  <path transform="translate(90 90) scale(6) translate(-16 -16)" d="M16 8L18.5 13.5L24 14L20 18L21 24L16 21L11 24L12 18L8 14L13.5 13.5L16 8Z" fill="#fff"/>
+</svg>

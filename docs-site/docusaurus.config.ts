@@ -5,7 +5,13 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: 'STELLA',
   tagline: 'System for Testing and Engineering LLM-based Conversational Agents',
-  favicon: 'img/favicon.ico',
+  // One icon set for the app and the docs site, from branding/favicon (#133).
+  favicon: 'favicon.ico',
+  headTags: [
+    {tagName: 'link', attributes: {rel: 'icon', type: 'image/svg+xml', href: '/STELLA/favicon.svg'}},
+    {tagName: 'link', attributes: {rel: 'apple-touch-icon', href: '/STELLA/apple-touch-icon.png'}},
+    {tagName: 'link', attributes: {rel: 'manifest', href: '/STELLA/site.webmanifest'}},
+  ],
 
   clientModules: [
     require.resolve('./src/clientModules/scrollDetector.js'),
