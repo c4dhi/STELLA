@@ -15,11 +15,7 @@ import React, { useEffect, useState } from 'react'
 import StellaFace from '../components/face/StellaFace'
 import { EXPRESSIONS, GESTURES, STATES } from '../components/face/animations/emotionRegistry'
 import { useStore } from '../store'
-
-/** The face's size: 520 px, or the screen's width less a 16 px margin each side (#184). */
-export function previewFaceSize(viewportWidth: number, max = 520): number {
-  return Math.max(160, Math.min(max, viewportWidth - 32))
-}
+import { previewFaceSize } from '../lib/previewFaceSize'
 
 const EXPRESSION_TAGS = Object.keys(EXPRESSIONS)
 const GESTURE_TAGS = Object.keys(GESTURES)
