@@ -61,6 +61,7 @@ from stella_v2_agent.companion import (
     ExitStep,
     commands_from,
     decision as companion_decision,
+    opening_from_history,
     started_label,
     woken_tag,
     exit_dialogue,
@@ -103,6 +104,11 @@ def _turn_speed(bridge_mode) -> float:
 
 
 logger = logging.getLogger(__name__)
+
+# How much of the transcript a resuming companion reads to rebuild its opening
+# (#159). The opening is settled within a turn or two of being woken, and a
+# sleep inside this window starts it over, so the recent past is enough.
+_OPENING_HISTORY_LIMIT = 100
 
 # How far back _find_activity_start pages through history looking for the
 # activity's own "Started" tag, before giving up (#727): a page's worth of
@@ -1209,6 +1215,7 @@ class StellaV2Agent(BaseAgent):
             # Before anything reads companion state: the session may already be in
             # an activity this pod knows nothing about.
             await self._rehydrate_active_activity(full_state)
+            await self._rehydrate_opening()
             if self._companion_mode and not self.companion.active:
                 full_state = {}
             # A companion joins with no plan at all, so gating on full_state alone
@@ -1450,6 +1457,32 @@ class StellaV2Agent(BaseAgent):
         )
         if self.sm_client and not await self._cleared():
             logger.error("Could not clear the stale activity %s", plan_id)
+
+    async def _rehydrate_opening(self) -> None:
+        """A companion resumed after an auto-pause carries on the conversation
+        it was having (#159).
+
+        The opening — whether she has greeted, whether she has offered the
+        activities — lived only in the old pod's memory, so the first turn
+        after a resume was told "this is the start of the conversation" and
+        she greeted the user as if meeting them for the first time. The
+        transcript outlives the pod and says what happened; see
+        `opening_from_history`. Unreadable history leaves a fresh opening,
+        which is what every pod had before.
+        """
+        if not self._companion_mode or not self.has_history:
+            return
+        try:
+            messages = await self.get_chat_history(include_debug=True, limit=_OPENING_HISTORY_LIMIT)
+        except Exception as e:
+            logger.warning("Could not read the transcript to resume the opening: %s", e)
+            return
+        greeted, offered = opening_from_history(messages)
+        if greeted:
+            self.companion.greeted = True
+            self.companion.offered = offered
+            self.companion.asleep = False
+            logger.info("Resumed an ongoing conversation (offered=%s)", offered)
 
     async def _find_activity_start(self, activity: Dict[str, Any]) -> Optional[datetime]:
         """When this activity actually began, for a companion rehydrating
