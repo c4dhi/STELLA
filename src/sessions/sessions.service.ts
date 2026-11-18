@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, Logger, forwardRef, Inject } from '@nestjs/common';
 import { Observable, Subject, ReplaySubject, filter, map, finalize } from 'rxjs';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
-import { TokenVerifier } from 'livekit-server-sdk';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LiveKitService } from '../livekit/livekit.service.js';
 import { AgentsService } from '../agents/agents.service.js';
@@ -15,6 +14,7 @@ import { Prisma } from '@prisma/client';
 import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service.js';
 import { attachTurnLanguage } from './turn-language.util.js';
 import { clientChannelRecord } from '../message-recorder/client-channel-record.js';
+import { agentMayReadHistory, readAgentToken } from './agent-history-token.js';
 
 /** Deliverable entry in the transcript summary section */
 interface TranscriptDeliverableSummaryEntry {
@@ -1716,21 +1716,18 @@ export class SessionsService {
    * @param token JWT token signed with LIVEKIT_API_SECRET
    * @param sessionId Session ID the agent is requesting access to
    * @returns The decoded token claims if valid
-   * @throws UnauthorizedException if token is invalid
+   * @throws UnauthorizedException if token is invalid, or expired while its agent no longer runs
    * @throws ForbiddenException if token doesn't have access to the session
    */
   async validateAgentToken(token: string, sessionId: string): Promise<{ identity: string; room: string }> {
-    const apiKey = this.livekit.getApiKey();
-    const apiSecret = this.livekit.getApiSecret();
-
-    const verifier = new TokenVerifier(apiKey, apiSecret);
-
     try {
-      // Verify the token signature and expiration
-      const claims = await verifier.verify(token);
+      // Signature and issuer; an expired token of ours comes back marked expired (#165).
+      const { identity, room: roomName, expired } = await readAgentToken(
+        token,
+        this.livekit.getApiKey(),
+        this.livekit.getApiSecret(),
+      );
 
-      // Get the identity from claims
-      const identity = claims.sub;
       if (!identity) {
         throw new UnauthorizedException('Token missing identity (sub) claim');
       }
@@ -1740,8 +1737,6 @@ export class SessionsService {
         throw new ForbiddenException('Only agent tokens can access chat history');
       }
 
-      // Get the room from video grants
-      const roomName = claims.video?.room;
       if (!roomName) {
         throw new UnauthorizedException('Token missing room claim');
       }
@@ -1759,6 +1754,21 @@ export class SessionsService {
       // Verify the token's room matches the session's room
       if (session.room?.livekitRoomName !== roomName) {
         throw new ForbiddenException('Token does not have access to this session');
+      }
+
+      // An expired token still counts while the agent holding it runs: agents
+      // outlive any token lifetime, and an uploaded one cannot sign a new one.
+      const agent = expired
+        ? await this.prisma.agentInstance.findFirst({
+            where: { id: identity.slice('agent-'.length), sessionId },
+            select: { status: true },
+          })
+        : null;
+      if (!agentMayReadHistory({
+        expired,
+        agent: agent ? { agentStatus: agent.status, sessionStatus: session.status } : null,
+      })) {
+        throw new UnauthorizedException('Token expired and its agent is no longer running');
       }
 
       return { identity, room: roomName };
