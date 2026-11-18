@@ -6,20 +6,9 @@
  * arrives for that reply and the audio-driven cursor never moves. The text is
  * the progress there, exactly as in a session with TTS off.
  */
-import { afterEach, describe, expect, it } from 'vitest'
-import { act, cleanup, renderHook } from '@testing-library/react'
+import { describe, expect, it } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
 import { useTeleprompter, type AgentEmotionCue } from './useTeleprompter'
-
-// This file is the only one of the useTeleprompter suites that drives a
-// spoken reply (speakVoiceReply, below), which starts the hook's
-// requestAnimationFrame loop. Without unmounting, that loop is still
-// scheduled on this file's jsdom window when vitest tears it down for the
-// next file, which then throws "window is not defined" from an unrelated
-// test (#987) — the hook's own unmount cleanup (useTeleprompter.ts) is
-// correct, it just never ran. @testing-library/react's automatic cleanup
-// needs `afterEach` as a real global, which this project doesn't set, so it
-// has to be done explicitly here instead of relying on it.
-afterEach(cleanup)
 
 const GOODBYE = 'Schlaf gut, bis morgen.'
 const sleepCue = { char: GOODBYE.length, tag: 'sleep', kind: 'state' } as unknown as AgentEmotionCue

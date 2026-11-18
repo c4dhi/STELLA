@@ -31,5 +31,11 @@ export default defineConfig({
     // Set VITE_HOST=0.0.0.0 to enable network access (mobile/tablet testing)
     host: process.env.VITE_HOST || 'localhost',
     port: 5173
+  },
+  test: {
+    // Every test unmounts whatever it rendered, so a hook's own unmount
+    // effects (cancelling a requestAnimationFrame, clearing a setInterval)
+    // actually run instead of leaking into whatever test runs next (#987).
+    setupFiles: ['./vitest.setup.ts']
   }
 })
