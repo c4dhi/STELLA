@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An offline banner on every screen.** While your device has no connection, a pill at the top says you're offline, and it shows "Back online" for a moment once the connection returns. It covers participant pages too. It only notices your own connection, not the server being unreachable ([#944](https://github.com/c4dhi/STELLA/issues/944))
+
 ### Fixed
 
 - The Settings menu scrolls on its own, so every section, Admin and
