@@ -30,6 +30,8 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
+from stella_agent_sdk.messages.output import AgentOutput
+
 logger = logging.getLogger(__name__)
 
 CLIENT_CHANNEL_ENV = "STELLA_CLIENT_CHANNEL"
@@ -40,6 +42,25 @@ PLATFORM_PREFIX = "stella."
 # ignores the microphone. Data: {"mode": "voice" | "text"}.
 INTERACTION_MODE_EVENT = "stella.interaction_mode"
 INTERACTION_MODES = ("voice", "text")
+
+# The agent tells the screen whether it speaks (#180). With TTS off nothing
+# is spoken, so no audio progress arrives and the screen has to fire a reply's
+# cues (a [sleep] after a goodbye) once its text is in. Sent on ready and to
+# every participant who joins later. Data: {"enabled": bool}.
+SPEECH_COMMAND = "stella.speech"
+TTS_ENABLED_ENV = "TTS_ENABLED"
+
+
+def tts_enabled(env: Optional[Mapping[str, str]] = None) -> bool:
+    """Whether this agent speaks its replies: anything but ``TTS_ENABLED=false``."""
+    env = os.environ if env is None else env
+    return (env.get(TTS_ENABLED_ENV) or "true").strip().lower() != "false"
+
+
+def speech_command(session_id: str, enabled: bool):
+    """The ``stella.speech`` command for the screen."""
+    return AgentOutput.client_command(session_id, SPEECH_COMMAND, enabled=bool(enabled))
+
 
 # Keys of a client_event's data that belong to the envelope, not the message.
 ENVELOPE_KEYS = ("event", "request_id", "timestamp")
@@ -88,7 +109,10 @@ class ClientChannel:
         return self._problem("event", self.events, name, data)
 
     def command_problem(self, name: str, data: Mapping[str, Any]) -> Optional[str]:
-        """Why the agent may not send this command, or None."""
+        """Why the agent may not send this command, or None. Platform commands
+        (``stella.…``) are the SDK's own and need no declaration."""
+        if name.startswith(PLATFORM_PREFIX):
+            return None
         return self._problem("command", self.commands, name, data)
 
     def _problem(self, kind: str, table: Optional[Dict[str, Optional[dict]]], name: str, data: Mapping[str, Any]) -> Optional[str]:
