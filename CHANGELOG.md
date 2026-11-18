@@ -5,6 +5,12 @@ All notable changes to STELLA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Agents keep reading the chat history after their first hour.** An agent's room token expired after an hour (a day for uploaded agents), and from then on the agent could no longer load the conversation so far, even though it kept talking. The history API now accepts an agent's own token for as long as that agent runs, and refuses it once the agent stops or the session closes. Backend only: running agents are fixed by the upgrade, without a rebuild ([#923](https://github.com/c4dhi/STELLA/issues/923))
+
 ## [2.0.1] - 2026-11-17
 
 Sessions that last. A session in a private project now stays open when
