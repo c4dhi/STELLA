@@ -1254,6 +1254,7 @@ export interface ProjectWithPublicConfig extends Project {
 
 export enum UserMessageType {
   PROJECT_INVITATION = 'PROJECT_INVITATION',
+  AGENT_BUILD_FAILED = 'AGENT_BUILD_FAILED',
 }
 
 export enum ProjectInvitationStatus {
