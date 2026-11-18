@@ -51,6 +51,17 @@ const TELEPROMPTER_CLIENT_LAG_MS = 60
 // SDK has buffered ahead. Generous enough to leave genuine lookahead alone.
 const TELEPROMPTER_REBASE_TOLERANCE_MS = 600
 
+// How long to wait, after the schedule says this segment's speech has
+// finished, before treating speech as actually settled (#894 review).
+// TTS synthesizes and sends one sentence at a time, so there is a genuine
+// audible gap between sentences while the next one is still being
+// synthesized — settling the instant a segment's schedule runs out flips
+// speechSettled in that gap, mid-reply, which is exactly the case this
+// ticket is about. scheduleSettleCheck re-arms this on every new segment, so
+// it only fires once nothing new has arrived for this long after the
+// schedule ran out.
+const SPEECH_QUIET_WINDOW_MS = 500
+
 /** A span of speech scheduled on the wall clock (performance.now() ms). */
 interface Segment {
   charStart: number
@@ -405,7 +416,7 @@ export function useTeleprompter(): Teleprompter {
   // earlier one (segments chain, so each call pushes the target further out).
   const scheduleSettleCheck = useCallback(() => {
     clearSettleTimer()
-    const remaining = Math.max(0, scheduledUntilRef.current - performance.now())
+    const remaining = Math.max(0, scheduledUntilRef.current + SPEECH_QUIET_WINDOW_MS - performance.now())
     settleTimerRef.current = setTimeout(() => {
       settleTimerRef.current = null
       setSpeechSettled(true)

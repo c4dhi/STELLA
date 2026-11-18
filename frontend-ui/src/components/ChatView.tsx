@@ -504,6 +504,10 @@ export default function ChatView({
   // speech can wait for its words rather than jumping ahead of them.
   useEffect(() => {
     setAgentSpeechSettled(speechSettled)
+    // Navigating away mid-speech must not leave the store stuck unsettled
+    // with task-panel updates queued forever — nothing will flip it back
+    // once this ChatView is gone (#894 review).
+    return () => setAgentSpeechSettled(true)
   }, [speechSettled, setAgentSpeechSettled])
 
   return (
