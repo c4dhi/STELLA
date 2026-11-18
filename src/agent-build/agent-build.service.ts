@@ -80,6 +80,8 @@ export interface BuildStatus {
   errorMessage?: string
   startedAt: Date
   completedAt?: Date
+  /** Only ever set on a single build fetched by id (never in a history list). */
+  buildOutput?: string
 }
 
 @Injectable()

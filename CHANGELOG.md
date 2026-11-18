@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Copy an uploaded agent's build log with one button.** The Build tab's log now has a Copy button below it, confirming with "Copied"; it's disabled while there's no log yet ([#899](https://github.com/c4dhi/STELLA/issues/899))
 - **A failed agent build now tells you.** Whoever started the build (or the agent's owner, if nobody did) gets a toast on any page and an inbox message with the agent's name, the first line of the error, and a link straight to the build log. A successful build still sends nothing (#896)
+- **The Build tab remembers the last build.** Reopening an agent's Build tab used to show nothing unless a build was running at that exact moment. It now loads the last build's stored log, status and time straight away; a build still in progress streams live as before (#961)
 
 ### Changed
 
