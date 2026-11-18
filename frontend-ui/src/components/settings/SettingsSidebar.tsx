@@ -212,7 +212,7 @@ export default function SettingsSidebar({ activeSection, onSectionChange }: Sett
 
   return (
     <aside
-      className={`w-72 border-r flex flex-col ${
+      className={`w-full md:w-72 border-r flex flex-col ${
         isDark ? 'border-border-dark bg-surface-dark' : 'border-border bg-surface'
       }`}
     >
