@@ -329,6 +329,33 @@ describe('sharing an agent with projects', () => {
   })
 })
 
+describe('build-status (#961: the window still has something to show after reopening)', () => {
+  const mine = { id: 'a1', userId: 'owner1', isBuiltIn: false }
+
+  it('returns null when the agent has never been built', async () => {
+    const { controller, prisma } = makeUpload(mine)
+    prisma.agentBuildLog.findFirst.mockResolvedValue(null)
+
+    const status = await controller.getBuildStatus('a1', user('owner1') as any)
+
+    expect(status).toBeNull()
+  })
+
+  it('includes the stored output of the latest build, for whoever may see it', async () => {
+    const { controller, prisma, build } = makeUpload(mine)
+    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
+    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'failed', errorMessage: 'boom' })
+    build.getBuildOutput.mockResolvedValue('Step 1/5 ...\nERROR: boom')
+
+    const status = await controller.getBuildStatus('a1', user('owner1') as any)
+
+    expect(status).toMatchObject({ status: 'failed', errorMessage: 'boom', buildOutput: 'Step 1/5 ...\nERROR: boom' })
+  })
+
+  // Who may call getBuildStatus at all (owner / shared project member / admin
+  // / stranger / unknown agent) is covered by 'who may see an agent build'.
+})
+
 describe('the build-logs SSE event', () => {
   // A plain map() over an async callback emits the unresolved Promise as the
   // "event" (streamBuildLogs used to do exactly this): the browser's

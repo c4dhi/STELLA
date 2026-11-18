@@ -305,7 +305,10 @@ export class AgentUploadController {
   }
 
   /**
-   * Get build status for an agent.
+   * Get build status for an agent, including its stored output (#961) so a
+   * window reopened after the build finished still has something to show —
+   * a build still running keeps streaming live over build-logs instead.
+   * Only ever on this single latest-build lookup, never on build-history.
    * GET /agent-types/:id/build-status
    */
   @Get(':id/build-status')
@@ -314,6 +317,9 @@ export class AgentUploadController {
     return this.latestBuildStatus(id)
   }
 
+  /** Looks up the latest build log for an agent type and its output (#961),
+   *  with no access check of its own — callers reachable without one (the
+   *  SSE stream below) must not be newly gated by adding output here. */
   private async latestBuildStatus(id: string): Promise<BuildStatus | null> {
     const latestBuild = await this.prisma.agentBuildLog.findFirst({
       where: { agentTypeId: id },
@@ -324,7 +330,13 @@ export class AgentUploadController {
       return null
     }
 
-    return this.agentBuildService.getBuildStatus(latestBuild.id)
+    const status = await this.agentBuildService.getBuildStatus(latestBuild.id)
+    if (!status) {
+      return null
+    }
+
+    const buildOutput = await this.agentBuildService.getBuildOutput(latestBuild.id)
+    return { ...status, buildOutput: buildOutput ?? undefined }
   }
 
   /**
