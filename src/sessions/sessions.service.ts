@@ -570,15 +570,29 @@ export class SessionsService {
     // one's status, so reopening the session gives it back (#170); a manual
     // close does not, and its invitations stay revoked.
     const restore = restoresOnReopen(cause);
-    const revoked = await this.prisma.$transaction(
-      REVOKED_BY_CLOSE.map((before) =>
+    const revoked = await this.prisma.$transaction([
+      ...REVOKED_BY_CLOSE.map((before) =>
         this.prisma.invitation.updateMany({
           where: { sessionId: id, status: before },
           data: { status: 'REVOKED', statusBeforeAutoRevoke: restore ? before : null },
         }),
       ),
-    );
-    const revokedCount = revoked.reduce((n, r) => n + r.count, 0);
+      // A manual close wins over an automatic one that overlapped it: stopping the
+      // agents above makes the agent-left webhook finalize with close(id, 'automatic'),
+      // which can revoke (and note statuses) before we get here. Forget those notes
+      // so a later rejoin doesn't give back a deliberately closed session's links.
+      ...(restore
+        ? []
+        : [
+            this.prisma.invitation.updateMany({
+              where: { sessionId: id, statusBeforeAutoRevoke: { not: null } },
+              data: { statusBeforeAutoRevoke: null },
+            }),
+          ]),
+    ]);
+    const revokedCount = revoked
+      .slice(0, REVOKED_BY_CLOSE.length)
+      .reduce((n, r) => n + r.count, 0);
 
     if (revokedCount > 0) {
       this.logger.log(

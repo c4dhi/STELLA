@@ -13,7 +13,7 @@ type Inv = { id: string; sessionId: string; status: string; statusBeforeAutoRevo
  * restoreAutoRevokedInvitations() make, so the tests follow invitations
  * through close → reopen as the database would (#170).
  */
-function setup(invitations: Inv[]) {
+function setup(invitations: Inv[], onStopAgents?: (service: SessionsService) => Promise<void>) {
   let sessionStatus = 'ACTIVE';
   const matches = (inv: Inv, where: any) =>
     (where.id === undefined || inv.id === where.id) &&
@@ -40,10 +40,12 @@ function setup(invitations: Inv[]) {
     participant: { updateMany: jest.fn(async () => ({ count: 0 })) },
     message: { create: jest.fn(async () => ({ id: 'm1' })) },
   };
-  const service = new SessionsService(
+  // eslint-disable-next-line prefer-const
+  let service: SessionsService;
+  service = new SessionsService(
     prisma,
     { sendData: jest.fn(async () => undefined), deleteRoom: jest.fn(async () => undefined) } as any,
-    { stopAllSessionAgents: jest.fn(async () => undefined) } as any,
+    { stopAllSessionAgents: jest.fn(async () => { await onStopAgents?.(service); }) } as any,
     {} as any,
     {} as any,
     { emit: jest.fn() } as any,
@@ -100,6 +102,23 @@ describe('invitations across an automatic close and reopen (#170)', () => {
     const { service, reopen, byId } = setup([inv('pending', 'PENDING')]);
     await service.close('s1');
     expect(byId('pending')).toMatchObject({ status: 'REVOKED', statusBeforeAutoRevoke: null });
+    await expect(reopen()).resolves.toBe(0);
+    expect(byId('pending').status).toBe('REVOKED');
+  });
+
+  it('a manual close is not undone even if the agent-left finalize closes "automatically" while it stops the agent', async () => {
+    // Manual close: CLOSING, then stopAllSessionAgents. The agent leaving fires the
+    // participant_left webhook, which sees CLOSING with no agents and finalizes with
+    // close(id, 'automatic'), revoking before the manual close gets there.
+    let agentLeft = false;
+    const { service, reopen, byId } = setup([inv('pending', 'PENDING'), inv('accepted', 'ACCEPTED')], async (svc) => {
+      if (agentLeft) return; // the finalize's own agent stop finds nobody left
+      agentLeft = true;
+      await svc.close('s1', 'automatic');
+    });
+    await service.close('s1');
+    expect(byId('pending')).toMatchObject({ status: 'REVOKED', statusBeforeAutoRevoke: null });
+    expect(byId('accepted')).toMatchObject({ status: 'REVOKED', statusBeforeAutoRevoke: null });
     await expect(reopen()).resolves.toBe(0);
     expect(byId('pending').status).toBe('REVOKED');
   });
