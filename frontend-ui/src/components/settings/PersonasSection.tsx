@@ -184,7 +184,7 @@ export default function PersonasSection() {
           )}
 
           {!isLoading && !error && (
-            <motion.div key="list" className="grid gap-3" variants={containerVariants}>
+            <motion.div key="list" className="grid grid-cols-1 gap-3" variants={containerVariants}>
               {personas.map((persona) => {
                 const variableKeys = Object.keys(persona.variables || {})
                 return (
