@@ -27,7 +27,7 @@ import type { TranscriptChunk, ProcessingMessage, ParticipantEvent, ProgressUpda
 import { generateUUID } from '../lib/uuid'
 import { isSameListenerStatus } from '../lib/sessionPollEquality'
 import { progressUpdateToTodoList, resolveStateType } from '../lib/progressConversion'
-import SessionPanelTabs, { type SessionPanel } from '../components/SessionPanelTabs'
+import SessionPanelTabs, { type SessionPanel, visiblePanel } from '../components/SessionPanelTabs'
 
 export default function SessionView() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -80,8 +80,7 @@ export default function SessionView() {
   const user = useAuthStore(s => s.user)
   const showTaskPanel = useStore(s => s.showTaskPanel)
   const [narrowTab, setNarrowTab] = useState<SessionPanel>('chat')
-  // The plan tab goes away when the task panel does; fall back to the chat.
-  const narrowPanel: SessionPanel = narrowTab === 'plan' && !showTaskPanel ? 'chat' : narrowTab
+  const narrowPanel = visiblePanel(narrowTab, showTaskPanel)
   const addLiveTaskUpdate = useStore(s => s.addLiveTaskUpdate)
   const setTodoList = useStore(s => s.setTodoList)
   const updateDeliverable = useStore(s => s.updateDeliverable)

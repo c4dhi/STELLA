@@ -5,6 +5,11 @@
  */
 export type SessionPanel = 'chat' | 'people' | 'plan'
 
+/** The panel to show: the chosen one, but the plan only while it is there. */
+export function visiblePanel(chosen: SessionPanel, showPlan: boolean): SessionPanel {
+  return chosen === 'plan' && !showPlan ? 'chat' : chosen
+}
+
 interface SessionPanelTabsProps {
   active: SessionPanel
   onSelect: (panel: SessionPanel) => void
