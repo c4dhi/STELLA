@@ -10,7 +10,7 @@ import { WebhooksService } from './webhooks.service.js';
  * still finishes closing either way.
  */
 describe('empty-room auto-close follows the session setting', () => {
-  function setup(session: { status: string; closeWhenEmpty: boolean | null; projectCloses: boolean }) {
+  function setup(session: { status: string; closeWhenEmpty: boolean | null; projectCloses: boolean; startingAgents?: number }) {
     const prisma: any = {
       session: {
         findUnique: jest.fn(async () => ({
@@ -24,6 +24,7 @@ describe('empty-room auto-close follows the session setting', () => {
         })),
         update: jest.fn(async () => ({})),
       },
+      agentInstance: { count: jest.fn(async () => session.startingAgents ?? 0) },
     };
     const livekit: any = { listRoomParticipants: jest.fn(async () => []) };
     const sessions: any = { close: jest.fn(async () => ({})) };
@@ -37,6 +38,14 @@ describe('empty-room auto-close follows the session setting', () => {
     const { service, sessions } = setup({ status: 'ACTIVE', closeWhenEmpty: null, projectCloses: true });
     await service.handleParticipantInactivity('s1', 'participant-1');
     expect(sessions.close).toHaveBeenCalledWith('s1');
+  });
+
+  it('does not close while an agent is still starting (#188)', async () => {
+    // A wake re-creating the agent's pod isn't in the room yet. Closing now
+    // stopped the agent before its pod existed, and the pod ran on for weeks.
+    const { service, sessions } = setup({ status: 'ACTIVE', closeWhenEmpty: null, projectCloses: true, startingAgents: 1 });
+    await service.handleParticipantInactivity('s1', 'participant-1');
+    expect(sessions.close).not.toHaveBeenCalled();
   });
 
   it('keeps an empty session open when its project keeps sessions open', async () => {
