@@ -230,7 +230,7 @@ export default function ParticipantConnectionModal({
                 </button>
               </div>
 
-              <div className="flex-1 min-h-0 overflow-y-auto px-8">
+              <div className="flex-1 min-h-0 overflow-y-auto px-8 pb-6">
               {isWebParticipant ? (
                 /* Web Participant View - Show invitation link or revoked status */
                 <div className="space-y-6">
