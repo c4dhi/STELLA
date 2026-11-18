@@ -37,7 +37,7 @@ import {
   DEFAULT_EXPIRATION_OPTIONS,
   SessionDurationSelectionStep,
 } from '../shared'
-import { WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
+import { WIZARD_MODAL_SIZE, WIZARD_OVERLAY_ALIGN } from '../shared/wizardLayout'
 import { choiceCardClass } from '../shared/wizardChoice'
 import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
 
@@ -630,10 +630,15 @@ export default function ProjectModal({
     }
   }
 
-  // Determine modal size
-  const modalSizeClass = (isPublicWizard || step === 'complete')
-    ? WIZARD_MODAL_SIZE
-    : 'max-w-lg'
+  // Determine modal size. The wizard's own cap already bounds its height; the
+  // plain (non-wizard) dialog has no height built into its width class, so it
+  // needs its own cap here instead.
+  const isWizardSized = isPublicWizard || step === 'complete'
+  const modalSizeClass = isWizardSized ? WIZARD_MODAL_SIZE : 'max-w-lg max-h-[calc(100dvh-2rem)]'
+  // Centering a dialog whose height follows its step would move its top edge,
+  // and with it the header and step bar, as steps differ in height. The
+  // plain dialog doesn't resize per step, so it stays centered as before.
+  const overlayAlignClass = isWizardSized ? WIZARD_OVERLAY_ALIGN : 'items-center'
 
   return (
     <AnimatePresence>
@@ -643,7 +648,7 @@ export default function ProjectModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm"
+          className={`fixed inset-0 z-[100] flex justify-center p-4 ${overlayAlignClass} bg-black/20 backdrop-blur-sm`}
           onClick={handleClose}
         >
           <motion.div
@@ -654,7 +659,7 @@ export default function ProjectModal({
             layout
             className={`
               backdrop-blur-xl rounded-[20px] w-full ${modalSizeClass} overflow-hidden
-              flex flex-col max-h-[calc(100dvh-2rem)]
+              flex flex-col
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'

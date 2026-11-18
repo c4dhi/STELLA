@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Copy an uploaded agent's build log with one button.** The Build tab's log now has a Copy button below it, confirming with "Copied"; it's disabled while there's no log yet ([#899](https://github.com/c4dhi/STELLA/issues/899))
 
+### Changed
+
+- **The deploy wizards (Deploy agent, public project setup) size to their step again, up to a screen-based cap.** A short step like "How should it run?" no longer sits in a box sized for the longest step, with empty space above the buttons; a step with more to show grows up to the cap and scrolls past it, with Back/Continue always on screen. Width is unaffected ([#890](https://github.com/c4dhi/STELLA/issues/890))
+
 ### Upgrade notes
 
 - **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
