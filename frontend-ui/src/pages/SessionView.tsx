@@ -27,6 +27,7 @@ import type { TranscriptChunk, ProcessingMessage, ParticipantEvent, ProgressUpda
 import { generateUUID } from '../lib/uuid'
 import { isSameListenerStatus } from '../lib/sessionPollEquality'
 import { progressUpdateToTodoList, resolveStateType } from '../lib/progressConversion'
+import SessionPanelTabs, { type SessionPanel } from '../components/SessionPanelTabs'
 
 export default function SessionView() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -78,6 +79,9 @@ export default function SessionView() {
   const setStatus = useStore(s => s.setStatus)
   const user = useAuthStore(s => s.user)
   const showTaskPanel = useStore(s => s.showTaskPanel)
+  const [narrowTab, setNarrowTab] = useState<SessionPanel>('chat')
+  // The plan tab goes away when the task panel does; fall back to the chat.
+  const narrowPanel: SessionPanel = narrowTab === 'plan' && !showTaskPanel ? 'chat' : narrowTab
   const addLiveTaskUpdate = useStore(s => s.addLiveTaskUpdate)
   const setTodoList = useStore(s => s.setTodoList)
   const updateDeliverable = useStore(s => s.updateDeliverable)
@@ -724,11 +728,11 @@ export default function SessionView() {
   }
 
   return (
-    <div className={`w-full h-screen transition-colors duration-200 ${isDark ? 'bg-surface-dark' : 'bg-surface'}`}>
+    <div className={`w-full h-screen flex flex-col md:block transition-colors duration-200 ${isDark ? 'bg-surface-dark' : 'bg-surface'}`}>
       {/* Header */}
       <header className={`sticky top-0 z-40 border-b transition-colors duration-200 backdrop-blur-sm ${isDark ? 'bg-surface-dark/95 border-border-dark' : 'bg-white/95 border-border'
         }`}>
-        <div className="max-w-7xl mx-auto px-6 py-3">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-3">
           <div className="flex items-center gap-3">
             {/* Back Button */}
             <Link
@@ -742,9 +746,9 @@ export default function SessionView() {
             </Link>
 
             {/* Breadcrumb and Title */}
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               {/* Breadcrumb */}
-              <div className={`flex items-center gap-2 text-caption mb-1 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
+              <div className={`flex items-center gap-2 min-w-0 text-caption mb-1 ${isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'}`}>
                 <Link to="/dashboard" className={`transition-colors ${isDark ? 'hover:text-content-inverse' : 'hover:text-content'}`}>
                   Projects
                 </Link>
@@ -753,7 +757,7 @@ export default function SessionView() {
                   Sessions
                 </Link>
                 <span>/</span>
-                <span className={`font-mono ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+                <span className={`font-mono truncate ${isDark ? 'text-content-inverse' : 'text-content'}`}>
                   {session?.room.livekitRoomName || 'Session'}
                 </span>
               </div>
@@ -791,9 +795,19 @@ export default function SessionView() {
         </div>
       </header>
 
-      <div className={`h-[calc(100vh-81px)] flex gap-4 px-4 py-4 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+      {/* Narrow screens (#181): one panel at a time, chosen here. From md up
+          all panels sit side by side as before. Every panel stays mounted, so
+          switching tabs never drops the call or a stream. */}
+      <SessionPanelTabs
+        active={narrowPanel}
+        onSelect={setNarrowTab}
+        showPlan={showTaskPanel}
+        isDark={isDark}
+      />
+
+      <div className={`flex-1 min-h-0 md:flex-none md:h-[calc(100vh-81px)] flex gap-4 px-3 py-3 md:px-4 md:py-4 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
         {/* Left Sidebar - Participants and Agents */}
-        <div className="flex-shrink-0 space-y-4">
+        <div className={`${narrowPanel === 'people' ? 'block' : 'hidden'} md:block w-full md:w-auto flex-shrink-0 space-y-4 overflow-y-auto md:overflow-visible`}>
           <ParticipantSection
             sessionId={sessionId}
             participants={participants}
@@ -811,7 +825,7 @@ export default function SessionView() {
         </div>
 
         {/* Main Content Area */}
-        <div className={`flex flex-col gap-3 transition-all duration-300 ${showTaskPanel ? 'flex-1 min-w-0' : 'w-full min-w-0 max-w-3xl mx-auto'}`}>
+        <div className={`${narrowPanel === 'chat' ? 'flex' : 'hidden'} md:flex flex-col gap-3 transition-all duration-300 ${showTaskPanel ? 'flex-1 min-w-0' : 'w-full min-w-0 max-w-3xl mx-auto'}`}>
           <ConnectPanel roomName={session?.room.livekitRoomName} />
 
           <div className={`flex-1 backdrop-blur-xl rounded-xl shadow-sm flex flex-col overflow-hidden transition-colors duration-300 ${isDark
@@ -832,7 +846,7 @@ export default function SessionView() {
 
         {/* Task Panel - Now displays multiple agent cards side-by-side */}
         {showTaskPanel && (
-          <div className="flex-shrink-0">
+          <div className={`${narrowPanel === 'plan' ? 'block' : 'hidden'} md:block w-full md:w-auto flex-shrink-0`}>
             <TaskPanel />
           </div>
         )}
