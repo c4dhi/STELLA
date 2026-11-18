@@ -205,7 +205,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     faceGesture,
     faceState,
     clearSpoken: clearTeleprompterText,
-  } = useTeleprompter()
+  } = useTeleprompter({ interactionMode })
   const [messages, setMessages] = useState<ParticipantMessage[]>([])
 
   // Emotion tags (#face-emotions): publish what the cursor resolves to the
