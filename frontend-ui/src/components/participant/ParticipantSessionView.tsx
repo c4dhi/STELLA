@@ -205,7 +205,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     faceGesture,
     faceState,
     clearSpoken: clearTeleprompterText,
-  } = useTeleprompter()
+  } = useTeleprompter({ interactionMode })
   const [messages, setMessages] = useState<ParticipantMessage[]>([])
 
   // Emotion tags (#face-emotions): publish what the cursor resolves to the
@@ -214,12 +214,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const triggerFaceState = useStore(s => s.triggerFaceState)
+  const clearFaceSleepPending = useStore(s => s.clearFaceSleepPending)
   const sttStatus = useStore(s => s.sttStatus)
   // What one session's agent told the face must not carry into the next one
   // opened in the same page load.
   useEffect(() => {
-    useStore.getState().applyAgentCommand({ command: 'sleep_allowed', allowed: true })
-    useStore.getState().applySttStatus({ state: 'ready' })
+    useStore.getState().resetFaceForSession()
   }, [sessionData.sessionId])
 
   useEffect(() => {
@@ -1403,6 +1403,9 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   // Loading state
   // A typed message shows straight away, as "sending" until the agent echoes it.
   const addOptimisticMessage = useCallback((message: ParticipantMessage) => {
+    // Typing after the goodbye is the user carrying on, so it cancels a sleep
+    // the face has not honoured yet (#149) — the same as speaking does.
+    clearFaceSleepPending()
     setMessages(prev => [...prev, message])
     if (message.correlationId) {
       setPendingCorrelationIds(prev => {
@@ -1411,7 +1414,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         return next
       })
     }
-  }, [])
+  }, [clearFaceSleepPending])
 
   if (isConnecting) {
     return (
