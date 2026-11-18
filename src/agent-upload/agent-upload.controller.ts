@@ -441,7 +441,6 @@ export class AgentUploadController {
     return { projectIds }
   }
 
-  /** The caller's own upload: sharing is the owner's alone, not an admin's. */
   /** 404 for an unknown agent, 403 unless the caller may see its builds (`canSeeAgentBuilds`). */
   private async visibleBuilds(id: string, req: AuthenticatedRequest): Promise<void> {
     const userId = requireUserId(req)
@@ -462,6 +461,7 @@ export class AgentUploadController {
     if (!allowed) throw new ForbiddenException('You cannot see this agent\'s builds')
   }
 
+  /** The caller's own upload: sharing is the owner's alone, not an admin's. */
   private async ownUpload(id: string, req: AuthenticatedRequest) {
     const userId = requireUserId(req)
     const agentType = await this.prisma.agentType.findUnique({ where: { id } })
