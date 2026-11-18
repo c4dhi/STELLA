@@ -73,6 +73,7 @@ Authentication and encryption settings.
 |----------|----------|---------|-------------|
 | `JWT_SECRET` | **Yes** | - | Secret key for signing JWT tokens. Use 64+ characters in production |
 | `ENV_VAR_ENCRYPTION_KEY` | **Yes** (prod) | - | AES-256 encryption key for sensitive environment variables stored in database. Generate with: `openssl rand -hex 32` |
+| `INTERNAL_API_KEY` | No | kept in the cluster, or generated | Key the message recorder sends in `X-Internal-Key` to the backend's internal monitoring endpoints (`/internal/monitoring/logs` and `/status`). Without it they answer 401. Under Kubernetes leave it unset: the deploy stores it in the `stella-ai-secrets` secret as `internal-api-key`, keeps it across redeploys and gives it to both the backend and the recorder. Set it only to run them outside Kubernetes |
 
 :::caution Encryption Key Security
 The `ENV_VAR_ENCRYPTION_KEY` must be exactly 64 hex characters (32 bytes). **Losing this key means losing access to all encrypted environment variables!** Store it securely in a secrets manager.

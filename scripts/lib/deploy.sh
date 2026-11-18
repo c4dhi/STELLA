@@ -403,6 +403,17 @@ create_secrets() {
 
     local db_url="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public"
 
+    # The internal key for the recorder → backend monitoring endpoints (#145).
+    # INTERNAL_API_KEY from .env wins; otherwise keep the one already in the
+    # cluster, so a redeploy never changes it under running pods; otherwise
+    # make one.
+    local internal_key="${INTERNAL_API_KEY:-}"
+    if [[ -z "$internal_key" ]]; then
+        internal_key=$(kubectl get secret stella-ai-secrets -n "$KUBERNETES_NAMESPACE" \
+            -o jsonpath='{.data.internal-api-key}' 2>/dev/null | base64 --decode 2>/dev/null || true)
+    fi
+    [[ -z "$internal_key" ]] && internal_key=$(openssl rand -hex 32)
+
     kubectl create secret generic stella-ai-secrets -n "$KUBERNETES_NAMESPACE" \
         --from-literal=postgres-db="$POSTGRES_DB" \
         --from-literal=postgres-user="$POSTGRES_USER" \
@@ -417,6 +428,7 @@ create_secrets() {
         --from-literal=elevenlabs-api-key="${ELEVENLABS_API_KEY:-}" \
         --from-literal=huggingface-token="${HF_TOKEN:-}" \
         --from-literal=env-var-encryption-key="${ENV_VAR_ENCRYPTION_KEY:-}" \
+        --from-literal=internal-api-key="$internal_key" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
     verbose "Secrets created"

@@ -5,6 +5,12 @@ All notable changes to STELLA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **The message recorder's monitoring endpoints need an internal key.** Anyone who could reach the backend could post log lines and connection status into the session dashboard, and an unknown log level made the request fail with an error. Now the recorder sends a shared internal key that the deploy keeps in the cluster (`INTERNAL_API_KEY`, created on its own), requests without it are refused, and only the known log levels are accepted ([#889](https://github.com/c4dhi/STELLA/issues/889))
+
 ## [2.0.1] - 2026-11-17
 
 Sessions that last. A session in a private project now stays open when

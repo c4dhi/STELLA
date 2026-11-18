@@ -32,6 +32,11 @@ spec:
               key: LIVEKIT_URL
         - name: SESSION_SERVER_URL
           value: "http://session-management-server:3000"
+        - name: INTERNAL_API_KEY  # shared with the backend's internal endpoints (#145)
+          valueFrom:
+            secretKeyRef:
+              name: stella-ai-secrets
+              key: internal-api-key
         - name: POLL_INTERVAL
           value: "10"  # Poll every 10 seconds
         - name: LIVEKIT_API_KEY
