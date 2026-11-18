@@ -5,6 +5,12 @@ All notable changes to STELLA will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The agent settings show the defaults the agents really use.** For STELLA V2, Jev and Light, the configurator and the docs showed a transcript debounce of 300 ms where the agents use 0 (off), and for V2 and Jev an expert timeout of 3000 ms where they use 15000. Only the shown values change; what the agents do stays the same ([#866](https://github.com/c4dhi/STELLA/issues/866))
+
 ## [2.0.1] - 2026-11-17
 
 Sessions that last. A session in a private project now stays open when

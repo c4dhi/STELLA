@@ -77,7 +77,7 @@ env:
       agentDefault: "true"
     - name: TRANSCRIPT_DEBOUNCE_MS
       description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
-      default: "300"
+      default: "0"
       type: integer
       label: "Transcript debounce"
       group: Timing
@@ -95,7 +95,7 @@ env:
       unsetLabel: "Built-in experts"
     - name: EXPERT_TIMEOUT_MS
       description: "Timeout per expert in milliseconds"
-      default: "3000"
+      default: "15000"
       type: integer
       label: "Expert timeout"
       group: Timing
