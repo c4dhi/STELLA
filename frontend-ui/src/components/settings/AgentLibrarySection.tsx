@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
@@ -36,6 +37,7 @@ export default function AgentLibrarySection() {
   const { addToast } = useToastStore()
   const isDark = resolvedTheme === 'dark'
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [allAgents, setAllAgents] = useState<AgentType[]>([])
   const [customAgents, setCustomAgents] = useState<CustomAgentType[]>([])
@@ -74,6 +76,23 @@ export default function AgentLibrarySection() {
   useEffect(() => {
     loadAgents()
   }, [])
+
+  // A link from a build-failure toast or inbox message (?agent=<id>) opens
+  // straight to that agent's card, which opens on its Build tab on its own.
+  useEffect(() => {
+    const agentId = searchParams.get('agent')
+    if (!agentId || isLoading) return
+    const agent = allCustom.find((a) => a.id === agentId)
+    if (agent) {
+      handleView(agent)
+    }
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      next.delete('agent')
+      return next
+    }, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, searchParams])
 
   // Two sections: custom (uploaded) agents first, then the built-in ones. The
   // custom list is the user's own uploads, whatever their state, plus the ones

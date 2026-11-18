@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useThemeStore } from '../store/themeStore'
 
 export interface ToastProps {
@@ -7,9 +8,10 @@ export interface ToastProps {
   type: 'success' | 'error' | 'info'
   onClose: () => void
   duration?: number
+  link?: { to: string; label: string }
 }
 
-export default function Toast({ message, type, onClose, duration = 5000 }: ToastProps) {
+export default function Toast({ message, type, onClose, duration = 5000, link }: ToastProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
 
@@ -66,7 +68,14 @@ export default function Toast({ message, type, onClose, duration = 5000 }: Toast
       `}
     >
       <div className="flex-shrink-0">{icons[type]}</div>
-      <div className="flex-1 text-sm font-light">{message}</div>
+      <div className="flex-1 text-sm font-light">
+        {message}
+        {link && (
+          <Link to={link.to} onClick={onClose} className="block mt-0.5 underline underline-offset-2 opacity-90 hover:opacity-100">
+            {link.label}
+          </Link>
+        )}
+      </div>
       <button
         onClick={onClose}
         className="flex-shrink-0 text-current opacity-60 hover:opacity-100 transition-opacity"
@@ -84,6 +93,7 @@ interface ToastItem {
   message: string
   type: 'success' | 'error' | 'info'
   duration?: number
+  link?: { to: string; label: string }
 }
 
 interface ToastContainerProps {
@@ -102,6 +112,7 @@ export function ToastContainer({ toasts, onRemove }: ToastContainerProps) {
             type={toast.type}
             onClose={() => onRemove(toast.id)}
             duration={toast.duration}
+            link={toast.link}
           />
         ))}
       </AnimatePresence>
