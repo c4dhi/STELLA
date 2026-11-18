@@ -123,7 +123,6 @@ export default function DeployAgentModal({
     () => assignSlots(connectorSlots, availableConnectors, selectedConnectors),
     [connectorSlots, availableConnectors, selectedConnectors],
   )
-  const showConnectorsStep = connectorSlots.length > 0 || availableConnectors.length > 0
 
 
   // Determine dynamic steps based on agent requirements
@@ -172,16 +171,16 @@ export default function DeployAgentModal({
     if (runsPlans) {
       steps.push(runMode === 'companion' ? 'activities' : 'plan')
     }
-    if (showConnectorsStep) {
-      steps.push('connectors')
-    }
+    // Always shown, even with none yet: it's how someone with no connectors
+    // finds out they exist (#891).
+    steps.push('connectors')
     if (supportsVoiceSelection) {
       steps.push('voice')
     }
     // Where the settings start from, then the settings themselves (#892).
     steps.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length))
     return steps
-  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep, isLoadingEnvVars, envVarTemplates.length])
+  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, isLoadingEnvVars, envVarTemplates.length])
 
   // Start From drops out of the steps when the templates finish loading and
   // there are none (or the fetch failed). Move on to the settings rather than
@@ -391,7 +390,7 @@ export default function DeployAgentModal({
         needs.persona ? selectedPersona?.id : undefined,
         runsPlans ? runMode : undefined,
         runsPlans && runMode === 'companion' ? activityPlanIds : undefined,
-        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors) : undefined,
+        bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors),
       )
       onClose()
     } catch (err) {
