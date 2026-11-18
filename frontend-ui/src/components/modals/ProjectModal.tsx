@@ -630,8 +630,10 @@ export default function ProjectModal({
     }
   }
 
-  // Determine modal size
-  const modalSizeClass = (isPublicWizard || step === 'complete')
+  // Determine modal size. The wizard steps share one fixed height so stepping through
+  // them doesn't resize the box; the complete step has its own short, fixed content and
+  // sizes to it instead, same as every non-wizard step.
+  const modalSizeClass = isPublicWizard && step !== 'complete'
     ? WIZARD_MODAL_SIZE
     : 'max-w-lg'
 
