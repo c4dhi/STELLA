@@ -26,7 +26,9 @@ import { nextSttStatus, type SttStatus, type SttStatusEnvelope } from '../lib/st
  */
 export function agentActivityEnded(todoList: TodoList): boolean {
   if (todoList.companion) return !todoList.companion.active_activity
-  return todoList.remaining_states === 0
+  // total_states > 0 so an envelope with no groups at all (if one can ever
+  // arrive) doesn't read as "ended" just because remaining_states is also 0.
+  return todoList.total_states > 0 && todoList.remaining_states === 0
 }
 
 /** Whether any agent still has something running — the panel should be visible. */
@@ -748,12 +750,10 @@ export const useStore = create<
 
   setTodoList: (todoList) => set((state) => {
     // Always called right after setAgentTaskList/addLiveTaskUpdate for the
-    // same update (SessionView.tsx), so agentTaskLists already reflects it —
-    // read the same anyActive signal rather than forcing the panel open again.
-    const anyActive = anyActivityActive(state.agentTaskLists.values())
+    // same update (SessionView.tsx), which already set showTaskPanel for it —
+    // left alone here so there's one owner for it, not two in sync by habit.
     return {
       todoList,
-      showTaskPanel: anyActive || state.taskPanelPinnedOpen,
       planProgress: todoList.progress_percentage,
       currentStateId: todoList.current_state?.id || null,
       currentTaskId: todoList.current_task?.id || null,

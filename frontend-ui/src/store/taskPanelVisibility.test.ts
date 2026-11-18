@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { agentActivityEnded, anyActivityActive, isNewActivityStarting } from './index'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { agentActivityEnded, anyActivityActive, isNewActivityStarting, useStore } from './index'
 import type { TodoList } from '../lib/types'
 
-function planList(remaining_states: number): TodoList {
-  return { remaining_states } as unknown as TodoList
+function planList(remaining_states: number, total_states = 5): TodoList {
+  return { remaining_states, total_states } as unknown as TodoList
 }
 
 function companionList(active_activity: string | null): TodoList {
@@ -56,5 +56,82 @@ describe('isNewActivityStarting', () => {
 
   it('is false the moment an active agent ends', () => {
     expect(isNewActivityStarting(planList(2), planList(0))).toBe(false)
+  })
+})
+
+describe('agentActivityEnded: no groups at all', () => {
+  it('a plan envelope with total_states 0 is not read as ended', () => {
+    expect(agentActivityEnded(planList(0, 0))).toBe(false)
+  })
+})
+
+// The predicates above are pure; these cover the store actions that use them,
+// per sable's review of PR 979 — a predicate test alone wouldn't catch an
+// action that computes it right but then gets overwritten, or ignores the pin.
+describe('the task panel store actions', () => {
+  beforeEach(() => {
+    useStore.getState().clearTasks()
+  })
+
+  it('1. a plan agent reaching remaining_states 0 hides the panel', () => {
+    useStore.getState().setAgentTaskList('a1', planList(2), 'Agent 1')
+    expect(useStore.getState().showTaskPanel).toBe(true)
+
+    useStore.getState().setAgentTaskList('a1', planList(0), 'Agent 1')
+    useStore.getState().setTodoList(planList(0))
+
+    expect(useStore.getState().showTaskPanel).toBe(false)
+  })
+
+  it('2. a companion whose active_activity goes to null hides the panel', () => {
+    useStore.getState().setAgentTaskList('a1', companionList('chatting'), 'Agent 1')
+    expect(useStore.getState().showTaskPanel).toBe(true)
+
+    useStore.getState().setAgentTaskList('a1', companionList(null), 'Agent 1')
+    useStore.getState().setTodoList(companionList(null))
+
+    expect(useStore.getState().showTaskPanel).toBe(false)
+  })
+
+  it('3. with two agents, the panel stays shown until both have ended', () => {
+    useStore.getState().setAgentTaskList('a1', planList(2), 'Agent 1')
+    useStore.getState().setAgentTaskList('a2', planList(3), 'Agent 2')
+
+    useStore.getState().setAgentTaskList('a1', planList(0), 'Agent 1')
+    expect(useStore.getState().showTaskPanel).toBe(true)
+
+    useStore.getState().setAgentTaskList('a2', planList(0), 'Agent 2')
+    expect(useStore.getState().showTaskPanel).toBe(false)
+  })
+
+  it('4. pinning it back open keeps it shown through another ended update', () => {
+    useStore.getState().setAgentTaskList('a1', planList(0), 'Agent 1')
+    expect(useStore.getState().showTaskPanel).toBe(false)
+
+    useStore.getState().setShowTaskPanel(true)
+    expect(useStore.getState().showTaskPanel).toBe(true)
+
+    useStore.getState().setAgentTaskList('a1', planList(0), 'Agent 1')
+    expect(useStore.getState().showTaskPanel).toBe(true)
+  })
+
+  it('5. a new activity after the pin clears it, hiding the panel once that one ends too', () => {
+    useStore.getState().setAgentTaskList('a1', planList(0), 'Agent 1')
+    useStore.getState().setShowTaskPanel(true)
+
+    useStore.getState().setAgentTaskList('a1', planList(2), 'Agent 1')
+    expect(useStore.getState().taskPanelPinnedOpen).toBe(false)
+
+    useStore.getState().setAgentTaskList('a1', planList(0), 'Agent 1')
+    expect(useStore.getState().showTaskPanel).toBe(false)
+  })
+
+  it('6. a manual hide while active clears the pin too', () => {
+    useStore.getState().setAgentTaskList('a1', planList(2), 'Agent 1')
+
+    useStore.getState().setShowTaskPanel(false)
+
+    expect(useStore.getState().showTaskPanel).toBe(false)
+    expect(useStore.getState().taskPanelPinnedOpen).toBe(false)
   })
 })
