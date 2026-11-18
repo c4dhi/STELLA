@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **The deploy wizards (Deploy agent, public project setup) size to their step again, up to a screen-based cap.** A short step like "How should it run?" no longer sits in a box sized for the longest step, with empty space above the buttons; a step with more to show grows up to the cap and scrolls past it, with Back/Continue always on screen. Width is unaffected ([#890](https://github.com/c4dhi/STELLA/issues/890))
+- **The deploy wizards (Deploy agent, public project setup) always show the Connectors step**, even with no connectors yet — before, someone with none never found out connectors exist. With none, it says so in one line, linking to Settings → Connectors (opens in a new tab, so the wizard's progress isn't lost). A required slot with nothing to fill it still disables Continue, pointing at the same link ([#891](https://github.com/c4dhi/STELLA/issues/891))
 
 ### Upgrade notes
 

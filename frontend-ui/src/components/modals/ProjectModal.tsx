@@ -177,7 +177,6 @@ export default function ProjectModal({
     () => assignSlots(connectorSlots, ownConnectors, selectedConnectors),
     [connectorSlots, ownConnectors, selectedConnectors],
   )
-  const showConnectorsStep = connectorSlots.length > 0 || ownConnectors.length > 0
 
   // The language the selected plan declares, if it declares one. A plan written
   // in German is German wherever it is deployed, so it — not the operator —
@@ -227,15 +226,15 @@ export default function ProjectModal({
     if (runsPlan) {
       s.push('plan')
     }
-    if (showConnectorsStep) {
-      s.push('connectors')
-    }
+    // Always shown, even with none yet: it's how someone with no connectors
+    // finds out they exist (#891).
+    s.push('connectors')
     if (supportsVoiceSelection) {
       s.push('voice')
     }
     s.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length), 'visualizer', 'duration', 'expiration')
     return s
-  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
+  }, [needs, runsPlan, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
 
   // Start From drops out of the steps when the templates finish loading and
   // there are none (or the fetch failed). Move on to the settings rather than
@@ -505,10 +504,8 @@ export default function ProjectModal({
             agentConfig.plan = selectedPlan.content as unknown as Record<string, unknown>
           }
 
-          if (showConnectorsStep) {
-            const bindings = bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors)
-            if (bindings.length > 0) agentConfig.connectorBindings = bindings
-          }
+          const bindings = bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors)
+          if (bindings.length > 0) agentConfig.connectorBindings = bindings
 
           if (selectedConfiguration) {
             // Preferred: store the ID so the spawn resolves a type/version-checked,
