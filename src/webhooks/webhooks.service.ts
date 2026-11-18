@@ -297,15 +297,7 @@ export class WebhooksService {
     // should be closed. Only close if a human actually participated — otherwise
     // the session might just be waiting for an invitation to be created.
     if (remainingParticipants.humans === 0 && remainingParticipants.agents === 0) {
-      // An agent still starting isn't in the room yet, but it isn't gone
-      // either: closing now would stop it while its pod is being created
-      // (#188). The session closes when that agent later leaves.
-      const startingAgents = await this.prisma.agentInstance.count({
-        where: { sessionId, status: 'STARTING' },
-      });
-      if (startingAgents > 0) {
-        this.logger.log(`Session ${sessionId} not closed: ${startingAgents} agent(s) still starting`);
-      } else if (session.status === 'ACTIVE' && session.hasHumanParticipant) {
+      if (session.status === 'ACTIVE' && session.hasHumanParticipant) {
         if (closesWhenEmpty(session, session.project)) {
           // Route empty-room auto-close through the single authoritative closer so it
           // follows ACTIVE → CLOSING → CLOSED (and revokes invitations, marks

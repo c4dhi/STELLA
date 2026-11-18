@@ -40,12 +40,14 @@ describe('empty-room auto-close follows the session setting', () => {
     expect(sessions.close).toHaveBeenCalledWith('s1');
   });
 
-  it('does not close while an agent is still starting (#188)', async () => {
-    // A wake re-creating the agent's pod isn't in the room yet. Closing now
-    // stopped the agent before its pod existed, and the pod ran on for weeks.
+  it('closes even while an agent is still starting: the stop deletes its pod (#188)', async () => {
+    // A wake re-creating the agent's pod isn't in the room yet. Close goes
+    // ahead; stopAgent marks the row STOPPING, so keepNewPod refuses the new
+    // pod and deletes it. Waiting for STARTING instead could block close for
+    // good when a create never finishes.
     const { service, sessions } = setup({ status: 'ACTIVE', closeWhenEmpty: null, projectCloses: true, startingAgents: 1 });
     await service.handleParticipantInactivity('s1', 'participant-1');
-    expect(sessions.close).not.toHaveBeenCalled();
+    expect(sessions.close).toHaveBeenCalledWith('s1');
   });
 
   it('keeps an empty session open when its project keeps sessions open', async () => {
