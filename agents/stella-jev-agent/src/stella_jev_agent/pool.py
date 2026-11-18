@@ -238,8 +238,9 @@ class JevExpertPool(ExpertPool):
     ) -> Callable[[], Any]:
         """Extraction for after the reply, kept to the task Jev picked when it picked one."""
         context = sm_context
-        # On a stalled plan extraction may skip the stuck task, which a scope would refuse.
-        if self.last_picks and not is_stalled(sm_context):
+        # The answer to an ask-back keeps the old, unscoped extraction, and on a stalled
+        # plan extraction may skip the stuck task, which a scope would refuse.
+        if self.last_picks and not (self._ask_back.answering or is_stalled(sm_context)):
             self.last_scope = Scope.of(self.last_picks)
             context = {**sm_context, SCOPE: self.last_scope}
             if self.last_pick is not None and not self.last_pick["correction"]:

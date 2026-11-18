@@ -41,10 +41,10 @@ class Scope:
             names.append(str(task.get("description") or task.get("id")))
             tasks[names[-1]] = {d["key"] for d in task.get("deliverables", []) if d.get("key")}
             if how != CORRECTED:
-                tasks[names[-1]] |= {i for i in (task.get("id"), task.get("description")) if i}
-            if how != CORRECTED:
                 # A corrected task is already complete, so only its values can change.
-                ids |= {i for i in (task.get("id"), task.get("description")) if i}
+                refs = {i for i in (task.get("id"), task.get("description")) if i}
+                tasks[names[-1]] |= refs
+                ids |= refs
             for d in task.get("deliverables", []):
                 if d.get("key"):
                     keys[d["key"]] = how
