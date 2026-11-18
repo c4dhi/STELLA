@@ -459,15 +459,23 @@ STELLA provides a secure mechanism for injecting environment variables into agen
 Agents using the STELLA SDK can access environment variables through the standard Python `os.environ`:
 
 ```python
+import asyncio
 import os
-from stella_agent import run_agent_from_env
+
+from stella_agent_sdk import BaseAgent, run_agent_from_env
 
 # Access environment variables
 openai_key = os.environ.get("OPENAI_API_KEY")
 elevenlabs_key = os.environ.get("ELEVENLABS_API_KEY")
 
-# Or use the SDK helper that configures everything
-run_agent_from_env()
+
+class MyAgent(BaseAgent):
+    ...
+
+
+# run_agent_from_env reads the platform's own variables (LiveKit, STT, TTS,
+# session) and runs the agent until the session ends.
+asyncio.run(run_agent_from_env(MyAgent()))
 ```
 
 ### Security Features
