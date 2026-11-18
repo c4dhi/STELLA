@@ -388,12 +388,10 @@ class MyAgent:
 The STELLA agent SDK provides `LLMService` which handles tool calling automatically:
 
 ```python title="Using LLMService"
-from stella_light_agent.llm.service import (
-    LLMService,
-    LLMConfig,
-    LLMProvider,
-    LLMMessage
-)
+from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider, LLMService
+from stella_agent_sdk.tools import ToolRegistry
+
+from tools.weather import GetWeatherTool
 
 class MyAgent:
     def __init__(self):
@@ -829,11 +827,11 @@ self.tool_registry.register(tool)
 
 ## Testing Tools
 
-```python
+```python title="tests/test_weather.py"
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from your_agent.tools import GetWeatherTool
+from tools.weather import GetWeatherTool
 
 
 @pytest.mark.asyncio
