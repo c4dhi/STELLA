@@ -727,7 +727,7 @@ export default function SessionView() {
   }
 
   return (
-    <div className={`w-full h-screen flex flex-col md:block transition-colors duration-200 ${isDark ? 'bg-surface-dark' : 'bg-surface'}`}>
+    <div className={`w-full h-dvh md:h-screen flex flex-col md:block transition-colors duration-200 ${isDark ? 'bg-surface-dark' : 'bg-surface'}`}>
       {/* Header */}
       <header className={`sticky top-0 z-40 border-b transition-colors duration-200 backdrop-blur-sm ${isDark ? 'bg-surface-dark/95 border-border-dark' : 'bg-white/95 border-border'
         }`}>
