@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The project page and the face preview fit a phone screen.** On a phone each session row kept its Open, Close and Delete buttons beside the details. That made the page about 415 px wide, so the public link window opened partly off-screen. The buttons now sit under the details, and long names and room ids wrap. The face preview drew a fixed 520 px face whose left eye was cut off; it now fits the screen width and stays 520 px on tablets and desktops. (#184)
 - **STELLA Jev: the reply and the plan stay in step.** Jev decides which task a message answered and the reply moves on from it, but extraction used to decide on its own what to save, so Grace could ask again for something already saved, or move on from something never saved. Extraction now saves only what Jev picked. Tasks in the same state mentioned in passing are saved too (unconfirmed), and Grace doesn't ask about them again; a correction of a value already collected in this state overwrites it. When Jev is unsure, nothing is saved and the question comes again. Jev's decision and what was saved show as debug lines in the session chat. New Pipeline Configurator settings `forecast_threshold` and `also_threshold`. Jev agent only (#177)
 
 ## [2.0.1] - 2026-11-17
