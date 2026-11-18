@@ -59,6 +59,7 @@ from stella_agent_sdk.services.agent_server_client import AgentServerClient
 from stella_agent_sdk.messages.types import OutputType
 from stella_agent_sdk.session_config import SessionConfig
 from stella_agent_sdk.participants import is_session_participant
+from stella_agent_sdk.client_channel import speech_command, tts_enabled as _tts_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -336,7 +337,7 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 logger.warning(f"STT warmup failed: {warmup_result['message']}")
 
         # 3. Connect to external TTS service (gRPC) - conditional on TTS_ENABLED
-        tts_enabled = os.environ.get("TTS_ENABLED", "true").lower() != "false"
+        tts_enabled = _tts_enabled()
         if tts_enabled:
             tts_client = TTSClient(tts_address)
             await tts_client.connect()
@@ -442,6 +443,11 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 agent._last_progress_payload = payload
                 logger.info(f"[INITIAL PROGRESS] Publishing: {payload}")
             await audio_pipeline._room.publish_data(payload)
+
+        # 10a. Tell the screens whether this agent speaks (#180): with TTS off no
+        # audio progress ever arrives, so they fire a reply's cues at its end.
+        speech_payload = speech_command(session_id, tts_enabled).to_data_payload(agent_identity)
+        await audio_pipeline._room.publish_data(speech_payload)
 
         # 10b. Register agent with session-management-server (marks status as RUNNING)
         logger.info(
@@ -556,6 +562,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
                 audio_pipeline._room.publish_data_ordered(agent._last_progress_payload)
             else:
                 logger.warning(f"[PARTICIPANT JOINED] {participant_identity} - no progress payload to send!")
+
+            # A screen that joins later has not heard whether this agent speaks.
+            audio_pipeline._room.publish_data_ordered(speech_payload)
 
             spawn_participant_event_task(emit_participant_event_message("joined", participant_identity))
 

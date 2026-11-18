@@ -52,6 +52,8 @@ export default function ChatView({
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const triggerFaceState = useStore(s => s.triggerFaceState)
+  // An agent with TTS off says so (`stella.speech`, #180).
+  const agentSpeaks = useStore(s => s.agentSpeaks)
   const {
     spokenChar,
     spokenTranscriptId,
@@ -63,7 +65,7 @@ export default function ChatView({
     faceGesture,
     cuesByTranscript,
     faceState,
-  } = useTeleprompter()
+  } = useTeleprompter({ speaks: agentSpeaks })
   const processingMessages = useStore(s => s.processingMessages)
   const participantEvents = useStore(s => s.participantEvents)
   const showProcessingMessages = useStore(s => s.showProcessingMessages)

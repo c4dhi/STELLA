@@ -54,6 +54,7 @@ from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
 from stella_agent_sdk.services.tts_client import TTSClient
 from stella_agent_sdk.messages.types import BargeInDecision
+from stella_agent_sdk.client_channel import tts_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -613,7 +614,7 @@ class AudioPipeline:
         self._interrupt_mode = os.getenv("INTERRUPT_MODE", "none")
 
         # TTS enabled flag
-        self._tts_enabled = os.getenv("TTS_ENABLED", "true").lower() != "false"
+        self._tts_enabled = tts_enabled()
         # Which interface the participant uses ("voice" or "text"), set by the
         # screen (stella.interaction_mode). In "text" nothing is spoken and
         # speech from the microphone is not a turn; the TTS and STT connections

@@ -8,7 +8,7 @@ import { useStore } from './index'
 const s = () => useStore.getState()
 
 beforeEach(() => {
-  useStore.setState({ faceState: null, faceSleepPending: false, faceSleepAllowed: true })
+  useStore.setState({ faceState: null, faceSleepPending: false, faceSleepAllowed: true, agentSpeaks: true })
 })
 
 describe('faceSleepPending (#149)', () => {
@@ -49,5 +49,18 @@ describe('faceSleepPending (#149)', () => {
     s().resetFaceForSession()
     expect(s().faceSleepPending).toBe(false)
     expect(s().faceSleepAllowed).toBe(true)
+  })
+
+  it('remembers whether the agent speaks, and forgets it with the session (#180)', () => {
+    expect(s().agentSpeaks).toBe(true)
+    s().applyAgentCommand({ command: 'stella.speech', enabled: false })
+    expect(s().agentSpeaks).toBe(false)
+    expect(s().faceState).toBeNull()
+    expect(s().faceSleepPending).toBe(false)
+    s().applyAgentCommand({ command: 'stella.speech', enabled: true })
+    expect(s().agentSpeaks).toBe(true)
+    s().applyAgentCommand({ command: 'stella.speech', enabled: false })
+    s().resetFaceForSession()
+    expect(s().agentSpeaks).toBe(true)
   })
 })

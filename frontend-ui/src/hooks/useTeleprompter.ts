@@ -218,9 +218,15 @@ export interface TeleprompterOptions {
    * text is the only progress there is — the same as a session with TTS off.
    */
   interactionMode?: 'voice' | 'text'
+  /**
+   * Whether the agent speaks its replies (#180). False for an agent running
+   * with TTS off, which says so with `stella.speech`: no progress envelope
+   * will come, so cues fire at the end of the text as in the text interface.
+   */
+  speaks?: boolean
 }
 
-export function useTeleprompter({ interactionMode = 'voice' }: TeleprompterOptions = {}): Teleprompter {
+export function useTeleprompter({ interactionMode = 'voice', speaks = true }: TeleprompterOptions = {}): Teleprompter {
   const [spokenChar, setSpokenChar] = useState(0)
   const [spokenTranscriptId, setSpokenTranscriptId] = useState('')
   const [frozenSpoken, setFrozenSpoken] = useState<Record<string, number>>({})
@@ -266,10 +272,12 @@ export function useTeleprompter({ interactionMode = 'voice' }: TeleprompterOptio
   // here alone, so the face still gets its cues without the bubble dimming
   // ahead of a voice that is never coming (#149).
   const cueTranscriptRef = useRef('')
-  const textInterfaceRef = useRef(interactionMode === 'text')
+  // Nothing of the reply will be spoken: the text interface, or an agent with
+  // TTS off. Either way the text is the only progress there is.
+  const unspokenRef = useRef(interactionMode === 'text' || !speaks)
   useEffect(() => {
-    textInterfaceRef.current = interactionMode === 'text'
-  }, [interactionMode])
+    unspokenRef.current = interactionMode === 'text' || !speaks
+  }, [interactionMode, speaks])
   const textByTranscriptRef = useRef<Map<string, string>>(new Map())
   const prefersReducedMotionRef = useRef(
     typeof window !== 'undefined' &&
@@ -447,7 +455,7 @@ export function useTeleprompter({ interactionMode = 'voice' }: TeleprompterOptio
       if (!transcriptId) return
       textByTranscriptRef.current.set(transcriptId, text)
       // Text interface: never spoken, never highlighted — see syncUnspoken.
-      if (textInterfaceRef.current) {
+      if (unspokenRef.current) {
         syncUnspoken(transcriptId)
         return
       }
@@ -472,7 +480,7 @@ export function useTeleprompter({ interactionMode = 'voice' }: TeleprompterOptio
       const ordered = [...cues].sort((a, b) => a.char - b.char)
       cuesByTranscriptRef.current.set(transcriptId, ordered)
       setCuesByTranscript(prev => ({ ...prev, [transcriptId]: ordered }))
-      if (textInterfaceRef.current) {
+      if (unspokenRef.current) {
         syncUnspoken(transcriptId)
         return
       }
