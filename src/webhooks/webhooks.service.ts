@@ -7,6 +7,7 @@ import { SessionsService } from '../sessions/sessions.service.js';
 import { LiveKitService } from '../livekit/livekit.service.js';
 import { EncryptionService } from '../env-var-templates/encryption.service.js';
 import { bindingRequestsFrom } from '../connectors/connector-bindings.util.js';
+import { closesWhenEmpty } from '../sessions/close-when-empty.js';
 import { Prisma } from '@prisma/client';
 
 interface ParticipantJoinedEvent {
@@ -148,6 +149,11 @@ export class WebhooksService {
       return;
     }
 
+    // Somebody is back in a session that was kept open (#162): it is no longer waiting.
+    if (session.keptOpenAt && (isHuman || isAgent)) {
+      await this.prisma.session.update({ where: { id: sessionId }, data: { keptOpenAt: null } });
+    }
+
     // Always ensure recorder should join when any meaningful participant is present
     if (!session.recorderShouldJoin) {
       await this.prisma.session.update({
@@ -249,6 +255,7 @@ export class WebhooksService {
       where: { id: sessionId },
       include: {
         room: true,
+        project: { select: { closeSessionWhenEmpty: true } },
       },
     });
 
@@ -291,11 +298,19 @@ export class WebhooksService {
     // the session might just be waiting for an invitation to be created.
     if (remainingParticipants.humans === 0 && remainingParticipants.agents === 0) {
       if (session.status === 'ACTIVE' && session.hasHumanParticipant) {
-        // Route empty-room auto-close through the single authoritative closer so it
-        // follows ACTIVE → CLOSING → CLOSED (and revokes invitations, marks
-        // participants left, emits session.closed) like every other close path.
-        await this.sessionsService.close(sessionId);
-        this.logger.log(`Session ${sessionId} closed — all participants left after human interaction`);
+        if (closesWhenEmpty(session, session.project)) {
+          // Route empty-room auto-close through the single authoritative closer so it
+          // follows ACTIVE → CLOSING → CLOSED (and revokes invitations, marks
+          // participants left, emits session.closed) like every other close path.
+          await this.sessionsService.close(sessionId);
+          this.logger.log(`Session ${sessionId} closed — all participants left after human interaction`);
+        } else {
+          // Kept open (#162): the session stays ACTIVE and its invitations valid,
+          // so the participant can come back; the organiser can restart the agent.
+          await this.prisma.session.update({ where: { id: sessionId }, data: { keptOpenAt: new Date() } });
+          this.eventEmitter.emit('session.kept_open', { sessionId, projectId: session.projectId });
+          this.logger.log(`Session ${sessionId} kept open — all participants left, closeWhenEmpty is off`);
+        }
       }
       this.startRecorderLeaveTimer(sessionId);
     }

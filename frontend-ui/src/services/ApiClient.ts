@@ -249,7 +249,7 @@ class SessionManagementClient {
     return this.get<ProjectStats>(`/projects/${projectId}/stats`)
   }
 
-  async updateProject(projectId: string, data: { name?: string; agentInactivityTimeoutMinutes?: number | null }): Promise<Project> {
+  async updateProject(projectId: string, data: { name?: string; agentInactivityTimeoutMinutes?: number | null; closeSessionWhenEmpty?: boolean }): Promise<Project> {
     return this.request<Project>(`/projects/${projectId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -501,7 +501,7 @@ class SessionManagementClient {
     return this.get<Timeline>(path)
   }
 
-  async updateSession(sessionId: string, data: { name?: string }): Promise<SessionDetail> {
+  async updateSession(sessionId: string, data: { name?: string; closeWhenEmpty?: boolean | null }): Promise<SessionDetail> {
     return this.request<SessionDetail>(`/sessions/${sessionId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),

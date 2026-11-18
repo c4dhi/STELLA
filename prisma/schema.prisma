@@ -67,6 +67,12 @@ model Project {
   // Agent inactivity auto-stop configuration
   agentInactivityTimeoutMinutes Int? // null = disabled (default)
 
+  // When everyone has left an ACTIVE session (#162): true closes it and revokes
+  // its invitations; false (the default, Felix 16 Nov 2026) keeps it open so the
+  // participant can come back on the same link and the agent can be restarted.
+  // Sessions follow this unless they set closeWhenEmpty themselves.
+  closeSessionWhenEmpty Boolean @default(false)
+
   // Public Project Configuration
   isPublic                        Boolean    @default(false)
   publicToken                     String?    @unique @default(uuid())
@@ -127,6 +133,8 @@ model Session {
   agentSpawnMode                String @default("immediate") // 'immediate' | 'on_demand'
   lastAgentConfig               Json? // Stored config for respawning paused agents
   agentInactivityTimeoutMinutes Int? // Inherited from project at creation
+  closeWhenEmpty                Boolean? // null = as the project's closeSessionWhenEmpty (#162)
+  keptOpenAt                    DateTime? // Everyone left and the session was kept open; cleared when someone joins (#162)
 
   // Session auto-end (issue #198): hard max-duration cap. The cap is opt-in per
   // session, set from the invitation (manual invite) or the public-session config

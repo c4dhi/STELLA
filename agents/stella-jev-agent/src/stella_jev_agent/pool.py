@@ -12,6 +12,7 @@ where only the state machine can tell where the plan goes, or when it may skip a
 """
 
 import asyncio
+import copy
 import logging
 import time
 from dataclasses import dataclass, field
@@ -23,9 +24,10 @@ from stella_v2_agent.pipeline.expert_pool import ExpertPool
 from stella_jev_agent.ask_back import AskBack
 from stella_jev_agent.jev import JevClient, JevUnavailable
 from stella_jev_agent.next_step import (
-    NOTHING, OTHERWISE, Branch, branch_question, finishes, has_choice, open_required_keys, pending_tasks, predict, required_tasks,
-    route, task_question,
+    OTHERWISE, Branch, also_questions, branch_question, collected_tasks, finishes, has_choice, open_required_keys, pending_tasks, predict,
+    read_also, read_pick, required_tasks, route, task_question,
 )
+from stella_jev_agent.scope import Scope, scoped
 from stella_v2_agent.companion import commands_from
 from stella_jev_agent.questions import (
     ACTIVITY_INTENT, COMMON_SENSE, DOESNT_FIT, FITS, HAS_ANSWER, LEGAL, MEDICAL, PROBING,
@@ -44,6 +46,8 @@ ROUTER = "companion_router"
 NEEDS_CLARIFICATION = "needs_clarification"
 ANSWERED_TASK = "answered_task"
 NEXT_STEP = "next_step"
+# Carries Jev's pick to the extraction run, and is taken out before extraction reads the context.
+SCOPE = "_jev_scope"
 
 JEV_EXPERTS = {
     COMMON: COMMON_SENSE,
@@ -63,6 +67,11 @@ class TurnForecast:
     keys: List[str] = field(default_factory=list)
     next_state: Optional[str] = None
     done_task: Optional[str] = None
+    # Every task the reply can treat as done: the one answered and those mentioned in passing.
+    done_tasks: List[str] = field(default_factory=list)
+    # What the message mentioned in passing, and which earlier answers it corrected, by description.
+    mentioned: List[str] = field(default_factory=list)
+    corrected: List[str] = field(default_factory=list)
 
 
 def is_stalled(sm_context: Dict[str, Any]) -> bool:
@@ -114,6 +123,8 @@ class JevExpertPool(ExpertPool):
         self.ask_threshold = 0.45
         self.skip_threshold = 0.8
         self.forecast_threshold = 0.7
+        # Stricter, since nobody asked: a wrong one saves what was not said, or overwrites an answer.
+        self.also_threshold = 0.8
         self.forecast = TurnForecast()
         # The extraction this turn holds back until arbitration, and the one running.
         self._held: Optional[Callable[[], Any]] = None
@@ -121,6 +132,13 @@ class JevExpertPool(ExpertPool):
         self._unreported: List[ExpertVerdict] = []
         # What Jev did on the latest turn, for the analytics.
         self.last_jev: Dict[str, Any] = {}
+        # The task Jev picked this turn (task_id, p, correction), or None, and how sure it was of its choice.
+        self.last_pick: Optional[Dict[str, Any]] = None
+        # The main pick and every other task Jev is sure the message mentioned or corrected.
+        self.last_picks: List[Dict[str, Any]] = []
+        self.last_answer: Optional[Dict[str, Any]] = None
+        # What the held extraction was allowed to write, and what it did.
+        self.last_scope: Optional[Scope] = None
 
     def apply_config(self, config: dict) -> None:
         if "ask_threshold" in config:
@@ -133,6 +151,8 @@ class JevExpertPool(ExpertPool):
             self._jev.timeout_s = float(config["jev_timeout_ms"]) / 1000
         if "forecast_threshold" in config:
             self.forecast_threshold = float(config["forecast_threshold"])
+        if "also_threshold" in config:
+            self.also_threshold = float(config["also_threshold"])
 
     async def run(
         self,
@@ -150,12 +170,17 @@ class JevExpertPool(ExpertPool):
 
         self.forecast = TurnForecast()
         self._held = None
+        self.last_pick = self.last_answer = self.last_scope = None
+        self.last_picks = []
         plan = self._plan()
         state_id = (sm_context.get("state") or {}).get("id")
         tasks = pending_tasks(sm_context)
+        fixes = collected_tasks(sm_context)
         branches = route(plan, state_id)
-        if tasks:
-            questions[ANSWERED_TASK] = task_question(tasks)
+        if tasks or fixes:
+            collected = sm_context.get("collected_deliverables")
+            questions[ANSWERED_TASK] = task_question(tasks, fixes, collected)
+            questions.update(also_questions(tasks, fixes, collected))
         if has_choice(branches):
             questions[NEXT_STEP] = branch_question(branches)
 
@@ -173,6 +198,12 @@ class JevExpertPool(ExpertPool):
             return self._settle_llm_ask_back(_started_after(verdicts, waited_ms))
 
         self.last_jev = {"answered": True, "latency_ms": result.latency_ms}
+        answer = result.answers.get(ANSWERED_TASK)
+        if answer is not None:
+            self.last_answer = {"choice": answer.choice, "p": round(float(answer.probabilities[answer.choice]), 2)}
+        self.last_pick = read_pick(answer, tasks, fixes, self.forecast_threshold, result.answers)
+        also = read_also(result.answers, tasks, fixes, self.also_threshold, self.last_pick)
+        self.last_picks = ([self.last_pick] if self.last_pick else []) + also
         verdicts = self._verdicts(expert_names, result)
         common = next((v for v in verdicts if v.expert_name == COMMON), None)
         wanted = bool(common and common.verdict == DOESNT_FIT)
@@ -194,7 +225,7 @@ class JevExpertPool(ExpertPool):
             # An activity starts or ends this turn, and it swaps the plan underneath.
             verdicts += _started_after(await run_llm([EXTRACTION]), result.latency_ms)
         elif extraction:
-            self._held = lambda: run_llm([EXTRACTION])
+            self._held = self._hold_extraction(user_input, conversation_history, sm_context)
             self.forecast = self._forecast(result, tasks, branches, plan, state_id, sm_context)
         logger.info(
             "Jev: %s in %.0fms, asking_back=%s, then language model: %s",
@@ -202,28 +233,73 @@ class JevExpertPool(ExpertPool):
         )
         return verdicts
 
+    def _hold_extraction(
+        self, user_input: str, conversation_history: List[Dict[str, str]], sm_context: Dict[str, Any],
+    ) -> Callable[[], Any]:
+        """Extraction for after the reply, kept to the task Jev picked when it picked one."""
+        context = sm_context
+        # The answer to an ask-back keeps the old, unscoped extraction, and on a stalled
+        # plan extraction may skip the stuck task, which a scope would refuse.
+        if self.last_picks and not (self._ask_back.answering or is_stalled(sm_context)):
+            self.last_scope = Scope.of(self.last_picks)
+            context = {**sm_context, SCOPE: self.last_scope}
+            if self.last_pick is not None and not self.last_pick["correction"]:
+                # So {{current_focus}} names the task the reply has already moved past.
+                task = self.last_pick["task"]
+                context["current_task"] = {
+                    "id": task.get("id"), "description": task.get("description"),
+                    "instruction": task.get("instruction"),
+                    "has_deliverables": bool(task.get("deliverables")),
+                    "deliverable_keys": [d.get("key") for d in task.get("deliverables", [])],
+                }
+        return lambda: self._run_experts(
+            [EXTRACTION], user_input, conversation_history, context, self._timeout_ms / 1000.0
+        )
+
+    async def _run_with_timeout(
+        self, config: Any, user_input: str, conversation_history: List[Dict[str, str]],
+        sm_context: Dict[str, Any], timeout_seconds: float,
+    ) -> ExpertVerdict:
+        scope = sm_context.get(SCOPE)
+        if scope is None:
+            return await super()._run_with_timeout(config, user_input, conversation_history, sm_context, timeout_seconds)
+        context = {k: v for k, v in sm_context.items() if k != SCOPE}
+        # A copy, so the scope cannot leak into an expert running at the same time.
+        view = copy.copy(self)
+        view._tool_registry = _Scoped(self._tool_registry, scope) if self._tool_registry else None
+        return await ExpertPool._run_with_timeout(view, config, user_input, conversation_history, context, timeout_seconds)
+
     def _forecast(
         self, result: Any, tasks: List[Dict[str, Any]], branches: Optional[List[Branch]],
         plan: Optional[Dict[str, Any]], state_id: Any, sm_context: Dict[str, Any],
     ) -> TurnForecast:
-        answer = result.answers.get(ANSWERED_TASK)
-        if answer is None or answer.choice == NOTHING:
-            return TurnForecast()
-        if answer.probabilities[answer.choice] < self.forecast_threshold:
-            return TurnForecast()
-        picked = tasks[int(answer.choice.split("_")[1])]
+        extra = [p for p in self.last_picks if p is not self.last_pick]
+        # Jev cannot say which of several open values a mention gave, so only a single one is marked.
+        mentioned = [p["task"] for p in extra if not p["correction"] and finishes(p["task"])]
+        notes = dict(
+            mentioned=[str(t.get("description")) for t in mentioned],
+            corrected=[str(p["task"].get("description")) for p in self.last_picks if p["correction"]],
+        )
+        also_keys = [k for t in mentioned for k in open_required_keys(t)]
+        also_done = [t.get("id") for t in mentioned]
+        if self.last_pick is None or self.last_pick["correction"]:
+            # A correction changes an answer behind the conversation, so the reply stays where it is.
+            return TurnForecast(also_keys, done_tasks=also_done, **notes)
+        picked = self.last_pick["task"]
         if not finishes(picked):
             # Jev cannot say which of the values this answer gave, so none is marked.
-            return TurnForecast()
-        keys = open_required_keys(picked)
+            return TurnForecast(also_keys, done_tasks=also_done, **notes)
+        keys = open_required_keys(picked) + also_keys
         done = picked.get("id")
+        done_tasks = [done] + also_done
         way = OTHERWISE
         if has_choice(branches):
             pick = result.answers[NEXT_STEP]
             if pick.probabilities[pick.choice] < self.forecast_threshold:
-                return TurnForecast(keys, done_task=done)
+                return TurnForecast(keys, done_task=done, done_tasks=done_tasks, **notes)
             way = pick.choice
-        return TurnForecast(keys, predict(branches, tasks, picked, way, required_tasks(plan, state_id)), done)
+        target = predict(branches, tasks, picked, way, required_tasks(plan, state_id), also_done)
+        return TurnForecast(keys, target, done, done_tasks, **notes)
 
     def start_held_extraction(self) -> None:
         """Called once arbitration has settled the turn."""
@@ -295,6 +371,9 @@ class JevExpertPool(ExpertPool):
     ) -> List[str]:
         # A plain "Ja" to the question asked back is the only place that answer gets saved.
         always_extract = self._ask_back.answering or is_stalled(sm_context)
+        # Where Jev said which task was answered, that decides: extraction saves only that task,
+        # so it runs exactly when there is one. The other two questions can disagree with it.
+        follows_pick = ANSWERED_TASK in result.answers
         # Too vague to record, by the definition of the answer. The reply probes, and the
         # value is still in the history when the person says it properly.
         unclear = "probing" in result.answers and result.answers["probing"].choice == NEEDS_CLARIFICATION
@@ -302,7 +381,10 @@ class JevExpertPool(ExpertPool):
         for name in expert_names:
             if name in JEV_EXPERTS:
                 continue
-            if name in GATES and not (name == EXTRACTION and always_extract):
+            if name == EXTRACTION and follows_pick and not always_extract:
+                if not self.last_picks:
+                    continue
+            elif name in GATES and not (name == EXTRACTION and always_extract):
                 key, _, nothing_to_do = GATES[name]
                 if result.answers[key].probabilities[nothing_to_do] >= self.skip_threshold:
                     continue
@@ -315,3 +397,14 @@ class JevExpertPool(ExpertPool):
         wanted = any(v.expert_name == COMMON and v.verdict == DOESNT_FIT for v in verdicts)
         self._ask_back.decide(wanted and not overridden(verdicts))
         return verdicts
+
+
+class _Scoped:
+    """The registry as the base pool reads it, with every tool kept to the scope."""
+
+    def __init__(self, registry: Any, scope: Scope):
+        self._registry = registry
+        self._scope = scope
+
+    def list_tools(self) -> List[Any]:
+        return scoped(self._registry.list_tools(), self._scope)

@@ -291,7 +291,23 @@ pipelineSchema:
           max: 1
           step: 0.05
           default: 0.8
-          description: "How sure Jev must be that there is nothing to record or route before task extraction or the companion router are skipped."
+          description: "How sure Jev must be that there is nothing to record or route before the companion router is skipped, and task extraction too when the state has no open or collected task."
+        - id: forecast_threshold
+          label: "Pick Threshold"
+          type: number
+          min: 0
+          max: 1
+          step: 0.05
+          default: 0.7
+          description: "How sure Jev must be which task the latest message answered before the reply moves on and extraction saves that task. Below it nothing is saved and the question is asked again."
+        - id: also_threshold
+          label: "Also-mentioned Threshold"
+          type: number
+          min: 0
+          max: 1
+          step: 0.05
+          default: 0.8
+          description: "How sure Jev must be that the message also settled another task in this state (mentioned in passing, saved unconfirmed) or corrected a collected one (overwritten)."
         - id: jev_timeout_ms
           label: "Jev Timeout (ms)"
           type: number

@@ -7,6 +7,8 @@ import ExpertSidebar from './ExpertSidebar'
 import NodeDetailOverlay from './NodeDetailOverlay'
 import { useConfiguratorState } from './useConfiguratorState'
 import type { StageSummary } from './PipelineNodeCard'
+import DiscardChangesDialog from '../shared/DiscardChangesDialog'
+import { useDiscardGuard } from '../../hooks/useDiscardGuard'
 
 /** Order-independent JSON serialization for a reliable dirty check. */
 function stableStringify(value: unknown): string {
@@ -46,12 +48,11 @@ export default function AgentConfiguratorModal({
     initialConfiguration || { nodes: {}, thresholds: {} },
   )
   const [overlayNodeId, setOverlayNodeId] = useState<string | null>(null)
-  const [showCloseConfirm, setShowCloseConfirm] = useState(false)
 
   const state = useConfiguratorState(configuration, setConfiguration, pipelineSchema)
 
-  // Unsaved-changes guard (#177): compare current name/description/config to the
-  // values the modal opened with. Closing while dirty asks for confirmation first.
+  // Unsaved-changes guard (#177, #161): compare current name/description/config
+  // to the values the modal opened with. Closing while dirty asks first.
   const isDirty = useMemo(() => {
     const initialCfg = initialConfiguration || { nodes: {}, thresholds: {} }
     return (
@@ -61,10 +62,7 @@ export default function AgentConfiguratorModal({
     )
   }, [name, description, configuration, initialName, initialDescription, initialConfiguration])
 
-  const requestClose = useCallback(() => {
-    if (isDirty) setShowCloseConfirm(true)
-    else onClose()
-  }, [isDirty, onClose])
+  const { showConfirm: showCloseConfirm, requestClose, keepEditing, confirmDiscard } = useDiscardGuard(isDirty, onClose)
 
   const overlayNode: PipelineNodeType | null = overlayNodeId
     ? pipelineSchema.nodes.find((n) => n.id === overlayNodeId) || null
@@ -335,43 +333,14 @@ export default function AgentConfiguratorModal({
         </AnimatePresence>
       </motion.div>
 
-      {/* Unsaved-changes confirmation (#177) — matches the Plan Builder pattern */}
-      {showCloseConfirm && (
-        <div
-          className="absolute inset-0 z-[120] flex items-center justify-center bg-black/40"
-          onClick={(e) => { e.stopPropagation(); setShowCloseConfirm(false) }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className={`rounded-2xl p-6 max-w-sm w-full mx-4 shadow-xl ${
-              isDark ? 'bg-zinc-900 border border-zinc-700' : 'bg-white border border-neutral-200'
-            }`}
-          >
-            <h4 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-neutral-800'}`}>
-              Discard changes?
-            </h4>
-            <p className={`text-[13px] mt-1.5 ${isDark ? 'text-zinc-400' : 'text-neutral-500'}`}>
-              You have unsaved changes to this configuration. If you close now, they will be lost.
-            </p>
-            <div className="flex justify-end gap-2.5 mt-5">
-              <button
-                onClick={() => setShowCloseConfirm(false)}
-                className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors ${
-                  isDark ? 'text-zinc-300 hover:bg-zinc-800' : 'text-neutral-600 hover:bg-neutral-100'
-                }`}
-              >
-                Keep editing
-              </button>
-              <button
-                onClick={() => { setShowCloseConfirm(false); onClose() }}
-                className="px-4 py-2 rounded-lg text-xs font-medium bg-red-500 text-white hover:bg-red-600 transition-colors"
-              >
-                Discard changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Unsaved-changes confirmation (#177, #161) — shared with the deploy/invite modals */}
+      <DiscardChangesDialog
+        open={showCloseConfirm}
+        isDark={isDark}
+        onKeepEditing={keepEditing}
+        onDiscard={confirmDiscard}
+        message="You have unsaved changes to this configuration. If you close now, they will be lost."
+      />
     </motion.div>
   )
 }

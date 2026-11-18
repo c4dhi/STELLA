@@ -180,7 +180,7 @@ The projects the user is a member of.
 
 **Inputs:** none.
 
-**Returns:** `{ items }`. Each item has `id`, `name`, `isOwner`, `isPublic`, `agentInactivityTimeoutMinutes`, `activeSessions`, `activeAgents`, `totalSessions` and `createdAt`.
+**Returns:** `{ items }`. Each item has `id`, `name`, `isOwner`, `isPublic`, `agentInactivityTimeoutMinutes`, `closeSessionWhenEmpty` (whether a session closes once everyone has left; `false` keeps it open), `activeSessions`, `activeAgents`, `totalSessions` and `createdAt`.
 
 ### `sessions_list` · `mcp:read`
 
@@ -199,6 +199,7 @@ The sessions in a project, newest first.
 **Returns:** `{ items, total, skip, take }`. Each item has these fields:
 
 - `id`, `name`, `status`, `createdAt`, `closedAt`;
+- `closeWhenEmpty` (the session's own setting for when everyone has left; `null` follows the project) and `keptOpenAt` (when everyone left and the session was kept open; cleared when somebody joins);
 - `hasHumanParticipant`, `humanJoinedAt`, `humanLeftAt`, `firstAgentMessageAt`;
 - `agentCount`, `participantCount`, `messageCount`.
 
