@@ -261,6 +261,7 @@ Settings for agent deployment and management.
 | `AGENT_IMAGE` | No | `conversational-ai-server:latest` | Docker image for agent pods |
 | `AGENTS_DIR` | No | `./agents` | Directory containing agent definitions |
 | `DEFAULT_AGENT_TYPE` | No | `stella-v2-agent` | The agent type a deployment gets when it names none: deploy, restart, wake, public projects (`src/agents/default-agent-type.ts`) |
+| `AGENT_RECONCILER_MODE` | No | `log` | Every 10 minutes the backend compares agent pods with agent rows. It removes a pod whose agent is gone or stopped for over 5 minutes, and marks a RUNNING agent STOPPED once two sweeps in a row (about 10 minutes apart) have found its pod missing. It never touches a RUNNING or STARTING agent's pod. `log` only logs what it would do, `delete` does it, `off` skips it (`src/agents/orphaned-agent-pods.ts`) |
 
 ### Connectors
 

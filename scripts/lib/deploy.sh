@@ -175,6 +175,7 @@ generate_configmap() {
         -e "s|\${QWEN3_LANGUAGE}|${QWEN3_LANGUAGE:-Auto}|g" \
         -e "s|\${QWEN3_CHUNK_SIZE}|${QWEN3_CHUNK_SIZE:-2}|g" \
         -e "s|\${QWEN3_DTYPE}|${QWEN3_DTYPE:-bfloat16}|g" \
+        -e "s|\${AGENT_RECONCILER_MODE}|${AGENT_RECONCILER_MODE:-log}|g" \
         -e "s|\${CUSTOM_DNS_SERVERS}|${CUSTOM_DNS_SERVERS:-}|g" \
         -e "s|\${KUBERNETES_DNS_IP}|${KUBERNETES_DNS_IP:-}|g" \
         -e "s|namespace: ai-agents|namespace: ${KUBERNETES_NAMESPACE}|g" \

@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { AgentsService } from './agents.service.js';
+import { AgentReconcilerService } from './agent-reconciler.service.js';
 import { AgentsController } from './agents.controller.js';
 import { KubernetesModule } from '../kubernetes/kubernetes.module.js';
 import { AgentServerModule } from '../agent-server/agent-server.module.js';
@@ -40,7 +41,7 @@ import { ConnectorsModule } from '../connectors/connectors.module.js';
     forwardRef(() => SessionsModule),
   ],
   controllers: [AgentsController],
-  providers: [AgentsService],
+  providers: [AgentsService, AgentReconcilerService],
   exports: [AgentsService],
 })
 export class AgentsModule {}
