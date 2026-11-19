@@ -14,6 +14,7 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **What the agent can do, from the session** (#992). `StateMachineClient.get_capabilities()` returns the mode (`plan`, `activity` or `companion`) and what the agent can do in it, worked out by STELLA from the plan, the activities on offer and the connector tools the agent type calls in that mode. `get_full_state(include_capabilities=True)` brings the same list in the per-turn call, also when no plan is loaded, and keeps it in `StateMachineClient.capabilities`. The client is told the agent's id (`agent_id`), so the list is for this agent. Needs a STELLA with `GetCapabilities`.
+- **Prompt compiler 1.2.0: `{{capabilities}}`** (#992). It resolves `sm_context["capabilities"]` to the mode and one line per entry. `prompts.format_capabilities()` renders the same text for prompts an agent renders itself. 1.0.0 and 1.1.0 are unchanged and leave the token as written.
 
 ## [0.10.1] - 2026-11-17
 

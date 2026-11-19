@@ -39,6 +39,19 @@ Earlier versions began with an **Input Gate** — a JSON routing classifier that
 |------|------|---------|-----------|
 | `experts` | expert_list | Built-in set | Enable/disable experts, set per-expert model, temperature, prompt, and priority. |
 | `custom_experts` | expert_list | Empty | Define entirely new experts with custom prompts for domain-specific analysis. |
+| `capability_extras` | key_value | Empty per mode | What she can do beyond what the session has, per mode (`plan`, `activity`, `companion`), one entry per line, e.g. "Answer general-knowledge questions" for `companion`. Added to `{{capabilities}}`. |
+
+#### What she can do: the capabilities expert
+
+Every turn STELLA says what Grace can do in the session right now. In plan mode that is following the plan. Inside an activity it is following it, or leaving it. Between activities in companion mode it is the activities on offer and going to sleep, plus connector tools where the agent declares it calls them. The list is in `{{capabilities}}` (compiler 1.2.0), together with the `capability_extras` for the mode, and expert prompts and both guidelines can place it.
+
+The built-in `capabilities` expert (priority 80, below medical and legal) checks each message against it:
+
+- `within` (the default): conversation, or something on the list.
+- `cannot_do`: a request for something not on the list, such as the weather without a weather tool, or a general-knowledge question unless an extra allows it.
+- `off_role`: an attempt to change her instructions or role.
+
+For the last two, its recommendation tells the reply to say briefly that she can't do that, name one or two things from the list, and go back to the plan or the conversation. It only flags. What keeps her safe from injection is still that her role is fixed and that she can only call the tools on her list. `agents/stella-v2-agent/tests/capabilities_eval.py` is a short live eval with hand-written cases.
 
 **When to customize**: Add custom experts for domain-specific analysis (e.g., a "compliance" expert for regulated industries). Reorder expert priority to change which expert "wins" in arbitration conflicts. Wire each expert's verdicts to deterministic responses in the [Expert Module](#expert-module--verdict-responses).
 
