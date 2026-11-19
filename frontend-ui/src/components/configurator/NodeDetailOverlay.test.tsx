@@ -53,9 +53,14 @@ describe('NodeDetailOverlay', () => {
     expect(html).not.toContain('No configuration available')
   })
 
-  it('shows pairs it cannot edit yet, and says so when a stage declares nothing', () => {
-    expect(render('arbitration', [{ key: 'arbitration.tone_map', type: 'key_value', label: 'Tone Map', default: { medical: 'calm' } }]))
-      .toContain('calm')
+  it('edits pairs and lists, and says so when a stage declares nothing', () => {
+    const pairs = render('arbitration', [{ key: 'arbitration.tone_map', type: 'key_value', label: 'Tone Map', default: { medical: 'calm' } }])
+    expect(pairs).toContain('value="medical"')
+    expect(pairs).toContain('>calm</textarea>')
+    expect(pairs).toContain('+ Add')
+    const list = render('companion', [{ key: 'companion.topics', type: 'string_list', label: 'Topics', default: ['garden'] }], { topics: ['books', 'walks'] })
+    expect(list).toContain('>books\nwalks</textarea>')
+    expect(list).toContain('Reset to default')
     expect(render('companion', [])).toContain('No configuration available')
   })
 })

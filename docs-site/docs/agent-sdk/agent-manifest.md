@@ -122,7 +122,7 @@ settings:
 
 The fields are the ones `env.optional` uses: `type`, `label`, `description`, `default`, `group`, `advanced`, `min`/`max`/`step`/`unit`, `options`, `format`, plus `maxLength` for text. Types are `string`, `text` (long text with `{{placeholder}}` support), `boolean`, `integer`, `number`, `enum`, `string_list`, `key_value`, `expert_list` and `verdict_directives`. Unlike an env var, a value is JSON (a number is a number), and it reaches the agent in `pipeline_config.nodes.<stage>.<name>`, not in the pod's environment.
 
-- **In the Configurator**, clicking a stage shows every setting declared for it, each drawn by its type: text as a prompt editor, numbers, choices and switches in a grid (one grid per `group`, `advanced` ones last), an expert list as the experts the sidebar edits.
+- **In the Configurator**, clicking a stage shows every setting declared for it, each drawn by its type: text as a prompt editor, numbers, choices and switches in a grid (one grid per `group`, `advanced` ones last), `key_value` as name and text rows, `string_list` as one item per line, an expert list as the experts the sidebar edits. A `verdict_directives` setting is edited with its expert in the sidebar.
 - **When a configuration is saved or deployed**, STELLA checks every value against its declaration and refuses, with a 400, a key the agent does not declare or a value that does not fit its type, range, length or options. A saved configuration that still holds a key the agent no longer declares has that key dropped on deploy and when its agent type changes, like a removed node.
 - **In the agent**, `AgentSettings` from the SDK reads the declarations and their defaults from `agent.yaml`, so a default is written once:
 

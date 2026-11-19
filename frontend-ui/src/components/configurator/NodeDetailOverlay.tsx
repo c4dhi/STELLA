@@ -5,7 +5,8 @@
  * the `settings` list its pipelineSchema carries, keyed `<stage>.<name>`. Which
  * control a setting gets follows from its type, never from the agent or the
  * stage: text is a PromptComposer block with {{placeholder}} support, numbers,
- * choices and switches sit in a settings grid, and an expert list shows the
+ * choices and switches sit in a settings grid, pairs (key_value) and lists
+ * (string_list) get row and line editors, and an expert list shows the
  * experts the Expert Module sidebar edits. Defaults, ranges and choices come
  * from the declaration, so nothing here repeats an agent's defaults.
  */
@@ -19,8 +20,6 @@ import { PromptComposer, type PromptBlock } from './PromptComposer'
 
 /** Types drawn as one field each in a settings grid. */
 const FIELD_TYPES = new Set(['number', 'integer', 'enum', 'boolean', 'string'])
-/** Types shown, but not edited, here (#996 keeps their editors for later). */
-const SHOWN_TYPES = new Set(['key_value', 'string_list'])
 
 // Stage icon + accent color mapping
 const STAGE_META: Record<string, { icon: JSX.Element; accent: string; accentBg: string; accentBgLight: string }> = {
@@ -369,36 +368,114 @@ export default function NodeDetailOverlay({
     }
   }
 
-  const renderShown = (s: ConfigSetting) => {
-    const value = (getSlotValue(nameOf(s)) ?? s.default) as unknown
-    const entries = Array.isArray(value)
-      ? value.map((v, i) => [String(i + 1), String(v)])
-      : value && typeof value === 'object'
-        ? Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')])
-        : []
+  /** Label row with the default badge or a reset, shared by the list editors. */
+  const renderHeader = (s: ConfigSetting, isOverridden: boolean) => (
+    <div className="flex items-center justify-between mb-2">
+      <label className={labelClass}>{s.label ?? nameOf(s)}</label>
+      {isOverridden ? (
+        <button
+          onClick={() => onUpdateNodeConfig(node.id, nameOf(s), undefined)}
+          className={`text-[11px] font-medium px-2.5 py-1 rounded-lg transition-colors ${
+            isDark ? 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800' : 'text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100'
+          }`}
+        >
+          Reset to default
+        </button>
+      ) : (
+        <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md ${isDark ? 'bg-zinc-800 text-zinc-500' : 'bg-neutral-100 text-neutral-400'}`}>
+          default
+        </span>
+      )}
+    </div>
+  )
+
+  /**
+   * key_value: one row per pair. The configured object replaces the default
+   * whole, so the first edit copies the default and changes that copy.
+   */
+  const renderPairs = (s: ConfigSetting) => {
+    const configured = getSlotValue(nameOf(s))
+    const isOverridden = configured !== undefined && configured !== null
+    const current = ((isOverridden ? configured : s.default) ?? {}) as Record<string, string>
+    const entries = Object.entries(current)
+    const write = (next: [string, string][]) => onUpdateNodeConfig(node.id, nameOf(s), Object.fromEntries(next))
+    const rename = (i: number, key: string) => {
+      // Two pairs can't share a name; the keystroke that would merge them is ignored.
+      if (entries.some(([k], j) => j !== i && k === key)) return
+      write(entries.map(([k, v], j) => (j === i ? [key, v] : [k, v])))
+    }
+    const addPair = () => {
+      let n = entries.length + 1
+      while (`name_${n}` in current) n++
+      write([...entries, [`name_${n}`, '']])
+    }
     return (
-      <ReadOnlySection key={s.key} title={s.label ?? nameOf(s)}>
-        {entries.length === 0 ? (
-          <span className="italic">Empty</span>
-        ) : (
-          <div className="space-y-1">
-            {entries.map(([k, v]) => (
-              <div key={k} className="flex gap-2">
-                <span className="font-mono shrink-0">{k}</span>
-                <span className="truncate">{v}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </ReadOnlySection>
+      <div key={s.key}>
+        {renderHeader(s, isOverridden)}
+        <div className="space-y-2">
+          {entries.map(([k, v], i) => (
+            <div key={i} className="flex gap-2 items-start">
+              <input
+                aria-label={`${s.label ?? nameOf(s)} name ${i + 1}`}
+                value={k}
+                onChange={(e) => rename(i, e.target.value)}
+                className={`${inputClass} font-mono w-1/3 shrink-0`}
+              />
+              <textarea
+                aria-label={`${s.label ?? nameOf(s)} text ${i + 1}`}
+                value={String(v ?? '')}
+                onChange={(e) => write(entries.map(([kk, vv], j) => (j === i ? [kk, e.target.value] : [kk, vv])))}
+                rows={2}
+                className={`${inputClass} resize-y flex-1`}
+                style={{ fontSize: '12px', lineHeight: '1.6' }}
+              />
+              <button
+                onClick={() => write(entries.filter((_, j) => j !== i))}
+                aria-label={`Remove ${k}`}
+                className={`px-2 py-1 rounded-lg text-sm ${isDark ? 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800' : 'text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100'}`}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={addPair}
+            className={`text-xs font-medium px-2.5 py-1 rounded-lg ${isDark ? 'text-zinc-400 hover:bg-zinc-800' : 'text-neutral-500 hover:bg-neutral-100'}`}
+          >
+            + Add
+          </button>
+        </div>
+        {s.description && <p className={`mt-1.5 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>{s.description}</p>}
+      </div>
     )
   }
 
-  /** Every setting the stage declares, each drawn by its type. */
+  /** string_list: one item per line; blank lines are dropped when the field is left. */
+  const renderList = (s: ConfigSetting) => {
+    const configured = getSlotValue(nameOf(s))
+    const isOverridden = configured !== undefined && configured !== null
+    const items = ((isOverridden ? configured : s.default) ?? []) as string[]
+    return (
+      <div key={s.key}>
+        {renderHeader(s, isOverridden)}
+        <textarea
+          aria-label={s.label ?? nameOf(s)}
+          value={items.join('\n')}
+          onChange={(e) => onUpdateNodeConfig(node.id, nameOf(s), e.target.value.split('\n'))}
+          onBlur={() => isOverridden && onUpdateNodeConfig(node.id, nameOf(s), items.filter((line) => line.trim() !== ''))}
+          rows={Math.max(3, items.length + 1)}
+          className={`${inputClass} resize-y ${isOverridden ? '' : isDark ? '!text-zinc-300' : '!text-neutral-500'}`}
+          style={{ fontSize: '12px', lineHeight: '1.7' }}
+        />
+        <p className={`mt-1.5 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>{s.description ?? 'One per line.'}</p>
+      </div>
+    )
+  }
+
   const renderSettings = () => {
     const prompts = settings.filter((s) => s.type === 'text')
     const fields = settings.filter((s) => FIELD_TYPES.has(s.type))
-    const shown = settings.filter((s) => SHOWN_TYPES.has(s.type))
+    const lists = settings.filter((s) => s.type === 'key_value' || s.type === 'string_list')
     const hasExperts = settings.some((s) => s.type === 'expert_list')
 
     // Fields by their declared group, in order of appearance; advanced ones last.
@@ -436,7 +513,7 @@ export default function NodeDetailOverlay({
             ))}
           </SettingsGrid>
         ))}
-        {shown.map(renderShown)}
+        {lists.map((s) => (s.type === 'key_value' ? renderPairs(s) : renderList(s)))}
       </div>
     )
   }
