@@ -764,7 +764,7 @@ export default function SessionView() {
               </div>
 
               {/* Title - Editable */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 coarse:gap-5">
                 <h1 className={`text-heading-sm ${isDark ? 'text-content-inverse' : 'text-content'}`}>
                   {session?.name || session?.room.livekitRoomName || 'Session'}
                 </h1>

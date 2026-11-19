@@ -162,7 +162,7 @@ export default function EnvVarTemplateCard({
           </span>
 
           {/* Actions */}
-          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+          <div className="flex gap-1 coarse:gap-2.5 opacity-0 group-hover:opacity-100 coarse:opacity-100 transition-opacity duration-200">
             <motion.button
               onClick={onEdit}
               className={`p-2 rounded-lg transition-colors ${isDark

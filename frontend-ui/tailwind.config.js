@@ -169,5 +169,6 @@ export default {
       },
     },
   },
-  plugins: [],
+  // coarse: = touch screens (phones, tablets), for tap-target spacing (#183)
+  plugins: [({ addVariant }) => addVariant('coarse', '@media (pointer: coarse)')],
 }
