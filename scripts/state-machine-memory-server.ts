@@ -10,6 +10,7 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { StateMachineService } from '../src/state-machine/state-machine.service.js';
 import { StateMachineGrpcController } from '../src/state-machine/state-machine-grpc.controller.js';
+import { sessionCapabilities } from '../src/state-machine/capabilities.js';
 
 const store = new Map<string, any>();
 const prisma: any = {
@@ -46,7 +47,28 @@ const prisma: any = {
 const quiet = { log() {}, warn() {}, error(m: string) { console.error(m); }, debug() {}, verbose() {} };
 const service = new StateMachineService(prisma);
 (service as any).logger = quiet;
-const controller: any = new StateMachineGrpcController(service);
+// No deployments here, so capabilities come from the plan alone (plan mode).
+const capabilities = {
+  async getCapabilities(sessionId: string) {
+    const state = await service.getState(sessionId);
+    const plan = state?.planData as any;
+    const pending = state ? await service.getPendingTasks(sessionId) : [];
+    return sessionCapabilities({
+      deploymentMode: 'plan',
+      plan: plan
+        ? {
+            title: plan.title || 'The plan',
+            currentStateTitle: plan.states?.find((s: any) => s.id === state!.currentStateId)?.title,
+            openItems: pending.map((t) => t.description),
+          }
+        : null,
+      activities: [],
+      connectors: [],
+      connectorToolModes: [],
+    });
+  },
+};
+const controller: any = new StateMachineGrpcController(service, capabilities);
 controller.logger = quiet;
 
 const definition = protoLoader.loadSync(join(process.cwd(), 'proto', 'state_machine.proto'));

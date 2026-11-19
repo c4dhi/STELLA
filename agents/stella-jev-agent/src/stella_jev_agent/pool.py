@@ -31,7 +31,7 @@ from stella_jev_agent.scope import Scope, scoped
 from stella_v2_agent.companion import commands_from
 from stella_jev_agent.questions import (
     ACTIVITY_INTENT, COMMON_SENSE, DOESNT_FIT, FITS, HAS_ANSWER, LEGAL, MEDICAL, PROBING,
-    RECOGNISER_ARTIFACT, RECOMMENDATIONS, SLIGHT_DOUBT, TIMEKEEPER, not_believable, turn_state,
+    RECOGNISER_ARTIFACT, RECOMMENDATIONS, SLIGHT_DOUBT, TIMEKEEPER, not_believable, settle_safety, turn_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,10 @@ class JevExpertPool(ExpertPool):
         self.forecast_threshold = 0.7
         # Stricter, since nobody asked: a wrong one saves what was not said, or overwrites an answer.
         self.also_threshold = 0.8
+        # How sure Jev must be of a medical or legal "low" or "high".
+        self.safety_threshold = 0.6
+        # What kind of conversation this is, for every question Jev answers.
+        self.expert_context = ""
         self.forecast = TurnForecast()
         # The extraction this turn holds back until arbitration, and the one running.
         self._held: Optional[Callable[[], Any]] = None
@@ -153,6 +157,10 @@ class JevExpertPool(ExpertPool):
             self.forecast_threshold = float(config["forecast_threshold"])
         if "also_threshold" in config:
             self.also_threshold = float(config["also_threshold"])
+        if "safety_threshold" in config:
+            self.safety_threshold = float(config["safety_threshold"])
+        if "expert_context" in config:
+            self.expert_context = str(config["expert_context"] or "")
 
     async def run(
         self,
@@ -185,7 +193,7 @@ class JevExpertPool(ExpertPool):
             questions[NEXT_STEP] = branch_question(branches)
 
         limit = max(self._limit(COMMON), 1)
-        state = turn_state(user_input, conversation_history, current_task(sm_context), limit)
+        state = turn_state(user_input, conversation_history, current_task(sm_context), limit, self.expert_context)
         started = time.monotonic()
         try:
             result = await self._jev.ask(state, questions)
@@ -344,6 +352,7 @@ class JevExpertPool(ExpertPool):
             answer = result.answers[name]
             choice = answer.choice
             probabilities = dict(answer.probabilities)
+            raw: Dict[str, Any] = {"provider": "jev", "probabilities": probabilities}
             if name == COMMON:
                 artifact = result.answers["recogniser_artifact"].probabilities
                 p_bad = not_believable(probabilities, artifact)
@@ -354,6 +363,13 @@ class JevExpertPool(ExpertPool):
                     choice = SLIGHT_DOUBT
                 else:
                     choice = FITS
+            elif name in OVERRIDING_EXPERTS:
+                settled = settle_safety(probabilities, choice, self.safety_threshold)
+                if settled != choice:
+                    logger.info(f"Jev {name}: {choice} ({probabilities.get(choice, 0):.2f}) is below "
+                                f"{self.safety_threshold}, taken as {settled}")
+                    raw["jev_choice"] = choice
+                    choice = settled
             config = self._registry.get(name)
             verdicts.append(ExpertVerdict(
                 expert_name=name,
@@ -362,7 +378,7 @@ class JevExpertPool(ExpertPool):
                 recommendation=RECOMMENDATIONS.get(name, {}).get(choice, ""),
                 priority=config.priority if config else 0,
                 latency_ms=result.latency_ms,
-                raw_output={"provider": "jev", "probabilities": probabilities},
+                raw_output=raw,
             ))
         return verdicts
 

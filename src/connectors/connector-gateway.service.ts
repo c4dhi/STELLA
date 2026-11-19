@@ -35,7 +35,7 @@ export class GatewayError extends Error {
   }
 }
 
-interface AgentContext {
+export interface AgentContext {
   agentId: string;
   sessionId: string;
   projectId: string;
