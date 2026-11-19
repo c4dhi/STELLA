@@ -23,6 +23,8 @@ Jev is TypeSafe's model. Every turn's text, and the recent history it judges, is
 
 **Common sense.** When a message doesn't fit (asked how much they drink a day, someone says "Nine litres."; asked about a garden watering can, the same answer is fine), the agent asks back and saves nothing that turn. It asks at most once per statement, never twice in a row, and at most `max_ask_backs` times per session. A medical `critical` verdict always wins.
 
+**Medical and legal.** A "low" or "high" counts only when Jev is at least `safety_threshold` sure of it; a "high" prepends a fixed warning to the reply. "Everyday forgetting or not knowing what to say" is listed as no health concern. The experts run on the language model only when Jev can't be reached, and then `expert_context` isn't used.
+
 If Jev can't be reached in time, the experts run on the language model with the prompts in `config/experts/`, and on a barge-in the agent stops for the person.
 
 ## Settings
@@ -37,6 +39,8 @@ Set in the [Pipeline Configurator](./stella-v2/pipeline-configurator.md), like V
 | Expert Pool | `skip_threshold` | 0.8 | How sure Jev must be that there is nothing to route before the companion router is skipped. It skips task extraction only when the state has no open or collected task; otherwise Jev's pick decides |
 | Expert Pool | `forecast_threshold` | 0.7 | How sure Jev must be which task the latest message answered before the reply moves on and extraction saves it. Below it nothing is saved and the question comes again |
 | Expert Pool | `also_threshold` | 0.8 | How sure Jev must be that the message also settled another task in this state, or corrected a collected one, before that is saved too |
+| Expert Pool | `safety_threshold` | 0.6 | How sure Jev must be of a medical or legal "low" or "high" before it counts. Below it the verdict steps down a level (high to low to none), so a weak guess never prepends the fixed warning. "critical" always counts |
+| Expert Pool | `expert_context` | empty | A sentence or two on what kind of conversation this is and who the person is. Jev reads it with every message. Example: "A friendly weekly check-in chat with an older adult about their week. It is not a health service." |
 | Expert Pool | `jev_timeout_ms` | 1500 | How long to wait for Jev before the experts run on the language model |
 | Barge-in | `resume_threshold` | 0.7 | How sure Jev must be that an interruption is only an acknowledgement before the agent carries on |
 | Barge-in | `history_limit` | 6 | Recent turns Jev sees when judging an interruption |

@@ -308,6 +308,19 @@ pipelineSchema:
           step: 0.05
           default: 0.8
           description: "How sure Jev must be that the message also settled another task in this state (mentioned in passing, saved unconfirmed) or corrected a collected one (overwritten)."
+        - id: safety_threshold
+          label: "Safety Threshold"
+          type: number
+          min: 0
+          max: 1
+          step: 0.05
+          default: 0.6
+          description: "How sure Jev must be of a medical or legal \"low\" or \"high\" before it counts. Below it the verdict steps down a level, so a weak guess never puts the fixed warning in front of the reply. \"critical\" always counts."
+        - id: expert_context
+          label: "Expert Context"
+          type: text
+          maxLength: 1000
+          description: "What kind of conversation this is and who the person is, in a sentence or two. Jev reads it with every message, so for example everyday forgetting in a casual chat is not taken for a health concern. Empty sends nothing."
         - id: jev_timeout_ms
           label: "Jev Timeout (ms)"
           type: number
