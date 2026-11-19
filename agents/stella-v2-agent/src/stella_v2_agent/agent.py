@@ -1156,7 +1156,6 @@ class StellaV2Agent(BaseAgent):
         self.expert_pool.set_compiler_version(self._compiler_version)
         # Arbitration resolves {{placeholders}} in verdict templates with the same version.
         self.arbitration.set_compiler_version(self._compiler_version)
-        self._fit_experts_to_compiler()
 
         # Apply LLM config overrides
         if "model" in config:
@@ -1172,6 +1171,8 @@ class StellaV2Agent(BaseAgent):
                 "configuration before deploying the agent."
             )
         self._apply_pipeline_config(pipeline_config)
+        # After the pipeline config, which can switch experts back on.
+        self._fit_experts_to_compiler()
         # AFTER the saved configuration, and deliberately so. The router is not an
         # assessment expert an operator opts into — it is the mechanism companion
         # mode is made of, in the same way task_extraction is the mechanism plans
