@@ -15,7 +15,7 @@ from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_agent_sdk.emotion.tags import EXPRESSION_TAGS, GESTURE_TAGS, STATE_TAGS
 from stella_agent_sdk.language import LANGUAGE_NAMES
 from stella_v2_agent.prompts.template import render_prompt
-from stella_agent_sdk.prompts import format_history
+from stella_agent_sdk.prompts import format_capabilities, format_history
 
 
 def build_response_system_prompt(
@@ -88,6 +88,9 @@ def build_response_system_prompt(
         "contentLanguage": _content_language_directive(sm_context.get("content_language")) or "",
         "bridge": bridge or "",
         "emotionTags": _emotion_tag_directive() if emotion_tags else "",
+        # What she can do right now (#992): STELLA's list plus the configuration's
+        # extras, formatted exactly as the experts' {{capabilities}} reads it.
+        "capabilities": format_capabilities(sm_context.get("capabilities")),
         # {{persona.*}} in the configured guidelines. This engine and the
         # placeholder compiler resolve the same namespace from the same values, so
         # a variable reads identically wherever it is written.

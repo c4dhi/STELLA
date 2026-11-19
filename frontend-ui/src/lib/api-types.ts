@@ -1719,6 +1719,8 @@ export interface ExpertDefault {
   always_triggered?: boolean
   history_limit?: number
   min_confidence?: number
+  /** On by default only for configurations authored against this prompt compiler or later. */
+  enabled_from_compiler?: string
   verdict_directives?: Record<
     string,
     { action?: string; template?: string; description?: string; template_i18n?: Record<string, string> }

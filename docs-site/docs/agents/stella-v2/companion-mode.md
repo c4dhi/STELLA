@@ -138,6 +138,8 @@ Nothing in companion mode overrules a setting out of sight. The reply instructio
 
 A saved configuration overrides these one value at a time, and reply instructions one entry at a time. When and what the router proposes is the router expert's own prompt, in the Structural section.
 
+What she says she can't do comes from the session as well. Between activities, `{{capabilities}}` lists the activities on offer and going to sleep. With no weather connector she says she can't check the weather and names what she can do. To let her answer general-knowledge questions, add that line to the Expert Pool's *Capability Extras* for `companion` ([the capabilities expert](./pipeline-configurator.md#what-she-can-do-the-capabilities-expert)).
+
 ### It is structural, not an expert you opt into
 
 The router sits in its own section of the Pipeline Configurator, beside Task Extraction, and has **no on/off switch**. That is deliberate: it is the mechanism companion mode is made of, the same way `task_extraction` is the mechanism plans are made of. Deleting either does not leave a working system with one fewer opinion in it — it removes the thing the mode runs on.

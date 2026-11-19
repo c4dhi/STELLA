@@ -61,8 +61,11 @@ compiler can actually resolve.
 | `{{processing_mode}}` | Processing mode (sequential / flexible / goal) |
 | `{{history_N}}` | The last **N** conversation messages, e.g. `{{history_8}}` |
 | `{{user_message}}` | The current user message |
+| `{{capabilities}}` | **1.2.0 on:** what the agent can do in the session right now (the mode, then one line each), from `sm_context["capabilities"]`. See [capabilities](./platform-contract.md#what-the-agent-can-do-capabilities). `format_capabilities()` renders the same text for prompts an agent renders itself |
 
 `{{history_N}}` is **parametric**: `N` is any positive integer.
+
+Registered versions: `1.0.0` (the table above without `{{capabilities}}`), `1.1.0` (adds `{{persona.*}}`) and `1.2.0` (adds `{{capabilities}}`). An older version leaves a newer token as written.
 
 You can inspect the palette and validate a template programmatically:
 

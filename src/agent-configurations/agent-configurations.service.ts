@@ -321,7 +321,7 @@ export class AgentConfigurationsService {
     }
 
     // Always merge over defaults so the agent receives a complete config.
-    return deriveEffectiveAgentConfig(
+    const effective = deriveEffectiveAgentConfig(
       {
         slug: '',
         defaultConfig: (agentTypeRecord.defaultConfig ?? null) as
@@ -330,6 +330,13 @@ export class AgentConfigurationsService {
       },
       { configuration: overrides },
     );
+    // The compiler version the configuration was authored against (stamped at
+    // create, kept on re-save and duplicate), so an agent can tell a
+    // configuration saved before a feature existed from one made after it and
+    // keep the old one running as it was (#992).
+    return cfg.minCompilerVersion
+      ? { ...effective, authored_compiler_version: cfg.minCompilerVersion }
+      : effective;
   }
 
   /**
