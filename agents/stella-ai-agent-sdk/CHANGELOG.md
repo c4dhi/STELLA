@@ -9,6 +9,12 @@ platform's changelog lives [at the repository root](https://github.com/c4dhi/STE
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **What the agent can do, from the session** (#992). `StateMachineClient.get_capabilities()` returns the mode (`plan`, `activity` or `companion`) and what the agent can do in it, worked out by STELLA from the plan, the activities on offer and the connector tools the agent type calls in that mode. `get_full_state(include_capabilities=True)` brings the same list in the per-turn call, also when no plan is loaded, and keeps it in `StateMachineClient.capabilities`. The client is told the agent's id (`agent_id`), so the list is for this agent. Needs a STELLA with `GetCapabilities`.
+
 ## [0.10.1] - 2026-11-17
 
 Ships with STELLA 2.0.1. Fixes only.

@@ -19,16 +19,20 @@ class StateMachineClient:
     the external state machine service with database persistence.
     """
 
-    def __init__(self, session_id: str, address: str):
+    def __init__(self, session_id: str, address: str, agent_id: str = ""):
         """
         Initialize the client.
 
         Args:
             session_id: The session ID to manage state for
             address: gRPC server address (e.g., "session-management-server:50052")
+            agent_id: This agent's id. Capabilities are worked out for it; left
+                empty, for the session's newest live agent.
         """
         self._session_id = session_id
         self._address = address
+        self._agent_id = agent_id or ""
+        self._capabilities: Optional[Dict[str, Any]] = None
         self._channel: Optional[grpc.aio.Channel] = None
         self._stub: Optional[state_machine_pb2_grpc.StateMachineServiceStub] = None
 
@@ -36,6 +40,18 @@ class StateMachineClient:
     def session_id(self) -> str:
         """Get the session ID."""
         return self._session_id
+
+    @property
+    def capabilities(self) -> Optional[Dict[str, Any]]:
+        """What the agent can do for the person, as last fetched (#992).
+
+        ``{"mode": "plan" | "activity" | "companion", "capabilities": [{"id",
+        "kind", "title", "description"}, ...]}``, updated by
+        ``get_capabilities()`` and by ``get_full_state(include_capabilities=True)``
+        (also when that returns None because no plan is loaded). None until one
+        of them has run.
+        """
+        return self._capabilities
 
     async def connect(self) -> None:
         """Connect to the gRPC server."""
@@ -505,9 +521,41 @@ class StateMachineClient:
             logger.error(f"gRPC error during get_collected_deliverables: {e.code()} - {e.details()}")
             return {}
 
-    async def get_full_state(self) -> Optional[Dict[str, Any]]:
+    async def get_capabilities(self) -> Optional[Dict[str, Any]]:
+        """What the agent can do for the person in this session right now (#992).
+
+        Worked out by STELLA from what the session has: the plan, the activities
+        a companion offers, and the connector tools the agent type calls in this
+        mode. Same shape as :attr:`capabilities`; None on a gRPC failure.
+
+        Per turn, prefer ``get_full_state(include_capabilities=True)``: it brings
+        the same list without another round trip.
+        """
+        self._ensure_connected()
+
+        try:
+            request = state_machine_pb2.GetCapabilitiesRequest(
+                session_id=self._session_id,
+                agent_id=self._agent_id,
+            )
+            response = await self._stub.GetCapabilities(request)
+            if not response.success:
+                logger.warning(f"get_capabilities failed: {response.error}")
+                return None
+            self._capabilities = _capabilities_dict(response.capabilities)
+            return self._capabilities
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"gRPC error during get_capabilities: {e.code()} - {e.details()}")
+            return None
+
+    async def get_full_state(self, include_capabilities: bool = False) -> Optional[Dict[str, Any]]:
         """
         Get full state machine state (for frontend updates).
+
+        Args:
+            include_capabilities: Also fetch what the agent can do, in the same
+                call. It is stored in :attr:`capabilities` even when this returns
+                None (no plan loaded), and added to the dict as "capabilities".
 
         Returns:
             Dict with full state including all states, tasks, deliverables
@@ -518,8 +566,13 @@ class StateMachineClient:
         try:
             request = state_machine_pb2.GetFullStateRequest(
                 session_id=self._session_id,
+                include_capabilities=include_capabilities,
+                agent_id=self._agent_id,
             )
             response = await self._stub.GetFullState(request)
+
+            if include_capabilities and response.HasField("capabilities"):
+                self._capabilities = _capabilities_dict(response.capabilities)
 
             if not response.success:
                 return None
@@ -590,7 +643,28 @@ class StateMachineClient:
                 "turns_without_progress": response.turns_without_progress,
                 "states": states,
                 "collected_deliverables": collected,
+                **(
+                    {"capabilities": self._capabilities}
+                    if include_capabilities and response.HasField("capabilities")
+                    else {}
+                ),
             }
         except grpc.aio.AioRpcError as e:
             logger.error(f"gRPC error during get_full_state: {e.code()} - {e.details()}")
             return None
+
+
+def _capabilities_dict(message: Any) -> Dict[str, Any]:
+    """SessionCapabilities message -> plain dict (snake_case, as everywhere here)."""
+    return {
+        "mode": message.mode,
+        "capabilities": [
+            {
+                "id": c.id,
+                "kind": c.kind,
+                "title": c.title,
+                "description": c.description,
+            }
+            for c in message.capabilities
+        ],
+    }

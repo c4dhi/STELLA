@@ -101,6 +101,11 @@ class StateMachineServiceStub:
                 request_serializer=state__machine__pb2.GetFullStateRequest.SerializeToString,
                 response_deserializer=state__machine__pb2.GetFullStateResponse.FromString,
                 _registered_method=True)
+        self.GetCapabilities = channel.unary_unary(
+                '/stella.statemachine.v1.StateMachineService/GetCapabilities',
+                request_serializer=state__machine__pb2.GetCapabilitiesRequest.SerializeToString,
+                response_deserializer=state__machine__pb2.GetCapabilitiesResponse.FromString,
+                _registered_method=True)
 
 
 class StateMachineServiceServicer:
@@ -116,19 +121,17 @@ class StateMachineServiceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def LoadPlan(self, request, context):
-        """Replace the session's plan, discarding any progress (companion mode #467).
-        Distinct from Initialize, which RESUMES an existing state so a paused agent
-        can be restarted without losing progress. Starting an activity is the
-        opposite intent: a fresh run of a plan the user just picked.
+        """Replace the session's plan, discarding any progress (#467). Distinct from
+        Initialize, which RESUMES an existing state so a paused agent can be
+        restarted without losing progress: this is a fresh run from the top.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def ClearPlan(self, request, context):
-        """Drop the session's plan entirely and return to free-flow companion mode.
-        Used when the user abandons an activity mid-way, or when a plan reaches its
-        end and the companion takes the floor back instead of the session ending.
+        """Drop the session's plan entirely, leaving the session with none. For an
+        agent that keeps talking after a plan is abandoned or reaches its end.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -206,6 +209,14 @@ class StateMachineServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetCapabilities(self, request, context):
+        """What the agent can do for the person right now, from what the session has
+        (#992). GetFullState returns the same list with include_capabilities.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_StateMachineServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -273,6 +284,11 @@ def add_StateMachineServiceServicer_to_server(servicer, server):
                     servicer.GetFullState,
                     request_deserializer=state__machine__pb2.GetFullStateRequest.FromString,
                     response_serializer=state__machine__pb2.GetFullStateResponse.SerializeToString,
+            ),
+            'GetCapabilities': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetCapabilities,
+                    request_deserializer=state__machine__pb2.GetCapabilitiesRequest.FromString,
+                    response_serializer=state__machine__pb2.GetCapabilitiesResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -628,6 +644,33 @@ class StateMachineService:
             '/stella.statemachine.v1.StateMachineService/GetFullState',
             state__machine__pb2.GetFullStateRequest.SerializeToString,
             state__machine__pb2.GetFullStateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetCapabilities(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/stella.statemachine.v1.StateMachineService/GetCapabilities',
+            state__machine__pb2.GetCapabilitiesRequest.SerializeToString,
+            state__machine__pb2.GetCapabilitiesResponse.FromString,
             options,
             channel_credentials,
             insecure,
