@@ -192,3 +192,9 @@ def test_switched_off_by_configuration_stays_off():
     agent.expert_registry.get("capabilities").enabled = False
     agent._fit_experts_to_compiler()
     assert agent.expert_registry.get("capabilities").enabled is False
+
+
+def test_an_unknown_compiler_leaves_it_alone():
+    agent = _agent_with("0.1.0")
+    agent._fit_experts_to_compiler()
+    assert agent.expert_registry.get("capabilities").enabled is True

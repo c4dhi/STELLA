@@ -1252,7 +1252,10 @@ class StellaV2Agent(BaseAgent):
         config = self.expert_registry.get("capabilities")
         if config is None:
             return
-        fits = "capabilities" in get_compiler(self._compiler_version).known_placeholders()
+        try:
+            fits = "capabilities" in get_compiler(self._compiler_version).known_placeholders()
+        except KeyError:
+            return  # an unknown version fails where prompts compile, not at session start
         if fits and getattr(self, "_capabilities_expert_off", False):
             # Off for an earlier session on this instance, not by its configuration.
             config.enabled = True
