@@ -120,6 +120,8 @@ Closing the Configurator (backdrop click or the close button) while there are un
 
 ## Agent-Declared Defaults & Capability Gating
 
+The settings each stage shows are the ones the agent declares in its `agent.yaml` (as pipeline slots or in `settings:`), drawn by their type; the Configurator has no per-agent forms. A value the agent does not declare, or one out of its range, is refused on save. See [Configuration settings](../../agent-sdk/agent-manifest.md#configuration-settings).
+
 Experts and their default verdicts/actions are **declared by the agent**, not hardcoded in the UI. On seed/upload the platform reads each agent's `config/experts/*.json` and publishes them on `AgentType.expertDefaults`; the Configurator renders the agent's declared experts/verdicts/actions (with a transitional fallback to built-ins until re-seeded).
 
 Which sections appear is gated by the agent's declared `capabilities`:

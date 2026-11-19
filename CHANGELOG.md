@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes
 
 - **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
+- **Saved Pipeline Configurations are re-checked once** when the agent types are seeded: a key the agent does not declare (such as `always_run`, `background_experts`, `fast_path` or `response_generator.system_prompt`, which nothing read) is dropped from it. Agents built with the SDK now need PyYAML, which the SDK pulls in
+
+### Added
+
+- **Agents declare the settings a configuration may change** (#996). Each setting is declared once in `agent.yaml`, as a pipeline slot or in the new `settings:` section, with a key `<stage>.<name>`, a type and a default. The Pipeline Configurator draws every stage from these declarations, the same way for every agent, so a new setting needs no UI change. Saving or deploying a configuration with an undeclared key, or a value of the wrong type or out of range, gets a 400 with the reason. The SDK's new `AgentSettings` reads the declarations and defaults from `agent.yaml`; STELLA Jev now takes its thresholds from there, so each default is written once
 
 ### Fixed
 

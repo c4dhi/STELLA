@@ -525,6 +525,9 @@ function getCustomExperts(cfg: AgentConfigurationPayload): Record<string, Record
   return (pool.custom_experts ?? {}) as Record<string, Record<string, unknown>>
 }
 
+// No agent reads always_run or background_experts and no agent declares them,
+// so the backend refuses them (#996) and drops them from saved configurations.
+// Nothing here writes them; a configuration saved before still shows its lists.
 function getAlwaysRun(cfg: AgentConfigurationPayload): string[] {
   const pool = getExpertPoolConfig(cfg)
   return (pool.always_run ?? [...DEFAULT_ALWAYS_RUN]) as string[]
@@ -846,11 +849,7 @@ export function useConfiguratorState(
       const current = { ...getCustomExperts(configuration) }
       delete current[name]
 
-      // Also remove from always_run and background
-      const ar = getAlwaysRun(configuration).filter((n) => n !== name)
-      const bg = getBackgroundExperts(configuration).filter((n) => n !== name)
-
-      patchExpertPool({ custom_experts: current, always_run: ar, background_experts: bg })
+      patchExpertPool({ custom_experts: current })
     },
     [configuration, patchExpertPool, builtInNames],
   )
@@ -859,44 +858,8 @@ export function useConfiguratorState(
   const toggleTaskExtraction = useCallback(
     (enabled: boolean) => {
       updateExpert('task_extraction', { enabled })
-
-      if (enabled) {
-        // Ensure it's in always_run and background
-        const ar = getAlwaysRun(configuration)
-        const bg = getBackgroundExperts(configuration)
-        const patch: Record<string, unknown> = {}
-        if (!ar.includes('task_extraction')) patch.always_run = [...ar, 'task_extraction']
-        if (!bg.includes('task_extraction')) patch.background_experts = [...bg, 'task_extraction']
-        if (Object.keys(patch).length > 0) patchExpertPool(patch)
-      }
     },
-    [configuration, patchExpertPool, updateExpert],
-  )
-
-  /** Move an expert to/from background */
-  const setExpertBackground = useCallback(
-    (name: string, isBackground: boolean) => {
-      const bg = getBackgroundExperts(configuration)
-      if (isBackground && !bg.includes(name)) {
-        patchExpertPool({ background_experts: [...bg, name] })
-      } else if (!isBackground && bg.includes(name)) {
-        patchExpertPool({ background_experts: bg.filter((n) => n !== name) })
-      }
-    },
-    [configuration, patchExpertPool],
-  )
-
-  /** Toggle always_run for an expert */
-  const toggleAlwaysRun = useCallback(
-    (name: string) => {
-      const ar = getAlwaysRun(configuration)
-      if (ar.includes(name)) {
-        patchExpertPool({ always_run: ar.filter((n) => n !== name) })
-      } else {
-        patchExpertPool({ always_run: [...ar, name] })
-      }
-    },
-    [configuration, patchExpertPool],
+    [updateExpert],
   )
 
   /** Update a non-expert pipeline node config (e.g. input_gate.model, response_generator.persona) */
@@ -960,8 +923,6 @@ export function useConfiguratorState(
     addCustomExpert,
     removeExpert,
     toggleTaskExtraction,
-    setExpertBackground,
-    toggleAlwaysRun,
     updateNodeConfig,
     updateThreshold,
   }

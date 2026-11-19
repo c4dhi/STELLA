@@ -90,9 +90,51 @@ sdk:
 | `configSchema` | Describes the agent's `defaultConfig`, as a JSON Schema object. A user never sets these at deploy: anything a deployer chooses is an `env` variable. |
 | `defaultConfig` | Fixed values the agent receives in `config`. They must fit `configSchema`. |
 | `pipelineSchema` | The pipeline the Configurator edits (nodes, slots, thresholds). Needed for `features.configurator`. |
+| `settings` | Settings a saved configuration may change, beyond the pipeline slots. Each has a `key` (`<stage>.<name>`), a `type` and a `default`. See [Configuration settings](#configuration-settings). |
 | `runtimeVariables` | The `{{placeholder}}` palette the agent's prompt compiler resolves. |
 | `promptCompiler.version` | The SDK prompt compiler version the agent uses. Saved configurations are checked against it. |
 | `sdk.minVersion` | The oldest `stella-ai-agent-sdk` the agent works with. It may not be newer than the SDK this STELLA ships. |
+
+### Configuration settings
+
+A saved configuration (made in the Pipeline Configurator) can change only the settings the agent declares. An agent declares each one once, in one of two ways:
+
+- as a slot on a `pipelineSchema` node: slot `x` on node `n` is the setting `n.x`;
+- in the `settings:` section, with a `key` of the form `<stage>.<name>`, where the stage is a `pipelineSchema` node.
+
+```yaml
+settings:
+  - key: expert_pool.expert_context
+    type: text
+    label: "Expert Context"
+    description: "What kind of conversation this is, in a sentence or two."
+    default: ""
+    maxLength: 1000
+  - key: expert_pool.safety_threshold
+    type: number
+    label: "Safety Threshold"
+    default: 0.6
+    min: 0
+    max: 1
+    step: 0.05
+    group: "Safety"
+```
+
+The fields are the ones `env.optional` uses: `type`, `label`, `description`, `default`, `group`, `advanced`, `min`/`max`/`step`/`unit`, `options`, `format`, plus `maxLength` for text. Types are `string`, `text` (long text with `{{placeholder}}` support), `boolean`, `integer`, `number`, `enum`, `string_list`, `key_value`, `expert_list` and `verdict_directives`. Unlike an env var, a value is JSON (a number is a number), and it reaches the agent in `pipeline_config.nodes.<stage>.<name>`, not in the pod's environment.
+
+- **In the Configurator**, clicking a stage shows every setting declared for it, each drawn by its type: text as a prompt editor, numbers, choices and switches in a grid (one grid per `group`, `advanced` ones last), an expert list as the experts the sidebar edits.
+- **When a configuration is saved or deployed**, STELLA checks every value against its declaration and refuses, with a 400, a key the agent does not declare or a value that does not fit its type, range, length or options. A saved configuration that still holds a key the agent no longer declares has that key dropped on deploy and when its agent type changes, like a removed node.
+- **In the agent**, `AgentSettings` from the SDK reads the declarations and their defaults from `agent.yaml`, so a default is written once:
+
+```python
+from stella_agent_sdk import AgentSettings
+
+settings = AgentSettings.from_manifest()          # ./agent.yaml, or $STELLA_AGENT_MANIFEST
+settings.apply(session_config.pipeline_config)    # the configuration's values
+settings.get("expert_pool.safety_threshold")      # its value, else the default
+```
+
+`get` raises `KeyError` for a key the manifest does not declare.
 
 ### Experts
 
@@ -133,6 +175,7 @@ STELLA refuses a manifest that breaks any of these:
 - `configSchema` is a valid JSON Schema that STELLA can compile, and `defaultConfig` fits it. Values for required settings may be left out of the defaults.
 - `configSchema` uses no regular expressions (`pattern`, `patternProperties`, or a `propertyNames` pattern), anywhere in the document, including parts reached through `$ref`. STELLA checks settings on its server, where a badly written expression can stall it. Use `enum`, `minLength` or `maxLength` instead.
 - An env var is not both required and optional.
+- Every configuration setting is declared once, across the pipeline slots and `settings:`. A `settings:` key's stage is a `pipelineSchema` node, its declaration holds together (an `enum` lists options, only numbers take a range), and its `default` fits it.
 - `client` event and command names are unique in their list, and each `data` is a JSON Schema STELLA can compile, without regular expressions.
 - Unknown keys are refused, not ignored. A typo like `conectors:` is an error, not a silently missing feature.
 

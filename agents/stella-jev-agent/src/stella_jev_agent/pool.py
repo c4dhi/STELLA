@@ -16,7 +16,10 @@ import copy
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from stella_agent_sdk.settings import AgentSettings
 
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.expert_pool import ExpertPool
@@ -48,6 +51,15 @@ ANSWERED_TASK = "answered_task"
 NEXT_STEP = "next_step"
 # Carries Jev's pick to the extraction run, and is taken out before extraction reads the context.
 SCOPE = "_jev_scope"
+# The pipeline node whose settings (agent.yaml, expert_pool slots) this pool reads.
+NODE = "expert_pool"
+# In a checkout and in tests; an image finds ./agent.yaml in its working directory.
+_OWN_MANIFEST = Path(__file__).resolve().parents[2] / "agent.yaml"
+
+
+def jev_settings() -> AgentSettings:
+    """Jev's declared settings, defaults from its agent.yaml."""
+    return AgentSettings.from_manifest(_OWN_MANIFEST)
 
 JEV_EXPERTS = {
     COMMON: COMMON_SENSE,
@@ -114,21 +126,16 @@ def _started_after(verdicts: List[ExpertVerdict], waited_ms: float) -> List[Expe
 class JevExpertPool(ExpertPool):
     def __init__(
         self, *args: Any, jev: JevClient, ask_back: AskBack,
-        plan: Callable[[], Optional[Dict[str, Any]]] = lambda: None, **kwargs: Any,
+        plan: Callable[[], Optional[Dict[str, Any]]] = lambda: None,
+        settings: Optional[AgentSettings] = None, **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self._jev = jev
         self._ask_back = ask_back
         self._plan = plan
-        self.ask_threshold = 0.45
-        self.skip_threshold = 0.8
-        self.forecast_threshold = 0.7
-        # Stricter, since nobody asked: a wrong one saves what was not said, or overwrites an answer.
-        self.also_threshold = 0.8
-        # How sure Jev must be of a medical or legal "low" or "high".
-        self.safety_threshold = 0.6
-        # What kind of conversation this is, for every question Jev answers.
-        self.expert_context = ""
+        # Thresholds and context: agent.yaml's defaults, then the configuration's values.
+        self.settings = settings or jev_settings()
+        self._read_settings()
         self.forecast = TurnForecast()
         # The extraction this turn holds back until arbitration, and the one running.
         self._held: Optional[Callable[[], Any]] = None
@@ -145,22 +152,29 @@ class JevExpertPool(ExpertPool):
         self.last_scope: Optional[Scope] = None
 
     def apply_config(self, config: dict) -> None:
-        if "ask_threshold" in config:
-            self.ask_threshold = float(config["ask_threshold"])
-        if "skip_threshold" in config:
-            self.skip_threshold = float(config["skip_threshold"])
-        if "max_ask_backs" in config:
-            self._ask_back.max_per_session = int(config["max_ask_backs"])
-        if "jev_timeout_ms" in config:
-            self._jev.timeout_s = float(config["jev_timeout_ms"]) / 1000
-        if "forecast_threshold" in config:
-            self.forecast_threshold = float(config["forecast_threshold"])
-        if "also_threshold" in config:
-            self.also_threshold = float(config["also_threshold"])
-        if "safety_threshold" in config:
-            self.safety_threshold = float(config["safety_threshold"])
-        if "expert_context" in config:
-            self.expert_context = str(config["expert_context"] or "")
+        """The configuration's expert_pool node. Replaces what an earlier call set."""
+        self.settings.apply({"nodes": {NODE: config}})
+        self._read_settings()
+
+    def _read_settings(self) -> None:
+        def get(name: str) -> Any:
+            return self.settings.get(f"{NODE}.{name}")
+
+        self.ask_threshold = get("ask_threshold")
+        self.skip_threshold = get("skip_threshold")
+        self.forecast_threshold = get("forecast_threshold")
+        # Stricter, since nobody asked: a wrong one saves what was not said, or overwrites an answer.
+        self.also_threshold = get("also_threshold")
+        # How sure Jev must be of a medical or legal "low" or "high".
+        self.safety_threshold = get("safety_threshold")
+        # What kind of conversation this is, for every question Jev answers.
+        self.expert_context = str(get("expert_context") or "")
+        # These two belong to objects with their own defaults (JEV_TIMEOUT_MS sets the
+        # client's), so only a configured value changes them.
+        if self.settings.is_set(f"{NODE}.max_ask_backs"):
+            self._ask_back.max_per_session = int(get("max_ask_backs"))
+        if self.settings.is_set(f"{NODE}.jev_timeout_ms"):
+            self._jev.timeout_s = float(get("jev_timeout_ms")) / 1000
 
     async def run(
         self,

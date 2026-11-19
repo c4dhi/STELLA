@@ -1,149 +1,26 @@
 /**
- * NodeDetailOverlay — click-to-edit overlay for pipeline node settings.
+ * NodeDetailOverlay — click-to-edit overlay for one pipeline stage's settings.
  *
- * Each stage uses a single PromptComposer editor with {{placeholder}} variables
- * for runtime-injected context, plus a SettingsGrid for model configuration.
+ * Drawn entirely from the settings the agent declares for the stage (#996):
+ * the `settings` list its pipelineSchema carries, keyed `<stage>.<name>`. Which
+ * control a setting gets follows from its type, never from the agent or the
+ * stage: text is a PromptComposer block with {{placeholder}} support, numbers,
+ * choices and switches sit in a settings grid, and an expert list shows the
+ * experts the Expert Module sidebar edits. Defaults, ranges and choices come
+ * from the declaration, so nothing here repeats an agent's defaults.
  */
 
 import { useState, Fragment } from 'react'
 import type { JSX } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { PipelineNode as PipelineNodeType, AgentConfigurationPayload } from '../../lib/api-types'
-import type { ExpertDefinition, InputGateRule } from './useConfiguratorState'
+import type { PipelineNode as PipelineNodeType, AgentConfigurationPayload, ConfigSetting } from '../../lib/api-types'
+import type { ExpertDefinition } from './useConfiguratorState'
 import { PromptComposer, type PromptBlock } from './PromptComposer'
 
-/** Expert Pool slots edited in the Expert Module sidebar, not in the overlay. */
-const EXPERT_LIST_SLOTS = new Set(['experts', 'custom_experts', 'always_run', 'background_experts'])
-
-// ---------------------------------------------------------------------------
-// Default prompt templates for pipeline nodes (mirrors Python agent defaults)
-// ---------------------------------------------------------------------------
-
-const DEFAULT_INPUT_GATE_TEMPLATE = `You are a routing classifier. Select which expert modules to activate for this message.
-
-{{trigger_rules}}
-
-{{current_state}}
-{{pending_deliverables}}
-{{processing_mode}}
-
-{{history_2}}
-
-{{user_message}}`
-
-const DEFAULT_RESPONSE_GENERATOR_TEMPLATE = `{{plan_persona}}
-
-CONVERSATIONAL STYLE (spoken aloud via TTS — follow strictly):
-
-LANGUAGE RULE (highest priority):
-- You MUST respond in the same language the user speaks.
-- If the user speaks German, your ENTIRE response must be in German. Not a single English word.
-- If the user speaks English, respond in English.
-- When in doubt, default to German.
-
-All style rules below apply in WHATEVER LANGUAGE you are responding in. Use that language's natural spoken register.
-
-Tone — Friendly Professional:
-- Think of a skilled interviewer or consultant: warm, attentive, composed.
-- Be genuinely interested without being overly enthusiastic or performative.
-- Stay professional but never stiff. You can be personable without being casual.
-- Adapt slightly to the user's energy — if they are relaxed, you can be a touch warmer. If they are formal, match that. But always stay on the professional side.
-
-Name Usage — CRITICAL:
-- Use the user's name at MOST once every 4-5 responses. Most responses should have NO name at all.
-- Never put the name at the start of a sentence as a greeting pattern.
-- When you do use it, place it mid-sentence or at the end, and only when it adds warmth to a specific moment.
-
-Register:
-- Use natural contractions — speak like a real person, not a document.
-  DE: "hab ich", "ist's", "geht's", "gibt's" — never "habe ich", "ist es", "gibt es"
-  EN: "don't", "it's", "I'm", "that's" — never "do not", "it is"
-- Avoid slang, excessive fillers, and overly casual interjections.
-- Use clean, professional connectors.
-  DE: "also", "das heißt", "in dem Fall", "übrigens"
-  EN: "actually", "so", "in that case", "that said"
-
-Transitions — NEVER JUMP ABRUPTLY BETWEEN TOPICS:
-- Connect what the user just said to where you're heading next.
-- BAD (DE): "Verstehe. Welche Sportart magst du?"
-- GOOD (DE): "Ja, wenn man müde ist, fällt alles schwerer. Gibt's eine Sportart, die sich dann machbar anfühlt?"
-
-Variety — the most important rule:
-- NEVER use the same opening pattern twice in a row.
-- Do NOT always follow the pattern "acknowledge + question." Mix it up.
-
-TTS Rhythm:
-- Comma roughly every 7-10 words for natural breathing.
-- Period at the end of statements for pitch drop.
-- One question mark max, at the very end if you're asking something.
-
-Response Shape — STRICT LENGTH:
-- 1-2 sentences, max 3. Aim for 20-35 words.
-- ONE direction per response. At most ONE question per response.
-- Match the user's energy and length. If you can say it in fewer words, do.
-
-Formatting:
-- No markdown, bullets, numbered lists, or emojis.
-- Write exactly as a professional interviewer would speak.
-
-Bridge Continuation:
-- A short bridge phrase (e.g. "Gute Frage.", "Absolut.", "Good question.") may already have been spoken aloud before your response.
-- If so, you will be told what was said. Continue naturally from it — do NOT repeat it, re-greet, or add another acknowledgment.
-- Just pick up mid-thought as if you already started talking.
-
-{{current_state}}
-{{pending_deliverables}}
-{{collected_deliverables}}
-{{progress_percentage}}
-
-{{arbitration_directive}}
-
-{{history_10}}
-
-{{user_message}}`
-
-const DEFAULT_BRIDGE_TEMPLATE = `You are the real-time speech reflex for a professional Voice AI interviewer. Generate an immediate, ultra-short conversational "bridge" sentence right after the user stops speaking. This bridge buys time for the main response to be composed.
-
-Core Directives:
-
-Complete Sentence: Your bridge MUST be a complete, self-contained sentence that ends with a period, exclamation mark, or question mark. It will be spoken aloud on its own before the main response follows.
-
-Maximum Length: No more than 6 words.
-
-Do Not Answer: Never attempt to answer the user's question, provide facts, or complete a task.
-
-Tone — Friendly Professional:
-- Sound like a composed, attentive interviewer — warm but not overly casual.
-- Adapt slightly to the user's energy while staying professional.
-
-Examples (German):
-Sachlich/Komplex: "Gute Frage."
-Aktion/Bitte: "Auf jeden Fall."
-Persönlich/Emotional: "Das kann ich verstehen."
-Gesprächig: "Ja, das stimmt."
-
-Examples (English):
-Factual/Complex: "Good question."
-Action/Request: "Absolutely."
-Empathetic/Personal: "I appreciate that."
-Conversational: "That's a great point."
-
-Natural Speech: Never say "Processing," "Checking," or "Thinking." Use natural acknowledgments.
-
-Language Matching — CRITICAL:
-- ALWAYS respond in the SAME LANGUAGE the user is speaking.
-- If the user speaks German, your bridge MUST be in German. No English words.
-- If the user speaks English, your bridge MUST be in English.
-- When in doubt, default to German.
-- Use natural, idiomatic phrasing for each language — do not translate literally.
-
-IMPORTANT: Always end with a period, exclamation mark, or question mark. Never end with a comma, ellipsis, or connector word.
-
-Output ONLY the bridge sentence. No quotes, no explanations.
-
-{{history_2}}
-
-{{user_message}}`
+/** Types drawn as one field each in a settings grid. */
+const FIELD_TYPES = new Set(['number', 'integer', 'enum', 'boolean', 'string'])
+/** Types shown, but not edited, here (#996 keeps their editors for later). */
+const SHOWN_TYPES = new Set(['key_value', 'string_list'])
 
 // Stage icon + accent color mapping
 const STAGE_META: Record<string, { icon: JSX.Element; accent: string; accentBg: string; accentBgLight: string }> = {
@@ -201,17 +78,17 @@ const STAGE_META: Record<string, { icon: JSX.Element; accent: string; accentBg: 
 
 interface NodeDetailOverlayProps {
   node: PipelineNodeType
+  /** The settings the agent declares for this stage (keys `<node.id>.<name>`). */
+  settings: ConfigSetting[]
   configuration: AgentConfigurationPayload
   onUpdateNodeConfig: (nodeId: string, slotId: string, value: unknown) => void
   onClose: () => void
   isDark: boolean
-  // Expert-derived data for cross-references
+  /** For a stage with an expert list: the experts, as the sidebar edits them. */
   experts?: ExpertDefinition[]
-  inputGateRules?: InputGateRule[]
-  arbitrationOrder?: string[]
 }
 
-/** Collapsible grouped settings card for model/temp/tokens.
+/** Collapsible grouped settings card.
  *  Extracted to module level so React preserves its identity (and open state)
  *  across parent re-renders triggered by config edits. */
 function SettingsGrid({ children, isDark, title = 'Model Settings', defaultOpen = false }: {
@@ -269,13 +146,12 @@ function SettingsGrid({ children, isDark, title = 'Model Settings', defaultOpen 
 
 export default function NodeDetailOverlay({
   node,
+  settings,
   configuration,
   onUpdateNodeConfig,
   onClose,
   isDark,
   experts = [],
-  inputGateRules = [],
-  arbitrationOrder = [],
 }: NodeDetailOverlayProps) {
   const nodeConfig = (configuration.nodes?.[node.id] ?? {}) as Record<string, unknown>
   const meta = STAGE_META[node.id]
@@ -292,8 +168,11 @@ export default function NodeDetailOverlay({
     return nodeConfig[slotId]
   }
 
+  /** A setting's name within the stage: `expert_pool.ask_threshold` → `ask_threshold`. */
+  const nameOf = (s: ConfigSetting) => s.key.slice(node.id.length + 1)
+
   const getSlotDefault = (slotId: string) => {
-    return node.slots.find((s) => s.id === slotId)?.default
+    return settings.find((s) => nameOf(s) === slotId)?.default
   }
 
   /**
@@ -313,6 +192,8 @@ export default function NodeDetailOverlay({
     defaultValue?: string
     emptyWhenDefault?: boolean
     helperText?: string
+    /** Turns the select's text into the stored value (a boolean for a switch). */
+    parse?: (raw: string) => unknown
   }) => {
     const value = getSlotValue(slotId)
     const defaultVal = getSlotDefault(slotId)
@@ -370,10 +251,10 @@ export default function NodeDetailOverlay({
         ) : type === 'select' ? (
           <select
             value={isOverridden ? String(value) : ''}
-            onChange={(e) => onUpdateNodeConfig(node.id, slotId, e.target.value || undefined)}
+            onChange={(e) => onUpdateNodeConfig(node.id, slotId, e.target.value ? (options?.parse ? options.parse(e.target.value) : e.target.value) : undefined)}
             className={inputClass}
           >
-            <option value="">Default{defaultVal ? ` (${defaultVal})` : ''}</option>
+            <option value="">Default{defaultVal !== undefined && defaultVal !== null && defaultVal !== '' ? ` (${String(defaultVal)})` : ''}</option>
             {options?.selectOptions?.map((opt) => (
               <option key={opt} value={opt}>{opt}</option>
             ))}
@@ -427,39 +308,7 @@ export default function NodeDetailOverlay({
     </div>
   )
 
-  // Per-stage content renderers
-  const renderInputGate = () => {
-    const systemPromptValue = getSlotValue('system_prompt')
-    const isOverridden = systemPromptValue !== undefined && systemPromptValue !== null
-
-    const blocks: PromptBlock[] = [
-      {
-        id: 'system_prompt',
-        type: 'editable',
-        label: 'Prompt Template',
-        value: isOverridden ? String(systemPromptValue) : undefined,
-        defaultValue: DEFAULT_INPUT_GATE_TEMPLATE,
-        onChange: (v) => onUpdateNodeConfig(node.id, 'system_prompt', v),
-        onReset: () => onUpdateNodeConfig(node.id, 'system_prompt', undefined),
-        rows: 18,
-        outputFormat: '{"experts": ["name1", "name2"]}',
-      },
-    ]
-
-    return (
-      <div className="space-y-6">
-        <PromptComposer blocks={blocks} isDark={isDark} />
-
-        <SettingsGrid isDark={isDark}>
-          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
-          {renderSlotField('temperature', 'Temperature', 'number', { min: 0, max: 1, step: 0.1 })}
-          {renderSlotField('max_tokens', 'Max Tokens', 'number', { min: 20, max: 500, step: 10 })}
-        </SettingsGrid>
-      </div>
-    )
-  }
-
-  const renderExpertPool = () => {
+  const renderExperts = () => {
     const foreground = experts.filter((e) => e.enabled && !e.isBackground)
     const background = experts.filter((e) => e.enabled && e.isBackground)
 
@@ -498,193 +347,102 @@ export default function NodeDetailOverlay({
         <p className={`text-[12px] font-light italic text-center py-2 ${isDark ? 'text-zinc-600' : 'text-neutral-400'}`}>
           Edit individual experts in the sidebar
         </p>
-
-        {/* The pool's own settings (thresholds, context, timeouts) — every
-            slot the manifest declares except the expert lists the sidebar edits. */}
-        {renderSlots(node.slots.filter((s) => s.type !== 'expert_list' && !EXPERT_LIST_SLOTS.has(s.id)), {
-          title: 'Pool Settings',
-          defaultOpen: true,
-        })}
       </div>
     )
   }
 
-  const renderArbitration = () => (
-    <div className="space-y-6">
-      <ReadOnlySection title="Priority Order (from sidebar drag order)">
-        <div className="flex flex-wrap gap-2">
-          {arbitrationOrder.map((name, i) => (
-            <span key={name} className="flex items-center gap-1.5">
-              <span className={`font-medium px-2 py-0.5 rounded-md ${
-                isDark ? 'bg-zinc-700/60 text-zinc-300' : 'bg-neutral-200/60 text-neutral-600'
-              }`}>
-                {name}
-              </span>
-              {i < arbitrationOrder.length - 1 && (
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-                  className={isDark ? 'text-zinc-600' : 'text-neutral-300'}
-                >
-                  <polyline points="9 18 15 12 9 6" />
-                </svg>
-              )}
-            </span>
-          ))}
-        </div>
+  const renderField = (s: ConfigSetting) => {
+    const name = nameOf(s)
+    const label = (s.label ?? name) + (s.unit ? ` (${s.unit})` : '')
+    const common = { helperText: s.description }
+    switch (s.type) {
+      case 'number':
+        return renderSlotField(name, label, 'number', { ...common, min: s.min, max: s.max, step: s.step })
+      case 'integer':
+        return renderSlotField(name, label, 'number', { ...common, min: s.min, max: s.max, step: s.step ?? 1 })
+      case 'enum':
+        return renderSlotField(name, label, 'select', { ...common, selectOptions: (s.options ?? []).map((o) => o.value) })
+      case 'boolean':
+        return renderSlotField(name, label, 'select', { ...common, selectOptions: ['true', 'false'], parse: (raw) => raw === 'true' })
+      default:
+        return renderSlotField(name, label, 'text', common)
+    }
+  }
+
+  const renderShown = (s: ConfigSetting) => {
+    const value = (getSlotValue(nameOf(s)) ?? s.default) as unknown
+    const entries = Array.isArray(value)
+      ? value.map((v, i) => [String(i + 1), String(v)])
+      : value && typeof value === 'object'
+        ? Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, String(v ?? '')])
+        : []
+    return (
+      <ReadOnlySection key={s.key} title={s.label ?? nameOf(s)}>
+        {entries.length === 0 ? (
+          <span className="italic">Empty</span>
+        ) : (
+          <div className="space-y-1">
+            {entries.map(([k, v]) => (
+              <div key={k} className="flex gap-2">
+                <span className="font-mono shrink-0">{k}</span>
+                <span className="truncate">{v}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </ReadOnlySection>
-
-      {renderSlotField('gate_failure_message', 'Gate Failure Message', 'textarea', { rows: 2 })}
-
-      <div className={`flex items-center gap-2.5 text-[12px] font-light ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-60">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="12" y1="16" x2="12" y2="12" />
-          <line x1="12" y1="8" x2="12.01" y2="8" />
-        </svg>
-        Deterministic Python — no LLM, no plan data. Priority-based conflict resolution.
-      </div>
-    </div>
-  )
-
-  const renderResponseGenerator = () => {
-    const systemPromptValue = getSlotValue('system_prompt')
-    const isOverridden = systemPromptValue !== undefined && systemPromptValue !== null
-
-    const blocks: PromptBlock[] = [
-      {
-        id: 'system_prompt',
-        type: 'editable',
-        label: 'Prompt Template',
-        headerHint: 'The bridge phrase (from Bridge Generator) is automatically prepended to every response. The model is instructed to continue naturally from it — do not repeat or re-acknowledge.',
-        headerHintLabel: 'Bridge Phrase Injection',
-        value: isOverridden ? String(systemPromptValue) : undefined,
-        defaultValue: DEFAULT_RESPONSE_GENERATOR_TEMPLATE,
-        onChange: (v) => onUpdateNodeConfig(node.id, 'system_prompt', v),
-        onReset: () => onUpdateNodeConfig(node.id, 'system_prompt', undefined),
-        rows: 22,
-      },
-    ]
-
-    return (
-      <div className="space-y-6">
-        <PromptComposer blocks={blocks} isDark={isDark} />
-
-        <SettingsGrid isDark={isDark}>
-          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
-          {renderSlotField('temperature', 'Temperature', 'number', { min: 0, max: 1.5, step: 0.1 })}
-          {renderSlotField('max_tokens', 'Max Tokens', 'number', { min: 50, max: 1000, step: 10 })}
-        </SettingsGrid>
-      </div>
     )
   }
 
-  const renderBridgeGenerator = () => {
-    const systemPromptValue = getSlotValue('system_prompt')
-    const isOverridden = systemPromptValue !== undefined && systemPromptValue !== null
+  /** Every setting the stage declares, each drawn by its type. */
+  const renderSettings = () => {
+    const prompts = settings.filter((s) => s.type === 'text')
+    const fields = settings.filter((s) => FIELD_TYPES.has(s.type))
+    const shown = settings.filter((s) => SHOWN_TYPES.has(s.type))
+    const hasExperts = settings.some((s) => s.type === 'expert_list')
 
-    const blocks: PromptBlock[] = [
-      {
-        id: 'system_prompt',
-        type: 'editable',
-        label: 'Prompt Template',
-        value: isOverridden ? String(systemPromptValue) : undefined,
-        defaultValue: DEFAULT_BRIDGE_TEMPLATE,
-        onChange: (v) => onUpdateNodeConfig(node.id, 'system_prompt', v),
-        onReset: () => onUpdateNodeConfig(node.id, 'system_prompt', undefined),
-        rows: 18,
-      },
-    ]
+    // Fields by their declared group, in order of appearance; advanced ones last.
+    const groups = new Map<string, ConfigSetting[]>()
+    for (const s of [...fields.filter((f) => !f.advanced), ...fields.filter((f) => f.advanced)]) {
+      const title = s.group ?? 'Settings'
+      groups.set(title, [...(groups.get(title) ?? []), s])
+    }
 
-    return (
-      <div className="space-y-6">
-        <PromptComposer blocks={blocks} isDark={isDark} />
-
-        <SettingsGrid isDark={isDark}>
-          {renderSlotField('model', 'Model', 'select', { selectOptions: ['gpt-5.4-mini', 'gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1-nano'] })}
-          {renderSlotField('temperature', 'Temperature', 'number', { min: 0, max: 1, step: 0.1 })}
-          {renderSlotField('max_tokens', 'Max Tokens', 'number', { min: 10, max: 100, step: 5 })}
-          {renderSlotField('fast_path', 'Fast Bridge (skip LLM)', 'select', { selectOptions: ['off', 'on'] })}
-          {renderSlotField('timeout_ms', 'LLM Bridge Timeout (ms)', 'number', { min: 200, max: 5000, step: 100 })}
-        </SettingsGrid>
-
-        <div className={`flex items-center gap-2.5 text-[12px] font-light ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 opacity-60">
-            <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
-          </svg>
-          Parallel path — no plan data. Fast Bridge "on" serves an instant templated ack (no LLM); "off" generates a contextual bridge from the prompt, falling back after the timeout.
-        </div>
-      </div>
-    )
-  }
-
-  // Generic fallback: render any stage's editable slots straight from the
-  // manifest — `text` slots as PromptComposer blocks (supporting {{variable}}
-  // placeholders), and number/select slots as a settings grid. This lets new
-  // pipeline stages (e.g. barge_in) be fully configurable without a bespoke
-  // renderer, instead of falling through to "No configuration available".
-  const renderGenericStage = () => renderSlots(node.slots)
-
-  const renderSlots = (slots: PipelineNodeType['slots'], grid?: { title: string; defaultOpen: boolean }) => {
-    const textSlots = slots.filter((s) => s.type === 'text')
-    const settingSlots = slots.filter((s) => s.type === 'number' || s.type === 'select')
-
-    const blocks: PromptBlock[] = textSlots.map((s) => {
-      const v = getSlotValue(s.id)
+    const blocks: PromptBlock[] = prompts.map((s) => {
+      const v = getSlotValue(nameOf(s))
       const isOverridden = v !== undefined && v !== null
       return {
-        id: s.id,
+        id: s.key,
         type: 'editable' as const,
-        label: s.label,
+        label: s.label ?? nameOf(s),
         headerHint: s.description,
         value: isOverridden ? String(v) : undefined,
         defaultValue: typeof s.default === 'string' ? s.default : '',
-        onChange: (val: string) => onUpdateNodeConfig(node.id, s.id, val),
-        onReset: () => onUpdateNodeConfig(node.id, s.id, undefined),
+        onChange: (val: string) => onUpdateNodeConfig(node.id, nameOf(s), val),
+        onReset: () => onUpdateNodeConfig(node.id, nameOf(s), undefined),
         // A short text (a few sentences) needs a few rows, a prompt needs many.
         rows: s.maxLength !== undefined && s.maxLength <= 2000 ? 5 : 18,
       }
     })
 
-    if (blocks.length === 0 && settingSlots.length === 0) return null
-
     return (
       <div className="space-y-6">
+        {hasExperts && renderExperts()}
         {blocks.length > 0 && <PromptComposer blocks={blocks} isDark={isDark} />}
-        {settingSlots.length > 0 && (
-          <SettingsGrid isDark={isDark} title={grid?.title} defaultOpen={grid?.defaultOpen}>
-            {settingSlots.map((s) => (
-              <Fragment key={s.id}>
-                {renderSlotField(
-                  s.id,
-                  s.label,
-                  s.type === 'select' ? 'select' : 'number',
-                  {
-                    selectOptions: s.options,
-                    min: s.min,
-                    max: s.max,
-                    step: s.step,
-                    helperText: s.type === 'select' ? s.description : undefined,
-                  },
-                )}
-              </Fragment>
+        {[...groups.entries()].map(([title, group]) => (
+          <SettingsGrid key={title} isDark={isDark} title={title} defaultOpen>
+            {group.map((s) => (
+              <Fragment key={s.key}>{renderField(s)}</Fragment>
             ))}
           </SettingsGrid>
-        )}
+        ))}
+        {shown.map(renderShown)}
       </div>
     )
   }
 
-  const stageRenderers: Record<string, () => JSX.Element> = {
-    input_gate: renderInputGate,
-    expert_pool: renderExpertPool,
-    arbitration: renderArbitration,
-    response_generator: renderResponseGenerator,
-    bridge_generator: renderBridgeGenerator,
-  }
-
-  // Use a bespoke renderer when one exists; otherwise fall back to the generic
-  // slot-driven renderer so every manifest-defined stage is configurable.
-  const renderContent =
-    stageRenderers[node.id] || (node.slots.length > 0 ? renderGenericStage : undefined)
+  const editable = settings.some((s) => s.type !== 'verdict_directives')
+  const renderContent = editable ? renderSettings : undefined
 
   return (
     <motion.div

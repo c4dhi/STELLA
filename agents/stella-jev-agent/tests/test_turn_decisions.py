@@ -53,10 +53,10 @@ class FakeJev:
 class Pool(JevExpertPool):
     """Records the language-model experts instead of calling them."""
 
-    def __init__(self, jev, ask_back):
+    def __init__(self, jev, ask_back, settings=None):
         super().__init__(
             None, ExpertRegistry(experts_dir=str(_OWN_EXPERTS_DIR)),
-            compiler_version="1.0.0", jev=jev, ask_back=ask_back,
+            compiler_version="1.0.0", jev=jev, ask_back=ask_back, settings=settings,
         )
         self.language_model_calls = []
 
@@ -479,3 +479,31 @@ def test_jev_reads_the_configured_setting():
     pool.apply_config({"expert_context": ""})
     _run(pool)
     assert "setting" not in jev.asked[-1][0]
+
+
+def test_the_pool_takes_its_defaults_from_agent_yaml_and_resets_between_configurations(tmp_path):
+    from stella_agent_sdk.settings import AgentSettings
+    manifest = tmp_path / "agent.yaml"
+    manifest.write_text(
+        "pipelineSchema:\n  nodes:\n    - id: expert_pool\n      slots:\n"
+        + "".join(
+            f"        - {{ id: {name}, type: number, default: {value} }}\n"
+            for name, value in [("ask_threshold", 0.3), ("skip_threshold", 0.9), ("forecast_threshold", 0.5),
+                                ("also_threshold", 0.95), ("safety_threshold", 0.75), ("max_ask_backs", 1),
+                                ("jev_timeout_ms", 900)]
+        )
+        + "        - { id: expert_context, type: text }\n"
+    )
+    jev = FakeJev(_answers())
+    jev.timeout_s = 1.5
+    ask_back = AskBack()
+    pool = Pool(jev, ask_back, settings=AgentSettings.from_manifest(manifest))
+
+    assert (pool.ask_threshold, pool.safety_threshold, pool.expert_context) == (0.3, 0.75, "")
+    # Left unset, the timeout and ask-back limit keep their own objects' defaults.
+    assert (jev.timeout_s, ask_back.max_per_session) == (1.5, 3)
+
+    pool.apply_config({"safety_threshold": 0.5, "jev_timeout_ms": 2000})
+    assert (pool.safety_threshold, jev.timeout_s) == (0.5, 2.0)
+    pool.apply_config({})
+    assert pool.safety_threshold == 0.75

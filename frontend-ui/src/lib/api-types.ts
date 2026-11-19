@@ -1762,10 +1762,36 @@ export interface PipelineThreshold {
   default?: number
 }
 
+/**
+ * A setting a configuration may change (#996), keyed `<stage>.<name>`: declared
+ * in agent.yaml (`settings:` or a pipeline slot). The value lives at
+ * `nodes.<stage>.<name>`; the backend refuses any other key, and values that
+ * do not fit the declaration.
+ */
+export interface ConfigSetting {
+  key: string
+  type: 'string' | 'text' | 'boolean' | 'integer' | 'number' | 'enum' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives'
+  label?: string
+  description?: string
+  default?: unknown
+  group?: string
+  advanced?: boolean
+  min?: number
+  max?: number
+  step?: number
+  unit?: string
+  options?: { value: string; label?: string }[]
+  format?: string
+  maxLength?: number
+  isCustom?: boolean
+}
+
 export interface PipelineSchema {
   nodes: PipelineNode[]
   edges: PipelineEdge[]
   thresholds: PipelineThreshold[]
+  /** Every setting the agent declares; the backend always sends it. */
+  settings?: ConfigSetting[]
 }
 
 export interface AgentConfigurationPayload {
