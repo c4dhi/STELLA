@@ -9,6 +9,12 @@ platform's changelog lives [at the repository root](https://github.com/c4dhi/STE
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An agent started while speech is still loading waits for it** (#151). `run_agent_from_env` used to give STT and TTS about 80 s and then exit, and agent pods are never restarted, so a session started in the minutes after a cold restart lost its agent. The agent now joins the room first, shows the participant "Getting ready to listen…" (the `stt_status` envelope), and waits up to `STELLA_SPEECH_WAIT_SECONDS` (default 720, the services' startup budget), logging how long it has waited on every attempt. `STTClient.connect()` and `TTSClient.connect()` take `wait_seconds` instead of `max_retries`/`base_delay`.
+
 ## [0.10.1] - 2026-11-17
 
 Ships with STELLA 2.0.1. Fixes only.

@@ -1,11 +1,12 @@
 """TTS (Text-to-Speech) gRPC client for the STELLA Agent SDK."""
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
 import grpc
+
+from stella_agent_sdk.services.channel_wait import open_ready_channel
 
 logger = logging.getLogger(__name__)
 
@@ -58,62 +59,24 @@ class TTSClient:
         """Whether connected to the TTS service."""
         return self._connected
 
-    async def connect(self, max_retries: int = 5, base_delay: float = 2.0) -> None:
+    async def connect(self, wait_seconds: Optional[float] = None) -> None:
         """
-        Connect to the TTS service with retry logic.
+        Connect to the TTS service, waiting while it is still starting (#151).
 
         Args:
-            max_retries: Maximum number of connection attempts
-            base_delay: Base delay between retries (exponential backoff)
+            wait_seconds: How long to keep trying. Defaults to the speech
+                services' startup budget (``STELLA_SPEECH_WAIT_SECONDS``, 720 s),
+                so an agent started during a cold model load waits for it
+                instead of giving up.
         """
         if self._connected:
             return
 
         logger.info(f"Connecting to TTS service at {self.tts_address}")
-
-        last_error = None
-        for attempt in range(max_retries):
-            try:
-                # Create gRPC channel
-                if self._channel:
-                    await self._channel.close()
-                self._channel = grpc.aio.insecure_channel(self.tts_address)
-
-                # Wait for channel to be ready
-                await asyncio.wait_for(
-                    self._channel.channel_ready(),
-                    timeout=10.0,
-                )
-                # Success - exit retry loop
-                break
-
-            except asyncio.TimeoutError as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning(
-                        f"TTS connection attempt {attempt + 1}/{max_retries} timed out. "
-                        f"Retrying in {delay:.1f}s..."
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    raise ConnectionError(
-                        f"Timeout connecting to TTS service at {self.tts_address} "
-                        f"after {max_retries} attempts"
-                    )
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning(
-                        f"TTS connection attempt {attempt + 1}/{max_retries} failed: {e}. "
-                        f"Retrying in {delay:.1f}s..."
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    raise ConnectionError(
-                        f"Failed to connect to TTS service at {self.tts_address}: {last_error}"
-                    )
+        if self._channel:
+            await self._channel.close()
+            self._channel = None
+        self._channel = await open_ready_channel("TTS", self.tts_address, wait_seconds)
 
         # Import and create stub dynamically
         try:
