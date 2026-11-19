@@ -535,7 +535,7 @@ function SortableExpertCard({
             : isDark ? 'border-zinc-700/60 bg-zinc-800/50' : 'border-neutral-200/60 bg-white'
         }`}
       >
-        <div className="flex items-center gap-2 px-3 py-2">
+        <div className="relative coarse:z-10 flex items-center gap-2 px-3 py-2">
           {/* Drag handle */}
           <button
             {...attributes}
