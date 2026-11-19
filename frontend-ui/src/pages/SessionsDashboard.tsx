@@ -706,7 +706,7 @@ export default function SessionsDashboard() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 coarse:gap-3">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()

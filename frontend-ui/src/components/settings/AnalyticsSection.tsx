@@ -175,7 +175,7 @@ export default function AnalyticsSection() {
             <button
               key={d}
               onClick={() => setDays(d)}
-              className={`px-3 py-2 transition-colors ${
+              className={`px-3 coarse:px-4 py-2 coarse:py-3 transition-colors ${
                 days === d
                   ? isDark ? 'bg-purple-600 text-white' : 'bg-neutral-900 text-white'
                   : isDark ? 'text-content-inverse-secondary hover:text-content-inverse' : 'text-content-secondary hover:text-content'
