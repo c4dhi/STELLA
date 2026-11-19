@@ -53,6 +53,8 @@ The built-in `capabilities` expert (priority 80, below medical and legal) checks
 
 For the last two, its recommendation tells the reply to say briefly that she can't do that, name one or two things from the list, and go back to the plan or the conversation. It only flags. What keeps her safe from injection is still that her role is fixed and that she can only call the tools on her list. `agents/stella-v2-agent/tests/capabilities_eval.py` is a short live eval with hand-written cases.
 
+It is on by default. To switch it off for a deployment, set `experts.capabilities.enabled: false`. A configuration that pins the prompt compiler below 1.2.0 has no `{{capabilities}}`, so the agent switches the expert off for that session rather than have it judge against nothing.
+
 **When to customize**: Add custom experts for domain-specific analysis (e.g., a "compliance" expert for regulated industries). Reorder expert priority to change which expert "wins" in arbitration conflicts. Wire each expert's verdicts to deterministic responses in the [Expert Module](#expert-module--verdict-responses).
 
 ### Arbitration

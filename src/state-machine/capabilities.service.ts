@@ -140,7 +140,8 @@ export class CapabilitiesService implements CapabilitiesProvider {
       deployedByUserId: instance.deployedByUserId,
       bindings: readBindings(instance.connectorBindings),
     });
-    return bound.map((c) => ({
+    // Only a connector whose last check worked is something the agent can still do.
+    return bound.filter((c) => c.status === 'ok').map((c) => ({
       handle: c.handle,
       name: c.name,
       tools: c.tools.map((t) => ({ name: t.name, description: t.description })),
