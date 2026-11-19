@@ -68,6 +68,7 @@ describe('agent requirements', () => {
       configurator: null,
       env: { required: [], optional: [] },
       connectors: [],
+      connectorToolModes: [],
       configSchema: null,
       defaultConfig: {},
       sdkMinVersion: null,
@@ -77,6 +78,19 @@ describe('agent requirements', () => {
       cpu: { request: '250m', limit: '250m' },
       gpu: false,
     })
+  })
+
+  it('takes the modes in which the agent calls connector tools (#992)', () => {
+    const companion = { capabilities: ['plans', 'companion'] }
+    const r = resolveAgentRequirements(
+      manifest({ ...companion, features: { plans: { modes: ['plan', 'companion'] }, connectorTools: { modes: ['companion'] } } }),
+    )
+    expect(r.connectorToolModes).toEqual(['companion'])
+
+    const refused = parseAgentManifest({ ...base, features: { connectorTools: { modes: ['companion'] } } })
+    expect(refused.errors.join('\n')).toContain('features.connectorTools.modes includes "companion" only when the agent runs as a companion')
+    expect(parseAgentManifest({ ...base, features: { connectorTools: { modes: [] } } }).manifest).toBeFalsy()
+    expect(resolveAgentRequirements(manifest({ features: { connectorTools: { modes: ['plan'] } } })).connectorToolModes).toEqual(['plan'])
   })
 
   it('takes requests and limits from the manifest, lowering a default request to a smaller limit', () => {

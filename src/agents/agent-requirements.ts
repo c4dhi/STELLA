@@ -29,6 +29,8 @@ export interface AgentRequirements {
   configurator: { required: boolean } | null
   env: { required: string[]; optional: ManifestOptionalEnvVar[] }
   connectors: ManifestConnectorSlot[]
+  /** The plan modes in which the agent calls connector tools mid-conversation (empty: none). */
+  connectorToolModes: PlanMode[]
   /** What the user's screen and the agent may send each other (the client channel). */
   client: ManifestClientChannel
   /** The settings a user may give the agent (JSON Schema), or null for none. */
@@ -51,6 +53,7 @@ export function resolveAgentRequirements(manifest: AgentManifest): AgentRequirem
     configurator: features.configurator ? { required: features.configurator.required } : null,
     env: { required: [...manifest.env.required], optional: manifest.env.optional.map((v) => ({ ...v })) },
     connectors: manifest.connectors.map((slot) => ({ ...slot })),
+    connectorToolModes: [...(features.connectorTools?.modes ?? [])],
     client: structuredClone(manifest.client),
     configSchema: manifest.configSchema ? structuredClone(manifest.configSchema) : null,
     defaultConfig: structuredClone((manifest.defaultConfig as Record<string, unknown>) ?? {}),
