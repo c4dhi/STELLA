@@ -13,7 +13,7 @@ from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.prompts.response_prompt import build_response_system_prompt
 
-from test_companion_turns import FakeStateMachine, Session, _companion_in_activity
+from tests.test_companion_turns import FakeStateMachine, Session, _companion_in_activity
 
 EXPERT_JSON = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "experts", "capabilities.json")
 
