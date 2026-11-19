@@ -30,13 +30,15 @@ from stella_jev_agent.next_step import (
 from stella_jev_agent.scope import Scope, scoped
 from stella_v2_agent.companion import commands_from
 from stella_jev_agent.questions import (
-    ACTIVITY_INTENT, COMMON_SENSE, DOESNT_FIT, FITS, HAS_ANSWER, LEGAL, MEDICAL, PROBING,
-    RECOGNISER_ARTIFACT, RECOMMENDATIONS, SLIGHT_DOUBT, TIMEKEEPER, not_believable, settle_safety, turn_state,
+    ACTIVITY_INTENT, CAPABILITIES, COMMON_SENSE, DOESNT_FIT, FITS, HAS_ANSWER, LEGAL, MEDICAL, PROBING,
+    RECOGNISER_ARTIFACT, RECOMMENDATIONS, SLIGHT_DOUBT, TIMEKEEPER, capability_recommendation, not_believable,
+    settle_safety, turn_state,
 )
 
 logger = logging.getLogger(__name__)
 
 COMMON = "common_sense"
+CAPABILITY = "capabilities"
 # These verdicts speak a fixed template instead of the reply, so nothing could ask back.
 OVERRIDING_EXPERTS = {"medical", "legal"}
 # Extraction is where V2 skips a stalled optional task, so it must run on a stalled plan.
@@ -55,6 +57,9 @@ JEV_EXPERTS = {
     "legal": LEGAL,
     "probing": PROBING,
     "timekeeper": TIMEKEEPER,
+    # One more question in the same call (#992): bundling it cost nothing in accuracy
+    # or latency (64 cases, 2026-11-19).
+    CAPABILITY: CAPABILITIES,
 }
 # A language-model expert is skipped when Jev says it has nothing to do.
 GATES = {EXTRACTION: ("has_answer", HAS_ANSWER, "no"), ROUTER: ("activity_intent", ACTIVITY_INTENT, "none")}
@@ -170,6 +175,10 @@ class JevExpertPool(ExpertPool):
         sm_context: Dict[str, Any],
     ) -> List[ExpertVerdict]:
         questions = {name: JEV_EXPERTS[name] for name in expert_names if name in JEV_EXPERTS}
+        capabilities = sm_context.get("capabilities")
+        if not isinstance(capabilities, dict):
+            # Without STELLA's list there is nothing to check a request against.
+            questions.pop(CAPABILITY, None)
         if COMMON in questions:
             questions["recogniser_artifact"] = RECOGNISER_ARTIFACT
         for name, (key, question, _) in GATES.items():
@@ -193,7 +202,10 @@ class JevExpertPool(ExpertPool):
             questions[NEXT_STEP] = branch_question(branches)
 
         limit = max(self._limit(COMMON), 1)
-        state = turn_state(user_input, conversation_history, current_task(sm_context), limit, self.expert_context)
+        state = turn_state(
+            user_input, conversation_history, current_task(sm_context), limit, self.expert_context,
+            capabilities if isinstance(capabilities, dict) else None,
+        )
         started = time.monotonic()
         try:
             result = await self._jev.ask(state, questions)
@@ -212,7 +224,7 @@ class JevExpertPool(ExpertPool):
         self.last_pick = read_pick(answer, tasks, fixes, self.forecast_threshold, result.answers)
         also = read_also(result.answers, tasks, fixes, self.also_threshold, self.last_pick)
         self.last_picks = ([self.last_pick] if self.last_pick else []) + also
-        verdicts = self._verdicts(expert_names, result)
+        verdicts = self._verdicts(expert_names, result, capabilities)
         common = next((v for v in verdicts if v.expert_name == COMMON), None)
         wanted = bool(common and common.verdict == DOESNT_FIT)
         asking = self._ask_back.decide(wanted and not overridden(verdicts))
@@ -344,7 +356,9 @@ class JevExpertPool(ExpertPool):
         config = self._registry.get(name)
         return config.history_limit if config and config.history_limit > 0 else 12
 
-    def _verdicts(self, expert_names: List[str], result: Any) -> List[ExpertVerdict]:
+    def _verdicts(
+        self, expert_names: List[str], result: Any, capabilities: Optional[Dict[str, Any]] = None,
+    ) -> List[ExpertVerdict]:
         verdicts = []
         for name in expert_names:
             if name not in JEV_EXPERTS or name not in result.answers:
@@ -375,7 +389,10 @@ class JevExpertPool(ExpertPool):
                 expert_name=name,
                 verdict=choice,
                 confidence=float(answer.probabilities.get(choice, max(answer.probabilities.values()))),
-                recommendation=RECOMMENDATIONS.get(name, {}).get(choice, ""),
+                recommendation=(
+                    capability_recommendation(choice, capabilities) if name == CAPABILITY
+                    else RECOMMENDATIONS.get(name, {}).get(choice, "")
+                ),
                 priority=config.priority if config else 0,
                 latency_ms=result.latency_ms,
                 raw_output=raw,
