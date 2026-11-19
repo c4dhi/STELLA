@@ -79,7 +79,7 @@ export default function HistoricalUsageCharts({
             <motion.button
               key={value}
               onClick={() => handleRangeChange(value)}
-              className={`px-3 py-1.5 text-caption font-medium rounded-md transition-colors ${
+              className={`px-3 coarse:px-4 py-1.5 text-caption font-medium rounded-md transition-colors ${
                 selectedRange === value
                   ? isDark
                     ? 'bg-primary text-white'

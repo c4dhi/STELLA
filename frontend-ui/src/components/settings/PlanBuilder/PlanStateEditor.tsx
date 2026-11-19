@@ -420,11 +420,11 @@ export default function PlanStateEditor({
                     </div>
 
                     {/* Reorder/Delete */}
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1 coarse:gap-3" onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={() => handleMoveTask(index, 'up')}
                         disabled={index === 0}
-                        className={`p-1 rounded ${
+                        className={`p-1 coarse:p-2 rounded ${
                           index === 0
                             ? 'opacity-30 cursor-not-allowed'
                             : isDark
@@ -439,7 +439,7 @@ export default function PlanStateEditor({
                       <button
                         onClick={() => handleMoveTask(index, 'down')}
                         disabled={index === state.tasks.length - 1}
-                        className={`p-1 rounded ${
+                        className={`p-1 coarse:p-2 rounded ${
                           index === state.tasks.length - 1
                             ? 'opacity-30 cursor-not-allowed'
                             : isDark
