@@ -36,6 +36,7 @@ from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.tools import ToolRegistry
+from stella_v2_agent.capabilities import parse_extras, with_extras
 from stella_v2_agent.companion_tools import create_companion_tools
 
 from stella_agent_sdk.llm import LLMService
@@ -115,7 +116,7 @@ _ACTIVITY_START_MAX_PAGES = 5
 # purpose (not the SDK's latest) so an SDK upgrade can't silently change how this
 # agent's expert prompts compile. Bump deliberately when adopting a new compiler
 # version. Can be overridden per deployment via config["compiler_version"].
-PROMPT_COMPILER_VERSION = "1.1.0"
+PROMPT_COMPILER_VERSION = "1.2.0"  # 1.2.0: {{capabilities}} (#992)
 
 # Stands in for the user's message on a turn she opens herself after being
 # woken: the reply model needs something to answer, and nothing was said.
@@ -177,6 +178,8 @@ class StellaV2Agent(BaseAgent):
         # version this agent was authored against; overridable per deployment via
         # config["compiler_version"] in on_session_start.
         self._compiler_version: str = PROMPT_COMPILER_VERSION
+        # Entries a configuration adds to what she can do, per mode (#992).
+        self._capability_extras: Dict[str, List[str]] = {}
 
         # Initialize core services
         self.llm_service = LLMService(config_path=llm_config_path)
@@ -1297,6 +1300,7 @@ class StellaV2Agent(BaseAgent):
                 k: v for k, v in expert_pool_config.items()
                 if k in ("experts", "custom_experts")
             }
+            self._capability_extras = parse_extras(expert_pool_config.get("capability_extras"))
             if experts_config:
                 self.expert_registry.apply_config(experts_config)
                 # The expert pool reads the registry by reference, so updated
@@ -1689,7 +1693,14 @@ class StellaV2Agent(BaseAgent):
             context = await self._fetch_sm_context() or {}
             context["state_just_changed"] = False
         else:
+            # Just left an activity: what she can do changed with it.
             context = {}
+            if self.sm_client:
+                capabilities = with_extras(
+                    await self.sm_client.get_capabilities(), getattr(self, "_capability_extras", {})
+                )
+                if capabilities is not None:
+                    context["capabilities"] = capabilities
         for key in ("language", "language_pinned", "persona"):
             if key in turn_start:
                 context[key] = turn_start[key]
@@ -2077,6 +2088,25 @@ class StellaV2Agent(BaseAgent):
         )
 
     async def _fetch_sm_context(self) -> Dict[str, Any]:
+        """The plan context (see _fetch_plan_context) plus what she can do (#992).
+
+        ``capabilities`` arrives with the same GetFullState call, also when no
+        plan is loaded (a companion between activities), so it costs no extra
+        round trip. Left out when STELLA sent none: she claims nothing then.
+        """
+        context = await self._fetch_plan_context()
+        capabilities = self._turn_capabilities()
+        if capabilities is not None:
+            context = {**context, "capabilities": capabilities}
+        return context
+
+    def _turn_capabilities(self) -> Optional[Dict[str, Any]]:
+        """STELLA's latest list for this agent, with the configuration's extras."""
+        if not self.sm_client:
+            return None
+        return with_extras(getattr(self.sm_client, "capabilities", None), getattr(self, "_capability_extras", {}))
+
+    async def _fetch_plan_context(self) -> Dict[str, Any]:
         """Fetch state from gRPC backend and build sm_context for the pipeline.
 
         Makes parallel gRPC calls, then assembles the dict structure that the
@@ -2088,7 +2118,7 @@ class StellaV2Agent(BaseAgent):
 
         full_state, current_state, pending_tasks, pending_deliverables, collected = (
             await asyncio.gather(
-                self.sm_client.get_full_state(),
+                self.sm_client.get_full_state(include_capabilities=True),
                 self.sm_client.get_current_state(),
                 self.sm_client.get_pending_tasks(),
                 self.sm_client.get_pending_deliverables(),

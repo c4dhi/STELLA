@@ -7,7 +7,7 @@ that is injected into the Response Generator's system prompt.
 
 Conflict resolution rules:
 - noise_detection "unclear" → short-circuit: ask user to repeat (highest priority override)
-- medical/legal > task_extraction > probing > timekeeper
+- medical/legal > capabilities > task_extraction > probing > timekeeper
 - If two experts contradict, higher priority wins
 """
 
@@ -32,6 +32,7 @@ _DEFAULT_TONE_MAP: Dict[str, str] = {
     "task_extraction": "friendly",
     "probing": "curious",
     "timekeeper": "encouraging",
+    "capabilities": "friendly",
 }
 
 # Default verdicts that indicate the expert flagged something noteworthy
@@ -42,6 +43,8 @@ _DEFAULT_FLAGGING_VERDICTS: Dict[str, set] = {
     "task_extraction": {"tool_calls_executed"},
     "probing": {"needs_clarification", "gentle_redirect"},
     "timekeeper": {"slowing", "stuck", "force_advance"},
+    # Its default "within" is not a flag (#992).
+    "capabilities": {"cannot_do", "off_role"},
 }
 
 _DEFAULT_GATE_FAILURE_MESSAGE = "Sorry, I didn't quite catch that. Could you say it again?"
@@ -60,7 +63,7 @@ class Arbitration:
     """Deterministic arbitration engine: resolves expert conflicts without an LLM.
 
     Priority ordering (higher priority number = higher importance):
-    noise_detection (100) > medical (95) > legal (90) > task_extraction (70) > probing (60) > timekeeper (50)
+    noise_detection (100) > medical (95) > legal (90) > capabilities (80) > task_extraction (70) > probing (60) > timekeeper (50)
     """
 
     def __init__(self, compiler_version: str = "1.0.0"):
