@@ -453,7 +453,7 @@ export default function PlanStateEditor({
                       </button>
                       <button
                         onClick={() => handleDeleteTask(index)}
-                        className={`p-1 rounded ${
+                        className={`p-1 coarse:p-2 rounded ${
                           isDark
                             ? 'text-red-400 hover:bg-red-500/10'
                             : 'text-red-600 hover:bg-red-50'

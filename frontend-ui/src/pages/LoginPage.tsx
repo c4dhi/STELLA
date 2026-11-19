@@ -154,7 +154,7 @@ export default function LoginPage() {
                 {!isSignup && (
                   <button
                     type="button"
-                    className="text-xs text-content-tertiary dark:text-content-inverse-tertiary hover:text-content dark:hover:text-content-inverse transition-colors"
+                    className="coarse:z-10 text-xs text-content-tertiary dark:text-content-inverse-tertiary hover:text-content dark:hover:text-content-inverse transition-colors"
                   >
                     Forgot?
                   </button>
