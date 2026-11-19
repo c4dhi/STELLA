@@ -23,6 +23,7 @@ from stella_agent_sdk.prompts.base import PromptCompiler
 from stella_agent_sdk.prompts.placeholder_compiler import (
     PlaceholderPromptCompiler,
     PersonaAwarePlaceholderCompiler,
+    CapabilityAwarePlaceholderCompiler,
 )
 
 # version string -> compiler class
@@ -115,3 +116,4 @@ def compile(
 # Register the built-in compiler version(s) shipped with the SDK.
 register_compiler(PlaceholderPromptCompiler)
 register_compiler(PersonaAwarePlaceholderCompiler)
+register_compiler(CapabilityAwarePlaceholderCompiler)
