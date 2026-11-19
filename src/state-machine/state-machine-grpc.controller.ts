@@ -1,6 +1,11 @@
-import { Controller, Logger } from '@nestjs/common';
+import { Controller, Inject, Logger } from '@nestjs/common';
 import { GrpcMethod } from '@nestjs/microservices';
 import { StateMachineService, END_STATE_ID } from './state-machine.service.js';
+import {
+  CAPABILITIES_PROVIDER,
+  type CapabilitiesProvider,
+  type SessionCapabilities,
+} from './capabilities.js';
 
 /**
  * StateMachineGrpcController - gRPC endpoints for state machine operations.
@@ -12,7 +17,11 @@ import { StateMachineService, END_STATE_ID } from './state-machine.service.js';
 export class StateMachineGrpcController {
   private readonly logger = new Logger(StateMachineGrpcController.name);
 
-  constructor(private readonly stateMachineService: StateMachineService) {}
+  constructor(
+    private readonly stateMachineService: StateMachineService,
+    @Inject(CAPABILITIES_PROVIDER)
+    private readonly capabilitiesService: CapabilitiesProvider,
+  ) {}
 
   /**
    * Initialize state machine for a session
@@ -512,6 +521,8 @@ export class StateMachineGrpcController {
   @GrpcMethod('StateMachineService', 'GetFullState')
   async getFullState(request: {
     sessionId: string;
+    includeCapabilities?: boolean;
+    agentId?: string;
   }): Promise<{
     success: boolean;
     error?: string;
@@ -520,6 +531,7 @@ export class StateMachineGrpcController {
     currentStateId?: string;
     progress?: number;
     totalTurns?: number;
+    capabilities?: SessionCapabilities;
     turnsWithoutProgress?: number;
     states?: Array<{
       id: string;
@@ -550,12 +562,27 @@ export class StateMachineGrpcController {
     this.logger.debug(`GetFullState called for session: ${request.sessionId}`);
 
     try {
-      const fullState = await this.stateMachineService.getFullState(request.sessionId);
+      // Asked for by the per-turn context fetch, so the agent gets what it can
+      // do without another round trip (#992). Present even when there is no
+      // plan: that is a companion between activities, and it still has a list.
+      const [fullState, capabilities] = await Promise.all([
+        this.stateMachineService.getFullState(request.sessionId),
+        request.includeCapabilities
+          ? this.capabilitiesService
+              .getCapabilities(request.sessionId, request.agentId || undefined)
+              .catch((error: Error) => {
+                // The state matters more than the list: never fail the turn over it.
+                this.logger.warn(`Capabilities left out of GetFullState: ${error.message}`);
+                return undefined;
+              })
+          : Promise.resolve(undefined),
+      ]);
 
       if (!fullState) {
         return {
           success: false,
           error: 'State machine not initialized for this session',
+          capabilities,
         };
       }
 
@@ -607,12 +634,34 @@ export class StateMachineGrpcController {
         turnsWithoutProgress: fullState.turnsWithoutProgress,
         states,
         collectedDeliverables,
+        capabilities,
       };
     } catch (error) {
       return {
         success: false,
         error: error.message,
       };
+    }
+  }
+
+  /**
+   * What the agent can do for the person in this session right now (#992).
+   * The same list comes back from GetFullState with include_capabilities.
+   */
+  @GrpcMethod('StateMachineService', 'GetCapabilities')
+  async getCapabilities(request: {
+    sessionId: string;
+    agentId?: string;
+  }): Promise<{ success: boolean; error?: string; capabilities?: SessionCapabilities }> {
+    try {
+      const capabilities = await this.capabilitiesService.getCapabilities(
+        request.sessionId,
+        request.agentId || undefined,
+      );
+      return { success: true, capabilities };
+    } catch (error) {
+      this.logger.error(`GetCapabilities error: ${error.message}`);
+      return { success: false, error: error.message };
     }
   }
 }

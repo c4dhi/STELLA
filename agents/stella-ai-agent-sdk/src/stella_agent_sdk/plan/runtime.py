@@ -48,8 +48,10 @@ class PlanRuntime:
         address: Optional[str] = None,
         *,
         client: Optional["StateMachineClient"] = None,
+        agent_id: str = "",
     ) -> None:
         self._session_id = session_id
+        self._agent_id = agent_id
         explicit = address or state_machine_address_from_env()
         self._configured = bool(explicit) or client is not None
         self._address = explicit or DEFAULT_STATE_MACHINE_ADDRESS
@@ -89,7 +91,9 @@ class PlanRuntime:
         if self._client is None:
             from stella_agent_sdk.services.state_machine_client import StateMachineClient
 
-            self._client = StateMachineClient(session_id=self._session_id, address=self._address)
+            self._client = StateMachineClient(
+                session_id=self._session_id, address=self._address, agent_id=self._agent_id
+            )
         return self._client
 
     @property

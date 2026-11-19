@@ -105,6 +105,17 @@ const featuresSchema = z
       .union([z.boolean(), z.object({ required: z.boolean().default(false) }).strict()])
       .transform((value) => (value === true ? { required: false } : value || undefined))
       .optional(),
+    /**
+     * The plan modes in which the agent calls its connectors' tools during the
+     * conversation. Only then are those tools part of what the agent tells the
+     * person it can do (GetCapabilities, #992). Left out: in no mode.
+     */
+    connectorTools: z
+      .object({
+        modes: z.array(z.enum(PLAN_MODES)).min(1),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
 
@@ -547,6 +558,14 @@ export const agentManifestSchema = z
         code: 'custom',
         path: ['features', 'plans', 'modes'],
         message: 'features.plans.modes includes "companion" exactly when capabilities includes "companion"',
+      })
+    }
+    // A deployment without companion mode runs in plan mode, with or without a plan.
+    if (manifest.features.connectorTools?.modes.includes('companion') && !companion) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['features', 'connectorTools', 'modes'],
+        message: 'features.connectorTools.modes includes "companion" only when the agent runs as a companion',
       })
     }
 
