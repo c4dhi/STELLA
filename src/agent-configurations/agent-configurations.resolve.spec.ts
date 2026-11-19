@@ -10,6 +10,7 @@ type ConfigRow = {
   configuration: Record<string, unknown>;
   compatibility: 'CURRENT' | 'COMPATIBLE' | 'OUTDATED';
   compatibilityNote: string | null;
+  minCompilerVersion?: string | null;
   agentType?: unknown;
 };
 
@@ -92,5 +93,20 @@ describe('AgentConfigurationsService.resolveForDeploy', () => {
       llm: { model: 'gpt-4o-mini', temperature: 0.7 },
       nodes: { planner: { x: 1 } },
     });
+  });
+
+  it('passes the compiler version the configuration was authored against', async () => {
+    const svc = createService({ ...base, minCompilerVersion: '1.1.0' });
+    const effective = await svc.resolveForDeploy('cfg-1', 'user-1', 'type-A', {
+      ...agentTypeRecord,
+      compilerVersion: '1.2.0',
+    });
+    expect(effective.authored_compiler_version).toBe('1.1.0');
+  });
+
+  it('passes none when the configuration has no compiler floor', async () => {
+    const svc = createService({ ...base, minCompilerVersion: null });
+    const effective = await svc.resolveForDeploy('cfg-1', 'user-1', 'type-A', agentTypeRecord);
+    expect(effective).not.toHaveProperty('authored_compiler_version');
   });
 });

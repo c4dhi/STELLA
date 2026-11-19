@@ -160,41 +160,82 @@ def _agent_with(compiler_version):
 
     agent = StellaV2Agent.__new__(StellaV2Agent)
     agent.expert_registry = ExpertRegistry()
+    agent._shipped_enabled = {n: e.enabled for n, e in agent.expert_registry.as_map().items()}
     agent._compiler_version = compiler_version
     return agent
 
 
+def _saved(authored=None, enabled=None):
+    """A pipeline config as resolveForDeploy hands it over."""
+    pipeline = {"nodes": {}}
+    if enabled is not None:
+        pipeline["nodes"]["expert_pool"] = {"experts": {"capabilities": {"enabled": enabled}}}
+    if authored is not None:
+        pipeline["authored_compiler_version"] = authored
+    return pipeline
+
+
+def _fit(agent, pipeline):
+    pool = pipeline["nodes"].get("expert_pool")
+    if pool:
+        agent.expert_registry.apply_config(pool)
+    agent._fit_experts_to_configuration(pipeline)
+    return agent.expert_registry.get("capabilities").enabled
+
+
+def test_a_new_configuration_gets_the_expert():
+    assert _fit(_agent_with("1.2.0"), _saved(authored="1.2.0")) is True
+
+
+def test_a_configuration_saved_before_the_expert_existed_runs_without_it():
+    # Felix (#191): existing saved configurations keep running as they were.
+    assert _fit(_agent_with("1.2.0"), _saved(authored="1.1.0")) is False
+    assert "medical" in [e.name for e in _agent_with("1.2.0").expert_registry.get_enabled()]
+
+
+def test_without_an_authored_version_it_counts_as_saved_before():
+    # Inline pipeline configs and rows with no compiler floor carry none.
+    assert _fit(_agent_with("1.2.0"), _saved()) is False
+    assert _fit(_agent_with("1.2.0"), _saved(authored="garbage")) is False
+
+
+def test_an_old_configuration_can_switch_it_on():
+    assert _fit(_agent_with("1.2.0"), _saved(authored="1.1.0", enabled=True)) is True
+
+
+def test_a_new_configuration_can_switch_it_off():
+    assert _fit(_agent_with("1.2.0"), _saved(authored="1.2.0", enabled=False)) is False
+
+
 def test_a_compiler_without_capabilities_switches_the_expert_off():
     # A configuration pinned to 1.1.0 would send the expert the literal
-    # {{capabilities}}; it gets no list to judge against, so it does not run.
-    agent = _agent_with("1.1.0")
-    agent._fit_experts_to_compiler()
-    assert agent.expert_registry.get("capabilities").enabled is False
-    assert "medical" in [e.name for e in agent.expert_registry.get_enabled()]
+    # {{capabilities}}; it gets no list to judge against, so it does not run,
+    # even when the configuration switched it on.
+    assert _fit(_agent_with("1.1.0"), _saved(authored="1.2.0")) is False
+    assert _fit(_agent_with("1.1.0"), _saved(authored="1.2.0", enabled=True)) is False
 
 
-def test_the_pinned_compiler_keeps_it_on():
+def test_an_unknown_compiler_does_not_decide_it():
+    assert _fit(_agent_with("0.1.0"), _saved(authored="1.2.0")) is True
+
+
+def test_nothing_carries_over_between_sessions_on_one_instance():
     agent = _agent_with("1.2.0")
-    agent._fit_experts_to_compiler()
-    assert agent.expert_registry.get("capabilities").enabled is True
+    assert _fit(agent, _saved(authored="1.1.0")) is False
+    assert _fit(agent, _saved(authored="1.2.0")) is True
+    assert _fit(agent, _saved(authored="1.2.0", enabled=False)) is False
+    assert _fit(agent, _saved(authored="1.3.0")) is True
 
 
-def test_a_later_session_on_the_new_compiler_gets_it_back():
-    agent = _agent_with("1.1.0")
-    agent._fit_experts_to_compiler()
-    agent._compiler_version = "1.2.0"
-    agent._fit_experts_to_compiler()
-    assert agent.expert_registry.get("capabilities").enabled is True
-
-
-def test_switched_off_by_configuration_stays_off():
+def test_an_expert_without_a_floor_is_not_touched():
     agent = _agent_with("1.2.0")
-    agent.expert_registry.get("capabilities").enabled = False
-    agent._fit_experts_to_compiler()
-    assert agent.expert_registry.get("capabilities").enabled is False
+    _fit(agent, _saved(authored="1.0.0"))
+    assert agent.expert_registry.get("medical").enabled is True
 
 
-def test_an_unknown_compiler_leaves_it_alone():
-    agent = _agent_with("0.1.0")
-    agent._fit_experts_to_compiler()
-    assert agent.expert_registry.get("capabilities").enabled is True
+def test_the_shipped_json_carries_the_floor():
+    import json
+    from pathlib import Path
+
+    raw = json.loads((Path(__file__).resolve().parents[1] / "config/experts/capabilities.json").read_text())
+    assert raw["enabled_from_compiler"] == "1.2.0"

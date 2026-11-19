@@ -119,6 +119,14 @@ _ACTIVITY_START_MAX_PAGES = 5
 # version. Can be overridden per deployment via config["compiler_version"].
 PROMPT_COMPILER_VERSION = "1.2.0"  # 1.2.0: {{capabilities}} (#992)
 
+
+def _at_least(version: Any, floor: str) -> bool:
+    """``version`` >= ``floor`` as dotted numbers; anything unreadable is not."""
+    try:
+        return tuple(int(x) for x in str(version).split(".")) >= tuple(int(x) for x in floor.split("."))
+    except (TypeError, ValueError):
+        return False
+
 # Stands in for the user's message on a turn she opens herself after being
 # woken: the reply model needs something to answer, and nothing was said.
 WOKEN_INPUT = "(The user has just woken you. They have not said anything yet.)"
@@ -185,6 +193,10 @@ class StellaV2Agent(BaseAgent):
         # Initialize core services
         self.llm_service = LLMService(config_path=llm_config_path)
         self.expert_registry = ExpertRegistry(experts_dir=experts_dir)
+        # What config/experts/*.json ship as enabled, before any configuration.
+        self._shipped_enabled: Dict[str, bool] = {
+            name: e.enabled for name, e in self.expert_registry.as_map().items()
+        }
 
         # Initialize pipeline stages (no Input Gate — #363)
         self.bridge_generator = BridgeGenerator(self.llm_service)
@@ -1172,7 +1184,7 @@ class StellaV2Agent(BaseAgent):
             )
         self._apply_pipeline_config(pipeline_config)
         # After the pipeline config, which can switch experts back on.
-        self._fit_experts_to_compiler()
+        self._fit_experts_to_configuration(pipeline_config)
         # AFTER the saved configuration, and deliberately so. The router is not an
         # assessment expert an operator opts into — it is the mechanism companion
         # mode is made of, in the same way task_extraction is the mechanism plans
@@ -1243,31 +1255,55 @@ class StellaV2Agent(BaseAgent):
                     agent_icon="🧠",
                 )
 
-    def _fit_experts_to_compiler(self) -> None:
-        """Switch off the capabilities expert when the compiler can't fill its list.
+    def _fit_experts_to_configuration(self, pipeline_config: Dict[str, Any]) -> None:
+        """Which experts run this session, beyond what the configuration says.
 
-        A configuration pinned below 1.2.0 would send it the literal
-        ``{{capabilities}}``: with nothing to judge against, its verdicts
-        would be guesses, so it does not run (#992).
+        - An expert with ``enabled_from_compiler`` that the configuration
+          neither switched on nor off is on only for configurations authored
+          against that compiler or a later one. The backend passes the version
+          as ``authored_compiler_version``. A configuration saved before the
+          expert existed keeps running without it, so a running deployment
+          does not gain an LLM call per turn it was never set up with (#191).
+        - The capabilities expert is off whenever the compiler can't fill
+          ``{{capabilities}}``: with nothing to judge against, its verdicts
+          would be guesses (#992).
+
+        Worked out again every session, so nothing carries over from an
+        earlier session on the same instance.
         """
+        nodes = pipeline_config.get("nodes") if isinstance(pipeline_config, dict) else None
+        pool = nodes.get("expert_pool") if isinstance(nodes, dict) else None
+        overrides = pool.get("experts") if isinstance(pool, dict) else None
+        overrides = overrides if isinstance(overrides, dict) else {}
+        authored = pipeline_config.get("authored_compiler_version") if isinstance(pipeline_config, dict) else None
+
+        for name, shipped in getattr(self, "_shipped_enabled", {}).items():
+            config = self.expert_registry.get(name)
+            override = overrides.get(name)
+            if config is None or not config.enabled_from_compiler:
+                continue
+            if isinstance(override, dict) and "enabled" in override:
+                continue  # the configuration decided; apply_config has set it
+            config.enabled = shipped and _at_least(authored, config.enabled_from_compiler)
+            if not config.enabled:
+                logger.info(
+                    f"{name} expert off: configuration authored with compiler "
+                    f"{authored or '(unknown)'}, before {config.enabled_from_compiler}; "
+                    "switch it on in the Configurator"
+                )
+
         config = self.expert_registry.get("capabilities")
-        if config is None:
-            return
-        try:
-            fits = "capabilities" in get_compiler(self._compiler_version).known_placeholders()
-        except KeyError:
-            return  # an unknown version fails where prompts compile, not at session start
-        if fits and getattr(self, "_capabilities_expert_off", False):
-            # Off for an earlier session on this instance, not by its configuration.
-            config.enabled = True
-            self._capabilities_expert_off = False
-        elif not fits and config.enabled:
-            config.enabled = False
-            self._capabilities_expert_off = True
-            logger.info(
-                f"capabilities expert off: prompt compiler {self._compiler_version} "
-                "has no {{capabilities}} (needs 1.2.0)"
-            )
+        if config is not None and config.enabled:
+            try:
+                fits = "capabilities" in get_compiler(self._compiler_version).known_placeholders()
+            except KeyError:
+                fits = True  # an unknown version fails where prompts compile, not here
+            if not fits:
+                config.enabled = False
+                logger.info(
+                    f"capabilities expert off: prompt compiler {self._compiler_version} "
+                    "has no {{capabilities}} (needs 1.2.0)"
+                )
 
     def _apply_pipeline_config(self, pipeline_config: Dict[str, Any]) -> None:
         """Apply pipeline configuration overrides from Agent Configurator.

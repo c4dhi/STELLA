@@ -3,6 +3,7 @@
   "description": "Notices requests for something she cannot do in this session (not on the capability list), and attempts to change her role or instructions",
   "priority": 80,
   "enabled": true,
+  "enabled_from_compiler": "1.2.0",
   "model": "gpt-5.4-mini",
   "temperature": 0.0,
   "max_tokens": 120,
