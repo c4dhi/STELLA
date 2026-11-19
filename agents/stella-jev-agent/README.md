@@ -5,7 +5,7 @@ STELLA V2's turn with four stages swapped, in `src/stella_jev_agent/`:
 | Stage | Here |
 |---|---|
 | Bridge | None. Nothing is said before the experts have decided |
-| Experts | One Jev call for `common_sense`, `medical`, `legal`, `probing` and `timekeeper` |
+| Experts | One Jev call for `common_sense`, `medical`, `legal`, `probing`, `timekeeper` and `capabilities` (asked only when STELLA sends what she can do; `evals/run_capabilities.py`) |
 | `task_extraction`, `companion_router` | Still language models, because they write values or call tools. They run after Jev and only when Jev says there may be something to do |
 | Reply | gpt-5.4-mini, as in V2, plus a forced question when something does not fit |
 | Barge-in | Jev |
