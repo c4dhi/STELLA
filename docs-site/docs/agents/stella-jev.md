@@ -29,7 +29,7 @@ If Jev can't be reached in time, the experts run on the language model with the 
 
 ## Settings
 
-Set in the [Pipeline Configurator](./stella-v2/pipeline-configurator.md), like V2's.
+Set in the [Pipeline Configurator](./stella-v2/pipeline-configurator.md): click the **Expert Pool** stage, and the settings are listed under the experts.
 
 | Node | Setting | Default | What it does |
 |---|---|---|---|

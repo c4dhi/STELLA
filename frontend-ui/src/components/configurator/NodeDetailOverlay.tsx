@@ -12,6 +12,9 @@ import type { PipelineNode as PipelineNodeType, AgentConfigurationPayload } from
 import type { ExpertDefinition, InputGateRule } from './useConfiguratorState'
 import { PromptComposer, type PromptBlock } from './PromptComposer'
 
+/** Expert Pool slots edited in the Expert Module sidebar, not in the overlay. */
+const EXPERT_LIST_SLOTS = new Set(['experts', 'custom_experts', 'always_run', 'background_experts'])
+
 // ---------------------------------------------------------------------------
 // Default prompt templates for pipeline nodes (mirrors Python agent defaults)
 // ---------------------------------------------------------------------------
@@ -211,8 +214,13 @@ interface NodeDetailOverlayProps {
 /** Collapsible grouped settings card for model/temp/tokens.
  *  Extracted to module level so React preserves its identity (and open state)
  *  across parent re-renders triggered by config edits. */
-function SettingsGrid({ children, isDark }: { children: React.ReactNode; isDark: boolean }) {
-  const [open, setOpen] = useState(false)
+function SettingsGrid({ children, isDark, title = 'Model Settings', defaultOpen = false }: {
+  children: React.ReactNode
+  isDark: boolean
+  title?: string
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
     <div className={`rounded-xl border ${
       isDark ? 'bg-zinc-800/30 border-zinc-700/40' : 'bg-neutral-50/50 border-neutral-200/40'
@@ -231,7 +239,7 @@ function SettingsGrid({ children, isDark }: { children: React.ReactNode; isDark:
           <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
         </svg>
         <span className={`flex-1 text-[11px] font-semibold tracking-wide uppercase ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
-          Model Settings
+          {title}
         </span>
         <svg
           width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
@@ -490,6 +498,13 @@ export default function NodeDetailOverlay({
         <p className={`text-[12px] font-light italic text-center py-2 ${isDark ? 'text-zinc-600' : 'text-neutral-400'}`}>
           Edit individual experts in the sidebar
         </p>
+
+        {/* The pool's own settings (thresholds, context, timeouts) — every
+            slot the manifest declares except the expert lists the sidebar edits. */}
+        {renderSlots(node.slots.filter((s) => s.type !== 'expert_list' && !EXPERT_LIST_SLOTS.has(s.id)), {
+          title: 'Pool Settings',
+          defaultOpen: true,
+        })}
       </div>
     )
   }
@@ -606,9 +621,11 @@ export default function NodeDetailOverlay({
   // placeholders), and number/select slots as a settings grid. This lets new
   // pipeline stages (e.g. barge_in) be fully configurable without a bespoke
   // renderer, instead of falling through to "No configuration available".
-  const renderGenericStage = () => {
-    const textSlots = node.slots.filter((s) => s.type === 'text')
-    const settingSlots = node.slots.filter((s) => s.type === 'number' || s.type === 'select')
+  const renderGenericStage = () => renderSlots(node.slots)
+
+  const renderSlots = (slots: PipelineNodeType['slots'], grid?: { title: string; defaultOpen: boolean }) => {
+    const textSlots = slots.filter((s) => s.type === 'text')
+    const settingSlots = slots.filter((s) => s.type === 'number' || s.type === 'select')
 
     const blocks: PromptBlock[] = textSlots.map((s) => {
       const v = getSlotValue(s.id)
@@ -622,15 +639,18 @@ export default function NodeDetailOverlay({
         defaultValue: typeof s.default === 'string' ? s.default : '',
         onChange: (val: string) => onUpdateNodeConfig(node.id, s.id, val),
         onReset: () => onUpdateNodeConfig(node.id, s.id, undefined),
-        rows: 18,
+        // A short text (a few sentences) needs a few rows, a prompt needs many.
+        rows: s.maxLength !== undefined && s.maxLength <= 2000 ? 5 : 18,
       }
     })
+
+    if (blocks.length === 0 && settingSlots.length === 0) return null
 
     return (
       <div className="space-y-6">
         {blocks.length > 0 && <PromptComposer blocks={blocks} isDark={isDark} />}
         {settingSlots.length > 0 && (
-          <SettingsGrid isDark={isDark}>
+          <SettingsGrid isDark={isDark} title={grid?.title} defaultOpen={grid?.defaultOpen}>
             {settingSlots.map((s) => (
               <Fragment key={s.id}>
                 {renderSlotField(
