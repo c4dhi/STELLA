@@ -381,6 +381,11 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             # The screens have been told ("failed"); the agent cannot work without speech.
             raise ConnectionError(speech["message"])
 
+        # What the participant said while speech was getting ready is not a
+        # turn: the card told them to wait. Drop it, or up to 30 s of it would
+        # reach STT the moment the pipeline starts and be answered.
+        room_manager.flush_audio_queue()
+
         # 5. Create AudioPipeline (orchestrates audio flow)
         # session_id was already set from SESSION_ID env var (or room_name as fallback)
         audio_pipeline = AudioPipeline(
