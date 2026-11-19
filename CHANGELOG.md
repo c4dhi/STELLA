@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The agent knows what it can do in the session** (#992). STELLA works out, every turn, what an agent can do for the person: follow the plan; inside an activity, follow it or leave it; as a companion, start one of the activities on offer or go to sleep. Connector tools are on the list only where the agent type declares it calls them (new manifest setting `features.connectorTools.modes`). Agents read it through the SDK's state machine client (`get_capabilities()`, or `get_full_state(include_capabilities=True)`). No agent uses it yet; STELLA V2 and Jev follow
+
 ### Upgrade notes
 
 - **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
