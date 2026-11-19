@@ -152,3 +152,49 @@ async def test_inside_an_activity_the_list_is_the_activity():
     caps = session.pool_inputs[-1]["sm_context"]["capabilities"]
     assert caps["mode"] == "activity"
     assert [c["id"] for c in caps["capabilities"]] == ["follow_plan", "leave_activity"]
+
+
+def _agent_with(compiler_version):
+    from stella_v2_agent.agent import StellaV2Agent
+    from stella_v2_agent.experts.registry import ExpertRegistry
+
+    agent = StellaV2Agent.__new__(StellaV2Agent)
+    agent.expert_registry = ExpertRegistry()
+    agent._compiler_version = compiler_version
+    return agent
+
+
+def test_a_compiler_without_capabilities_switches_the_expert_off():
+    # A configuration pinned to 1.1.0 would send the expert the literal
+    # {{capabilities}}; it gets no list to judge against, so it does not run.
+    agent = _agent_with("1.1.0")
+    agent._fit_experts_to_compiler()
+    assert agent.expert_registry.get("capabilities").enabled is False
+    assert "medical" in [e.name for e in agent.expert_registry.get_enabled()]
+
+
+def test_the_pinned_compiler_keeps_it_on():
+    agent = _agent_with("1.2.0")
+    agent._fit_experts_to_compiler()
+    assert agent.expert_registry.get("capabilities").enabled is True
+
+
+def test_a_later_session_on_the_new_compiler_gets_it_back():
+    agent = _agent_with("1.1.0")
+    agent._fit_experts_to_compiler()
+    agent._compiler_version = "1.2.0"
+    agent._fit_experts_to_compiler()
+    assert agent.expert_registry.get("capabilities").enabled is True
+
+
+def test_switched_off_by_configuration_stays_off():
+    agent = _agent_with("1.2.0")
+    agent.expert_registry.get("capabilities").enabled = False
+    agent._fit_experts_to_compiler()
+    assert agent.expert_registry.get("capabilities").enabled is False
+
+
+def test_an_unknown_compiler_leaves_it_alone():
+    agent = _agent_with("0.1.0")
+    agent._fit_experts_to_compiler()
+    assert agent.expert_registry.get("capabilities").enabled is True

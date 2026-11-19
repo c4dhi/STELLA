@@ -541,11 +541,13 @@ class StateMachineClient:
             response = await self._stub.GetCapabilities(request)
             if not response.success:
                 logger.warning(f"get_capabilities failed: {response.error}")
+                self._capabilities = None
                 return None
             self._capabilities = _capabilities_dict(response.capabilities)
             return self._capabilities
         except grpc.aio.AioRpcError as e:
             logger.error(f"gRPC error during get_capabilities: {e.code()} - {e.details()}")
+            self._capabilities = None
             return None
 
     async def get_full_state(self, include_capabilities: bool = False) -> Optional[Dict[str, Any]]:
@@ -571,8 +573,13 @@ class StateMachineClient:
             )
             response = await self._stub.GetFullState(request)
 
-            if include_capabilities and response.HasField("capabilities"):
-                self._capabilities = _capabilities_dict(response.capabilities)
+            if include_capabilities:
+                # No list this turn (the lookup failed) means none: the last one
+                # may be from another mode, so it is not kept.
+                self._capabilities = (
+                    _capabilities_dict(response.capabilities)
+                    if response.HasField("capabilities") else None
+                )
 
             if not response.success:
                 return None
@@ -645,12 +652,14 @@ class StateMachineClient:
                 "collected_deliverables": collected,
                 **(
                     {"capabilities": self._capabilities}
-                    if include_capabilities and response.HasField("capabilities")
+                    if include_capabilities and self._capabilities is not None
                     else {}
                 ),
             }
         except grpc.aio.AioRpcError as e:
             logger.error(f"gRPC error during get_full_state: {e.code()} - {e.details()}")
+            if include_capabilities:
+                self._capabilities = None
             return None
 
 

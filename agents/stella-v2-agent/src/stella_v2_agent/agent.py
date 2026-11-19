@@ -42,6 +42,7 @@ from stella_v2_agent.companion_tools import create_companion_tools
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
 from stella_agent_sdk.env import env_bool
+from stella_agent_sdk.prompts import get_compiler
 from stella_v2_agent.pipeline.bridge_generator import (
     BridgeGenerator,
     BRIDGE_MODE_BRIEF,
@@ -1155,6 +1156,7 @@ class StellaV2Agent(BaseAgent):
         self.expert_pool.set_compiler_version(self._compiler_version)
         # Arbitration resolves {{placeholders}} in verdict templates with the same version.
         self.arbitration.set_compiler_version(self._compiler_version)
+        self._fit_experts_to_compiler()
 
         # Apply LLM config overrides
         if "model" in config:
@@ -1239,6 +1241,32 @@ class StellaV2Agent(BaseAgent):
                     agent_name=self.agent_name,
                     agent_icon="🧠",
                 )
+
+    def _fit_experts_to_compiler(self) -> None:
+        """Switch off the capabilities expert when the compiler can't fill its list.
+
+        A configuration pinned below 1.2.0 would send it the literal
+        ``{{capabilities}}``: with nothing to judge against, its verdicts
+        would be guesses, so it does not run (#992).
+        """
+        config = self.expert_registry.get("capabilities")
+        if config is None:
+            return
+        try:
+            fits = "capabilities" in get_compiler(self._compiler_version).known_placeholders()
+        except KeyError:
+            return  # an unknown version fails where prompts compile, not at session start
+        if fits and getattr(self, "_capabilities_expert_off", False):
+            # Off for an earlier session on this instance, not by its configuration.
+            config.enabled = True
+            self._capabilities_expert_off = False
+        elif not fits and config.enabled:
+            config.enabled = False
+            self._capabilities_expert_off = True
+            logger.info(
+                f"capabilities expert off: prompt compiler {self._compiler_version} "
+                "has no {{capabilities}} (needs 1.2.0)"
+            )
 
     def _apply_pipeline_config(self, pipeline_config: Dict[str, Any]) -> None:
         """Apply pipeline configuration overrides from Agent Configurator.

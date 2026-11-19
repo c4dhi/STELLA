@@ -103,6 +103,13 @@ describe('CapabilitiesService', () => {
     })
   })
 
+  it('a connector that is not working adds no tools', async () => {
+    const broken = [{ handle: 'mail', name: 'Mail', status: 'error', tools: [{ name: 'send', description: 'Send' }] }]
+    const { service } = setup({ instance: companion({ modes: ['companion'] }), connectors: [...weather, ...broken] })
+    const result = await service.getCapabilities('sess')
+    expect(result.capabilities.map((c) => c.id)).toEqual(['activity.quiz', 'go_to_sleep', 'weather.forecast'])
+  })
+
   it('inside an activity: no connector lookup, even when declared for companion', async () => {
     const { service, listConnectors } = setup({
       state: { planData: plan, currentStateId: 's1' },
