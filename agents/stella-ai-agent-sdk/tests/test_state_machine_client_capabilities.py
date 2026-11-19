@@ -85,3 +85,62 @@ def test_full_state_without_the_flag_is_unchanged():
     assert "capabilities" not in state
     assert client.capabilities is None
     assert stub.requests[0].include_capabilities is False
+
+
+class FailingStub(FakeStub):
+    async def GetFullState(self, request):
+        self.requests.append(request)
+        raise _RpcError()
+
+    async def GetCapabilities(self, request):
+        raise _RpcError()
+
+
+class _RpcError(__import__("grpc").aio.AioRpcError):
+    def __init__(self):
+        import grpc
+        super().__init__(grpc.StatusCode.UNAVAILABLE, None, None, details="down")
+
+
+def _with_last_turns_list(stub):
+    client = _client(stub)
+    client._capabilities = EXPECTED
+    return client
+
+
+def test_a_turn_without_a_list_forgets_the_last_one():
+    # The server's lookup failed and was caught: the last turn's list may be from
+    # another mode, so the agent must claim nothing rather than act on it.
+    client = _with_last_turns_list(FakeStub(pb.GetFullStateResponse(success=True, plan_id="p", current_state_id="s")))
+
+    state = asyncio.run(client.get_full_state(include_capabilities=True))
+
+    assert client.capabilities is None
+    assert "capabilities" not in state
+
+
+def test_a_failed_call_forgets_the_last_list():
+    client = _with_last_turns_list(FailingStub(None))
+    assert asyncio.run(client.get_full_state(include_capabilities=True)) is None
+    assert client.capabilities is None
+
+    client = _with_last_turns_list(FailingStub(None))
+    assert asyncio.run(client.get_capabilities()) is None
+    assert client.capabilities is None
+
+
+def test_get_capabilities_failure_forgets_the_last_list():
+    class Refusing(FakeStub):
+        async def GetCapabilities(self, request):
+            return pb.GetCapabilitiesResponse(success=False, error="no session")
+
+    client = _with_last_turns_list(Refusing(None))
+    assert asyncio.run(client.get_capabilities()) is None
+    assert client.capabilities is None
+
+
+def test_without_the_flag_the_last_list_is_kept():
+    # Other callers (frontend updates) don't ask, and must not wipe the turn's list.
+    client = _with_last_turns_list(FakeStub(pb.GetFullStateResponse(success=True, plan_id="p", current_state_id="s")))
+    asyncio.run(client.get_full_state())
+    assert client.capabilities == EXPECTED
