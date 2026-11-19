@@ -68,16 +68,16 @@ export const RESEARCHER_COPY: Record<SttPhase, { chip: string; card: string; not
   warming: {
     chip: 'STT warming up',
     card: 'Getting ready to listen',
-    note: 'Speech recognition is getting ready after a quiet spell (usually up to 30 s). The participant sees "Getting ready to listen…".',
+    note: 'Speech is getting ready: after a quiet spell (usually up to 30 s), or while the speech models load after a restart (up to 10 min). The participant sees "Getting ready to listen…".',
   },
   slow: {
     chip: 'STT warming up',
     card: 'Getting ready to listen · slower than usual',
-    note: 'Taking longer than usual. The participant is asked to wait. If it does not finish, check the STT service logs.',
+    note: 'Taking longer than usual. The participant is asked to wait. If it does not finish, check the STT and TTS service logs.',
   },
   failed: {
     chip: 'STT not ready',
     card: "Can't hear the participant",
-    note: 'Speech recognition did not get ready. The participant cannot be heard and is asked to tell the study team. Restart the agent, or check the STT service.',
+    note: 'Speech did not get ready. The participant cannot be heard and is asked to tell the study team. Restart the agent, or check the STT and TTS services.',
   },
 }
