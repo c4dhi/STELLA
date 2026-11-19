@@ -322,31 +322,64 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             token=livekit_creds["token"],
         )
 
-        # 2. Connect to external STT service (gRPC)
-        stt_client = STTClient(stt_address)
-        await stt_client.connect()
-        logger.info(f"Connected to STT service at {stt_address}")
-
-        # 2b. Warm up STT model before user speaks (eliminates cold-start latency)
-        if os.environ.get("STT_WARMUP_ENABLED", "true").lower() != "false":
-            warmup_result = await stt_client.warmup(session_id=session_id)
-            if warmup_result["success"]:
-                logger.info(f"STT warmup completed in {warmup_result['warmup_time_ms']}ms ({warmup_result['provider']})")
-            else:
-                logger.warning(f"STT warmup failed: {warmup_result['message']}")
-
-        # 3. Connect to external TTS service (gRPC) - conditional on TTS_ENABLED
-        tts_enabled = os.environ.get("TTS_ENABLED", "true").lower() != "false"
-        if tts_enabled:
-            tts_client = TTSClient(tts_address)
-            await tts_client.connect()
-            logger.info(f"Connected to TTS service at {tts_address}")
-        else:
-            logger.info("TTS disabled (TTS_ENABLED=false) - skipping TTS connection")
-
-        # 4. Connect to LiveKit room (with agent display name)
+        # 2. Join the room first (#151), so the participant sees the agent
+        # and the screens can be told that speech is still getting ready.
         await room_manager.connect(room_name, identity, name=agent_name)
         logger.info(f"Connected to LiveKit room: {room_name} as {agent_name}")
+
+        # Tell the screens when speech is still getting ready: a cold model
+        # load at start (#151) or STT warming up after a quiet spell (#564).
+        # The language is the session's locked one, if any, so the
+        # participant card is worded in it; otherwise the browser decides.
+        def _session_language() -> Optional[str]:
+            resolver = getattr(agent, "language_resolver", None)
+            return getattr(resolver, "locked", None)
+
+        stt_readiness = SttReadiness(room_manager.publish_data, language=_session_language)
+
+        # Someone who joins while the agent still waits is told so too. The
+        # full join handler (10c) replaces this once the pipeline exists.
+        def _tell_joiner_while_waiting(participant_identity: str) -> None:
+            if stt_readiness.needs_resend():
+                asyncio.ensure_future(room_manager.publish_data(stt_readiness.payload()))
+
+        room_manager.on_participant_joined(_tell_joiner_while_waiting)
+
+        # 3. Connect to the external STT and TTS services (gRPC). While they
+        # are still loading their models this waits up to their startup
+        # budget (STELLA_SPEECH_WAIT_SECONDS, 720 s) instead of giving up
+        # after ~80 s: agent pods are never restarted (#151).
+        tts_enabled = os.environ.get("TTS_ENABLED", "true").lower() != "false"
+
+        async def _connect_speech() -> dict:
+            nonlocal stt_client, tts_client
+            try:
+                stt_client = STTClient(stt_address)
+                await stt_client.connect()
+                logger.info(f"Connected to STT service at {stt_address}")
+
+                # Warm up STT model before user speaks (eliminates cold-start latency)
+                if os.environ.get("STT_WARMUP_ENABLED", "true").lower() != "false":
+                    warmup_result = await stt_client.warmup(session_id=session_id)
+                    if warmup_result["success"]:
+                        logger.info(f"STT warmup completed in {warmup_result['warmup_time_ms']}ms ({warmup_result['provider']})")
+                    else:
+                        logger.warning(f"STT warmup failed: {warmup_result['message']}")
+
+                if tts_enabled:
+                    tts_client = TTSClient(tts_address)
+                    await tts_client.connect()
+                    logger.info(f"Connected to TTS service at {tts_address}")
+                else:
+                    logger.info("TTS disabled (TTS_ENABLED=false) - skipping TTS connection")
+            except ConnectionError as e:
+                return {"success": False, "message": str(e)}
+            return {"success": True}
+
+        speech = await stt_readiness.track(_connect_speech())
+        if not speech["success"]:
+            # The screens have been told ("failed"); the agent cannot work without speech.
+            raise ConnectionError(speech["message"])
 
         # 5. Create AudioPipeline (orchestrates audio flow)
         # session_id was already set from SESSION_ID env var (or room_name as fallback)
@@ -368,15 +401,6 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         agent._agent_name = agent_name
         agent._agent_id = agent_id
         agent._agent_icon = agent_icon
-
-        # Tell the screens when speech recognition is still warming up
-        # (#564). The language is the session's locked one, if any, so the
-        # participant card is worded in it; otherwise the browser decides.
-        def _session_language() -> Optional[str]:
-            resolver = getattr(agent, "language_resolver", None)
-            return getattr(resolver, "locked", None)
-
-        stt_readiness = SttReadiness(room_manager.publish_data, language=_session_language)
 
         # 6a. Wire barge-in: the agent declares whether it supports barge-in
         # (an intrinsic capability — its config depends on it). If so, enable it
