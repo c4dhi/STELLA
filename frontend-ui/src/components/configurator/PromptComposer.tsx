@@ -173,6 +173,16 @@ export const PLACEHOLDER_REGISTRY: PlaceholderDef[] = [
     dark: { text: 'text-lime-300', bg: 'bg-lime-500/20', chip: 'bg-lime-500/15 text-lime-400 border-lime-500/25' },
     light: { text: 'text-lime-700', bg: 'bg-lime-100/80', chip: 'bg-lime-50 text-lime-700 border-lime-200' },
   },
+  {
+    name: 'last_goal_attempt',
+    label: 'last_goal_attempt',
+    description: "In goal mode: the expert's last attempt to close or skip the goal, when it was held back; empty otherwise",
+    preview: 'YOUR LAST ATTEMPT: you tried to complete `__goal__` and it was held back: ...',
+    insertToken: '{{last_goal_attempt}}',
+    pattern: '{{last_goal_attempt}}',
+    dark: { text: 'text-pink-300', bg: 'bg-pink-500/20', chip: 'bg-pink-500/15 text-pink-400 border-pink-500/25' },
+    light: { text: 'text-pink-700', bg: 'bg-pink-100/80', chip: 'bg-pink-50 text-orange-700 border-orange-200' },
+  },
 ]
 
 const PLACEHOLDER_MAP = new Map(

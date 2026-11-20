@@ -120,34 +120,25 @@ def test_empty_string_returns_parse_error_verdict():
 # _build_messages — message assembly
 # ---------------------------------------------------------------------------
 
-def test_no_placeholders_includes_history_and_user_message_in_user_role():
+def test_the_prompt_alone_decides_what_conversation_the_expert_sees():
+    # No placeholder, no conversation: nothing is added behind the prompt.
     runner = _runner()
-    config = _config(system_prompt="You are an expert.")
-    messages = runner._build_messages(config, "What's wrong?", HISTORY, {})
+    messages = runner._build_messages(_config(system_prompt="You are an expert."), "What's wrong?", HISTORY, {})
 
-    assert messages[0].role == "system"
-    assert messages[1].role == "user"
-    user_content = messages[1].content
-    assert "CONVERSATION:" in user_content
-    assert "CURRENT USER MESSAGE: What's wrong?" in user_content
+    assert messages[0].content == "You are an expert."
+    assert [m.role for m in messages] == ["system", "user"]
+    assert messages[1].content == "What's wrong?"
 
 
-def test_history_placeholder_in_prompt_skips_history_in_user_role():
-    # {{history_5}} inlines history into the system prompt — must not duplicate in user role
+def test_history_and_user_message_placeholders_are_resolved_in_the_prompt():
     runner = _runner()
-    config = _config(system_prompt="Context: {{history_5}}")
+    config = _config(system_prompt="Context: {{history_1}}\n{{user_message}}")
     messages = runner._build_messages(config, "hello", HISTORY, {})
 
-    assert "CONVERSATION:" not in messages[1].content
-
-
-def test_user_message_placeholder_in_prompt_skips_duplication_in_user_role():
-    # {{user_message}} was already inlined — must not appear again as "CURRENT USER MESSAGE:"
-    runner = _runner()
-    config = _config(system_prompt="User said: {{user_message}}")
-    messages = runner._build_messages(config, "hello", HISTORY, {})
-
-    assert "CURRENT USER MESSAGE:" not in messages[1].content
+    assert "Hi there" in messages[0].content
+    assert "Hello" not in messages[0].content  # history_1 keeps only the last message
+    assert "hello" in messages[0].content
+    assert messages[1].content == "hello"
 
 
 def test_output_format_appended_to_system_prompt_when_set():
@@ -167,56 +158,37 @@ def test_append_output_format_false_skips_output_format():
     assert '{"verdict": "..."}' not in messages[0].content
 
 
-def test_each_tools_guidance_is_injected_once():
-    # An expert is taught exactly the tools it has, from the SDK — never from
-    # its editable prompt, and each contract once however many tools share it.
-    from stella_agent_sdk.tools.state_machine import create_state_machine_tools
-    from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
-
+def test_tool_mode_adds_nothing_but_the_last_goal_attempt_where_the_prompt_asks():
     runner = _runner()
-    config = _config(system_prompt="Extract things.")
-    messages = runner._build_messages(
-        config, "hi", [], {}, append_output_format=False,
-        tools=create_state_machine_tools(client=None),
+    plain = runner._build_messages(_config(system_prompt="Extract things."), "hi", [], {}, append_output_format=False)
+    assert plain[0].content == "Extract things."
+
+    asked = runner._build_messages(
+        _config(system_prompt="Extract things.\n{{last_goal_attempt}}"), "hi", [],
+        {"last_goal_attempt": "YOUR LAST ATTEMPT: held back."}, append_output_format=False,
     )
-    assert messages[0].content.count(STATE_MACHINE_TOOL_GUIDANCE) == 1
+    assert asked[0].content == "Extract things.\nYOUR LAST ATTEMPT: held back."
 
 
-def test_the_router_is_not_taught_the_state_machine_tools():
-    # companion_router got the set_deliverable contract appended, for tools it
-    # cannot call, contradicting its own prompt.
-    from stella_v2_agent.companion_tools import COMPANION_TOOL_GUIDANCE, create_companion_tools
+def test_the_default_prompts_carry_the_tool_contracts_themselves():
+    # The contracts used to be appended from code, out of sight of the
+    # Configurator and of anything optimizing the prompt.
+    import json, pathlib
     from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
+    from stella_v2_agent.companion_tools import COMPANION_TOOL_GUIDANCE
 
-    runner = _runner()
-    messages = runner._build_messages(
-        _config(system_prompt="Route."), "hi", [], {}, append_output_format=False,
-        tools=create_companion_tools([]),
-    )
-    assert COMPANION_TOOL_GUIDANCE in messages[0].content
-    assert STATE_MACHINE_TOOL_GUIDANCE not in messages[0].content
-
-
-def test_tool_guidance_not_injected_by_default():
-    # JSON-mode experts must not get the tool contract.
-    from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE
-
-    runner = _runner()
-    messages = runner._build_messages(_config(system_prompt="Classify."), "hi", [], {})
-    assert STATE_MACHINE_TOOL_GUIDANCE not in messages[0].content
+    experts = pathlib.Path(__file__).resolve().parents[1] / "config" / "experts"
+    prompt = lambda name: json.loads((experts / f"{name}.json").read_text())["system_prompt"]
+    assert STATE_MACHINE_TOOL_GUIDANCE in prompt("task_extraction")
+    assert "{{last_goal_attempt}}" in prompt("task_extraction")
+    assert COMPANION_TOOL_GUIDANCE.strip() in prompt("companion_router")
+    assert STATE_MACHINE_TOOL_GUIDANCE not in prompt("companion_router")
 
 
-def test_history_limit_truncates_older_messages():
-    # history_limit=1 should keep only the last message
-    long_history = [
-        {"role": "user", "content": "msg1"},
-        {"role": "assistant", "content": "msg2"},
-        {"role": "user", "content": "msg3"},
-    ]
-    runner = _runner()
-    config = _config(system_prompt="You are an expert.", history_limit=1)
-    messages = runner._build_messages(config, "hi", long_history, {})
-
-    user_content = messages[1].content
-    assert "msg3" in user_content
-    assert "msg1" not in user_content
+def test_every_default_expert_prompt_reads_the_conversation_through_placeholders():
+    import json, pathlib
+    experts = pathlib.Path(__file__).resolve().parents[1] / "config" / "experts"
+    for path in experts.glob("*.json"):
+        data = json.loads(path.read_text())
+        assert "{{user_message}}" in data["system_prompt"], path.name
+        assert "history_limit" not in data, path.name

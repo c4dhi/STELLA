@@ -40,6 +40,8 @@ Earlier versions began with an **Input Gate** — a JSON routing classifier that
 | `experts` | expert_list | Built-in set | Enable/disable experts, set per-expert model, temperature, prompt, and priority. |
 | `custom_experts` | expert_list | Empty | Define entirely new experts with custom prompts for domain-specific analysis. |
 
+**What an expert sees**: its prompt, exactly as the Configurator shows it, with the placeholders resolved, followed by the output format and the verdicts (with their descriptions) from its configuration. Nothing else is added: the conversation reaches it only through `{{history_N}}` (the last N messages) and `{{user_message}}`, and tool instructions are part of the default prompts of the experts that call tools. A prompt without `{{history_N}}` sees no conversation. Jev answers its experts without a language model, and reads as much conversation as the longest `{{history_N}}` among their prompts.
+
 **When to customize**: Add custom experts for domain-specific analysis (e.g., a "compliance" expert for regulated industries). Reorder expert priority to change which expert "wins" in arbitration conflicts. Wire each expert's verdicts to deterministic responses in the [Expert Module](#expert-module--verdict-responses).
 
 ### Arbitration

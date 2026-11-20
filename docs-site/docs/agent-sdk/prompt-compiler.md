@@ -61,8 +61,11 @@ compiler can actually resolve.
 | `{{processing_mode}}` | Processing mode (sequential / flexible / goal) |
 | `{{history_N}}` | The last **N** conversation messages, e.g. `{{history_8}}` |
 | `{{user_message}}` | The current user message |
+| `{{last_goal_attempt}}` | In goal mode, the expert's last attempt to close or skip the goal when it was held back; empty otherwise |
 
 `{{history_N}}` is **parametric**: `N` is any positive integer.
+
+The placeholders are the only way runtime context reaches a STELLA V2 or Jev expert: a prompt without `{{history_N}}` sees no conversation. `history_turns(template)` gives the largest `N` a prompt reads, for a component that reads the conversation on a prompt's behalf.
 
 You can inspect the palette and validate a template programmatically:
 

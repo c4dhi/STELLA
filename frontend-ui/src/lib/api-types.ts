@@ -1713,7 +1713,6 @@ export interface ExpertDefault {
   output_schema?: Record<string, unknown>
   trigger_criteria?: string
   always_triggered?: boolean
-  history_limit?: number
   min_confidence?: number
   verdict_directives?: Record<
     string,

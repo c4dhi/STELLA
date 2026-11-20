@@ -1,15 +1,13 @@
 """Canonical tool-usage contract for the state-machine tools.
 
-SINGLE SOURCE OF TRUTH. Every agent that calls the state-machine tools
-(set_deliverable / batch_update / complete_task / skip_task / skip_state) injects
-THIS text in the background — it is crucial plumbing, never an operator-editable
-prompt. The tools are identical across agents, so the contract that explains how
-to use them must be identical too. Do not hand-duplicate this prose in an agent's
-prompts or config; import it from here.
+How a model should use the state-machine tools (set_deliverable / batch_update /
+complete_task / skip_task / skip_state), beyond what their schemas say.
 
-Any agent that drives state through these tools appends
-``STATE_MACHINE_TOOL_GUIDANCE`` to its tool-calling prompt. Edit the contract
-here and every consumer picks up the change.
+Nothing appends this to a prompt behind the user's back: a prompt that drives
+state through these tools carries the text itself, where the Configurator shows
+it and an optimizer can change it. Agents start from this text: an expert's
+default prompt includes it (a test in the agent pins that), and an agent that
+builds its prompt in code adds it there.
 """
 
 # The tool *schemas* (names/params/descriptions) come from each tool's

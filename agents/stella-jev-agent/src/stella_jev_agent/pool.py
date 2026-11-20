@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from stella_agent_sdk.prompts import history_turns
 from stella_agent_sdk.settings import AgentSettings
 
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
@@ -206,7 +207,7 @@ class JevExpertPool(ExpertPool):
         if has_choice(branches):
             questions[NEXT_STEP] = branch_question(branches)
 
-        limit = max(self._limit(COMMON), 1)
+        limit = self._history_turns(expert_names)
         state = turn_state(user_input, conversation_history, current_task(sm_context), limit, self.expert_context)
         started = time.monotonic()
         try:
@@ -354,9 +355,12 @@ class JevExpertPool(ExpertPool):
             logger.warning(f"Extraction failed after the reply: {e}")
             return self._unreported
 
-    def _limit(self, name: str) -> int:
-        config = self._registry.get(name)
-        return config.history_limit if config and config.history_limit > 0 else 12
+    def _history_turns(self, expert_names: List[str]) -> int:
+        """How much conversation Jev reads: as much as the longest {{history_N}} in
+        the prompts of the experts it answers for. A prompt says what its expert
+        sees, whether a language model or Jev answers it."""
+        configs = (self._registry.get(name) for name in expert_names if name in JEV_EXPERTS)
+        return max((history_turns(c.system_prompt) for c in configs if c), default=0)
 
     def _verdicts(self, expert_names: List[str], result: Any) -> List[ExpertVerdict]:
         verdicts = []

@@ -3,7 +3,6 @@
 from typing import Any, Dict, List
 
 from stella_agent_sdk.tools.base import BaseTool, ToolResult
-from stella_agent_sdk.tools.state_machine.guidance import STATE_MACHINE_TOOL_GUIDANCE
 from stella_agent_sdk.services.state_machine_client import StateMachineClient
 
 
@@ -15,7 +14,6 @@ class BatchUpdateTool(BaseTool):
     Include every deliverable and task you found — current message and history.
     """
 
-    guidance = STATE_MACHINE_TOOL_GUIDANCE
 
     def __init__(self, client: StateMachineClient):
         self._client = client

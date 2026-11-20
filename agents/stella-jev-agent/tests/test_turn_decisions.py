@@ -507,3 +507,11 @@ def test_the_pool_takes_its_defaults_from_agent_yaml_and_resets_between_configur
     assert (pool.safety_threshold, jev.timeout_s) == (0.5, 2.0)
     pool.apply_config({})
     assert pool.safety_threshold == 0.75
+
+
+def test_jev_reads_as_much_conversation_as_the_prompts_it_answers_for():
+    # The prompt says what an expert sees, whether a language model or Jev answers it.
+    pool = Pool(FakeJev(), AskBack())
+    assert pool._history_turns(["common_sense", "medical"]) == 12  # {{history_12}}, {{history_4}}
+    assert pool._history_turns(["medical"]) == 4
+    assert pool._history_turns([]) == 0

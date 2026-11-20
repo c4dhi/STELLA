@@ -761,6 +761,10 @@ runtimeVariables:
     label: language
     description: "Resolved session language (single source of truth, #214)"
     preview: "German"
+  - name: last_goal_attempt
+    label: last_goal_attempt
+    description: "In goal mode: the expert's last attempt to close or skip the goal, when it was held back; empty otherwise"
+    preview: "YOUR LAST ATTEMPT: you tried to complete `__goal__` and it was held back: ..."
   - name: persona
     label: persona.key
     # A NAMESPACE, not a flat token: it resolves as {{persona.<key>}} against the
