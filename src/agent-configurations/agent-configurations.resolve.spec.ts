@@ -17,7 +17,7 @@ const agentTypeRecord = {
   version: '2.0.0',
   defaultConfig: { llm: { model: 'gpt-4o-mini', temperature: 0.7 } },
   pipelineSchema: {
-    nodes: [{ id: 'planner' }],
+    nodes: [{ id: 'planner', slots: [{ id: 'x', type: 'number' }] }],
     thresholds: [{ id: 'temperature', min: 0, max: 1 }],
   },
   configSchema: null,

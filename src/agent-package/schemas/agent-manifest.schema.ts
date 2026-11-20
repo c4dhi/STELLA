@@ -18,6 +18,15 @@ import {
 } from '../manifest-defaults.js'
 import { normalizeManifest } from '../manifest-normalizer.js'
 import { ENV_VAR_FORMATS, ENV_VAR_SETTING_TYPES, checkEnvVarValue } from '../env-var-settings.js'
+import {
+  CONFIG_SETTING_KEY_REGEX,
+  CONFIG_SETTING_TYPES,
+  checkConfigSettingValue,
+  declareConfigSettings,
+  duplicateConfigSettingKeys,
+  splitConfigSettingKey,
+  type ConfigSetting,
+} from '../config-settings.js'
 
 /**
  * The agent manifest (agent.yaml), format 2.0: the single description of an agent
@@ -435,6 +444,53 @@ const pipelineSchemaSchema = z
     }
   })
 
+/**
+ * A setting a saved configuration may change (#996): the same fields as an
+ * optional env var, but the value is JSON and reaches the agent in
+ * `pipeline_config.nodes.<stage>.<name>`, not the pod's environment. The key's
+ * stage is a pipelineSchema node, whose Configurator popup shows it. A
+ * configuration can set declared settings only.
+ */
+const configSettingSchema = z
+  .object({
+    key: z.string().regex(CONFIG_SETTING_KEY_REGEX, 'must be <stage>.<name>, lowercase with underscores'),
+    type: z.enum(CONFIG_SETTING_TYPES),
+    label: z.string().optional(),
+    description: z.string().optional(),
+    default: jsonValueSchema.optional(),
+    group: z.string().optional(),
+    advanced: z.boolean().optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+    step: z.number().positive().optional(),
+    unit: z.string().optional(),
+    options: z.array(z.object({ value: z.string(), label: z.string().optional() }).strict()).optional(),
+    format: z.enum(ENV_VAR_FORMATS).optional(),
+    maxLength: z.number().int().positive().optional(),
+    isCustom: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((setting, ctx) => {
+    const issue = (message: string, path: string) => ctx.addIssue({ code: 'custom', message, path: [path] })
+    if (setting.type === 'enum' && !setting.options?.length) issue('enum settings must list options', 'options')
+    if (setting.type !== 'enum' && setting.options) issue('only enum settings take options', 'options')
+    const ranged = setting.type === 'number' || setting.type === 'integer'
+    if (!ranged && (setting.min !== undefined || setting.max !== undefined || setting.step !== undefined)) {
+      issue('only number and integer settings take min, max or step', 'min')
+    }
+    if (setting.min !== undefined && setting.max !== undefined && setting.min > setting.max) {
+      issue('min must not be above max', 'min')
+    }
+    if (setting.type !== 'string' && setting.format) issue('only string settings take a format', 'format')
+    const texty = setting.type === 'string' || setting.type === 'text'
+    if (!texty && setting.maxLength !== undefined) issue('only string and text settings take maxLength', 'maxLength')
+    if (setting.type !== 'expert_list' && setting.isCustom !== undefined) issue('only expert_list settings take isCustom', 'isCustom')
+    if (setting.default !== undefined) {
+      const problem = checkConfigSettingValue(setting as ConfigSetting, setting.default)
+      if (problem) issue(`default ${problem}`, 'default')
+    }
+  })
+
 // Runtime variable the agent's prompt compiler can resolve ({{name}} or, when
 // parametric, {{name_N}}). Declared per-AgentType so the Configurator renders the
 // palette generically instead of hardcoding it. Color/theming is assigned in the
@@ -521,6 +577,8 @@ export const agentManifestSchema = z
     configSchema: configSchemaSchema.optional(),
     defaultConfig: z.record(z.string(), jsonValueSchema).optional(),
     pipelineSchema: pipelineSchemaSchema.optional(),
+    // Settings a saved configuration may change, beyond the pipeline slots (#996).
+    settings: z.array(configSettingSchema).default([]),
     // Per-AgentType {{placeholder}} palette for the Configurator (manifest-driven).
     runtimeVariables: z.array(runtimeVariableSchema).optional(),
     // Version of the SDK prompt compiler this agent resolves prompts with. Saved
@@ -565,6 +623,23 @@ export const agentManifestSchema = z
         path: ['configSchema'],
         message: 'capabilities includes "experts" with features.configurator but configSchema does not expose expert configuration',
       })
+    }
+
+    // Every setting has one declaration, and its stage is a node the Configurator shows.
+    const nodeIds = new Set((manifest.pipelineSchema?.nodes ?? []).map((n) => n.id))
+    manifest.settings.forEach((setting, index) => {
+      const [stage] = splitConfigSettingKey(setting.key)
+      if (!nodeIds.has(stage)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['settings', index, 'key'],
+          message: `${setting.key}: "${stage}" is not a pipelineSchema node`,
+        })
+      }
+    })
+    const declared = declareConfigSettings(manifest.pipelineSchema, manifest.settings as ConfigSetting[])
+    for (const key of duplicateConfigSettingKeys(declared)) {
+      ctx.addIssue({ code: 'custom', path: ['settings'], message: `${key} is declared more than once (a pipeline slot or settings entry)` })
     }
 
     const optionalNames = new Set(manifest.env.optional.map((v) => v.name))

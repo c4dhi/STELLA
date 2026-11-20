@@ -300,3 +300,18 @@ def test_speech_safe_forwarded_through_compile_entry_point():
         speech_safe=True,
     )
     assert out == "raw text"
+
+
+def test_history_turns_is_the_longest_history_a_prompt_reads():
+    from stella_agent_sdk.prompts import history_turns
+
+    assert history_turns("{{history_4}} then {{history_12}}") == 12
+    assert history_turns("no conversation") == 0
+    assert history_turns("") == 0
+
+
+def test_last_goal_attempt_resolves_from_the_context():
+    from stella_agent_sdk.prompts import compile as compile_prompt
+
+    assert compile_prompt("A{{last_goal_attempt}}B", "1.0.0", sm_context={"last_goal_attempt": "x"}) == "AxB"
+    assert compile_prompt("A{{last_goal_attempt}}B", "1.0.0", sm_context={}) == "AB"

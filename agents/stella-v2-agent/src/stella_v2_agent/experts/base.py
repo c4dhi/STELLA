@@ -143,7 +143,6 @@ class ExpertConfig:
     output_schema: Dict[str, Any] = field(default_factory=dict)
     output_format: str = ""
     trigger_criteria: str = ""
-    history_limit: int = 0  # 0 = use runner default (8 for most, 10 for task_extraction)
     min_confidence: float = 0.0  # 0 = not applicable (unused with tool-calling experts)
     # Tool allow-list (names). Empty = all registered tools.
     tools: List[str] = field(default_factory=list)
@@ -154,6 +153,11 @@ class ExpertConfig:
     def __post_init__(self) -> None:
         # Coerce verdict_directives whether they arrive as dicts (JSON/config) or instances.
         self.verdict_directives = VerdictDirective.coerce_map(self.verdict_directives)
+
+    def verdict_descriptions(self) -> Dict[str, str]:
+        """The verdicts this expert can give, each with its description, as configured.
+        What a language model is asked to choose from, and Jev too."""
+        return {label: d.description or "" for label, d in self.verdict_directives.items()}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ExpertConfig":
@@ -171,7 +175,6 @@ class ExpertConfig:
             output_schema=data.get("output_schema", {}),
             output_format=data.get("output_format", ""),
             trigger_criteria=data.get("trigger_criteria", ""),
-            history_limit=data.get("history_limit", 0),
             min_confidence=data.get("min_confidence", 0.0),
             tools=list(data.get("tools") or []),
             verdict_directives=data.get("verdict_directives", {}),
@@ -191,7 +194,6 @@ class ExpertConfig:
             "output_schema": self.output_schema,
             "output_format": self.output_format,
             "trigger_criteria": self.trigger_criteria,
-            "history_limit": self.history_limit,
             "min_confidence": self.min_confidence,
             "tools": list(self.tools),
             "verdict_directives": {

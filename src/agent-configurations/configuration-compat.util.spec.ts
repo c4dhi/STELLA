@@ -7,8 +7,28 @@ import {
 } from './configuration-compat.util.js';
 
 const schema = {
-  nodes: [{ id: 'input_gate' }, { id: 'planner' }],
+  nodes: [
+    {
+      id: 'input_gate',
+      slots: [
+        { id: 'x', type: 'number' },
+        { id: 'a', type: 'number' },
+      ],
+    },
+    { id: 'planner' },
+  ],
   thresholds: [{ id: 'temperature', min: 0, max: 1 }],
+};
+
+// A schema as the manifest mapper stores it since #996: the full settings list.
+const declared = {
+  nodes: [{ id: 'expert_pool', slots: [] }],
+  thresholds: [],
+  settings: [
+    { key: 'expert_pool.safety_threshold', type: 'number', min: 0, max: 1, default: 0.6 },
+    { key: 'expert_pool.expert_context', type: 'text', maxLength: 10 },
+    { key: 'expert_pool.mode', type: 'enum', options: [{ value: 'fast' }, { value: 'careful' }] },
+  ],
 };
 
 describe('validateConfigurationAgainstSchema', () => {
@@ -39,6 +59,28 @@ describe('validateConfigurationAgainstSchema', () => {
     ).toThrow(/above maximum 1/);
   });
 
+  it('refuses a node value the agent does not declare as a setting', () => {
+    expect(() =>
+      validateConfigurationAgainstSchema({ nodes: { expert_pool: { safty_threshold: 0.8 } } }, declared),
+    ).toThrow(/Unknown setting in configuration: expert_pool.safty_threshold/);
+  });
+
+  it('checks a declared setting against its type, range, length and options', () => {
+    const check = (values: Record<string, unknown>) => () =>
+      validateConfigurationAgainstSchema({ nodes: { expert_pool: values } }, declared);
+    expect(check({ safety_threshold: 0.8, expert_context: 'chat', mode: 'fast' })).not.toThrow();
+    expect(check({ safety_threshold: 1.5 })).toThrow(/expert_pool.safety_threshold must be between 0 and 1/);
+    expect(check({ safety_threshold: '0.8' })).toThrow(/expert_pool.safety_threshold must be a number/);
+    expect(check({ expert_context: 'far too long a text' })).toThrow(/at most 10 characters/);
+    expect(check({ mode: 'slow' })).toThrow(/must be one of: fast, careful/);
+  });
+
+  it('reads the settings from the slots of a schema stored before #996', () => {
+    expect(() =>
+      validateConfigurationAgainstSchema({ nodes: { input_gate: { x: 1, y: 2 } } }, schema),
+    ).toThrow(/Unknown setting in configuration: input_gate.y/);
+  });
+
   it('is a no-op when there is no schema', () => {
     expect(() =>
       validateConfigurationAgainstSchema({ nodes: { anything: {} } }, null),
@@ -61,6 +103,15 @@ describe('pruneRemovedOverrides', () => {
     expect(prunedKeys.sort()).toEqual(
       ['nodes.removed_node', 'thresholds.removed_threshold'].sort(),
     );
+  });
+
+  it('drops a setting the agent does not declare, keeping the declared ones', () => {
+    const { sanitized, prunedKeys } = pruneRemovedOverrides(
+      { nodes: { expert_pool: { safety_threshold: 0.8, always_run: ['x'] } } },
+      declared,
+    );
+    expect(sanitized.nodes).toEqual({ expert_pool: { safety_threshold: 0.8 } });
+    expect(prunedKeys).toEqual(['nodes.expert_pool.always_run']);
   });
 
   it('does not clamp out-of-range values (left for re-validation to flag)', () => {

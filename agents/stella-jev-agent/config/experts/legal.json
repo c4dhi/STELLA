@@ -19,12 +19,12 @@
     "none": {
       "action": "inform",
       "template": "",
-      "description": "TAP OUT (default). No legal matter, or only a general civic/news mention with no personal legal stake."
+      "description": "No legal matter, or only a passing or general mention."
     },
     "low": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. A legal subject is on the table but mild and non-urgent."
+      "description": "A legal subject comes up, but it is mild and not urgent."
     },
     "high": {
       "action": "prepend",
@@ -32,7 +32,7 @@
       "template_i18n": {
         "de": "Nur damit du es weißt: Ich kann keine Rechtsberatung geben, also bestätige bitte alles Wichtige mit einer qualifizierten Fachperson."
       },
-      "description": "ENGAGE. A specific legal concern: a dispute, contract, privacy/employment matter, or a request for legal advice."
+      "description": "A specific concern: a dispute, a contract, a privacy or employment matter, or a request for legal advice."
     },
     "critical": {
       "action": "override",
@@ -40,7 +40,7 @@
       "template_i18n": {
         "de": "Das klingt, als könnte es ernste rechtliche Folgen haben. Ich kann keine Rechtsberatung geben — wende dich bitte an eine qualifizierte Rechtsperson oder die zuständigen Behörden."
       },
-      "description": "ENGAGE. Illegal activity or imminent danger."
+      "description": "Illegal activity, or imminent danger or serious legal jeopardy."
     }
   }
 }

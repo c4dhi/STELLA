@@ -19,22 +19,22 @@
     "on_track": {
       "action": "inform",
       "template": "",
-      "description": "TAP OUT (default). The conversation is progressing normally."
+      "description": "It is moving, or it is too early to tell. This is the default."
     },
     "slowing": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. Some stagnation — progress is slowing."
+      "description": "A couple of turns without progress, with answers getting shorter or vaguer."
     },
     "stuck": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. No progress; a direct redirect toward the pending deliverable is needed."
+      "description": "No progress over several turns, or the same question keeps coming back."
     },
     "force_advance": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. Stuck enough that the current state should be skipped."
+      "description": "So stuck that the current step should be skipped."
     }
   }
 }

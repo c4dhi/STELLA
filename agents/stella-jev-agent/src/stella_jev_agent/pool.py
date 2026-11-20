@@ -16,7 +16,11 @@ import copy
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+from stella_agent_sdk.prompts import history_turns
+from stella_agent_sdk.settings import AgentSettings
 
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.expert_pool import ExpertPool
@@ -29,9 +33,10 @@ from stella_jev_agent.next_step import (
 )
 from stella_jev_agent.scope import Scope, scoped
 from stella_v2_agent.companion import commands_from
+from typesafe_sdk import Choice
+
 from stella_jev_agent.questions import (
-    ACTIVITY_INTENT, COMMON_SENSE, DOESNT_FIT, FITS, HAS_ANSWER, LEGAL, MEDICAL, PROBING,
-    RECOGNISER_ARTIFACT, RECOMMENDATIONS, SLIGHT_DOUBT, TIMEKEEPER, not_believable, settle_safety, turn_state,
+    ACTIVITY_INTENT, DOESNT_FIT, FITS, HAS_ANSWER, SLIGHT_DOUBT, settle_safety, turn_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,14 +53,22 @@ ANSWERED_TASK = "answered_task"
 NEXT_STEP = "next_step"
 # Carries Jev's pick to the extraction run, and is taken out before extraction reads the context.
 SCOPE = "_jev_scope"
+# The pipeline node whose settings (agent.yaml, expert_pool slots) this pool reads.
+NODE = "expert_pool"
+# In a checkout and in tests; an image finds ./agent.yaml in its working directory.
+_OWN_MANIFEST = Path(__file__).resolve().parents[2] / "agent.yaml"
 
-JEV_EXPERTS = {
-    COMMON: COMMON_SENSE,
-    "medical": MEDICAL,
-    "legal": LEGAL,
-    "probing": PROBING,
-    "timekeeper": TIMEKEEPER,
-}
+
+def jev_settings() -> AgentSettings:
+    """Jev's declared settings, defaults from its agent.yaml."""
+    return AgentSettings.from_manifest(_OWN_MANIFEST)
+
+
+def answered_by_jev(config: Any) -> bool:
+    """Jev answers every expert that only picks one of its verdicts. One that writes
+    or calls tools, such as task_extraction, needs a language model."""
+    return bool(config and config.enabled and config.verdict_directives and not config.can_call_functions)
+
 # A language-model expert is skipped when Jev says it has nothing to do.
 GATES = {EXTRACTION: ("has_answer", HAS_ANSWER, "no"), ROUTER: ("activity_intent", ACTIVITY_INTENT, "none")}
 
@@ -114,21 +127,16 @@ def _started_after(verdicts: List[ExpertVerdict], waited_ms: float) -> List[Expe
 class JevExpertPool(ExpertPool):
     def __init__(
         self, *args: Any, jev: JevClient, ask_back: AskBack,
-        plan: Callable[[], Optional[Dict[str, Any]]] = lambda: None, **kwargs: Any,
+        plan: Callable[[], Optional[Dict[str, Any]]] = lambda: None,
+        settings: Optional[AgentSettings] = None, **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self._jev = jev
         self._ask_back = ask_back
         self._plan = plan
-        self.ask_threshold = 0.45
-        self.skip_threshold = 0.8
-        self.forecast_threshold = 0.7
-        # Stricter, since nobody asked: a wrong one saves what was not said, or overwrites an answer.
-        self.also_threshold = 0.8
-        # How sure Jev must be of a medical or legal "low" or "high".
-        self.safety_threshold = 0.6
-        # What kind of conversation this is, for every question Jev answers.
-        self.expert_context = ""
+        # Thresholds and context: agent.yaml's defaults, then the configuration's values.
+        self.settings = settings or jev_settings()
+        self._read_settings()
         self.forecast = TurnForecast()
         # The extraction this turn holds back until arbitration, and the one running.
         self._held: Optional[Callable[[], Any]] = None
@@ -145,22 +153,29 @@ class JevExpertPool(ExpertPool):
         self.last_scope: Optional[Scope] = None
 
     def apply_config(self, config: dict) -> None:
-        if "ask_threshold" in config:
-            self.ask_threshold = float(config["ask_threshold"])
-        if "skip_threshold" in config:
-            self.skip_threshold = float(config["skip_threshold"])
-        if "max_ask_backs" in config:
-            self._ask_back.max_per_session = int(config["max_ask_backs"])
-        if "jev_timeout_ms" in config:
-            self._jev.timeout_s = float(config["jev_timeout_ms"]) / 1000
-        if "forecast_threshold" in config:
-            self.forecast_threshold = float(config["forecast_threshold"])
-        if "also_threshold" in config:
-            self.also_threshold = float(config["also_threshold"])
-        if "safety_threshold" in config:
-            self.safety_threshold = float(config["safety_threshold"])
-        if "expert_context" in config:
-            self.expert_context = str(config["expert_context"] or "")
+        """The configuration's expert_pool node. Replaces what an earlier call set."""
+        self.settings.apply({"nodes": {NODE: config}})
+        self._read_settings()
+
+    def _read_settings(self) -> None:
+        def get(name: str) -> Any:
+            return self.settings.get(f"{NODE}.{name}")
+
+        self.ask_threshold = get("ask_threshold")
+        self.skip_threshold = get("skip_threshold")
+        self.forecast_threshold = get("forecast_threshold")
+        # Stricter, since nobody asked: a wrong one saves what was not said, or overwrites an answer.
+        self.also_threshold = get("also_threshold")
+        # How sure Jev must be of a medical or legal "low" or "high".
+        self.safety_threshold = get("safety_threshold")
+        # What kind of conversation this is, for every question Jev answers.
+        self.expert_context = str(get("expert_context") or "")
+        # These two belong to objects with their own defaults (JEV_TIMEOUT_MS sets the
+        # client's), so only a configured value changes them.
+        if self.settings.is_set(f"{NODE}.max_ask_backs"):
+            self._ask_back.max_per_session = int(get("max_ask_backs"))
+        if self.settings.is_set(f"{NODE}.jev_timeout_ms"):
+            self._jev.timeout_s = float(get("jev_timeout_ms")) / 1000
 
     async def run(
         self,
@@ -169,9 +184,7 @@ class JevExpertPool(ExpertPool):
         conversation_history: List[Dict[str, str]],
         sm_context: Dict[str, Any],
     ) -> List[ExpertVerdict]:
-        questions = {name: JEV_EXPERTS[name] for name in expert_names if name in JEV_EXPERTS}
-        if COMMON in questions:
-            questions["recogniser_artifact"] = RECOGNISER_ARTIFACT
+        questions: Dict[str, Any] = self.expert_questions(expert_names, user_input, conversation_history, sm_context)
         for name, (key, question, _) in GATES.items():
             if name in expert_names:
                 questions[key] = question
@@ -192,7 +205,7 @@ class JevExpertPool(ExpertPool):
         if has_choice(branches):
             questions[NEXT_STEP] = branch_question(branches)
 
-        limit = max(self._limit(COMMON), 1)
+        limit = self._history_turns(expert_names)
         state = turn_state(user_input, conversation_history, current_task(sm_context), limit, self.expert_context)
         started = time.monotonic()
         try:
@@ -218,7 +231,7 @@ class JevExpertPool(ExpertPool):
         asking = self._ask_back.decide(wanted and not overridden(verdicts))
         if common and wanted and not asking:
             common.verdict = SLIGHT_DOUBT
-            common.recommendation = RECOMMENDATIONS[COMMON][SLIGHT_DOUBT]
+            common.recommendation = self._guidance(COMMON, SLIGHT_DOUBT)
 
         remaining = [] if asking else self._language_model_experts(expert_names, result, sm_context)
         run_llm = lambda names: self._run_experts(
@@ -340,26 +353,53 @@ class JevExpertPool(ExpertPool):
             logger.warning(f"Extraction failed after the reply: {e}")
             return self._unreported
 
-    def _limit(self, name: str) -> int:
+    def _jev_experts(self, expert_names: List[str]) -> List[str]:
+        return [name for name in expert_names if answered_by_jev(self._registry.get(name))]
+
+    def expert_questions(
+        self, expert_names: List[str], user_input: str,
+        conversation_history: List[Dict[str, str]], sm_context: Dict[str, Any],
+    ) -> Dict[str, Choice]:
+        """Each expert Jev answers, asked as its configuration says: the prompt as the
+        Configurator shows it, compiled as for a language model, and its verdicts with
+        their descriptions. The JSON output format is left out, since Jev answers with
+        a choice. Nothing else is added, so what is optimized is what runs."""
+        questions = {}
+        for name in self._jev_experts(expert_names):
+            config = self._registry.get(name)
+            questions[name] = Choice(
+                instructions=self._runner.compile_prompt(config, user_input, conversation_history, sm_context),
+                criteria=config.verdict_descriptions(),
+            )
+        return questions
+
+    def _guidance(self, name: str, verdict: str) -> str:
+        """What the reply is told about a verdict Jev gave: its configured description,
+        as a language model's own recommendation would be."""
         config = self._registry.get(name)
-        return config.history_limit if config and config.history_limit > 0 else 12
+        return config.verdict_descriptions().get(verdict, "") if config else ""
+
+    def _history_turns(self, expert_names: List[str]) -> int:
+        """How much conversation Jev reads: as much as the longest {{history_N}} in
+        the prompts of the experts it answers for. A prompt says what its expert
+        sees, whether a language model or Jev answers it."""
+        configs = (self._registry.get(name) for name in self._jev_experts(expert_names))
+        return max((history_turns(c.system_prompt) for c in configs if c), default=0)
 
     def _verdicts(self, expert_names: List[str], result: Any) -> List[ExpertVerdict]:
         verdicts = []
-        for name in expert_names:
-            if name not in JEV_EXPERTS or name not in result.answers:
+        for name in self._jev_experts(expert_names):
+            if name not in result.answers:
                 continue
             answer = result.answers[name]
             choice = answer.choice
             probabilities = dict(answer.probabilities)
             raw: Dict[str, Any] = {"provider": "jev", "probabilities": probabilities}
-            if name == COMMON:
-                artifact = result.answers["recogniser_artifact"].probabilities
-                p_bad = not_believable(probabilities, artifact)
-                probabilities["recogniser_artifact"] = artifact["artifact"]
+            if name == COMMON and DOESNT_FIT in probabilities:
+                p_bad = probabilities[DOESNT_FIT]
                 if p_bad >= self.ask_threshold:
                     choice = DOESNT_FIT
-                elif p_bad + probabilities[SLIGHT_DOUBT] >= self.ask_threshold:
+                elif p_bad + probabilities.get(SLIGHT_DOUBT, 0.0) >= self.ask_threshold:
                     choice = SLIGHT_DOUBT
                 else:
                     choice = FITS
@@ -375,7 +415,7 @@ class JevExpertPool(ExpertPool):
                 expert_name=name,
                 verdict=choice,
                 confidence=float(answer.probabilities.get(choice, max(answer.probabilities.values()))),
-                recommendation=RECOMMENDATIONS.get(name, {}).get(choice, ""),
+                recommendation=self._guidance(name, choice),
                 priority=config.priority if config else 0,
                 latency_ms=result.latency_ms,
                 raw_output=raw,
@@ -394,8 +434,9 @@ class JevExpertPool(ExpertPool):
         # value is still in the history when the person says it properly.
         unclear = "probing" in result.answers and result.answers["probing"].choice == NEEDS_CLARIFICATION
         remaining = []
+        answered = set(self._jev_experts(expert_names))
         for name in expert_names:
-            if name in JEV_EXPERTS:
+            if name in answered:
                 continue
             if name == EXTRACTION and follows_pick and not always_extract:
                 if not self.last_picks:

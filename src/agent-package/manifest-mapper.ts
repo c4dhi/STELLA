@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client'
 import { hashPipelineSchema } from '../agent-configurations/configuration-compat.util.js'
 import { DEFAULT_DOCKERFILE, RESOURCE_DEFAULTS } from './manifest-defaults.js'
+import { withConfigSettings, type ConfigSetting } from './config-settings.js'
 import type { AgentManifest } from './schemas/agent-manifest.schema.js'
 
 /**
@@ -15,6 +16,12 @@ export function manifestToAgentTypeData(
   expertDefaults: Record<string, unknown>[] | null,
 ) {
   const { metadata } = manifest
+  // The pipelineSchema column carries every setting the agent declares (#996),
+  // so validation and the Configurator read one list; its hash covers them too.
+  const pipelineSchema = withConfigSettings(
+    manifest.pipelineSchema as Record<string, unknown> | undefined,
+    manifest.settings as ConfigSetting[],
+  )
   return {
     slug: metadata.slug,
     name: metadata.name,
@@ -37,8 +44,8 @@ export function manifestToAgentTypeData(
     // The agent's own config description only; requirements come from the manifest column.
     configSchema: manifest.configSchema ? (manifest.configSchema as Prisma.InputJsonValue) : Prisma.JsonNull,
     defaultConfig: manifest.defaultConfig ? (manifest.defaultConfig as Prisma.InputJsonValue) : Prisma.JsonNull,
-    pipelineSchema: manifest.pipelineSchema ? (manifest.pipelineSchema as Prisma.InputJsonValue) : Prisma.DbNull,
-    pipelineSchemaHash: hashPipelineSchema((manifest.pipelineSchema as Record<string, unknown>) ?? null),
+    pipelineSchema: pipelineSchema ? (pipelineSchema as Prisma.InputJsonValue) : Prisma.DbNull,
+    pipelineSchemaHash: hashPipelineSchema(pipelineSchema),
     runtimeVariables: manifest.runtimeVariables
       ? (manifest.runtimeVariables as Prisma.InputJsonValue)
       : Prisma.DbNull,

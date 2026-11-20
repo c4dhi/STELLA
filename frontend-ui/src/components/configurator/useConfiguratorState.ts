@@ -29,7 +29,6 @@ export interface ExpertDefinition {
   /** Built-in default system prompt (read-only, for display). Empty for custom experts. */
   defaultSystemPrompt: string
   /** Number of conversation history messages to include. 0 = use stage default. */
-  historyLimit: number
   /** Minimum confidence for accepting deliverables. 0 = not applicable. Only task_extraction uses this. */
   minConfidence: number
   arbitrationPriority: number
@@ -51,250 +50,6 @@ export interface InputGateRule {
   criteria: string
 }
 
-// ---------------------------------------------------------------------------
-// Built-in expert defaults (mirrors config/experts/*.json)
-// ---------------------------------------------------------------------------
-
-// Default system prompts from config/experts/*.json
-const NOISE_DETECTION_PROMPT = `Determine if the user's message is clear enough to act on.
-
-Unclear: gibberish, random characters, transcription artifacts, nonsense syllables.
-Clear: any message with discernible meaning, even brief ("yes", "no", "ok").
-Be lenient — if ANY meaning is discernible, mark clear.
-
-{{history_4}}
-
-{{user_message}}
-
-Verdicts: "clear", "unclear", "partial"
-Keep recommendation under 10 words.`
-
-const MEDICAL_PROMPT = `Detect health-related concerns that require cautious handling. You do NOT provide medical advice — only flag topics.
-
-Flag: symptoms, medications, mental health concerns, requests for diagnosis.
-Do NOT flag: general wellness (exercise, sleep), casual health mentions.
-
-{{history_4}}
-
-{{user_message}}
-
-Verdicts: "none", "low" (general health topic), "high" (specific concern), "critical" (emergency/suicidal ideation)
-Keep recommendation under 10 words.`
-
-const LEGAL_PROMPT = `Detect legal concerns that require careful handling. You do NOT provide legal advice — only flag topics.
-
-Flag: legal disputes, contracts, criminal activity, privacy concerns, employment law, requests for legal advice.
-Do NOT flag: general civic topics, news about legal matters.
-
-{{history_4}}
-
-{{user_message}}
-
-Verdicts: "none", "low" (general legal topic), "high" (specific concern), "critical" (illegal activity/imminent danger)
-Keep recommendation under 10 words.`
-
-const PROBING_PROMPT = `You have two jobs:
-
-1. DELIVERABLE DETECTION: Check if the user's message provides any of the pending deliverables listed below. Output their keys in "deliverable_signals". Only signal deliverables the user CLEARLY provided — do not guess. In goal-oriented states, the user may provide information naturally without being directly asked — still detect it.
-
-2. FOLLOW-UP DECISION: Decide if the assistant should ask a follow-up question.
-   - "no_probe": user's message is clear, no question needed
-   - "needs_clarification": a specific follow-up would help
-   - "gentle_redirect": user went off-topic, steer back
-   Do NOT probe when the user just provided requested information or more questions would feel repetitive.
-   In goal-oriented states, prefer "no_probe" more often — let the conversation flow naturally. Only probe if critical required deliverables are missing and the conversation is winding down.
-
-REQUIRED vs OPTIONAL rules:
-- For REQUIRED deliverables: probe persistently until collected.
-- For OPTIONAL deliverables: probe gently at most once. If the user gave a vague or dismissive answer (e.g. "not sure", "nothing specific"), do NOT probe again — verdict should be "no_probe".
-- If TURNS WITHOUT PROGRESS >= 2 and only OPTIONAL deliverables remain pending, always return "no_probe". The conversation should move forward.
-
-{{turns_without_progress}}
-{{pending_deliverables}}
-{{collected_deliverables}}
-
-{{history_8}}
-
-{{user_message}}
-
-Keep recommendation under 15 words.`
-
-const TIMEKEEPER_PROMPT = `Assess if the conversation is making progress toward its goals.
-
-Consider: turns without deliverables collected, repeated questions, user engagement.
-
-{{history_8}}
-
-{{user_message}}
-
-Verdicts:
-- "on_track": progressing normally
-- "slowing": some stagnation
-- "stuck": recommend specific action
-- "force_advance": skip current state
-
-For stuck/force_advance, include suggested_deliverables if values can be inferred from context.
-Keep recommendation under 15 words.`
-
-const TASK_EXTRACTION_PROMPT = `You are a thorough extraction analyst running as a background process. You have more time than other components, so use it to be precise and reliable. Your job is to ensure every deliverable the user provides gets captured.
-
-You receive the FULL PLAN — all states, all tasks, all deliverables — not just the current state. You can extract and correct deliverables in ANY state.
-
-{{current_focus}}
-
-{{plan}}
-
-YOUR PROCESS:
-Step 1 — Read the current user message carefully. What information did the user share?
-
-Step 2 — Scan ALL pending deliverables across the entire plan. Did the user provide any of them? Think about synonyms, paraphrases, and indirect answers. In goal-oriented states, the user's answer may address multiple deliverables at once — extract ALL of them.
-
-Step 3 — Check completed deliverables too. If the user deliberately corrected a previous answer, set the same key again with the new value and correction: true, quoting what they said in reasoning (a collected required answer is rejected without it).
-Step 4 — For each match, call \`set_deliverable(key, value, reasoning)\` where reasoning explains WHY this matches.
-Step 5 — Validate each extraction with TWO checks before calling the tool:
-  a) PROVENANCE: Does the value trace back to something the user actually said? If not, do not call the tool.
-  b) SEMANTIC FIT: Was the user actually answering THIS deliverable's question, or did they mention similar words in a different context? A mention of "time scheduling" as a challenge is NOT a "preferred follow-up timeframe". The extracted value must be a plausible answer to the deliverable's description. If it doesn't fit, do not call the tool.
-  If the deliverable has acceptance_criteria, verify the extracted value satisfies it.
-
-GOAL-ORIENTED STATE HANDLING:
-When the current state type is "goal", the conversation is natural and free-flowing — the user is NOT being asked structured questions. This means:
-- The user may provide deliverable information IMPLICITLY, as part of a natural conversation. You must actively look for it.
-- Do NOT wait for explicit question-answer pairs. If the user mentions relevant information in passing, extract it.
-- A single user message may contain information for MULTIPLE deliverables — extract all of them.
-- The task structure in goal states is for bookkeeping only. Focus on matching the user's words to DELIVERABLE KEYS, not to task descriptions.
-- Be MORE aggressive about extraction in goal mode — the user won't be asked directly, so you must catch information as it flows naturally.
-- Example: if user says "I'm Sarah, I run about 3 times a week to improve my stamina" — this could match user_name, preferred_exercise, weekly_frequency, AND fitness_goal all at once. Extract ALL of them.
-
-TOOL USAGE:
-- When you identify a deliverable match: call \`set_deliverable(key, value, reasoning)\`
-- When a task with no deliverables is complete (e.g. assistant performed an introduction, told a joke): call \`complete_task(task_id, reasoning)\`
-- You may call multiple tools in one response.
-- If nothing to extract from the current message, call no tools.
-- IMPORTANT: In goal-oriented states, prefer calling \`set_deliverable\` over \`complete_task\`. Tasks auto-complete when their deliverables are filled.
-
-OPTIONAL DELIVERABLE HANDLING:
-Deliverables marked [optional] have relaxed acceptance criteria. For these:
-- Vague or negative answers ARE valid values. Extract them as-is:
-  "I don't really have specific goals" → value: "no specific goals"
-  "Not sure" / "I don't know" → value: "not specified"
-  "I guess just general fitness" → value: "general fitness"
-- If the user has been asked about an optional deliverable 2+ times (visible in conversation history) and gave indirect/dismissive responses, extract a reasonable summary value.
-- Capturing "not specified" is better than leaving an optional deliverable pending.
-- For REQUIRED deliverables, maintain strict extraction — only clean, specific values.
-
-STAGNATION PREVENTION:
-If {{turns_without_progress}} >= 3 and ONLY optional deliverables remain pending (all required ones are collected), call \`set_deliverable\` for ALL remaining optional deliverables with value "not specified" and reasoning explaining the stagnation. Do not let optional items block progress.
-
-GUIDELINES:
-- Extract everything the user provided. Missing a deliverable means the user has to repeat themselves, which is bad UX.
-- Be smart about matching. Users don't speak in schema language. "I do it every other day" means frequency is ~3-4 times per week. "Half an hour" means 30 minutes. "I'm Tom" means user_name is Tom. "to improve my stamina" means the fitness goal is stamina improvement.
-- You can change a completed deliverable only when the user deliberately corrects themselves (e.g. "Actually my name is Sarah, not Tom"): set the same key with the new value and correction: true, quoting what they said in reasoning. Without correction: true a collected required answer is rejected.
-- Extract from the CURRENT message only, not from previous turns (those were already processed).
-- Do NOT fabricate values the user never mentioned. If they talk about exercise type but not duration, only extract exercise type.
-- Watch for CONTEXT BLEED: words that appear in the user's message but are about a different topic. Example: user says "Except for the time scheduling not really" about challenges → do NOT extract "time scheduling" as "preferred follow-up timeframe". The user is discussing challenges, not scheduling preferences.
-- Greetings (hi, hello, hey) are never names.
-- Also check: did the assistant just perform a task that has no deliverables (like telling a joke, giving an introduction)? If so, call \`complete_task(task_id, reasoning)\` with the task ID from the plan.
-
-{{history_10}}
-
-{{user_message}}`
-
-export const BUILT_IN_EXPERTS: Omit<
-  ExpertDefinition,
-  'enabled' | 'isBackground' | 'isCustom' | 'verdictVocabulary' | 'verdictDirectives' | 'defaultVerdictDirectives'
->[] = [
-  {
-    name: 'noise_detection',
-    description: 'Detects inaudible, garbled, or nonsensical transcription and triggers clarification',
-    alwaysTriggered: false,
-    triggerCriteria: 'The message seems garbled, inaudible, or contains transcription artifacts',
-    model: 'gpt-5.4-mini',
-    temperature: 0.1,
-    maxTokens: 200,
-    systemPrompt: '',
-    defaultSystemPrompt: NOISE_DETECTION_PROMPT,
-    historyLimit: 0,
-    minConfidence: 0,
-    arbitrationPriority: 100,
-    canCallFunctions: false,
-  },
-  {
-    name: 'medical',
-    description: 'Flags health and medical safety concerns requiring cautious handling',
-    alwaysTriggered: false,
-    triggerCriteria: 'Health, medical, or wellness topics are mentioned',
-    model: 'gpt-5.4-mini',
-    temperature: 0.1,
-    maxTokens: 200,
-    systemPrompt: '',
-    defaultSystemPrompt: MEDICAL_PROMPT,
-    historyLimit: 0,
-    minConfidence: 0,
-    arbitrationPriority: 95,
-    canCallFunctions: false,
-  },
-  {
-    name: 'legal',
-    description: 'Flags legal concerns requiring careful handling and disclaimers',
-    alwaysTriggered: false,
-    triggerCriteria: 'Legal topics, disputes, contracts, or regulations are mentioned',
-    model: 'gpt-5.4-mini',
-    temperature: 0.1,
-    maxTokens: 200,
-    systemPrompt: '',
-    defaultSystemPrompt: LEGAL_PROMPT,
-    historyLimit: 0,
-    minConfidence: 0,
-    arbitrationPriority: 90,
-    canCallFunctions: false,
-  },
-  {
-    name: 'task_extraction',
-    description: 'Thorough background extraction of deliverables, completed tasks, and state transitions',
-    alwaysTriggered: false,
-    triggerCriteria: '',
-    model: 'gpt-5.4-mini',
-    temperature: 0.0,
-    maxTokens: 800,
-    systemPrompt: '',
-    defaultSystemPrompt: TASK_EXTRACTION_PROMPT,
-    historyLimit: 10,
-    minConfidence: 0.7,
-    arbitrationPriority: 70,
-    canCallFunctions: true,
-  },
-  {
-    name: 'probing',
-    description: 'Analyzes conversation for deliverable signals and determines if follow-up questions are needed',
-    alwaysTriggered: false,
-    triggerCriteria: 'Clarification or follow-up questions might be needed for pending deliverables',
-    model: 'gpt-5.4-mini',
-    temperature: 0.2,
-    maxTokens: 300,
-    systemPrompt: '',
-    defaultSystemPrompt: PROBING_PROMPT,
-    historyLimit: 0,
-    minConfidence: 0,
-    arbitrationPriority: 60,
-    canCallFunctions: false,
-  },
-  {
-    name: 'timekeeper',
-    description: 'Monitors conversation flow and detects stuck states where no progress is being made',
-    alwaysTriggered: false,
-    triggerCriteria: 'The conversation has gone 2 or more turns without collecting a deliverable, or the user seems disengaged or confused about what to do next',
-    model: 'gpt-5.4-mini',
-    temperature: 0.1,
-    maxTokens: 300,
-    systemPrompt: '',
-    defaultSystemPrompt: TIMEKEEPER_PROMPT,
-    historyLimit: 0,
-    minConfidence: 0,
-    arbitrationPriority: 50,
-    canCallFunctions: false,
-  },
-]
-
 // Structural experts: not part of the arbitration pool, not reordered, not
 // opted into. Each IS the mechanism of a mode — task_extraction executes plans,
 // companion_router executes companion mode — so both always run within their
@@ -304,9 +59,8 @@ const STRUCTURAL_EXPERTS = new Set(['task_extraction', 'companion_router'])
 const DEFAULT_ALWAYS_RUN = new Set(STRUCTURAL_EXPERTS)
 const DEFAULT_BACKGROUND = new Set(STRUCTURAL_EXPERTS)
 
-// Unified "built-in default" shape the expert list is derived from — whether the
-// defaults come from the agent's published config/experts (preferred) or, as a
-// transitional fallback, the hardcoded constants above.
+// The built-in default shape the expert list is derived from: the agent's
+// published config/experts/*.json.
 interface BuiltInExpertDefault {
   name: string
   description: string
@@ -316,7 +70,6 @@ interface BuiltInExpertDefault {
   temperature: number
   maxTokens: number
   defaultSystemPrompt: string
-  historyLimit: number
   minConfidence: number
   arbitrationPriority: number
   canCallFunctions: boolean
@@ -341,7 +94,6 @@ function builtInsFromPublished(published: ExpertDefault[]): BuiltInExpertDefault
       temperature: raw.temperature ?? 0.1,
       maxTokens: raw.max_tokens ?? 200,
       defaultSystemPrompt: raw.system_prompt ?? '',
-      historyLimit: raw.history_limit ?? 0,
       minConfidence: raw.min_confidence ?? 0,
       arbitrationPriority: raw.priority ?? 50,
       canCallFunctions: Boolean(raw.can_call_functions),
@@ -350,92 +102,6 @@ function builtInsFromPublished(published: ExpertDefault[]): BuiltInExpertDefault
       defaultVerdictDirectives: directives,
     }
   })
-}
-
-/** Transitional fallback: derive built-in defaults from the hardcoded constants
- *  (used only when the backend hasn't published expertDefaults yet). */
-function builtInsFallback(): BuiltInExpertDefault[] {
-  return BUILT_IN_EXPERTS.map((b) => ({
-    name: b.name,
-    description: b.description,
-    alwaysTriggered: b.alwaysTriggered,
-    triggerCriteria: b.triggerCriteria,
-    model: b.model,
-    temperature: b.temperature,
-    maxTokens: b.maxTokens,
-    defaultSystemPrompt: b.defaultSystemPrompt,
-    historyLimit: b.historyLimit,
-    minConfidence: b.minConfidence,
-    arbitrationPriority: b.arbitrationPriority,
-    canCallFunctions: b.canCallFunctions,
-    outputSchema: undefined,
-    verdictVocabulary: BUILT_IN_VERDICT_VOCAB[b.name] ?? [],
-    defaultVerdictDirectives: BUILT_IN_VERDICT_DEFAULTS[b.name] ?? {},
-  }))
-}
-
-// Verdict vocabulary per built-in expert (mirrors output_schema.verdict in
-// config/experts/*.json). Drives one row per outcome in the verdict editor.
-const BUILT_IN_VERDICT_VOCAB: Record<string, string[]> = {
-  noise_detection: ['clear', 'unclear', 'partial'],
-  medical: ['none', 'low', 'high', 'critical'],
-  legal: ['none', 'low', 'high', 'critical'],
-  task_extraction: ['tool_calls_executed'],
-  probing: ['no_probe', 'needs_clarification', 'gentle_redirect'],
-  timekeeper: ['on_track', 'slowing', 'stuck', 'force_advance'],
-}
-
-// Built-in default verdict directives (mirrors the seeded config/experts/*.json).
-// These ship as defaults and can be overridden, adjusted, and reset per verdict.
-const BUILT_IN_VERDICT_DEFAULTS: Record<string, Record<string, VerdictDirective>> = {
-  noise_detection: {
-    clear: { action: 'inform', template: '', description: 'The message has discernible meaning, even if brief.' },
-    unclear: { action: 'short_circuit', template: '', description: 'Gibberish, random characters, transcription artifacts, or nonsense syllables.' },
-    partial: { action: 'inform', template: '', description: 'Only partially intelligible.' },
-  },
-  medical: {
-    none: { action: 'inform', template: '', description: 'No health topic is present.' },
-    low: { action: 'inform', template: '', description: 'A general health or wellness topic is mentioned (e.g. exercise, sleep).' },
-    high: {
-      action: 'prepend',
-      template:
-        "I want to be careful here — I can't give medical advice, so please check anything important with a qualified professional.",
-      description: 'A specific health concern: symptoms, medication, mental health, or a request for diagnosis.',
-    },
-    critical: {
-      action: 'override',
-      template:
-        "It sounds like this could be serious. If you're in danger or this is an emergency, please contact emergency services or a medical professional right now. I'm not able to give medical advice, but I want to make sure you get the right help.",
-      description: 'A medical emergency or suicidal ideation.',
-    },
-  },
-  legal: {
-    none: { action: 'inform', template: '', description: 'No legal topic is present.' },
-    low: { action: 'inform', template: '', description: 'A general legal topic is mentioned.' },
-    high: {
-      action: 'prepend',
-      template:
-        "Just so you know, I can't give legal advice, so please confirm anything important with a qualified professional.",
-      description: 'A specific legal concern: a dispute, contract, privacy/employment matter, or a request for legal advice.',
-    },
-    critical: {
-      action: 'override',
-      template:
-        "This sounds like it could carry serious legal consequences. I'm not able to give legal advice — please reach out to a qualified legal professional or the appropriate authorities.",
-      description: 'Illegal activity or imminent danger.',
-    },
-  },
-  probing: {
-    no_probe: { action: 'inform', template: '', description: "The user's message is clear; no follow-up question is needed." },
-    needs_clarification: { action: 'inform', template: '', description: 'A specific follow-up question would help collect a pending deliverable.' },
-    gentle_redirect: { action: 'inform', template: '', description: 'The user went off-topic and should be gently steered back.' },
-  },
-  timekeeper: {
-    on_track: { action: 'inform', template: '', description: 'The conversation is progressing normally.' },
-    slowing: { action: 'inform', template: '', description: 'Some stagnation — progress is slowing.' },
-    stuck: { action: 'inform', template: '', description: 'No progress; a specific redirect toward the pending deliverable is needed.' },
-    force_advance: { action: 'inform', template: '', description: 'Stuck enough that the current state should be skipped.' },
-  },
 }
 
 /** Deep-equality for a verdict directive map (used to detect overrides vs defaults). */
@@ -525,6 +191,9 @@ function getCustomExperts(cfg: AgentConfigurationPayload): Record<string, Record
   return (pool.custom_experts ?? {}) as Record<string, Record<string, unknown>>
 }
 
+// No agent reads always_run or background_experts and no agent declares them,
+// so the backend refuses them (#996) and drops them from saved configurations.
+// Nothing here writes them; a configuration saved before still shows its lists.
 function getAlwaysRun(cfg: AgentConfigurationPayload): string[] {
   const pool = getExpertPoolConfig(cfg)
   return (pool.always_run ?? [...DEFAULT_ALWAYS_RUN]) as string[]
@@ -557,10 +226,9 @@ export function useConfiguratorState(
   const hasExperts = !capabilities || capabilities.includes('experts')
   const hasCompanion = !capabilities || capabilities.includes('companion')
   const builtInDefaults = useMemo(() => {
-    const source =
-      publishedExperts && publishedExperts.length
-        ? builtInsFromPublished(publishedExperts)
-        : builtInsFallback()
+    // The agent's own config/experts/*.json, published on its agent type, are the
+    // only defaults: the Configurator keeps no copy of an expert's prompt.
+    const source = builtInsFromPublished(publishedExperts ?? [])
     return source.filter((e) =>
       e.name === 'task_extraction'
         ? hasPlans
@@ -600,7 +268,6 @@ export function useConfiguratorState(
         // while an explicit '' is kept as an intentional empty prompt (#174).
         systemPrompt: ov.system_prompt !== undefined ? (ov.system_prompt as string) : undefined,
         defaultSystemPrompt: builtin.defaultSystemPrompt,
-        historyLimit: ov.history_limit !== undefined ? Number(ov.history_limit) : builtin.historyLimit,
         minConfidence: ov.min_confidence !== undefined ? Number(ov.min_confidence) : builtin.minConfidence,
         arbitrationPriority: ov.priority !== undefined ? Number(ov.priority) : builtin.arbitrationPriority,
         isBackground: backgroundSet.has(builtin.name),
@@ -629,7 +296,6 @@ export function useConfiguratorState(
         maxTokens: def.max_tokens !== undefined ? Number(def.max_tokens) : 200,
         systemPrompt: def.system_prompt !== undefined ? (def.system_prompt as string) : undefined,
         defaultSystemPrompt: '',
-        historyLimit: def.history_limit !== undefined ? Number(def.history_limit) : 0,
         minConfidence: def.min_confidence !== undefined ? Number(def.min_confidence) : 0,
         arbitrationPriority: def.priority !== undefined ? Number(def.priority) : 50,
         isBackground: backgroundSet.has(name),
@@ -741,7 +407,6 @@ export function useConfiguratorState(
           if (updates.systemPrompt === undefined) delete existing.system_prompt
           else existing.system_prompt = updates.systemPrompt
         }
-        if (updates.historyLimit !== undefined) existing.history_limit = updates.historyLimit
         if (updates.minConfidence !== undefined) existing.min_confidence = updates.minConfidence
         if (updates.arbitrationPriority !== undefined) existing.priority = updates.arbitrationPriority
         if (updates.description !== undefined) existing.description = updates.description
@@ -775,7 +440,6 @@ export function useConfiguratorState(
           if (updates.systemPrompt === undefined) delete existing.system_prompt
           else existing.system_prompt = updates.systemPrompt
         }
-        if (updates.historyLimit !== undefined) existing.history_limit = updates.historyLimit
         if (updates.minConfidence !== undefined) existing.min_confidence = updates.minConfidence
         if (updates.arbitrationPriority !== undefined) existing.priority = updates.arbitrationPriority
         if (updates.description !== undefined) existing.description = updates.description
@@ -846,11 +510,7 @@ export function useConfiguratorState(
       const current = { ...getCustomExperts(configuration) }
       delete current[name]
 
-      // Also remove from always_run and background
-      const ar = getAlwaysRun(configuration).filter((n) => n !== name)
-      const bg = getBackgroundExperts(configuration).filter((n) => n !== name)
-
-      patchExpertPool({ custom_experts: current, always_run: ar, background_experts: bg })
+      patchExpertPool({ custom_experts: current })
     },
     [configuration, patchExpertPool, builtInNames],
   )
@@ -859,44 +519,8 @@ export function useConfiguratorState(
   const toggleTaskExtraction = useCallback(
     (enabled: boolean) => {
       updateExpert('task_extraction', { enabled })
-
-      if (enabled) {
-        // Ensure it's in always_run and background
-        const ar = getAlwaysRun(configuration)
-        const bg = getBackgroundExperts(configuration)
-        const patch: Record<string, unknown> = {}
-        if (!ar.includes('task_extraction')) patch.always_run = [...ar, 'task_extraction']
-        if (!bg.includes('task_extraction')) patch.background_experts = [...bg, 'task_extraction']
-        if (Object.keys(patch).length > 0) patchExpertPool(patch)
-      }
     },
-    [configuration, patchExpertPool, updateExpert],
-  )
-
-  /** Move an expert to/from background */
-  const setExpertBackground = useCallback(
-    (name: string, isBackground: boolean) => {
-      const bg = getBackgroundExperts(configuration)
-      if (isBackground && !bg.includes(name)) {
-        patchExpertPool({ background_experts: [...bg, name] })
-      } else if (!isBackground && bg.includes(name)) {
-        patchExpertPool({ background_experts: bg.filter((n) => n !== name) })
-      }
-    },
-    [configuration, patchExpertPool],
-  )
-
-  /** Toggle always_run for an expert */
-  const toggleAlwaysRun = useCallback(
-    (name: string) => {
-      const ar = getAlwaysRun(configuration)
-      if (ar.includes(name)) {
-        patchExpertPool({ always_run: ar.filter((n) => n !== name) })
-      } else {
-        patchExpertPool({ always_run: [...ar, name] })
-      }
-    },
-    [configuration, patchExpertPool],
+    [updateExpert],
   )
 
   /** Update a non-expert pipeline node config (e.g. input_gate.model, response_generator.persona) */
@@ -960,8 +584,6 @@ export function useConfiguratorState(
     addCustomExpert,
     removeExpert,
     toggleTaskExtraction,
-    setExpertBackground,
-    toggleAlwaysRun,
     updateNodeConfig,
     updateThreshold,
   }
