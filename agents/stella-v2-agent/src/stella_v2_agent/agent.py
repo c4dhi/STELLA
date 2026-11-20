@@ -42,7 +42,7 @@ from stella_v2_agent.companion_tools import create_companion_tools
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
 from stella_agent_sdk.env import env_bool
-from stella_agent_sdk.prompts import get_compiler
+from stella_agent_sdk.prompts import available_versions, get_compiler
 from stella_v2_agent.pipeline.bridge_generator import (
     BridgeGenerator,
     BRIDGE_MODE_BRIEF,
@@ -118,6 +118,23 @@ _ACTIVITY_START_MAX_PAGES = 5
 # agent's expert prompts compile. Bump deliberately when adopting a new compiler
 # version. Can be overridden per deployment via config["compiler_version"].
 PROMPT_COMPILER_VERSION = "1.2.0"  # 1.2.0: {{capabilities}} (#992)
+
+
+def _placeholders_beyond(version: str, prompt: str) -> List[str]:
+    """Placeholders in ``prompt`` that a registered compiler fills but ``version`` can't.
+
+    Empty for an unknown ``version``: that fails where prompts compile, not here.
+    """
+    try:
+        unfilled = get_compiler(version).validate(prompt)
+    except KeyError:
+        return []
+    if not unfilled:
+        return []
+    fillable = set()
+    for other in available_versions():
+        fillable.update(n for n in unfilled if not get_compiler(other).validate("{{" + n + "}}"))
+    return [n for n in unfilled if n in fillable]
 
 
 def _at_least(version: Any, floor: str) -> bool:
@@ -1264,9 +1281,10 @@ class StellaV2Agent(BaseAgent):
           as ``authored_compiler_version``. A configuration saved before the
           expert existed keeps running without it, so a running deployment
           does not gain an LLM call per turn it was never set up with (#191).
-        - The capabilities expert is off whenever the compiler can't fill
-          ``{{capabilities}}``: with nothing to judge against, its verdicts
-          would be guesses (#992).
+        - Any expert whose configured prompt uses a placeholder that only a
+          newer compiler fills is off: it would be sent the literal token, so
+          its verdicts would be guesses (#992). A placeholder no compiler
+          knows is left as written, as it always has been.
 
         Worked out again every session, so nothing carries over from an
         earlier session on the same instance.
@@ -1292,17 +1310,14 @@ class StellaV2Agent(BaseAgent):
                     "switch it on in the Configurator"
                 )
 
-        config = self.expert_registry.get("capabilities")
-        if config is not None and config.enabled:
-            try:
-                fits = "capabilities" in get_compiler(self._compiler_version).known_placeholders()
-            except KeyError:
-                fits = True  # an unknown version fails where prompts compile, not here
-            if not fits:
+        for config in self.expert_registry.get_enabled():
+            missing = _placeholders_beyond(self._compiler_version, config.system_prompt)
+            if missing:
                 config.enabled = False
                 logger.info(
-                    f"capabilities expert off: prompt compiler {self._compiler_version} "
-                    "has no {{capabilities}} (needs 1.2.0)"
+                    f"{config.name} expert off: its prompt uses "
+                    f"{', '.join('{{' + m + '}}' for m in missing)}, which prompt compiler "
+                    f"{self._compiler_version} can't fill"
                 )
 
     def _apply_pipeline_config(self, pipeline_config: Dict[str, Any]) -> None:

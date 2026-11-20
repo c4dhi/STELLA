@@ -65,7 +65,7 @@ compiler can actually resolve.
 
 `{{history_N}}` is **parametric**: `N` is any positive integer.
 
-Registered versions: `1.0.0` (the table above without `{{capabilities}}`), `1.1.0` (adds `{{persona.*}}`) and `1.2.0` (adds `{{capabilities}}`). An older version leaves a newer token as written.
+Registered versions: `1.0.0` (the table above without `{{capabilities}}`), `1.1.0` (adds `{{persona.*}}`) and `1.2.0` (adds `{{capabilities}}`). An older version leaves a newer token as written. STELLA V2 does not run an expert whose prompt needs a newer version than the session's (it is switched off for that session and the log names the placeholder).
 
 You can inspect the palette and validate a template programmatically:
 
