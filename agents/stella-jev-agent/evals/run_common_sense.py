@@ -3,7 +3,7 @@
 
 Needs TYPESAFE_API_KEY and typesafe-sdk. Sends only the cases in this folder.
 
-Usage: python evals/run_common_sense.py [--split dev|holdout|all] [--threshold 0.45] [--out results.json]
+Usage: python evals/run_common_sense.py [--split dev|holdout|all] [--threshold 0.3] [--out results.json]
 """
 import argparse
 import asyncio
@@ -21,10 +21,24 @@ from typesafe_sdk import AsyncTypeSafeClient  # noqa: E402
 from common_sense_cases import (  # noqa: E402
     BARGE_IN as BARGE_CASES, CASES, CONFIRMED_CONCERNS, EMERGENCIES, HAS_ANSWER_CASES,
 )
+from stella_v2_agent.experts.registry import ExpertRegistry  # noqa: E402
+from stella_jev_agent.agent import _OWN_EXPERTS_DIR  # noqa: E402
+from stella_jev_agent.ask_back import AskBack  # noqa: E402
+from stella_jev_agent.jev import JevClient  # noqa: E402
+from stella_jev_agent.pool import JevExpertPool, jev_settings  # noqa: E402
 from stella_jev_agent.questions import (  # noqa: E402
-    BARGE_IN, COMMON_SENSE, HAS_ANSWER, MEDICAL, RECOGNISER_ARTIFACT, RESUME, barge_in_state, not_believable,
-    turn_state,
+    BARGE_IN, DOESNT_FIT, HAS_ANSWER, RESUME, barge_in_state, turn_state,
 )
+
+# The experts are asked as the pipeline asks them: from their default configuration.
+POOL = JevExpertPool(
+    None, ExpertRegistry(experts_dir=str(_OWN_EXPERTS_DIR)), compiler_version="1.0.0",
+    jev=JevClient(), ask_back=AskBack(),
+)
+
+
+def experts(names, c):
+    return POOL.expert_questions(names, c["said"], c["history"], {})
 
 
 async def ask(client, gate, state, questions):
@@ -42,7 +56,7 @@ def pct(values, q):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", default="dev", choices=["dev", "holdout", "all"])
-    parser.add_argument("--threshold", type=float, default=0.45)
+    parser.add_argument("--threshold", type=float, default=jev_settings().get("expert_pool.ask_threshold"))
     parser.add_argument("--skip-threshold", type=float, default=0.8)
     parser.add_argument("--out")
     args = parser.parse_args()
@@ -59,7 +73,7 @@ async def main():
         cases = chosen(CASES)
         answers = await asyncio.gather(*(
             ask(client, gate, turn_state(c["said"], c["history"], c["task"]),
-                {"common_sense": COMMON_SENSE, "recogniser_artifact": RECOGNISER_ARTIFACT, "medical": MEDICAL})
+                experts(["common_sense", "medical"], c))
             for c in cases
         ))
         hit = {}
@@ -67,7 +81,7 @@ async def main():
         for c, (response, ms) in zip(cases, answers):
             latencies.append(ms)
             answer = response.answers["common_sense"]
-            p = not_believable(answer.probabilities, response.answers["recogniser_artifact"].probabilities)
+            p = answer.probabilities[DOESNT_FIT]
             asks = p >= args.threshold
             right = asks == (c["expect"] == "ask")
             hit[c["id"]] = right
@@ -87,7 +101,7 @@ async def main():
 
         emergencies = chosen(EMERGENCIES)
         answers = await asyncio.gather(*(
-            ask(client, gate, turn_state(c["said"], c["history"]), {"medical": MEDICAL})
+            ask(client, gate, turn_state(c["said"], c["history"]), experts(["medical"], c))
             for c in emergencies
         ))
         print("\nemergencies")
@@ -122,7 +136,7 @@ async def main():
 
         concerns = chosen(CONFIRMED_CONCERNS)
         answers = await asyncio.gather(*(
-            ask(client, gate, turn_state(c["said"], c["history"]), {"medical": MEDICAL}) for c in concerns
+            ask(client, gate, turn_state(c["said"], c["history"]), experts(["medical"], c)) for c in concerns
         ))
         print("\nhealth concern after a plain yes")
         for c, (response, ms) in zip(concerns, answers):

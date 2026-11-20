@@ -15,7 +15,7 @@ Jev is TypeSafe's model. Every turn's text, and the recent history it judges, is
 | Stage | STELLA Jev |
 |---|---|
 | Bridge | None. Nothing is said before the experts have decided |
-| Experts | One Jev call answers `common_sense`, `medical`, `legal`, `probing` and `timekeeper` |
+| Experts | One Jev call answers every expert that only picks a verdict and calls no tools: by default `common_sense`, `medical`, `legal`, `probing` and `timekeeper`. See [What Jev is asked](#what-jev-is-asked) |
 | `task_extraction` | Still a language model, because it writes the values. It runs after the reply and saves only what Jev picked: the task the message answered, tasks in the same state mentioned in passing (saved unconfirmed, and the reply won't ask about them again) and corrections of a value already collected in this state (overwritten). When Jev is not sure which task was answered, nothing is saved and the question comes again. Two exceptions save without that limit: the answer to an ask-back, and a stalled plan. See [What gets saved](#what-gets-saved) |
 | `companion_router` | Still a language model, because it calls tools. It runs after Jev, and only when Jev says there may be something to route |
 | Reply | gpt-5.4-mini, as in V2, plus a question back when something doesn't fit. It doesn't wait for task extraction: it counts the answer as confirmed, and extraction saves it in the background |
@@ -25,7 +25,23 @@ Jev is TypeSafe's model. Every turn's text, and the recent history it judges, is
 
 **Medical and legal.** A "low" or "high" counts only when Jev is at least `safety_threshold` sure of it; a "high" prepends a fixed warning to the reply. "Everyday forgetting or not knowing what to say" is listed as no health concern. The experts run on the language model only when Jev can't be reached, and then `expert_context` isn't used.
 
-If Jev can't be reached in time, the experts run on the language model with the prompts in `config/experts/`, and on a barge-in the agent stops for the person.
+If Jev can't be reached in time, the experts run on the language model with the same configuration, and on a barge-in the agent stops for the person.
+
+## What Jev is asked
+
+Jev is asked each expert exactly as its configuration says, the same way a language model is asked:
+- **The question:** the expert's prompt as the Configurator shows it, with its placeholders resolved.
+- **The options:** the expert's verdicts with their descriptions.
+- **What the reply is told:** the description of the verdict Jev picks.
+
+The JSON output format is left out, because Jev answers with a choice and not with JSON. Editing an expert's prompt or a verdict's description changes what Jev decides, and what an optimization tunes is what runs.
+
+The verdict descriptions say when to pick each verdict. They are written for Jev and for the language model alike.
+
+Jev also has a few questions of its own, which no expert configuration covers. They decide what the pipeline does next:
+- whether extraction or the companion router needs to run;
+- which task the message answered (built from the plan);
+- whether an interruption should stop the assistant.
 
 ## Settings
 
@@ -34,7 +50,7 @@ Set in the [Pipeline Configurator](./stella-v2/pipeline-configurator.md): click 
 | Node | Setting | Default | What it does |
 |---|---|---|---|
 | Turn Taking | `take_back_window_ms` | 6000 | See [Take-back](#take-back). 0 is off |
-| Expert Pool | `ask_threshold` | 0.45 | How sure Jev must be that a message doesn't fit before the agent asks back |
+| Expert Pool | `ask_threshold` | 0.3 | How sure Jev must be that a message doesn't fit before the agent asks back |
 | Expert Pool | `max_ask_backs` | 3 | The most times it asks back in one session |
 | Expert Pool | `skip_threshold` | 0.8 | How sure Jev must be that there is nothing to route before the companion router is skipped. It skips task extraction only when the state has no open or collected task; otherwise Jev's pick decides |
 | Expert Pool | `forecast_threshold` | 0.7 | How sure Jev must be which task the latest message answered before the reply moves on and extraction saves it. Below it nothing is saved and the question comes again |

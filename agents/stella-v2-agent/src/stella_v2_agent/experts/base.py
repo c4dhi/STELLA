@@ -154,6 +154,11 @@ class ExpertConfig:
         # Coerce verdict_directives whether they arrive as dicts (JSON/config) or instances.
         self.verdict_directives = VerdictDirective.coerce_map(self.verdict_directives)
 
+    def verdict_descriptions(self) -> Dict[str, str]:
+        """The verdicts this expert can give, each with its description, as configured.
+        What a language model is asked to choose from, and Jev too."""
+        return {label: d.description or "" for label, d in self.verdict_directives.items()}
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ExpertConfig":
         """Create an ExpertConfig from a dictionary (typically loaded from JSON)."""

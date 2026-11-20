@@ -308,6 +308,34 @@ class ExpertRunner:
                 error_message=str(e),
             )
 
+    def compile_prompt(
+        self,
+        config: ExpertConfig,
+        user_input: str,
+        conversation_history: List[Dict[str, str]],
+        sm_context: Dict[str, Any],
+    ) -> str:
+        """The expert's prompt as the Configurator shows it, with its {{placeholders}}
+        resolved. Whoever answers the expert, a language model or Jev, reads this.
+
+        Compiled through the SDK's single, version-pinned entry point. A malformed
+        sm_context (e.g. a bad progress value or a message missing role/content)
+        must not crash the expert turn, so a failed compile falls back to the raw
+        template (placeholders unresolved) and the expert still runs.
+        """
+        template = config.system_prompt or ""
+        try:
+            return sdk_prompts.compile(
+                template,
+                version=self._compiler_version,
+                sm_context=sm_context,
+                conversation_history=conversation_history,
+                user_input=user_input,
+            )
+        except Exception as e:  # noqa: BLE001 — never let prompt compilation kill the turn
+            logger.warning("Prompt compile failed for expert '%s' (%s); using raw template", config.name, e)
+            return template
+
     def _build_messages(
         self,
         config: ExpertConfig,
@@ -329,30 +357,7 @@ class ExpertRunner:
             append_output_format: If False, skip appending output_format
                 (used in tool mode where tools replace structured JSON output).
         """
-        template = config.system_prompt or ""
-
-        # Compile system prompt through the SDK's single, version-pinned entry
-        # point — resolve all {{placeholders}} against the live runtime context.
-        # The compiler copies sm_context internally and layers in the per-turn
-        # history / user message, so we never mutate the shared context here.
-        # Guarded: a malformed sm_context (e.g. a bad progress value or a message
-        # missing role/content) must not crash the expert turn. Unlike arbitration,
-        # this path has no outer try/except, so we fall back to the raw template
-        # (placeholders unresolved) and let the expert still run.
-        try:
-            compiled_prompt = sdk_prompts.compile(
-                template,
-                version=self._compiler_version,
-                sm_context=sm_context,
-                conversation_history=conversation_history,
-                user_input=user_input,
-            )
-        except Exception as e:  # noqa: BLE001 — never let prompt compilation kill the turn
-            logger.warning(
-                "Prompt compile failed for expert '%s' (%s); using raw template",
-                config.name, e,
-            )
-            compiled_prompt = template
+        compiled_prompt = self.compile_prompt(config, user_input, conversation_history, sm_context)
 
         # Append output format instruction if configured (not in tool mode)
         if append_output_format and config.output_format:
@@ -360,19 +365,12 @@ class ExpertRunner:
 
         # Generic verdict interface: the allowed verdict LABELS + their explanations
         # come from config (verdict_directives), not a hardcoded enum baked into the
-        # prompt. The label and explanation are handed to the LLM so it knows what
-        # each verdict means; the per-verdict ACTION is NOT shown (it is applied
-        # deterministically in the arbitration layer). Operators can add/rename
-        # verdicts and edit explanations without touching prompt text or code.
-        if append_output_format and config.verdict_directives:
-            lines = []
-            for label, directive in config.verdict_directives.items():
-                description = getattr(directive, "description", "") or ""
-                lines.append(f'- "{label}": {description}' if description else f'- "{label}"')
-            if lines:
-                compiled_prompt += (
-                    "\n\nClassify into exactly ONE of these verdicts:\n" + "\n".join(lines)
-                )
+        # prompt. The per-verdict ACTION is NOT shown (it is applied deterministically
+        # in the arbitration layer).
+        verdicts = config.verdict_descriptions() if append_output_format else {}
+        if verdicts:
+            lines = [f'- "{label}": {text}' if text else f'- "{label}"' for label, text in verdicts.items()]
+            compiled_prompt += "\n\nClassify into exactly ONE of these verdicts:\n" + "\n".join(lines)
 
         return [
             LLMMessage(role="system", content=compiled_prompt),

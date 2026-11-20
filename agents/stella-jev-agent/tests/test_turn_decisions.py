@@ -33,7 +33,6 @@ QUIET_MEDICAL = _answer(none=0.97, low=0.01, high=0.01, critical=0.01)
 CRITICAL_MEDICAL = _answer(none=0.01, low=0.01, high=0.08, critical=0.9)
 CRITICAL_LEGAL = _answer(none=0.01, low=0.01, high=0.08, critical=0.9)
 QUIET_LEGAL = _answer(none=0.99, low=0.0, high=0.0, critical=0.01)
-SPEECH = _answer(speech=0.99, artifact=0.01)
 
 
 class FakeJev:
@@ -45,6 +44,7 @@ class FakeJev:
 
     async def ask(self, state, questions, timeout_s=0):
         self.asked.append((state, set(questions)))
+        self.questions = questions
         if self.fail:
             raise JevUnavailable("down")
         return SimpleNamespace(answers=self.answers, latency_ms=100.0)
@@ -68,10 +68,9 @@ class Pool(JevExpertPool):
 NAMES = [COMMON, "medical", "legal", "task_extraction", "companion_router"]
 
 
-def _answers(common=FITS_ANSWER, medical=QUIET_MEDICAL, has_answer=0.5, activity=0.99, artifact=SPEECH, legal=QUIET_LEGAL) -> Dict:
+def _answers(common=FITS_ANSWER, medical=QUIET_MEDICAL, has_answer=0.5, activity=0.99, legal=QUIET_LEGAL) -> Dict:
     return {
         COMMON: common,
-        "recogniser_artifact": artifact,
         "medical": medical,
         "legal": legal,
         "has_answer": _answer(no=1 - has_answer, yes=has_answer),
@@ -104,12 +103,33 @@ def test_a_misfit_asks_back_and_saves_nothing():
     assert pool.language_model_calls == []
 
 
-def test_a_caption_asks_back_even_when_the_first_question_passes_it():
-    ask_back = AskBack()
-    pool = Pool(FakeJev(_answers(artifact=_answer(speech=0.1, artifact=0.9))), ask_back)
+def test_jev_is_asked_each_expert_as_its_configuration_says():
+    jev = FakeJev(_answers(medical=_answer(none=0.01, low=0.01, high=0.97, critical=0.01)))
+    pool = Pool(jev, AskBack())
+    medical = pool._registry.get("medical")
+    medical.system_prompt = "Edited in the configurator. {{history_2}} Latest: {{user_message}}"
 
-    assert _verdict(_run(pool), COMMON).verdict == DOESNT_FIT
-    assert ask_back.now is True
+    verdicts = asyncio.run(pool.run(NAMES, "Mir ist schwindlig.", [{"role": "assistant", "content": "Wie geht's?"}], {}))
+
+    question = jev.questions["medical"]
+    assert "Edited in the configurator." in question.instructions
+    assert "Mir ist schwindlig." in question.instructions and "Wie geht's?" in question.instructions
+    assert "Respond with compact JSON" not in question.instructions
+    assert dict(question.criteria) == medical.verdict_descriptions()
+    # The reply is told what the configuration says the verdict means, nothing else.
+    assert _verdict(verdicts, "medical").recommendation == medical.verdict_descriptions()["high"]
+    # Extraction and the router write or call tools, so a language model answers them.
+    assert not {"task_extraction", "companion_router"} & set(jev.questions)
+
+
+def test_a_disabled_or_tool_calling_expert_is_not_asked_of_jev():
+    jev = FakeJev(_answers())
+    pool = Pool(jev, AskBack())
+    pool._registry.get("legal").enabled = False
+
+    asyncio.run(pool.run(NAMES, "x", [], {}))
+
+    assert "legal" not in jev.questions and COMMON in jev.questions
 
 
 def test_an_emergency_is_never_asked_back():
@@ -277,7 +297,7 @@ def test_jev_reads_the_turn_and_the_task():
     assert state["latest_message"] == "Neun Liter."
     assert state["conversation"] == ["assistant: Wie viel?"]
     assert state["current_task"] == "Trinken | Still to collect: Trinkmenge"
-    assert {"common_sense", "recogniser_artifact", "has_answer", "activity_intent"} <= questions
+    assert {"common_sense", "has_answer", "activity_intent"} <= questions
 
 
 def test_current_task_is_empty_without_a_plan():
