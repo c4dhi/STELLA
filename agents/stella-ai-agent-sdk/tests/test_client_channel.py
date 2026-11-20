@@ -261,3 +261,34 @@ async def test_an_empty_transcript_is_still_not_a_turn():
     await agent.run_audio_loop()
 
     assert agent.inputs == []
+
+
+# ── whether the agent speaks (#180) ─────────────────────────────────────────
+
+from stella_agent_sdk.client_channel import SPEECH_COMMAND, speech_command, tts_enabled  # noqa: E402
+
+
+@pytest.mark.parametrize("value,speaks", [(None, True), ("true", True), ("false", False), ("FALSE", False), ("", True)])
+def test_tts_enabled_reads_the_platform_variable(value, speaks):
+    env = {} if value is None else {"TTS_ENABLED": value}
+    assert tts_enabled(env) is speaks
+
+
+def test_the_speech_command_tells_the_screen_whether_the_agent_speaks():
+    # A screen cannot see the pod's TTS_ENABLED: with nothing spoken there is
+    # no audio progress, so it has to be told to fire the reply's cues at the
+    # end of its text instead.
+    assert speech_command("s1", False).to_data_payload() == {
+        "type": "agent_command",
+        "data": {"command": "stella.speech", "enabled": False},
+    }
+    assert SPEECH_COMMAND == "stella.speech"
+
+
+def test_platform_commands_need_no_manifest_declaration():
+    from stella_agent_sdk.client_channel import ClientChannel
+    channel = ClientChannel(events={}, commands={})   # inside STELLA, nothing declared
+    assert channel.command_problem(SPEECH_COMMAND, {"enabled": False}) is None
+    assert channel.command_problem("sleep", {}) is not None
+    # Only the SDK's own: a misspelt platform name is refused, not waved through.
+    assert channel.command_problem("stella.spech", {"enabled": False}) is not None

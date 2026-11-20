@@ -11,10 +11,16 @@ import { randomUUID } from 'crypto'
 import { DEFAULT_DOCKERFILE, SLUG_REGEX, VERSION_REGEX } from '../agent-package/manifest-defaults.js'
 import { SDK_PACKAGE, builtSdkProblem, sdkSupport } from '../agent-package/sdk-support.js'
 import { manifestOfAgentType, type AgentTypeManifestSource } from '../agents/agent-requirements.js'
+import { UserMessagesService } from '../user-messages/user-messages.service.js'
 
 // execFile, never exec: every argument goes to the program as-is, with no shell
 // in between, so nothing from an uploaded package can run a command on the host.
 const execFileAsync = promisify(execFile)
+
+/** The first line of a (possibly multi-line) error message, for a short notification. */
+export function firstLine(message: string): string {
+  return message.split('\n')[0]
+}
 
 /** `<slug>:<version>`, after checking both against the manifest patterns. */
 export function buildImageName(slug: string, version: string): string {
@@ -74,6 +80,8 @@ export interface BuildStatus {
   errorMessage?: string
   startedAt: Date
   completedAt?: Date
+  // Only ever set on a single build fetched by id (never in a history list).
+  buildOutput?: string
 }
 
 @Injectable()
@@ -91,6 +99,7 @@ export class AgentBuildService {
     private configService: ConfigService,
     private prisma: PrismaService,
     private agentPackageService: AgentPackageService,
+    private userMessagesService: UserMessagesService,
   ) {
     const nodeEnv = this.configService.get<string>('NODE_ENV', 'local')
     this.isProduction = nodeEnv === 'production'
@@ -105,11 +114,14 @@ export class AgentBuildService {
    * reading whatever is current on the agent type at that time. A second
    * request that arrives while one is already queued (not yet started)
    * supersedes it, so only the latest upload ever gets built next.
+   *
+   * `triggeredByUserId`, if given, is who hears about it if the build fails
+   * (falling back to the agent's owner otherwise).
    */
-  async startBuild(agentTypeId: string): Promise<BuildResult> {
+  async startBuild(agentTypeId: string, triggeredByUserId?: string): Promise<BuildResult> {
     const running = this.activeBuilds.get(agentTypeId)
     if (running) {
-      return this.queueBuild(agentTypeId, running)
+      return this.queueBuild(agentTypeId, running, triggeredByUserId)
     }
 
     // Reserve the slot before the first await: two startBuild calls for the
@@ -144,7 +156,7 @@ export class AgentBuildService {
 
       // Swap the reservation for the real build: a call queued behind the
       // reservation chains onto it, which only settles once this build does.
-      const buildPromise = this.executeBuild(agentType, buildLog.id)
+      const buildPromise = this.executeBuild(agentType, buildLog.id, triggeredByUserId)
       this.activeBuilds.set(agentTypeId, buildPromise)
       buildPromise.finally(() => {
         if (this.activeBuilds.get(agentTypeId) === buildPromise) this.activeBuilds.delete(agentTypeId)
@@ -165,7 +177,7 @@ export class AgentBuildService {
   }
 
   /** Queues a build behind the one currently running, superseding any build already queued. */
-  private async queueBuild(agentTypeId: string, running: Promise<BuildResult>): Promise<BuildResult> {
+  private async queueBuild(agentTypeId: string, running: Promise<BuildResult>, triggeredByUserId?: string): Promise<BuildResult> {
     const staleQueuedId = this.queuedNext.get(agentTypeId)
     if (staleQueuedId) {
       await this.prisma.agentBuildLog
@@ -182,7 +194,7 @@ export class AgentBuildService {
     this.queuedNext.set(agentTypeId, buildLog.id)
     this.logger.log(`Queued build ${buildLog.id} for ${agentTypeId} behind the one in progress`)
 
-    const chained = running.catch(() => undefined).then(() => this.runQueuedBuild(agentTypeId, buildLog.id))
+    const chained = running.catch(() => undefined).then(() => this.runQueuedBuild(agentTypeId, buildLog.id, triggeredByUserId))
     this.activeBuilds.set(agentTypeId, chained)
     chained.finally(() => {
       if (this.activeBuilds.get(agentTypeId) === chained) this.activeBuilds.delete(agentTypeId)
@@ -192,7 +204,7 @@ export class AgentBuildService {
   }
 
   /** Runs a queued build, unless a later upload has since superseded it. */
-  private async runQueuedBuild(agentTypeId: string, buildLogId: string): Promise<BuildResult> {
+  private async runQueuedBuild(agentTypeId: string, buildLogId: string, triggeredByUserId?: string): Promise<BuildResult> {
     if (this.queuedNext.get(agentTypeId) !== buildLogId) {
       // queueBuild only marks the row it is itself replacing: two queueBuild
       // calls landing in the same tick can each read queuedNext before either
@@ -217,15 +229,16 @@ export class AgentBuildService {
       return { success: false, buildLogId, errorMessage }
     }
 
-    return this.executeBuild(agentType, buildLogId)
+    return this.executeBuild(agentType, buildLogId, triggeredByUserId)
   }
 
   /**
    * Execute the Docker build process.
    */
   private async executeBuild(
-    agentType: AgentTypeManifestSource & { id: string; packagePath: string | null },
+    agentType: AgentTypeManifestSource & { id: string; packagePath: string | null; userId: string | null },
     buildLogId: string,
+    triggeredByUserId?: string,
   ): Promise<BuildResult> {
     const imageName = buildImageName(agentType.slug, agentType.version)
     let extractedPath: string | null = null
@@ -300,6 +313,15 @@ export class AgentBuildService {
           completedAt: new Date(),
         },
       })
+
+      const recipientId = triggeredByUserId ?? agentType.userId
+      if (recipientId) {
+        await this.userMessagesService
+          .createAgentBuildFailedMessage(recipientId, agentType.id, agentType.name, firstLine(error.message))
+          .catch((err) => this.logger.warn(`Failed to notify ${recipientId} of the build failure: ${(err as Error).message}`))
+      } else {
+        this.logger.warn(`No recipient for the build failure of ${agentType.slug} (${agentType.id}): no triggering user and no owner`)
+      }
 
       return {
         success: false,

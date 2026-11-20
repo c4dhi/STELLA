@@ -248,6 +248,14 @@ pipelineSchema:
           type: expert_list
           description: "Define new custom experts with name, description, priority, model, and prompt"
           isCustom: true
+        - id: capability_extras
+          label: "Capability Extras"
+          type: key_value
+          description: "What she can do beyond what the session has, per mode (plan, activity, companion), one entry per line, e.g. \"Answer general-knowledge questions\" for companion. Added to {{capabilities}}, which the capabilities expert checks requests against. Leave a mode empty to add nothing."
+          default:
+            plan: ""
+            activity: ""
+            companion: ""
 
     - id: arbitration
       label: "Arbitration"
@@ -266,6 +274,7 @@ pipelineSchema:
             task_extraction: "friendly"
             probing: "curious"
             timekeeper: "encouraging"
+            capabilities: "friendly"
         - id: gate_failure_message
           label: "Gate Failure Message"
           type: text
@@ -738,10 +747,11 @@ pipelineSchema:
       default: 1.5
 
 # SDK prompt-compiler version this agent resolves {{placeholder}} tokens with.
-# 1.1.0 adds the {{persona.*}} namespace. 1.0.0 stays registered in the SDK, so
-# configurations authored against it keep compiling unchanged.
+# 1.1.0 adds the {{persona.*}} namespace, 1.2.0 {{capabilities}}. Older versions
+# stay registered in the SDK, so configurations authored against them keep
+# compiling unchanged.
 promptCompiler:
-  version: "1.1.0"
+  version: "1.2.0"
 
 # {{placeholder}} palette offered in the Agent Configurator. Mirrors the SDK
 # placeholder compiler's resolvable set (stella_agent_sdk.prompts palette()).
@@ -801,6 +811,10 @@ runtimeVariables:
     parametric: true
     description: "A value defined once on the deployed Persona (e.g. {{persona.name}}). Built-ins: name, voice, language; any other key comes from the persona's own variables. Resolvable here and in a plan's own text, so identity is stated in one place."
     preview: "Grace"
+  - name: capabilities
+    label: capabilities
+    description: "What she can do in this session right now: the plan (and leaving an activity), or the activities on offer and going to sleep, plus the Capability Extras for the mode. From STELLA every turn (#992). Compiler 1.2.0."
+    preview: "Mode: open conversation, between activities\n- Memory quiz: Ten short questions\n- Go to sleep"
 
 sdk:
   minVersion: "0.4.0"

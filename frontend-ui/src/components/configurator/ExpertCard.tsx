@@ -393,7 +393,7 @@ function ExpertCardInner({
         }`}
       >
         {/* Header row */}
-        <div className="flex items-center gap-2.5 px-4 py-3">
+        <div className="coarse:relative coarse:z-10 flex items-center gap-2.5 px-4 py-3">
           {/* Drag handle */}
           <button
             {...attributes}

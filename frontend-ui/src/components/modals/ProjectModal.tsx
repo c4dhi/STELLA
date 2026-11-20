@@ -37,7 +37,7 @@ import {
   DEFAULT_EXPIRATION_OPTIONS,
   SessionDurationSelectionStep,
 } from '../shared'
-import { WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
+import { WIZARD_MODAL_SIZE, WIZARD_OVERLAY_ALIGN } from '../shared/wizardLayout'
 import { choiceCardClass } from '../shared/wizardChoice'
 import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
 
@@ -177,7 +177,6 @@ export default function ProjectModal({
     () => assignSlots(connectorSlots, ownConnectors, selectedConnectors),
     [connectorSlots, ownConnectors, selectedConnectors],
   )
-  const showConnectorsStep = connectorSlots.length > 0 || ownConnectors.length > 0
 
   // The language the selected plan declares, if it declares one. A plan written
   // in German is German wherever it is deployed, so it — not the operator —
@@ -227,15 +226,15 @@ export default function ProjectModal({
     if (runsPlan) {
       s.push('plan')
     }
-    if (showConnectorsStep) {
-      s.push('connectors')
-    }
+    // Always shown, even with none yet: it's how someone with no connectors
+    // finds out they exist (#891).
+    s.push('connectors')
     if (supportsVoiceSelection) {
       s.push('voice')
     }
     s.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length), 'visualizer', 'duration', 'expiration')
     return s
-  }, [needs, runsPlan, showConnectorsStep, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
+  }, [needs, runsPlan, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
 
   // Start From drops out of the steps when the templates finish loading and
   // there are none (or the fetch failed). Move on to the settings rather than
@@ -505,10 +504,8 @@ export default function ProjectModal({
             agentConfig.plan = selectedPlan.content as unknown as Record<string, unknown>
           }
 
-          if (showConnectorsStep) {
-            const bindings = bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors)
-            if (bindings.length > 0) agentConfig.connectorBindings = bindings
-          }
+          const bindings = bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors)
+          if (bindings.length > 0) agentConfig.connectorBindings = bindings
 
           if (selectedConfiguration) {
             // Preferred: store the ID so the spawn resolves a type/version-checked,
@@ -630,10 +627,15 @@ export default function ProjectModal({
     }
   }
 
-  // Determine modal size
-  const modalSizeClass = (isPublicWizard || step === 'complete')
-    ? WIZARD_MODAL_SIZE
-    : 'max-w-lg'
+  // Determine modal size. The wizard's own cap already bounds its height; the
+  // plain (non-wizard) dialog has no height built into its width class, so it
+  // needs its own cap here instead.
+  const isWizardSized = isPublicWizard || step === 'complete'
+  const modalSizeClass = isWizardSized ? WIZARD_MODAL_SIZE : 'max-w-lg max-h-[calc(100dvh-2rem)]'
+  // Centering a dialog whose height follows its step would move its top edge,
+  // and with it the header and step bar, as steps differ in height. The
+  // plain dialog doesn't resize per step, so it stays centered as before.
+  const overlayAlignClass = isWizardSized ? WIZARD_OVERLAY_ALIGN : 'items-center'
 
   return (
     <AnimatePresence>
@@ -643,7 +645,7 @@ export default function ProjectModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm"
+          className={`fixed inset-0 z-[100] flex justify-center p-4 ${overlayAlignClass} bg-black/20 backdrop-blur-sm`}
           onClick={handleClose}
         >
           <motion.div
@@ -654,7 +656,7 @@ export default function ProjectModal({
             layout
             className={`
               backdrop-blur-xl rounded-[20px] w-full ${modalSizeClass} overflow-hidden
-              flex flex-col max-h-[calc(100dvh-2rem)]
+              flex flex-col
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'

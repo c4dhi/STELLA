@@ -24,6 +24,40 @@ class InitializeResponse(_message.Message):
     current_state_id: str
     def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ..., current_state_id: _Optional[str] = ...) -> None: ...
 
+class LoadPlanRequest(_message.Message):
+    __slots__ = ("session_id", "plan_json")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    PLAN_JSON_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    plan_json: str
+    def __init__(self, session_id: _Optional[str] = ..., plan_json: _Optional[str] = ...) -> None: ...
+
+class LoadPlanResponse(_message.Message):
+    __slots__ = ("success", "error", "current_state_id", "plan_title")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    CURRENT_STATE_ID_FIELD_NUMBER: _ClassVar[int]
+    PLAN_TITLE_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    error: str
+    current_state_id: str
+    plan_title: str
+    def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ..., current_state_id: _Optional[str] = ..., plan_title: _Optional[str] = ...) -> None: ...
+
+class ClearPlanRequest(_message.Message):
+    __slots__ = ("session_id",)
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+
+class ClearPlanResponse(_message.Message):
+    __slots__ = ("success", "error")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    error: str
+    def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ...) -> None: ...
+
 class CompleteTaskRequest(_message.Message):
     __slots__ = ("session_id", "task_id", "reasoning")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
@@ -313,10 +347,14 @@ class GetCollectedDeliverablesResponse(_message.Message):
     def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ..., deliverables: _Optional[_Iterable[_Union[CollectedDeliverable, _Mapping]]] = ...) -> None: ...
 
 class GetFullStateRequest(_message.Message):
-    __slots__ = ("session_id",)
+    __slots__ = ("session_id", "include_capabilities", "agent_id")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    INCLUDE_CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    AGENT_ID_FIELD_NUMBER: _ClassVar[int]
     session_id: str
-    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+    include_capabilities: bool
+    agent_id: str
+    def __init__(self, session_id: _Optional[str] = ..., include_capabilities: _Optional[bool] = ..., agent_id: _Optional[str] = ...) -> None: ...
 
 class FullStateDeliverable(_message.Message):
     __slots__ = ("key", "description", "type", "required", "status", "value", "collected_at", "acceptance_criteria", "reasoning", "discovered")
@@ -383,7 +421,7 @@ class FullStateState(_message.Message):
     def __init__(self, id: _Optional[str] = ..., title: _Optional[str] = ..., type: _Optional[str] = ..., status: _Optional[str] = ..., tasks: _Optional[_Iterable[_Union[FullStateTask, _Mapping]]] = ..., goal_objective: _Optional[str] = ..., goal_context: _Optional[str] = ..., goal_depth_guidance: _Optional[str] = ..., goal_boundaries: _Optional[str] = ..., goal_success_description: _Optional[str] = ...) -> None: ...
 
 class GetFullStateResponse(_message.Message):
-    __slots__ = ("success", "error", "plan_id", "plan_title", "current_state_id", "progress", "total_turns", "turns_without_progress", "states", "collected_deliverables")
+    __slots__ = ("success", "error", "plan_id", "plan_title", "current_state_id", "progress", "total_turns", "turns_without_progress", "states", "collected_deliverables", "capabilities")
     class CollectedDeliverablesEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -401,6 +439,7 @@ class GetFullStateResponse(_message.Message):
     TURNS_WITHOUT_PROGRESS_FIELD_NUMBER: _ClassVar[int]
     STATES_FIELD_NUMBER: _ClassVar[int]
     COLLECTED_DELIVERABLES_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
     success: bool
     error: str
     plan_id: str
@@ -411,4 +450,43 @@ class GetFullStateResponse(_message.Message):
     turns_without_progress: int
     states: _containers.RepeatedCompositeFieldContainer[FullStateState]
     collected_deliverables: _containers.ScalarMap[str, str]
-    def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ..., plan_id: _Optional[str] = ..., plan_title: _Optional[str] = ..., current_state_id: _Optional[str] = ..., progress: _Optional[int] = ..., total_turns: _Optional[int] = ..., turns_without_progress: _Optional[int] = ..., states: _Optional[_Iterable[_Union[FullStateState, _Mapping]]] = ..., collected_deliverables: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    capabilities: SessionCapabilities
+    def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ..., plan_id: _Optional[str] = ..., plan_title: _Optional[str] = ..., current_state_id: _Optional[str] = ..., progress: _Optional[int] = ..., total_turns: _Optional[int] = ..., turns_without_progress: _Optional[int] = ..., states: _Optional[_Iterable[_Union[FullStateState, _Mapping]]] = ..., collected_deliverables: _Optional[_Mapping[str, str]] = ..., capabilities: _Optional[_Union[SessionCapabilities, _Mapping]] = ...) -> None: ...
+
+class GetCapabilitiesRequest(_message.Message):
+    __slots__ = ("session_id", "agent_id")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    AGENT_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    agent_id: str
+    def __init__(self, session_id: _Optional[str] = ..., agent_id: _Optional[str] = ...) -> None: ...
+
+class Capability(_message.Message):
+    __slots__ = ("id", "kind", "title", "description")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    TITLE_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    kind: str
+    title: str
+    description: str
+    def __init__(self, id: _Optional[str] = ..., kind: _Optional[str] = ..., title: _Optional[str] = ..., description: _Optional[str] = ...) -> None: ...
+
+class SessionCapabilities(_message.Message):
+    __slots__ = ("mode", "capabilities")
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    mode: str
+    capabilities: _containers.RepeatedCompositeFieldContainer[Capability]
+    def __init__(self, mode: _Optional[str] = ..., capabilities: _Optional[_Iterable[_Union[Capability, _Mapping]]] = ...) -> None: ...
+
+class GetCapabilitiesResponse(_message.Message):
+    __slots__ = ("success", "error", "capabilities")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    error: str
+    capabilities: SessionCapabilities
+    def __init__(self, success: _Optional[bool] = ..., error: _Optional[str] = ..., capabilities: _Optional[_Union[SessionCapabilities, _Mapping]] = ...) -> None: ...

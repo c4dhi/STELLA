@@ -188,104 +188,62 @@ pytest -v
 
 ### Test Structure
 
-```python
-"""Tests for the customer support agent."""
+Test `process()` directly, with a fake model client: no room, no STT or TTS, and no API key. This tests the agent from [Getting Started](../../agent-sdk/getting-started.md), saved as `my_agent/agent.py` (with an empty `my_agent/__init__.py`), where Getting Started calls it `agent.py`:
+
+<!-- reader-package: my_agent -->
+
+```python title="tests/test_agent.py"
+"""Tests for MyAgent, without a room or a real model."""
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock, patch
 
-from stella_agent.agent import CustomerSupportAgent
+from stella_agent_sdk import AgentInput, OutputType
+from my_agent.agent import MyAgent
+
+
+async def _stream(*parts):
+    """What the OpenAI client streams back: one delta per part."""
+    for part in parts:
+        yield SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=part))])
 
 
 @pytest.fixture
-def agent():
-    """Create a test agent instance."""
-    return CustomerSupportAgent()
+def agent(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    agent = MyAgent()
+    agent.model = "test-model"
+    agent.system_prompt = "Be brief."
+    agent.client.chat.completions.create = AsyncMock(return_value=_stream("Hi", " there"))
+    return agent
 
 
-@pytest.fixture
-def mock_openai():
-    """Mock OpenAI client."""
-    with patch('stella_agent.agent.AsyncOpenAI') as mock:
-        client = AsyncMock()
-        mock.return_value = client
-        yield client
+async def _run(agent, text):
+    return [o async for o in agent.process(AgentInput.text_input("s1", text))]
 
 
-class TestCustomerSupportAgent:
-    """Tests for CustomerSupportAgent."""
+@pytest.mark.asyncio
+async def test_the_reply_ends_with_one_final_chunk(agent):
+    outputs = await _run(agent, "Hello")
+    chunks = [o for o in outputs if o.type is OutputType.TEXT_CHUNK]
+    assert chunks[-1].is_final and chunks[-1].content == "Hi there"
+    assert [o.is_final for o in chunks].count(True) == 1
 
-    @pytest.mark.asyncio
-    async def test_on_connect_sends_greeting(self, agent):
-        """Agent should send greeting on connect."""
-        agent.speak = AsyncMock()
 
-        await agent.on_connect()
-
-        agent.speak.assert_called_once()
-        assert "help" in agent.speak.call_args[0][0].lower()
-
-    @pytest.mark.asyncio
-    async def test_on_transcript_ignores_partial(self, agent):
-        """Agent should ignore non-final transcripts."""
-        agent._generate_response = AsyncMock()
-
-        await agent.on_transcript("Hello", is_final=False)
-
-        agent._generate_response.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_on_transcript_processes_final(self, agent, mock_openai):
-        """Agent should process final transcripts."""
-        agent.speak = AsyncMock()
-        mock_openai.chat.completions.create.return_value.choices[0].message.content = "Hi there!"
-
-        await agent.on_transcript("Hello", is_final=True)
-
-        assert len(agent.history) == 1
-        assert agent.history[0]["content"] == "Hello"
-        agent.speak.assert_called_once_with("Hi there!")
+@pytest.mark.asyncio
+async def test_both_sides_of_the_turn_are_remembered(agent):
+    await _run(agent, "Hello")
+    assert agent.history == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
 ```
 
 ### Testing Tools
 
-```python
-"""Tests for agent tools."""
-
-import pytest
-from unittest.mock import AsyncMock, patch
-
-from stella_agent.tools import search_knowledge
-
-
-@pytest.mark.asyncio
-async def test_search_knowledge_returns_results():
-    """Search should return formatted results."""
-    mock_results = [
-        type('Article', (), {'title': 'FAQ', 'summary': 'Common questions'})(),
-    ]
-
-    with patch('stella_agent.tools.db.search', new_callable=AsyncMock) as mock_search:
-        mock_search.return_value = mock_results
-
-        result = await search_knowledge("help")
-
-        assert result["found"] is True
-        assert len(result["articles"]) == 1
-        assert result["articles"][0]["title"] == "FAQ"
-
-
-@pytest.mark.asyncio
-async def test_search_knowledge_handles_no_results():
-    """Search should handle empty results."""
-    with patch('stella_agent.tools.db.search', new_callable=AsyncMock) as mock_search:
-        mock_search.return_value = []
-
-        result = await search_knowledge("nonexistent")
-
-        assert result["found"] is False
-        assert result["articles"] == []
-```
+Tools are plain objects: call `execute()` with a fake in place of whatever the tool talks to. A worked example is in [Building a custom agent](../../agent-sdk/building-custom-agent.md#step-6-tests).
 
 ## Best Practices
 

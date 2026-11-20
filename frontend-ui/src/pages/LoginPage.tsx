@@ -147,14 +147,14 @@ export default function LoginPage() {
             />
 
             <div className="space-y-2 group">
-              <div className="flex justify-between items-center ml-1">
+              <div className="flex justify-between items-center ml-1 coarse:mb-3">
                 <label className="text-xs font-medium tracking-wider uppercase transition-colors text-content-secondary dark:text-content-inverse-tertiary group-focus-within:text-neutral-900 dark:group-focus-within:text-primary-400">
                   Password
                 </label>
                 {!isSignup && (
                   <button
                     type="button"
-                    className="text-xs text-content-tertiary dark:text-content-inverse-tertiary hover:text-content dark:hover:text-content-inverse transition-colors"
+                    className="coarse:z-10 text-xs text-content-tertiary dark:text-content-inverse-tertiary hover:text-content dark:hover:text-content-inverse transition-colors"
                   >
                     Forgot?
                   </button>

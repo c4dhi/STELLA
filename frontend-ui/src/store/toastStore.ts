@@ -6,6 +6,8 @@ export interface Toast {
   message: string
   type: 'success' | 'error' | 'info'
   duration?: number
+  /** Makes the toast clickable, navigating to this in-app path. */
+  link?: { to: string; label: string }
 }
 
 interface ToastState {

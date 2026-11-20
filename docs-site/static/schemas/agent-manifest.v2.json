@@ -132,6 +132,26 @@
               "additionalProperties": false
             }
           ]
+        },
+        "connectorTools": {
+          "type": "object",
+          "properties": {
+            "modes": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "plan",
+                  "companion"
+                ]
+              }
+            }
+          },
+          "required": [
+            "modes"
+          ],
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

@@ -452,11 +452,8 @@ export class AgentsService {
         clientChannel: requirements.client,
       });
 
-      // Update agent with pod info
-      await this.prisma.agentInstance.update({
-        where: { id: agentId },
-        data: { podName, secretName },
-      });
+      // Record the pod, unless the agent was stopped while it was being created.
+      if (!(await this.keepNewPod(agentId, podName, secretName))) return;
 
       this.logger.log(`Created K8s pod ${podName} for agent ${agentId}`);
 
@@ -779,8 +776,11 @@ export class AgentsService {
       throw new NotFoundException(`Agent with ID ${id} not found`);
     }
 
-    // Update status to STOPPING
-    await this.prisma.agentInstance.update({
+    // Update status to STOPPING. Clean up from the row this write returns, not
+    // the one read above: a wake running at the same time may have recorded
+    // its new pod in between, and the read above would miss it (#188). After
+    // STOPPING, keepNewPod refuses to record a pod, so none can slip past.
+    const stopping = await this.prisma.agentInstance.update({
       where: { id },
       data: {
         status: AgentStatus.STOPPING,
@@ -792,7 +792,7 @@ export class AgentsService {
 
     // Clean up K8s resources (pod, secret, configmap)
     // This is critical to prevent zombie containers from accumulating
-    await this.cleanupK8sResources(agent);
+    await this.cleanupK8sResources(stopping);
 
     // Update final status to STOPPED
     const stoppedAgent = await this.prisma.agentInstance.update({
@@ -820,6 +820,27 @@ export class AgentsService {
 
     this.logger.log(`Agent ${id} stopped successfully`);
     return stoppedAgent;
+  }
+
+  /**
+   * Record a just-created pod on its agent, unless the agent is being stopped
+   * or already is: then the pod and its secret are deleted and false returned.
+   * A wake re-creating a pod while the session's close stops the agent would
+   * otherwise leave a pod that no row names, running for weeks (#187, #188).
+   * The conditional write and stopAgent's STOPPING write serialize on the row,
+   * so in every order the pod is either recorded before stopAgent reads it
+   * back or refused here.
+   */
+  private async keepNewPod(agentId: string, podName: string, secretName: string): Promise<boolean> {
+    const { count } = await this.prisma.agentInstance.updateMany({
+      where: { id: agentId, status: { notIn: [AgentStatus.STOPPING, AgentStatus.STOPPED] } },
+      data: { podName, secretName },
+    });
+    if (count > 0) return true;
+    this.logger.warn(`Agent ${agentId} was stopped while its pod was created; deleting ${podName}`);
+    await this.k8s.deletePod(podName).catch((error) => this.logger.warn(`Failed to delete pod ${podName}: ${error.message}`));
+    await this.k8s.deleteSecret(secretName).catch((error) => this.logger.warn(`Failed to delete secret ${secretName}: ${error.message}`));
+    return false;
   }
 
   /**
@@ -1167,16 +1188,11 @@ export class AgentsService {
         clientChannel: requirements.client,
       });
 
-      // Update agent with new pod info
-      const updatedAgent = await this.prisma.agentInstance.update({
-        where: { id },
-        data: {
-          podName,
-          secretName,
-        },
-      });
-
-      this.logger.log(`Agent ${id} restarted successfully with pod ${podName}`);
+      // Record the new pod, unless the agent was stopped while it was being
+      // created (a wake racing a session close, #188).
+      const kept = await this.keepNewPod(id, podName, secretName);
+      const updatedAgent = await this.prisma.agentInstance.findUnique({ where: { id } });
+      if (kept) this.logger.log(`Agent ${id} restarted successfully with pod ${podName}`);
       return updatedAgent;
     } catch (error) {
       // Update agent status to FAILED

@@ -40,6 +40,8 @@ features:
   #   modes: [plan, companion]       # how a session may run them
   # configurator:                    # deployments pick a Configurator configuration
   #   required: true                 # every deployment needs one (`true` = optional)
+  # connectorTools:                  # the agent calls its connectors' tools mid-conversation
+  #   modes: [companion]             # in these plan modes (see Capabilities below)
 
 env:
   required:                          # deploy is refused without these
@@ -81,7 +83,7 @@ sdk:
 | `version` | The manifest format. Write `"2.0"`. |
 | `metadata` | Name, slug, version, description, icon, tags, author. `deprecated` and `deprecationNote` keep an agent deployable but demote it in the gallery. |
 | `capabilities` | What the agent can do. They decide which of its experts it publishes (see below). Unknown values are refused. |
-| `features` | Which platform features STELLA wires up for the agent. `persona` (default `true`), `plans` (`required`, `modes`) and `configurator` (`required`; `true` is short for an optional configuration). Leave a block out to turn the feature off. |
+| `features` | Which platform features STELLA wires up for the agent. `persona` (default `true`), `plans` (`required`, `modes`), `configurator` (`required`; `true` is short for an optional configuration) and `connectorTools` (`modes`: the plan modes in which the agent calls its connectors' tools during the conversation). Leave a block out to turn the feature off. |
 | `env` | Environment variables the deploying user provides: `required` names, and `optional` entries with a `name`, a `description` and a `default`, plus optional display and checking fields (`type`, `label`, `group` for the tab, `advanced`, `min`/`max`/`step`/`unit`, `options`, `format`, `agentDefault`, `unsetLabel`). See [Environment variables](../architecture/environment-variables.md#manifest-declaration). |
 | `connectors` | Outside MCP servers (Connectors) the agent reaches through the SDK by slot name. Users can always offer extra ones on top. |
 | `client` | What the user's screen and the agent may send each other beyond speech and chat text: `events` (screen → agent) and `commands` (agent → screen), each with a `name`, a `description` and an optional JSON Schema for its `data`. See [The client channel](#the-client-channel). |
@@ -128,6 +130,7 @@ An undeclared event or command is refused, and so is one whose data does not fit
 STELLA refuses a manifest that breaks any of these:
 
 - `features.plans` is set exactly when `capabilities` includes `plans`, and `features.plans.modes` includes `companion` exactly when `capabilities` includes `companion`.
+- `features.connectorTools.modes` includes `companion` only when `features.plans.modes` does. An agent without companion mode runs in plan mode, with or without a plan.
 - `features.configurator` needs a `pipelineSchema`. An `experts` agent with the configurator must expose its expert configuration in `configSchema` (`experts`, `expert_overrides`, `experts_dir` or `custom_experts`).
 - A resource `request` is not above its `limit`, and no limit is above the maximum.
 - `configSchema` is a valid JSON Schema that STELLA can compile, and `defaultConfig` fits it. Values for required settings may be left out of the defaults.

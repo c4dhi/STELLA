@@ -1,5 +1,6 @@
 
 import { create } from 'zustand'
+import { resolveState } from '../components/face/animations/emotionRegistry'
 import { generateUUID } from '../lib/uuid'
 import type {
   TranscriptChunk,
@@ -18,6 +19,35 @@ import { apiClient } from '../services/ApiClient'
 import { PeerTransport } from '../services/PeerTransport'
 import { progressUpdateToTodoList } from '../lib/progressConversion'
 import { nextSttStatus, type SttStatus, type SttStatusEnvelope } from '../lib/sttStatus'
+
+/**
+ * Whether an agent's task list still has something running (#977): a
+ * companion has no plan states to count, so it is active only while it
+ * names an activity; a plan agent is active while states remain.
+ */
+export function agentActivityEnded(todoList: TodoList): boolean {
+  if (todoList.companion) return !todoList.companion.active_activity
+  // total_states > 0 so an envelope with no groups at all (if one can ever
+  // arrive) doesn't read as "ended" just because remaining_states is also 0.
+  return todoList.total_states > 0 && todoList.remaining_states === 0
+}
+
+/** Whether any agent still has something running — the panel should be visible. */
+export function anyActivityActive(entries: Iterable<TodoList>): boolean {
+  for (const tl of entries) {
+    if (!agentActivityEnded(tl)) return true
+  }
+  return false
+}
+
+/**
+ * Whether this update is a genuinely new activity starting for an agent that
+ * had none (or whose last one had ended) — the point at which a pin from a
+ * past activity stops applying (#977).
+ */
+export function isNewActivityStarting(previous: TodoList | undefined, next: TodoList): boolean {
+  return (!previous || agentActivityEnded(previous)) && !agentActivityEnded(next)
+}
 
 type ConnectionState = {
   status: 'idle' | 'connecting' | 'connected' | 'error'
@@ -78,6 +108,13 @@ type MediaState = {
    * command. True until an agent says otherwise.
    */
   faceSleepAllowed: boolean
+  /**
+   * A `[sleep]` from the agent that nothing has honoured or cancelled yet
+   * (#149). Held here rather than in the face because the face may not be on
+   * screen when it arrives — the goodbye can come while the participant is in
+   * the text interface — and has to find it waiting when it mounts.
+   */
+  faceSleepPending: boolean
   /** Speech recognition still warming up, or failed to (#564); null when listening works. */
   sttStatus: SttStatus | null
   // Agent readiness state - controls audio processing
@@ -100,7 +137,13 @@ type MediaActions = {
   triggerFaceState: (tag: string) => void
   setFaceSleepPhase: (phase: 'awake' | 'asleep' | 'waking') => void
   /** Act on an `agent_command` envelope. A command this client does not know is ignored. */
-  applyAgentCommand: (data: { command?: string; allowed?: boolean }) => void
+  applyAgentCommand: (data: { command?: string; allowed?: boolean; enabled?: boolean }) => void
+  /** The pending sleep was honoured, or the user carried on and cancelled it. */
+  clearFaceSleepPending: () => void
+  /** A new session opens: nothing the last session's agent told the face carries over. */
+  resetFaceForSession: () => void
+  /** Whether the agent speaks its replies; false when it runs with TTS off (`stella.speech`, #180). */
+  agentSpeaks: boolean
   /** Act on an `stt_status` envelope. */
   applySttStatus: (data: SttStatusEnvelope) => void
   setAudioLevel: (v: number) => void
@@ -215,6 +258,15 @@ type TaskState = {
   currentTaskId: string | null
   processingMode: StateType | null
   showTaskPanel: boolean
+  /**
+   * The user reopened the panel (TaskPanel Toggle Button, ChatView.tsx) while
+   * every agent's activity had already ended. Keeps it open through that same
+   * activity ending again — e.g. a late progress_update that re-asserts the
+   * already-ended state — without requiring them to keep clicking it. Cleared
+   * the moment any agent starts a genuinely new activity, so it never pins
+   * the panel open past the one they actually asked to keep looking at.
+   */
+  taskPanelPinnedOpen: boolean
   lastDeliverableUpdate: {
     key: string
     value: any
@@ -285,6 +337,15 @@ type TaskActions = {
   clearTaskTimeline: () => void
 }
 
+/** A face state that is `sleep` also leaves a pending sleep behind, unless held awake. */
+function withSleepPending<T extends object>(
+  s: { faceSleepAllowed: boolean },
+  update: T,
+  tag: string
+): T | (T & { faceSleepPending: true }) {
+  return resolveState(tag) === 'sleep' && s.faceSleepAllowed ? { ...update, faceSleepPending: true } : update
+}
+
 export const useStore = create<
   ConnectionState & ConnectionActions & MediaState & MediaActions & LLMConfigState & LLMConfigActions & ChatState & ChatActions & TaskState & TaskActions
 >((set, get) => ({
@@ -314,6 +375,7 @@ export const useStore = create<
   faceState: null,
   faceSleepPhase: 'awake',
   faceSleepAllowed: true,
+  faceSleepPending: false,
   sttStatus: null,
   agentReady: false, // Audio disabled until agent is ready
   setMicGranted: (v) => set({ micGranted: v }),
@@ -330,18 +392,28 @@ export const useStore = create<
   triggerFaceGesture: (tag) => set(s => ({
     faceGesture: { tag, seq: (s.faceGesture?.seq ?? 0) + 1 },
   })),
-  triggerFaceState: (tag) => set(s => ({
+  triggerFaceState: (tag) => set(s => withSleepPending(s, {
     faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 },
-  })),
+  }, tag)),
+  clearFaceSleepPending: () => set(s => (s.faceSleepPending ? { faceSleepPending: false } : s)),
+  agentSpeaks: true,
+  resetFaceForSession: () => set({ faceSleepAllowed: true, faceSleepPending: false, agentSpeaks: true, sttStatus: nextSttStatus({ state: 'ready' }) }),
   setFaceSleepPhase: (phase) =>
     set(s => (s.faceSleepPhase === phase ? s : { faceSleepPhase: phase })),
   applyAgentCommand: (data) => {
-    if (data.command === 'sleep_allowed') {
-      set({ faceSleepAllowed: data.allowed !== false })
+    if (data.command === 'stella.speech') {
+      // The platform's own: whether this agent speaks at all (#180).
+      set({ agentSpeaks: data.enabled !== false })
+    } else if (data.command === 'sleep_allowed') {
+      // Held awake drops a pending sleep rather than saving it up — the same
+      // rule the face applies while it is on screen.
+      const allowed = data.allowed !== false
+      set(allowed ? { faceSleepAllowed: true } : { faceSleepAllowed: false, faceSleepPending: false })
     } else if (data.command) {
       // Every other command is a face state by name; the face drops one it
       // does not know.
-      set(s => ({ faceState: { tag: data.command as string, seq: (s.faceState?.seq ?? 0) + 1 } }))
+      const tag = data.command
+      set(s => withSleepPending(s, { faceState: { tag, seq: (s.faceState?.seq ?? 0) + 1 } }, tag))
     }
   },
   applySttStatus: (data) => set({ sttStatus: nextSttStatus(data) }),
@@ -579,6 +651,7 @@ export const useStore = create<
   currentTaskId: null,
   processingMode: null,
   showTaskPanel: false,
+  taskPanelPinnedOpen: false,
   lastDeliverableUpdate: null,
   lastStateChange: null,
   // New notification and update tracking
@@ -596,13 +669,21 @@ export const useStore = create<
   setAgentTaskList: (agentId, todoList, agentName) => set((state) => {
     const newMap = new Map(state.agentTaskLists)
     const isUpdate = state.agentTaskLists.has(agentId)
+    const previous = state.agentTaskLists.get(agentId)
     newMap.set(agentId, { ...todoList, agentName })
 
     console.log(`[TaskPanel] ${isUpdate ? 'Updated' : 'Added'} task list for agent "${agentName || agentId}"`)
 
+    // A new activity starting (this agent had none, or its last one had
+    // ended, and now it does) clears any pin from a previous activity —
+    // "since that list started" protects only the activity it was set for.
+    const isNewActivity = isNewActivityStarting(previous, todoList)
+    const anyActive = anyActivityActive(newMap.values())
+
     return {
       agentTaskLists: newMap,
-      showTaskPanel: true,
+      showTaskPanel: anyActive || state.taskPanelPinnedOpen,
+      taskPanelPinnedOpen: isNewActivity ? false : state.taskPanelPinnedOpen,
       // Set first agent as legacy todoList for backward compat
       todoList: state.todoList || todoList
     }
@@ -701,13 +782,17 @@ export const useStore = create<
     get().setAgentTaskList(agentId, todoList, agentName)
   },
 
-  setTodoList: (todoList) => set({
-    todoList,
-    showTaskPanel: true,
-    planProgress: todoList.progress_percentage,
-    currentStateId: todoList.current_state?.id || null,
-    currentTaskId: todoList.current_task?.id || null,
-    processingMode: todoList.current_state?.type || null
+  setTodoList: (todoList) => set((state) => {
+    // Always called right after setAgentTaskList/addLiveTaskUpdate for the
+    // same update (SessionView.tsx), which already set showTaskPanel for it —
+    // left alone here so there's one owner for it, not two in sync by habit.
+    return {
+      todoList,
+      planProgress: todoList.progress_percentage,
+      currentStateId: todoList.current_state?.id || null,
+      currentTaskId: todoList.current_task?.id || null,
+      processingMode: todoList.current_state?.type || null
+    }
   }),
   setAllDeliverableStates: (states) => set({ allDeliverableStates: states }),
   updateDeliverable: (key, value, stateId, confidence, sourceMessage, reasoning, acceptanceCriteria) => set((state) => {
@@ -872,7 +957,11 @@ export const useStore = create<
     }
   }),
 
-  setShowTaskPanel: (show) => set({ showTaskPanel: show }),
+  // The only call site (ChatView.tsx's Task Panel Toggle Button) is the user
+  // asking for it back, typically after it auto-hid — pin it open through
+  // the rest of that ended activity rather than letting the next update hide
+  // it under them again.
+  setShowTaskPanel: (show) => set({ showTaskPanel: show, taskPanelPinnedOpen: show }),
 
   clearTasks: () => set({
     agentTaskLists: new Map(),
@@ -884,6 +973,7 @@ export const useStore = create<
     currentTaskId: null,
     processingMode: null,
     showTaskPanel: false,
+    taskPanelPinnedOpen: false,
     lastDeliverableUpdate: null,
     lastStateChange: null,
     notifications: [],

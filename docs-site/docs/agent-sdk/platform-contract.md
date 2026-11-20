@@ -50,6 +50,28 @@ if self.plan or self.session.is_companion:
 
 The address comes from `STATE_MACHINE_ADDRESS`, which STELLA sets on every pod. Set `self.state_machine_address` to override it. `run_agent_from_env` closes the connection at teardown. Your own tools go on the same registry.
 
+### What the agent can do: capabilities
+
+STELLA works out what the agent can do for the person right now from what the session really has, so the agent can say plainly what it can and cannot do. Nothing is written by hand.
+
+| Mode | What is listed |
+|------|----------------|
+| `plan` | `follow_plan`: the plan, its current state and what is still open in it. |
+| `activity` | A companion inside an activity: `follow_plan` for the activity, and `leave_activity`. |
+| `companion` | A companion between activities: each activity on offer (`activity.<id>`) and `go_to_sleep`. |
+
+Connector tools (`<handle>.<tool>`, kind `tool`) are added in `plan` and `companion` mode only when the manifest declares the agent calls them there (`features.connectorTools.modes`), and only for connectors the agent may still use. General knowledge is never on the list; an agent adds such entries from its own configuration.
+
+Fetch it once per turn together with the state, so it costs no extra round trip:
+
+```python
+sm = self.plan_runtime.client
+state = await sm.get_full_state(include_capabilities=True)   # None between activities
+caps = sm.capabilities   # {"mode": "companion", "capabilities": [{"id", "kind", "title", "description"}, ...]}
+```
+
+`sm.capabilities` is filled even when `get_full_state` returns `None` because no plan is loaded. `await sm.get_capabilities()` fetches the list on its own. Titles and descriptions of connector tools come from the outside server: they are cut to one line of at most 240 characters, but treat them as data, not instructions.
+
 ## Agents that drive their own loop
 
 | Call | What it does |
@@ -81,6 +103,10 @@ The participant picks a face in the face gallery. The Text face is the text inte
 - **voice:** the agent speaks and listens again. The text-to-speech and speech-to-text connections stay open the whole time, so the switch takes effect on the next line.
 
 No agent code is needed: `speak()`, `speak_line()` and the sentence queue all follow the mode. `self.audio.interaction_mode` tells an agent which one is on.
+
+### Whether the agent speaks: `stella.speech`
+
+The other way round, the SDK tells the screen whether the agent speaks at all. Once it is ready, and again to everyone who joins later, it sends the command `stella.speech` with `{"enabled": true | false}`, which is false when the agent runs with `TTS_ENABLED=false`. With nothing spoken, no speech progress ever arrives, so the screen fires a reply's state and emotion cues (a `[sleep]` after a goodbye, for example) once the reply's text is in, as it does on the text interface. No agent code is needed, and no manifest declares it.
 
 ## When the session ends
 

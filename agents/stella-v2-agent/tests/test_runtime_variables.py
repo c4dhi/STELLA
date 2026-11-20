@@ -43,14 +43,23 @@ def _namespaced(runtime_vars):
     return {v["name"] for v in runtime_vars if v.get("namespaced")}
 
 
+def _pinned_known():
+    """What the pinned compiler resolves: the base palette plus what its version
+    added (1.2.0: {{capabilities}}), without the {{persona.*}} namespace entry."""
+    version = (_manifest().get("promptCompiler") or {}).get("version")
+    return frozenset(get_compiler(version).known_placeholders()) - {"persona.*"}
+
+
 def test_declared_runtime_variables_are_resolvable_by_the_compiler():
-    """Forward drift guard: every declared variable must be resolvable by the SDK."""
+    """Forward drift guard: every declared variable must be resolvable by the
+    compiler version this agent pins."""
     runtime_vars = _manifest().get("runtimeVariables") or []
     assert runtime_vars, "stella-v2 must declare runtimeVariables"
+    known = _pinned_known()
     for token in _declared_tokens(runtime_vars):
-        assert token in KNOWN_PLACEHOLDERS, (
+        assert token in known, (
             f"runtimeVariable token '{token}' is declared but not resolvable by the "
-            f"SDK prompt compiler (known: {sorted(KNOWN_PLACEHOLDERS)})"
+            f"pinned SDK prompt compiler (known: {sorted(known)})"
         )
 
 
@@ -60,7 +69,7 @@ def test_every_resolvable_placeholder_is_declared_or_intentionally_omitted():
     forgotten (which would leave a working {{placeholder}} undocumented in the UI
     palette)."""
     declared = _declared_tokens(_manifest().get("runtimeVariables") or [])
-    missing = KNOWN_PLACEHOLDERS - declared - INTENTIONALLY_OMITTED
+    missing = _pinned_known() - declared - INTENTIONALLY_OMITTED
     assert not missing, (
         f"SDK resolves placeholders the manifest neither declares nor intentionally "
         f"omits: {sorted(missing)}. Add them to runtimeVariables, or to "
