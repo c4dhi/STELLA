@@ -239,3 +239,41 @@ def test_the_shipped_json_carries_the_floor():
 
     raw = json.loads((Path(__file__).resolve().parents[1] / "config/experts/capabilities.json").read_text())
     assert raw["enabled_from_compiler"] == "1.2.0"
+
+
+def _fit_with_prompt(compiler, expert, prompt):
+    """An expert whose configured prompt is ``prompt``, fitted to a 1.2.0 configuration."""
+    agent = _agent_with(compiler)
+    pipeline = _saved(authored="1.2.0")
+    pipeline["nodes"]["expert_pool"] = {"experts": {expert: {"system_prompt": prompt}}}
+    agent.expert_registry.apply_config(pipeline["nodes"]["expert_pool"])
+    agent._fit_experts_to_configuration(pipeline)
+    return agent.expert_registry.get(expert).enabled
+
+
+def test_any_expert_using_a_placeholder_its_compiler_cannot_fill_is_off():
+    # The rule is about the configured prompt, not the expert's name
+    # (handbook sdk-experts-clean-interface).
+    prompt = "Judge against what she can do:\n{{capabilities}}"
+    assert _fit_with_prompt("1.1.0", "medical", prompt) is False
+    assert _fit_with_prompt("1.2.0", "medical", prompt) is True
+    assert _fit_with_prompt("1.0.0", "medical", "You are {{persona.name}}.") is False
+    assert _fit_with_prompt("1.1.0", "medical", "You are {{persona.name}}.") is True
+
+
+def test_a_capabilities_prompt_without_the_placeholder_runs_on_an_older_compiler():
+    assert _fit_with_prompt("1.1.0", "capabilities", "Flag requests outside the plan.") is True
+
+
+def test_a_placeholder_no_compiler_knows_does_not_switch_an_expert_off():
+    # A typo stays as written, as it always has; only placeholders a newer
+    # compiler fills say the configuration needs that compiler.
+    assert _fit_with_prompt("1.1.0", "medical", "Note {{not_a_placeholder}}.") is True
+
+
+def test_the_switch_off_reads_no_expert_by_name():
+    import inspect
+    from stella_v2_agent.agent import StellaV2Agent
+
+    source = inspect.getsource(StellaV2Agent._fit_experts_to_configuration)
+    assert '"capabilities"' not in source and "'capabilities'" not in source
