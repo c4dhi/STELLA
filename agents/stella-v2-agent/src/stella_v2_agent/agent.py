@@ -36,11 +36,13 @@ from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
 from stella_agent_sdk.tools import ToolRegistry
+from stella_v2_agent.capabilities import parse_extras, with_extras
 from stella_v2_agent.companion_tools import create_companion_tools
 
 from stella_agent_sdk.llm import LLMService
 from stella_v2_agent.experts.registry import ExpertRegistry
 from stella_agent_sdk.env import env_bool
+from stella_agent_sdk.prompts import available_versions, get_compiler
 from stella_v2_agent.pipeline.bridge_generator import (
     BridgeGenerator,
     BRIDGE_MODE_BRIEF,
@@ -115,7 +117,32 @@ _ACTIVITY_START_MAX_PAGES = 5
 # purpose (not the SDK's latest) so an SDK upgrade can't silently change how this
 # agent's expert prompts compile. Bump deliberately when adopting a new compiler
 # version. Can be overridden per deployment via config["compiler_version"].
-PROMPT_COMPILER_VERSION = "1.1.0"
+PROMPT_COMPILER_VERSION = "1.2.0"  # 1.2.0: {{capabilities}} (#992)
+
+
+def _placeholders_beyond(version: str, prompt: str) -> List[str]:
+    """Placeholders in ``prompt`` that a registered compiler fills but ``version`` can't.
+
+    Empty for an unknown ``version``: that fails where prompts compile, not here.
+    """
+    try:
+        unfilled = get_compiler(version).validate(prompt)
+    except KeyError:
+        return []
+    if not unfilled:
+        return []
+    fillable = set()
+    for other in available_versions():
+        fillable.update(n for n in unfilled if not get_compiler(other).validate("{{" + n + "}}"))
+    return [n for n in unfilled if n in fillable]
+
+
+def _at_least(version: Any, floor: str) -> bool:
+    """``version`` >= ``floor`` as dotted numbers; anything unreadable is not."""
+    try:
+        return tuple(int(x) for x in str(version).split(".")) >= tuple(int(x) for x in floor.split("."))
+    except (TypeError, ValueError):
+        return False
 
 # Stands in for the user's message on a turn she opens herself after being
 # woken: the reply model needs something to answer, and nothing was said.
@@ -177,10 +204,16 @@ class StellaV2Agent(BaseAgent):
         # version this agent was authored against; overridable per deployment via
         # config["compiler_version"] in on_session_start.
         self._compiler_version: str = PROMPT_COMPILER_VERSION
+        # Entries a configuration adds to what she can do, per mode (#992).
+        self._capability_extras: Dict[str, List[str]] = {}
 
         # Initialize core services
         self.llm_service = LLMService(config_path=llm_config_path)
         self.expert_registry = ExpertRegistry(experts_dir=experts_dir)
+        # What config/experts/*.json ship as enabled, before any configuration.
+        self._shipped_enabled: Dict[str, bool] = {
+            name: e.enabled for name, e in self.expert_registry.as_map().items()
+        }
 
         # Initialize pipeline stages (no Input Gate — #363)
         self.bridge_generator = BridgeGenerator(self.llm_service)
@@ -1167,6 +1200,8 @@ class StellaV2Agent(BaseAgent):
                 "configuration before deploying the agent."
             )
         self._apply_pipeline_config(pipeline_config)
+        # After the pipeline config, which can switch experts back on.
+        self._fit_experts_to_configuration(pipeline_config)
         # AFTER the saved configuration, and deliberately so. The router is not an
         # assessment expert an operator opts into — it is the mechanism companion
         # mode is made of, in the same way task_extraction is the mechanism plans
@@ -1237,6 +1272,54 @@ class StellaV2Agent(BaseAgent):
                     agent_icon="🧠",
                 )
 
+    def _fit_experts_to_configuration(self, pipeline_config: Dict[str, Any]) -> None:
+        """Which experts run this session, beyond what the configuration says.
+
+        - An expert with ``enabled_from_compiler`` that the configuration
+          neither switched on nor off is on only for configurations authored
+          against that compiler or a later one. The backend passes the version
+          as ``authored_compiler_version``. A configuration saved before the
+          expert existed keeps running without it, so a running deployment
+          does not gain an LLM call per turn it was never set up with (#191).
+        - Any expert whose configured prompt uses a placeholder that only a
+          newer compiler fills is off: it would be sent the literal token, so
+          its verdicts would be guesses (#992). A placeholder no compiler
+          knows is left as written, as it always has been.
+
+        Worked out again every session, so nothing carries over from an
+        earlier session on the same instance.
+        """
+        nodes = pipeline_config.get("nodes") if isinstance(pipeline_config, dict) else None
+        pool = nodes.get("expert_pool") if isinstance(nodes, dict) else None
+        overrides = pool.get("experts") if isinstance(pool, dict) else None
+        overrides = overrides if isinstance(overrides, dict) else {}
+        authored = pipeline_config.get("authored_compiler_version") if isinstance(pipeline_config, dict) else None
+
+        for name, shipped in getattr(self, "_shipped_enabled", {}).items():
+            config = self.expert_registry.get(name)
+            override = overrides.get(name)
+            if config is None or not config.enabled_from_compiler:
+                continue
+            if isinstance(override, dict) and "enabled" in override:
+                continue  # the configuration decided; apply_config has set it
+            config.enabled = shipped and _at_least(authored, config.enabled_from_compiler)
+            if not config.enabled:
+                logger.info(
+                    f"{name} expert off: configuration authored with compiler "
+                    f"{authored or '(unknown)'}, before {config.enabled_from_compiler}; "
+                    "switch it on in the Configurator"
+                )
+
+        for config in self.expert_registry.get_enabled():
+            missing = _placeholders_beyond(self._compiler_version, config.system_prompt)
+            if missing:
+                config.enabled = False
+                logger.info(
+                    f"{config.name} expert off: its prompt uses "
+                    f"{', '.join('{{' + m + '}}' for m in missing)}, which prompt compiler "
+                    f"{self._compiler_version} can't fill"
+                )
+
     def _apply_pipeline_config(self, pipeline_config: Dict[str, Any]) -> None:
         """Apply pipeline configuration overrides from Agent Configurator.
 
@@ -1297,6 +1380,7 @@ class StellaV2Agent(BaseAgent):
                 k: v for k, v in expert_pool_config.items()
                 if k in ("experts", "custom_experts")
             }
+            self._capability_extras = parse_extras(expert_pool_config.get("capability_extras"))
             if experts_config:
                 self.expert_registry.apply_config(experts_config)
                 # The expert pool reads the registry by reference, so updated
@@ -1689,7 +1773,14 @@ class StellaV2Agent(BaseAgent):
             context = await self._fetch_sm_context() or {}
             context["state_just_changed"] = False
         else:
+            # Just left an activity: what she can do changed with it.
             context = {}
+            if self.sm_client:
+                capabilities = with_extras(
+                    await self.sm_client.get_capabilities(), getattr(self, "_capability_extras", {})
+                )
+                if capabilities is not None:
+                    context["capabilities"] = capabilities
         for key in ("language", "language_pinned", "persona"):
             if key in turn_start:
                 context[key] = turn_start[key]
@@ -2077,6 +2168,25 @@ class StellaV2Agent(BaseAgent):
         )
 
     async def _fetch_sm_context(self) -> Dict[str, Any]:
+        """The plan context (see _fetch_plan_context) plus what she can do (#992).
+
+        ``capabilities`` arrives with the same GetFullState call, also when no
+        plan is loaded (a companion between activities), so it costs no extra
+        round trip. Left out when STELLA sent none: she claims nothing then.
+        """
+        context = await self._fetch_plan_context()
+        capabilities = self._turn_capabilities()
+        if capabilities is not None:
+            context = {**context, "capabilities": capabilities}
+        return context
+
+    def _turn_capabilities(self) -> Optional[Dict[str, Any]]:
+        """STELLA's latest list for this agent, with the configuration's extras."""
+        if not self.sm_client:
+            return None
+        return with_extras(getattr(self.sm_client, "capabilities", None), getattr(self, "_capability_extras", {}))
+
+    async def _fetch_plan_context(self) -> Dict[str, Any]:
         """Fetch state from gRPC backend and build sm_context for the pipeline.
 
         Makes parallel gRPC calls, then assembles the dict structure that the
@@ -2088,7 +2198,7 @@ class StellaV2Agent(BaseAgent):
 
         full_state, current_state, pending_tasks, pending_deliverables, collected = (
             await asyncio.gather(
-                self.sm_client.get_full_state(),
+                self.sm_client.get_full_state(include_capabilities=True),
                 self.sm_client.get_current_state(),
                 self.sm_client.get_pending_tasks(),
                 self.sm_client.get_pending_deliverables(),
