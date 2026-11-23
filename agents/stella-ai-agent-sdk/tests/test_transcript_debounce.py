@@ -89,9 +89,13 @@ def make_pipeline(monkeypatch, window=None):
     return pipe
 
 
-def test_default_is_off(monkeypatch):
-    """With the env unset the window is 0 — no per-turn sleep."""
-    assert make_pipeline(monkeypatch)._debounce_window_ms == 0
+def test_default_is_what_the_built_in_agents_run(monkeypatch):
+    """With the env unset the window is 300 ms, the agent.yaml default STELLA deploys (#137)."""
+    assert make_pipeline(monkeypatch)._debounce_window_ms == 300
+
+
+def test_zero_turns_it_off(monkeypatch):
+    assert make_pipeline(monkeypatch, 0)._debounce_window_ms == 0
 
 
 def test_env_still_overrides(monkeypatch):
@@ -100,13 +104,13 @@ def test_env_still_overrides(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_final_reaches_the_queue_without_a_debounce_task(monkeypatch):
-    """By default a final is queued outright, not parked in the buffer.
+async def test_with_the_window_off_a_final_reaches_the_queue_at_once(monkeypatch):
+    """With the window off a final is queued outright, not parked in the buffer.
 
     Asserting on _debounce_task rather than on elapsed wall-clock keeps this
     from being a timing test: no task means no sleep was ever scheduled.
     """
-    pipe = make_pipeline(monkeypatch)
+    pipe = make_pipeline(monkeypatch, 0)
     pipe._stt = FakeSTT([_final("a real user turn")])
 
     await pipe._run_stt_stream_inner()

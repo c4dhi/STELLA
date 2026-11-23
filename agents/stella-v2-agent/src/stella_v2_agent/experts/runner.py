@@ -19,10 +19,6 @@ from stella_agent_sdk import prompts as sdk_prompts
 
 from stella_v2_agent.experts.base import ExpertConfig
 from stella_v2_agent.experts.goal_check import GoalCloseCheck
-from stella_v2_agent.experts.template_compiler import (
-    has_user_message_placeholder,
-    HISTORY_PATTERN,
-)
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_agent_sdk.llm import LLMService, LLMConfig, LLMMessage, LLMProvider
 import logging
@@ -141,17 +137,16 @@ class ExpertRunner:
             # canonical tool-usage contract is auto-injected from the SDK (single
             # source of truth) — tool-calling experts must NOT hand-write it in
             # their prompt.
-            messages = self._build_messages(
-                config, user_input, conversation_history, sm_context,
-                append_output_format=False,
-                tools=tools,
-            )
             # What became of the expert's last attempt to close or skip a goal:
-            # it never sees its tool results otherwise (#706).
+            # it never sees its tool results otherwise (#706). The prompt shows
+            # it where it says {{last_goal_attempt}}.
             goal_check = getattr(self, "_goal_check", None)
             note = goal_check.note_for(sm_context) if goal_check else ""
-            if note and messages:
-                messages[0] = LLMMessage(role=messages[0].role, content=f"{messages[0].content}\n\n{note}")
+            messages = self._build_messages(
+                config, user_input, conversation_history,
+                {**sm_context, "last_goal_attempt": note},
+                append_output_format=False,
+            )
 
             # Use OPENAI_DIRECT provider (supports tool calling, unlike LANGCHAIN)
             tool_schemas = [t.to_openai_schema() for t in tools]
@@ -313,46 +308,24 @@ class ExpertRunner:
                 error_message=str(e),
             )
 
-    def _build_messages(
+    def compile_prompt(
         self,
         config: ExpertConfig,
         user_input: str,
         conversation_history: List[Dict[str, str]],
         sm_context: Dict[str, Any],
-        append_output_format: bool = True,
-        tools: Optional[List[BaseTool]] = None,
-    ) -> List[LLMMessage]:
-        """Build LLM messages for the expert call.
+    ) -> str:
+        """The expert's prompt as the Configurator shows it, with its {{placeholders}}
+        resolved. Whoever answers the expert, a language model or Jev, reads this.
 
-        System prompt is compiled with {{placeholder}} resolution from sm_context.
-        If the template uses {{history_N}} / {{user_message}}, those are resolved
-        inline and NOT duplicated in the user message. Otherwise the legacy
-        behavior (history + user message in the API user role) is preserved.
-
-        Args:
-            append_output_format: If False, skip appending output_format
-                (used in tool mode where tools replace structured JSON output).
-            tools: The tools this call can use. Each one's ``guidance`` (the SDK's
-                usage contract for it) is appended once — so an expert is taught
-                exactly the tools it has, from code, never from its editable
-                prompt.
+        Compiled through the SDK's single, version-pinned entry point. A malformed
+        sm_context (e.g. a bad progress value or a message missing role/content)
+        must not crash the expert turn, so a failed compile falls back to the raw
+        template (placeholders unresolved) and the expert still runs.
         """
         template = config.system_prompt or ""
-
-        # Detect placeholder usage before compilation
-        prompt_has_history = bool(HISTORY_PATTERN.search(template))
-        prompt_has_user_msg = has_user_message_placeholder(template)
-
-        # Compile system prompt through the SDK's single, version-pinned entry
-        # point — resolve all {{placeholders}} against the live runtime context.
-        # The compiler copies sm_context internally and layers in the per-turn
-        # history / user message, so we never mutate the shared context here.
-        # Guarded: a malformed sm_context (e.g. a bad progress value or a message
-        # missing role/content) must not crash the expert turn. Unlike arbitration,
-        # this path has no outer try/except, so we fall back to the raw template
-        # (placeholders unresolved) and let the expert still run.
         try:
-            compiled_prompt = sdk_prompts.compile(
+            return sdk_prompts.compile(
                 template,
                 version=self._compiler_version,
                 sm_context=sm_context,
@@ -360,18 +333,31 @@ class ExpertRunner:
                 user_input=user_input,
             )
         except Exception as e:  # noqa: BLE001 — never let prompt compilation kill the turn
-            logger.warning(
-                "Prompt compile failed for expert '%s' (%s); using raw template",
-                config.name, e,
-            )
-            compiled_prompt = template
+            logger.warning("Prompt compile failed for expert '%s' (%s); using raw template", config.name, e)
+            return template
 
-        # The usage contract of each tool this expert can call, once per distinct
-        # text. It used to be the state-machine contract for ANY tool-calling
-        # expert, which taught companion_router set_deliverable rules it could
-        # not even call.
-        for guidance in dict.fromkeys(t.guidance for t in tools or [] if t.guidance):
-            compiled_prompt += "\n\n" + guidance
+    def _build_messages(
+        self,
+        config: ExpertConfig,
+        user_input: str,
+        conversation_history: List[Dict[str, str]],
+        sm_context: Dict[str, Any],
+        append_output_format: bool = True,
+    ) -> List[LLMMessage]:
+        """Build LLM messages for the expert call.
+
+        What the model sees is the expert's prompt, as the Configurator shows it,
+        with its {{placeholders}} resolved ({{history_N}}, {{user_message}}, ...),
+        followed by what the expert's configuration says about its answer: the
+        output format and the verdicts with their descriptions. Nothing else is
+        added, so the prompt is the one thing to read, edit or optimize. The user
+        role repeats the current message, which the API needs.
+
+        Args:
+            append_output_format: If False, skip appending output_format
+                (used in tool mode where tools replace structured JSON output).
+        """
+        compiled_prompt = self.compile_prompt(config, user_input, conversation_history, sm_context)
 
         # Append output format instruction if configured (not in tool mode)
         if append_output_format and config.output_format:
@@ -379,40 +365,17 @@ class ExpertRunner:
 
         # Generic verdict interface: the allowed verdict LABELS + their explanations
         # come from config (verdict_directives), not a hardcoded enum baked into the
-        # prompt. The label and explanation are handed to the LLM so it knows what
-        # each verdict means; the per-verdict ACTION is NOT shown (it is applied
-        # deterministically in the arbitration layer). Operators can add/rename
-        # verdicts and edit explanations without touching prompt text or code.
-        if append_output_format and config.verdict_directives:
-            lines = []
-            for label, directive in config.verdict_directives.items():
-                description = getattr(directive, "description", "") or ""
-                lines.append(f'- "{label}": {description}' if description else f'- "{label}"')
-            if lines:
-                compiled_prompt += (
-                    "\n\nClassify into exactly ONE of these verdicts:\n" + "\n".join(lines)
-                )
+        # prompt. The per-verdict ACTION is NOT shown (it is applied deterministically
+        # in the arbitration layer).
+        verdicts = config.verdict_descriptions() if append_output_format else {}
+        if verdicts:
+            lines = [f'- "{label}": {text}' if text else f'- "{label}"' for label, text in verdicts.items()]
+            compiled_prompt += "\n\nClassify into exactly ONE of these verdicts:\n" + "\n".join(lines)
 
-        messages = [LLMMessage(role="system", content=compiled_prompt)]
-
-        # Build user message — only include what wasn't resolved via placeholders
-        user_parts: List[str] = []
-
-        if not prompt_has_history and conversation_history:
-            default_limit = 8
-            limit = config.history_limit if config.history_limit > 0 else default_limit
-            recent = conversation_history[-limit:]
-            history_lines = [f"[{msg['role'].upper()}]: {msg['content']}" for msg in recent]
-            user_parts.append("CONVERSATION:\n" + "\n".join(history_lines))
-
-        if not prompt_has_user_msg:
-            user_parts.append(f"CURRENT USER MESSAGE: {user_input}")
-        else:
-            # Still need a user message for API compliance
-            user_parts.append(user_input)
-
-        messages.append(LLMMessage(role="user", content="\n\n".join(user_parts)))
-        return messages
+        return [
+            LLMMessage(role="system", content=compiled_prompt),
+            LLMMessage(role="user", content=user_input),
+        ]
 
     def _build_llm_config(self, config: ExpertConfig) -> LLMConfig:
         """Build LLM config for JSON-mode expert call.

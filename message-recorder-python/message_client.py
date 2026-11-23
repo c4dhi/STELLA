@@ -10,9 +10,15 @@ from typing import List, Dict, Optional
 class MessageClient:
     """HTTP client for session management server API"""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, internal_key: Optional[str] = None):
         self.base_url = base_url.rstrip('/')
         self.session: Optional[aiohttp.ClientSession] = None
+        # Sent to the backend's key-protected internal endpoints (#145).
+        self.internal_key = internal_key
+
+    def _internal_headers(self) -> Dict[str, str]:
+        """Headers for internal endpoints that need the shared internal key."""
+        return {'X-Internal-Key': self.internal_key} if self.internal_key else {}
 
     async def __aenter__(self):
         """Async context manager entry"""
@@ -130,6 +136,7 @@ class MessageClient:
             async with self.session.post(
                 url,
                 json=payload,
+                headers=self._internal_headers(),
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 return response.status in (200, 201)
@@ -157,6 +164,7 @@ class MessageClient:
             async with self.session.post(
                 url,
                 json=payload,
+                headers=self._internal_headers(),
                 timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 return response.status in (200, 201)

@@ -29,6 +29,8 @@ data:
   KUBERNETES_NAMESPACE: "ai-agents"
   AGENT_IMAGE: "conversational-ai-server:latest"
   AGENT_IMAGE_PULL_POLICY: "IfNotPresent"
+  # Orphaned agent pod reconciler (#188): log (default) | delete | off
+  AGENT_RECONCILER_MODE: "${AGENT_RECONCILER_MODE}"
 
   # STT Service (microservices architecture)
   STT_SERVICE_URL: "stt-service:50051"

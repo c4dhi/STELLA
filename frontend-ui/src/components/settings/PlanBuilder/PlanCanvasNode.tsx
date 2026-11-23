@@ -44,7 +44,7 @@ function PlanCanvasNodeComponent({ data }: NodeProps) {
           e.stopPropagation()
           nodeData.onDelete(nodeData.stateId)
         }}
-        className={`absolute right-2 top-2 h-6 w-6 rounded-full border text-[10px] font-semibold transition-all opacity-0 group-hover:opacity-100 ${
+        className={`absolute right-2 top-2 h-6 w-6 rounded-full border text-[10px] font-semibold transition-all opacity-0 group-hover:opacity-100 coarse:opacity-100 ${
           nodeData.isDark
             ? 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-red-300'
             : 'border-neutral-200 bg-white text-neutral-500 hover:text-red-600'

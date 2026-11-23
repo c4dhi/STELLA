@@ -52,6 +52,9 @@ export default function ChatView({
   const setFaceExpression = useStore(s => s.setFaceExpression)
   const triggerFaceGesture = useStore(s => s.triggerFaceGesture)
   const triggerFaceState = useStore(s => s.triggerFaceState)
+  // An agent with TTS off says so (`stella.speech`, #180).
+  const agentSpeaks = useStore(s => s.agentSpeaks)
+  const setAgentSpeechSettled = useStore(s => s.setAgentSpeechSettled)
   const {
     spokenChar,
     spokenTranscriptId,
@@ -63,7 +66,8 @@ export default function ChatView({
     faceGesture,
     cuesByTranscript,
     faceState,
-  } = useTeleprompter()
+    speechSettled,
+  } = useTeleprompter({ speaks: agentSpeaks })
   const processingMessages = useStore(s => s.processingMessages)
   const participantEvents = useStore(s => s.participantEvents)
   const showProcessingMessages = useStore(s => s.showProcessingMessages)
@@ -496,6 +500,17 @@ export default function ChatView({
   useEffect(() => {
     if (faceState) triggerFaceState(faceState.tag)
   }, [faceState, triggerFaceState])
+
+  // #894: let the task panel know whether the agent's current turn has
+  // actually been heard yet, so a state/todo-list update that arrives mid-
+  // speech can wait for its words rather than jumping ahead of them.
+  useEffect(() => {
+    setAgentSpeechSettled(speechSettled)
+    // Navigating away mid-speech must not leave the store stuck unsettled
+    // with task-panel updates queued forever — nothing will flip it back
+    // once this ChatView is gone (#894 review).
+    return () => setAgentSpeechSettled(true)
+  }, [speechSettled, setAgentSpeechSettled])
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">

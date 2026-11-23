@@ -495,6 +495,19 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
   const [selectedTransition, setSelectedTransition] = useState<SelectedTransition | null>(null)
   const [selectedStartNode, setSelectedStartNode] = useState(false)
   const [selectedEndNode, setSelectedEndNode] = useState(false)
+  // Below lg the editor sits under the canvas, out of sight: bring it into
+  // view when a node or transition is picked, so the tap visibly does something (#189).
+  const editorPanelRef = useRef<HTMLDivElement>(null)
+  const editorTarget = selectedStartNode ? 'start' : selectedEndNode ? 'end' : selectedTransition ? `t:${JSON.stringify(selectedTransition)}` : selectedStateIndex !== null ? `s:${selectedStateIndex}` : null
+  // Only on a change: the first state is pre-selected when a plan opens, and
+  // the canvas should be what shows first.
+  const lastEditorTarget = useRef(editorTarget)
+  useEffect(() => {
+    if (lastEditorTarget.current === editorTarget) return
+    lastEditorTarget.current = editorTarget
+    if (!editorTarget || !editorPanelRef.current || window.matchMedia('(min-width: 1024px)').matches) return
+    editorPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [editorTarget])
   const [xRayMode, setXRayMode] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [autoFitKey, setAutoFitKey] = useState(0)
@@ -1122,7 +1135,9 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
 
   return (
     <div className="h-full flex flex-col">
-      <div className={`px-4 py-3 border-b flex items-center gap-3 ${isDark ? 'border-zinc-700/80 bg-surface-dark' : 'border-neutral-200 bg-white'}`}>
+      {/* Header — one row from lg up; below lg the name and description
+          move to their own full-width row so X-ray and Save stay on screen (#189) */}
+      <div className={`px-4 py-3 border-b flex flex-wrap lg:flex-nowrap items-center gap-3 ${isDark ? 'border-zinc-700/80 bg-surface-dark' : 'border-neutral-200 bg-white'}`}>
         {onBack ? (
           <motion.button
             onClick={onBack}
@@ -1172,13 +1187,13 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
           </div>
         </div>
 
-        <div className="flex-1 flex gap-2.5 ml-3">
+        <div className="basis-full order-last flex gap-2.5 lg:basis-auto lg:order-none lg:flex-1 lg:ml-3">
           <input
             type="text"
             value={name}
             onChange={(e) => { setName(e.target.value); markChanged() }}
             placeholder="Plan name..."
-            className={`flex-1 max-w-[220px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
+            className={`flex-1 min-w-0 lg:max-w-[220px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
               isDark
                 ? 'bg-surface-dark-secondary border border-border-dark text-content-inverse placeholder:text-content-inverse-tertiary focus:border-border-dark-secondary'
                 : 'bg-surface-secondary border border-border text-content placeholder:text-content-tertiary focus:border-border-secondary'
@@ -1189,7 +1204,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
             value={description}
             onChange={(e) => { setDescription(e.target.value); markChanged() }}
             placeholder="Description (optional)"
-            className={`flex-1 max-w-[280px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
+            className={`flex-1 min-w-0 lg:max-w-[280px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
               isDark
                 ? 'bg-surface-dark-secondary border border-border-dark text-content-inverse placeholder:text-content-inverse-tertiary focus:border-border-dark-secondary'
                 : 'bg-surface-secondary border border-border text-content placeholder:text-content-tertiary focus:border-border-secondary'
@@ -1197,7 +1212,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
           />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ml-auto lg:ml-0">
           <motion.button
             onClick={() => setXRayMode(!xRayMode)}
             className={`px-3 py-1.5 rounded-lg text-body-sm font-medium transition-all ${
@@ -1249,8 +1264,11 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
         </div>
       )}
 
-      <div className={`flex-1 flex overflow-hidden ${isFromGenerator ? 'mt-3' : ''}`}>
-        <div className="flex-1 min-w-0">
+      {/* Body — canvas and editor side by side from lg up; below lg there is
+          no room for a 440px editor beside the canvas, so it sits below it and
+          the body scrolls (the same pattern as the pipeline configurator, #182) */}
+      <div className={`flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden ${isFromGenerator ? 'mt-3' : ''}`}>
+        <div className="h-[50vh] shrink-0 lg:h-auto lg:shrink lg:flex-1 min-w-0">
           {xRayMode ? (
             <PlanJsonViewer content={buildContent()} />
           ) : (
@@ -1366,7 +1384,7 @@ export default function PlanBuilder({ template, onSave, onCancel, onBack, isFrom
           )}
         </div>
 
-        <div className={`w-[440px] shrink-0 border-l overflow-hidden ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+        <div ref={editorPanelRef} className={`w-full h-[75vh] shrink-0 lg:h-auto lg:w-[440px] border-t lg:border-t-0 lg:border-l overflow-hidden ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
           <div className="h-full flex flex-col overflow-hidden">
             <div className={`px-5 py-4 border-b shrink-0 ${isDark ? 'border-zinc-700/80' : 'border-neutral-200'}`}>
               <h3 className={`text-sm font-semibold ${isDark ? 'text-zinc-100' : 'text-neutral-800'}`}>

@@ -30,7 +30,7 @@ pip install -e STELLA/agents/stella-ai-agent-sdk
 Or pin directly to a tag without cloning:
 
 ```bash
-pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.10.1#subdirectory=agents/stella-ai-agent-sdk"
+pip install "stella-ai-agent-sdk @ git+https://github.com/c4dhi/STELLA.git@sdk-v0.11.0#subdirectory=agents/stella-ai-agent-sdk"
 ```
 
 ## Quick Start
@@ -170,6 +170,7 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `TTS_SERVICE_ADDRESS` | `tts-service:50052` | TTS gRPC service address |
 | `TTS_ENABLED` | `true` | Set to `false` to disable TTS entirely. The agent will still receive speech input and send text responses, but no audio will be synthesized — effectively turning it into a text chatbot. |
 | `STT_WARMUP_ENABLED` | `true` | Warm up STT model before first utterance |
+| `STELLA_SPEECH_WAIT_SECONDS` | `720` | How long to wait at start for STT and TTS that are still loading |
 | `STELLA_TTS_PLAYBACK` | `auto` | `auto` (and unset) starts in `stream` and switches once to `sentence` if synthesis measures slower than real time for 3 consecutive sentences — never back. `stream` plays each sentence as it synthesizes; `sentence` synthesizes the whole sentence first, then plays it. Unknown values log a warning and use `auto` |
 | `STELLA_TTS_PREROLL_MS` | auto | Audio buffered before an utterance starts playing in `stream` mode. Unset, it adapts to the measured synthesis speed (200 ms to 3 s); set, it is pinned |
 | `SESSION_SERVER_URL` | `http://session-management-server:3000` | Session management HTTP URL |
@@ -182,7 +183,7 @@ compiler — in **[SDK Reference → Prompt Compiler](../../docs-site/docs/sdk/p
 | `AGENT_TYPE` | *(class name)* | Type the agent registers under; STELLA sets it to the `agent.yaml` slug |
 | `AGENT_VERSION` | `1.0.0` | Version the agent registers with |
 | `STATE_MACHINE_ADDRESS` | `session-management-server:50051` | State machine used by `self.plan_runtime` |
-| `TRANSCRIPT_DEBOUNCE_MS` | `0` | Aggregate rapid successive finals within this window (ms). Off by default: STT endpointing already guarantees a &gt;1s gap between finals, so any window this size is unreachable. Set it only for an STT provider that can fragment faster than that. |
+| `TRANSCRIPT_DEBOUNCE_MS` | `300` | Aggregate rapid successive finals within this window (ms). `0` turns it off: STT endpointing already guarantees a &gt;1s gap between finals, so a window this size is rarely reached and costs its length on every turn. |
 | `INTERRUPT_MODE` | `none` | Barge-in behavior: `none` (strict gating) or `smart` |
 
 The voice-pipeline tuning variables above (and the rest of `BARGE_IN_*`, `TTS_*`, `STELLA_TTS_*`) are owned by the SDK: the full list with defaults is `stella_agent_sdk.platform_env.PLATFORM_ENV`, exported as `contracts/sdk-platform-env.json`. An agent does not need to declare them in its `agent.yaml`.
@@ -229,8 +230,8 @@ triggered by pushing a `sdk-v<version>` tag:
 ```bash
 # 1. Bump `version` in agents/stella-ai-agent-sdk/pyproject.toml, then commit it to main.
 # 2. Tag the commit. The tag version must match pyproject.toml or the workflow fails.
-git tag sdk-v0.10.1
-git push origin sdk-v0.10.1
+git tag sdk-v0.11.0
+git push origin sdk-v0.11.0
 ```
 
 The workflow builds the sdist and wheel, installs the wheel into a clean environment and runs

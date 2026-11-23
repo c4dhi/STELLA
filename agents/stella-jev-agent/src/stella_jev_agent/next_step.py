@@ -115,21 +115,145 @@ def pending_tasks(sm_context: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def task_question(tasks: List[Dict[str, Any]]) -> Choice:
-    """Asks which open task the latest message took care of."""
+def collected_tasks(sm_context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The tasks of the current state that already hold an answer, which a message can correct."""
+    collected = sm_context.get("collected_deliverables") or {}
+    for state in sm_context.get("full_plan") or []:
+        if state.get("is_current"):
+            return [
+                t for t in state.get("tasks", [])
+                if t.get("status") == "completed" and any(
+                    d.get("status") == "completed" and (d.get("value") is not None or d.get("key") in collected)
+                    for d in t.get("deliverables", [])
+                )
+            ]
+    return []
+
+
+def _wanted(deliverable: Dict[str, Any]) -> str:
+    """What one value is, with what the plan accepts for it."""
+    label = deliverable.get("description") or deliverable.get("key")
+    criteria = (deliverable.get("acceptance_criteria") or "").strip()
+    return f"{label} ({criteria})" if criteria else str(label)
+
+
+def _recorded(task: Dict[str, Any], collected: Dict[str, Any]) -> str:
+    values = [
+        str(d.get("value") if d.get("value") is not None else collected.get(d.get("key")))
+        for d in task.get("deliverables", []) if d.get("status") == "completed"
+    ]
+    return "; ".join(v.strip('"') for v in values)
+
+
+def task_question(
+    tasks: List[Dict[str, Any]],
+    corrections: Sequence[Dict[str, Any]] = (),
+    collected: Optional[Dict[str, Any]] = None,
+) -> Choice:
+    """Asks which open task the latest message took care of, or which earlier answer it corrected.
+
+    Extraction saves only what Jev picks here, so the deliverables are described with
+    what the plan accepts for them, the same detail extraction reads.
+    """
     criteria = {}
     for i, task in enumerate(tasks):
         # A plan's labels can be as thin as "deliverable_name", and the instruction says what was asked.
         about = ". ".join(filter(None, [task.get("description"), task.get("instruction")]))
-        wanted = "; ".join(d.get("description") or d.get("key") for d in task.get("deliverables", []))
+        wanted = "; ".join(_wanted(d) for d in task.get("deliverables", []))
         criteria[f"task_{i}"] = (
             f"{about}. They gave: {wanted}" if wanted else f"{about}. The assistant has done this and they responded"
         )
+    for i, task in enumerate(corrections):
+        criteria[f"fix_{i}"] = (
+            f"They change their earlier answer about {task.get('description')}, which was recorded as: "
+            f"{_recorded(task, collected or {})}. Only a clear correction or contradiction, not a repeat."
+        )
     criteria[NOTHING] = "None of these: small talk, a question to the assistant, or too vague to record."
     return Choice(
-        instructions="Which of these open tasks did the latest message take care of?",
+        instructions="Which of these did the latest message take care of?",
         criteria=criteria,
     )
+
+
+YES = "yes"
+ALSO_TASK = "also_task_"
+ALSO_FIX = "also_fix_"
+
+
+def also_questions(
+    tasks: List[Dict[str, Any]], corrections: Sequence[Dict[str, Any]], collected: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Choice]:
+    """Whatever else the message settled in this state, besides what it mainly answered.
+
+    People mention the weather while talking about their week, or fix an earlier answer
+    along the way. Each of these is its own yes or no, so one message can do several.
+    """
+    questions = {}
+    for i, task in enumerate(tasks):
+        about = ". ".join(filter(None, [task.get("description"), task.get("instruction")]))
+        wanted = "; ".join(_wanted(d) for d in task.get("deliverables", []))
+        questions[f"{ALSO_TASK}{i}"] = Choice(
+            instructions=(
+                "Whatever else it was about, does the latest message also give this, clearly enough "
+                f"to record? {about}." + (f" Wanted: {wanted}" if wanted else "")
+            ),
+            criteria={
+                YES: "Yes, it says this, even in passing.",
+                "no": "No, or only so vaguely that it would still have to be asked.",
+            },
+        )
+    for i, task in enumerate(corrections):
+        questions[f"{ALSO_FIX}{i}"] = Choice(
+            instructions=(
+                f"Earlier the person answered about {task.get('description')}, recorded as: "
+                f"{_recorded(task, collected or {})}. Does the latest message change or contradict that answer?"
+            ),
+            criteria={
+                YES: "Yes, a clear correction or contradiction of what was recorded.",
+                "no": "No: it does not mention it, repeats it, adds to it, or is too vague to tell.",
+            },
+        )
+    return questions
+
+
+def read_also(
+    answers: Dict[str, Any], tasks: List[Dict[str, Any]], corrections: Sequence[Dict[str, Any]],
+    threshold: float, main: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """The other tasks Jev is sure the message settled, apart from the main pick."""
+    picks = []
+    for prefix, pool, correction in ((ALSO_TASK, tasks, False), (ALSO_FIX, corrections, True)):
+        for i, task in enumerate(pool):
+            answer = answers.get(f"{prefix}{i}")
+            if answer is None or float(answer.probabilities.get(YES, 0.0)) < threshold:
+                continue
+            if main is not None and main["task_id"] == task.get("id"):
+                continue
+            p = round(float(answer.probabilities[YES]), 2)
+            picks.append({"task": task, "task_id": task.get("id"), "p": p, "correction": correction, "also": True})
+    return picks
+
+
+def read_pick(
+    answer: Any, tasks: List[Dict[str, Any]], corrections: Sequence[Dict[str, Any]], threshold: float,
+    answers: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """The task Jev picked, sure enough to act on, or None. Extraction may save only this.
+
+    One choice has to share its probability out when a message answers two tasks at once,
+    so an unsure pick counts when Jev's own yes or no on that task is sure of it.
+    """
+    if answer is None or answer.choice == NOTHING:
+        return None
+    p = float(answer.probabilities[answer.choice])
+    kind, index = answer.choice.split("_")
+    if p < threshold:
+        also = (answers or {}).get(f"{ALSO_FIX if kind == 'fix' else ALSO_TASK}{index}")
+        p = float(also.probabilities.get(YES, 0.0)) if also is not None else 0.0
+        if p < threshold:
+            return None
+    task = (corrections if kind == "fix" else tasks)[int(index)]
+    return {"task": task, "task_id": task.get("id"), "p": round(p, 2), "correction": kind == "fix"}
 
 
 def open_required_keys(task: Dict[str, Any]) -> List[str]:
@@ -150,6 +274,7 @@ def predict(
     picked: Dict[str, Any],
     way: str = OTHERWISE,
     required_task_ids: Optional[Set[str]] = None,
+    also_done: Sequence[Any] = (),
 ) -> Optional[str]:
     """Where this answer takes the plan, or None if it stays or only the state machine can tell."""
     if branches is None:
@@ -161,7 +286,7 @@ def predict(
 
     others = [
         t for t in tasks
-        if t.get("id") != picked.get("id")
+        if t.get("id") != picked.get("id") and t.get("id") not in also_done
         and (required_task_ids is None or t.get("id") in required_task_ids)
     ]
     if others or not finishes(picked):
@@ -179,7 +304,7 @@ def required_tasks(plan: Optional[Dict[str, Any]], state_id: Any) -> Set[str]:
     return {t.get("id") for t in state.get("tasks", []) if t.get("required", True)}
 
 
-def _open_for_reply(entry: Dict[str, Any], state: Dict[str, Any], without: Any = None) -> List[Dict[str, Any]]:
+def _open_for_reply(entry: Dict[str, Any], state: Dict[str, Any], without: Sequence[Any] = ()) -> List[Dict[str, Any]]:
     """The open tasks in the shape the state machine hands them to the reply."""
     required = {t.get("id"): t.get("required", True) for t in state.get("tasks", [])}
     return [
@@ -193,7 +318,7 @@ def _open_for_reply(entry: Dict[str, Any], state: Dict[str, Any], without: Any =
             "is_preview": False,
         }
         for t in entry.get("tasks", [])
-        if t.get("status", "pending") == "pending" and t.get("id") != without
+        if t.get("status", "pending") == "pending" and t.get("id") not in without
     ]
 
 
@@ -207,15 +332,16 @@ def _with_confirmed(sm_context: Dict[str, Any], keys: List[str]) -> List[Dict[st
 
 
 def context_within(
-    sm_context: Dict[str, Any], plan: Dict[str, Any], task_id: Any, keys: List[str]
+    sm_context: Dict[str, Any], plan: Dict[str, Any], task_ids: Any, keys: List[str]
 ) -> Optional[Dict[str, Any]]:
-    """The context once `task_id` is done and the plan stays, so the reply heads for the next task."""
+    """The context once these tasks are done and the plan stays, so the reply heads for the next task."""
+    done = [task_ids] if isinstance(task_ids, str) else list(task_ids)
     state_id = (sm_context.get("state") or {}).get("id")
     state = _plan_state(plan, state_id)
     entry = next((s for s in sm_context.get("full_plan") or [] if s.get("id") == state_id), None)
     if state is None or entry is None:
         return None
-    tasks = _open_for_reply(entry, state, without=task_id)
+    tasks = _open_for_reply(entry, state, without=done)
     if not tasks:
         return None
     mode = sm_context.get("processing_mode")

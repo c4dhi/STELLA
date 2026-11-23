@@ -37,7 +37,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from stella_agent_sdk import AgentOutput
 from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider
@@ -508,6 +508,37 @@ _DECISIONS = {
 }
 
 
+# Decision kinds that settle the offer, as `Companion.note` counts them live.
+_OFFER_KINDS = {"activities_offered", "activity_started", "activity_start_proposed"}
+# Going to sleep and being woken both start the opening over (`Companion.rest`).
+_WOKEN_KIND = "woken_up"
+_RESTART_KINDS = {_DECISIONS[Change.DISMISSED][0], _WOKEN_KIND}
+
+
+def opening_from_history(messages: List[Any]) -> Tuple[bool, bool]:
+    """``(greeted, offered)`` as the recorded transcript leaves them (#159).
+
+    For a pod resuming a paused session: the opening lived only in the old
+    pod's memory, but its reasons are in the transcript. The same rules as
+    `Companion.note`: going to sleep or being woken starts the opening over, a reply of hers
+    means she has greeted, and an offer or a start settles the offer. Only
+    what came after the last of those counts.
+
+    ``messages`` are chronological ``ChatMessage``s, debug ones included.
+    """
+    greeted = offered = False
+    for msg in messages:
+        data = (getattr(msg, "envelope", None) or {}).get("data") or {}
+        kind = ((data.get("metadata") or {}).get("decision") or {}).get("kind")
+        if kind in _RESTART_KINDS:
+            greeted = offered = False
+        elif kind in _OFFER_KINDS:
+            greeted = offered = True
+        elif getattr(msg, "role", None) == "assistant" and (getattr(msg, "content", "") or "").strip():
+            greeted = True
+    return greeted, offered
+
+
 def started_label(title: str) -> str:
     """The exact label the "Started" decision tag carries for `title` (#640):
     the curly quotes here must match `_DECISIONS[Change.STARTED]` exactly, so
@@ -519,7 +550,7 @@ def woken_tag(session_id: str) -> AgentOutput:
     """The transcript's note that the user woke her, the counterpart of
     "Going to sleep"."""
     return AgentOutput.decision(
-        session_id, "woken_up", "Woken up", detail="The user woke her", component=ROUTER,
+        session_id, _WOKEN_KIND, "Woken up", detail="The user woke her", component=ROUTER,
     )
 
 

@@ -212,12 +212,16 @@ export default function SettingsSidebar({ activeSection, onSectionChange }: Sett
 
   return (
     <aside
-      className={`w-72 border-r flex flex-col ${
+      // shrink-0/min-h-0 lets the column shrink to the window; the nav list then
+      // scrolls on its own, so every section stays reachable on a short window
+      // (#158). w-full md:w-72: full width below the phone breakpoint, same as
+      // every other Settings section (#102).
+      className={`w-full md:w-72 shrink-0 min-h-0 border-r flex flex-col ${
         isDark ? 'border-border-dark bg-surface-dark' : 'border-border bg-surface'
       }`}
     >
       {/* Header */}
-      <div className={`px-6 py-5 border-b ${isDark ? 'border-border-dark' : 'border-border'}`}>
+      <div className={`shrink-0 px-6 py-5 border-b ${isDark ? 'border-border-dark' : 'border-border'}`}>
         <h1
           className={`text-heading-lg font-semibold ${
             isDark ? 'text-content-inverse' : 'text-content'
@@ -235,7 +239,7 @@ export default function SettingsSidebar({ activeSection, onSectionChange }: Sett
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-1">
+      <nav className="flex-1 min-h-0 overflow-y-auto p-4 space-y-1">
         {visibleSections.map((section, index) => {
           const isActive = activeSection === section.id
           return (

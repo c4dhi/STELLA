@@ -170,7 +170,7 @@ export default function PublicLinkModal({
 
               {/* Link display */}
               <div className={`
-                flex items-center gap-2 p-4 rounded-xl mb-4
+                flex items-center gap-2 coarse:gap-3 p-4 rounded-xl mb-4
                 ${isDark ? 'bg-zinc-700/50 border border-zinc-600' : 'bg-neutral-50 border border-neutral-200'}
               `}>
                 <input

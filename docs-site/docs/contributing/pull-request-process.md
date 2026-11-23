@@ -33,6 +33,8 @@ cd frontend-ui && npm test
 cd agents/stella-ai-agent-sdk && python -m pytest
 ```
 
+CI also runs the full backend suite as the **Backend tests** check on any PR touching server code (`.github/workflows/backend-tests.yml`), and it's required before merge once branch protection is set up.
+
 ### 3. Check Formatting
 
 ```bash

@@ -1,6 +1,6 @@
 name: SDK Doc Examples
 
-# Every Python example in the SDK docs must import cleanly against the SDK in
+# Every Python example in the SDK docs, and the other pages the script lists, must import cleanly against the SDK in
 # this repo (#887). Blocks that are deliberately not runnable carry
 # <!-- pseudo-code --> on the line before their fence.
 
@@ -42,11 +42,13 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       # The examples import the SDK, the OpenAI client and pytest (the testing
-      # examples); nothing else is run.
+      # examples), and the monitoring, HTTP and web libraries the pages outside
+      # the SDK section show (#157). They are installed rather than skipped, so
+      # a misspelt name from them is caught too. Nothing else is run.
       - name: Install the SDK
         run: |
           uv pip install --system -e agents/stella-ai-agent-sdk
-          uv pip install --system openai pytest
+          uv pip install --system openai pytest httpx prometheus-client structlog opentelemetry-api fastapi
 
       - name: Check the examples import
         run: python scripts/check-sdk-doc-examples.py

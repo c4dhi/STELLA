@@ -68,12 +68,21 @@ export default function SettingsPage() {
     return section as SettingsSection
   })()
 
+  // Below `md` there's only room for the sidebar or the section, not both
+  // (#102): the bare `/settings` route shows the list, `/settings/:section`
+  // shows that section full-width with a way back to the list.
+  const hasSection = Boolean(section)
+
   useEffect(() => {
     initializeTheme()
   }, [initializeTheme])
 
   const handleSectionChange = (newSection: SettingsSection) => {
     navigate(`/settings/${newSection}`)
+  }
+
+  const handleBackToList = () => {
+    navigate('/settings')
   }
 
   const renderContent = () => {
@@ -128,16 +137,34 @@ export default function SettingsPage() {
 
       <div className="flex-1 flex justify-center overflow-hidden">
         <div className="w-full max-w-6xl flex">
-          {/* Sidebar */}
-          <SettingsSidebar
-            activeSection={activeSection}
-            onSectionChange={handleSectionChange}
-          />
+          {/* Sidebar: full-width list below `md` until a section is picked */}
+          <div className={hasSection ? 'hidden md:flex' : 'flex w-full md:w-auto'}>
+            <SettingsSidebar
+              activeSection={activeSection}
+              onSectionChange={handleSectionChange}
+            />
+          </div>
 
-          {/* Main Content */}
-          <main className={`flex-1 overflow-y-auto p-8 ${
+          {/* Main Content: full-width below `md` once a section is picked */}
+          <main className={`flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8 ${
+            hasSection ? 'flex' : 'hidden md:flex'
+          } flex-col ${
             isDark ? 'bg-surface-dark' : 'bg-surface'
           }`}>
+            <button
+              type="button"
+              onClick={handleBackToList}
+              className={`md:hidden self-start flex items-center gap-1 mb-4 text-body-sm transition-colors ${
+                isDark
+                  ? 'text-content-inverse-secondary hover:text-content-inverse'
+                  : 'text-content-secondary hover:text-content'
+              }`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+              Settings
+            </button>
             <AnimatePresence mode="wait">
               <motion.div
                 key={activeSection}

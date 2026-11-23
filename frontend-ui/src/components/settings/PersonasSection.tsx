@@ -184,7 +184,7 @@ export default function PersonasSection() {
           )}
 
           {!isLoading && !error && (
-            <motion.div key="list" className="grid gap-3" variants={containerVariants}>
+            <motion.div key="list" className="grid grid-cols-1 gap-3" variants={containerVariants}>
               {personas.map((persona) => {
                 const variableKeys = Object.keys(persona.variables || {})
                 return (
@@ -197,7 +197,7 @@ export default function PersonasSection() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2.5 mb-1">
                           <span className="text-lg">{persona.icon || '🎭'}</span>
-                          <h3 className={`text-body font-medium truncate ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+                          <h3 className={`min-w-0 text-body font-medium truncate ${isDark ? 'text-content-inverse' : 'text-content'}`}>
                             {persona.name}
                           </h3>
                           {persona.isSystemDefault && (
@@ -220,7 +220,7 @@ export default function PersonasSection() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5 coarse:gap-2.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => handleDuplicate(persona)}

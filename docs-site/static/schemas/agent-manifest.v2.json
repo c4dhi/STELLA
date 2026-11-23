@@ -132,6 +132,26 @@
               "additionalProperties": false
             }
           ]
+        },
+        "connectorTools": {
+          "type": "object",
+          "properties": {
+            "modes": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "plan",
+                  "companion"
+                ]
+              }
+            }
+          },
+          "required": [
+            "modes"
+          ],
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -720,6 +740,100 @@
         "edges",
         "thresholds"
       ]
+    },
+    "settings": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "text",
+              "boolean",
+              "integer",
+              "number",
+              "enum",
+              "string_list",
+              "key_value",
+              "expert_list",
+              "verdict_directives"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "default": {
+            "$ref": "#/$defs/__schema0"
+          },
+          "group": {
+            "type": "string"
+          },
+          "advanced": {
+            "type": "boolean"
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          },
+          "step": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "unit": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "language",
+              "language-or-auto"
+            ]
+          },
+          "maxLength": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "isCustom": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "type"
+        ],
+        "additionalProperties": false
+      }
     },
     "runtimeVariables": {
       "type": "array",

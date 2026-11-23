@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mail, Users, Check, X, Trash2, FolderOpen } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Mail, Users, AlertTriangle, Check, X, Trash2, FolderOpen } from 'lucide-react'
 import { apiClient } from '../../services/ApiClient'
 import { useThemeStore } from '../../store/themeStore'
 import { useToastStore } from '../../store/toastStore'
@@ -137,6 +138,8 @@ export default function InboxSection() {
     switch (type) {
       case 'PROJECT_INVITATION':
         return <Users className="w-5 h-5" />
+      case 'AGENT_BUILD_FAILED':
+        return <AlertTriangle className="w-5 h-5" />
       default:
         return <Mail className="w-5 h-5" />
     }
@@ -202,6 +205,7 @@ export default function InboxSection() {
             {messages.map((message, index) => {
               const isProcessing = processingIds.has(message.id)
               const isProjectInvitation = message.type === 'PROJECT_INVITATION'
+              const isBuildFailure = message.type === 'AGENT_BUILD_FAILED'
 
               return (
                 <motion.div
@@ -288,8 +292,38 @@ export default function InboxSection() {
                         </div>
                       )}
 
-                      {/* Delete button for non-actionable messages */}
-                      {!isProjectInvitation && (
+                      {/* View build log + Delete for a build failure */}
+                      {isBuildFailure && (
+                        <div className="flex items-center gap-2 mt-3">
+                          {message.relatedEntityId && (
+                            <Link
+                              to={`/settings/agent-library?agent=${message.relatedEntityId}`}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption font-medium transition-colors ${
+                                isDark
+                                  ? 'bg-primary/20 text-primary hover:bg-primary/30'
+                                  : 'bg-primary/10 text-primary hover:bg-primary/20'
+                              }`}
+                            >
+                              View build log
+                            </Link>
+                          )}
+                          <button
+                            onClick={() => handleDeleteMessage(message.id)}
+                            disabled={isProcessing}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-caption font-medium transition-colors ${
+                              isDark
+                                ? 'bg-surface-dark-tertiary text-content-inverse-secondary hover:bg-red-500/20 hover:text-red-400'
+                                : 'bg-surface-tertiary text-content-secondary hover:bg-red-50 hover:text-red-600'
+                            }`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Delete
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Delete button for other non-actionable messages */}
+                      {!isProjectInvitation && !isBuildFailure && (
                         <div className="flex items-center gap-2 mt-3">
                           <button
                             onClick={() => handleDeleteMessage(message.id)}

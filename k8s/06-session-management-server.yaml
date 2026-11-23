@@ -129,6 +129,11 @@ spec:
             secretKeyRef:
               name: stella-ai-secrets
               key: env-var-encryption-key
+        - name: INTERNAL_API_KEY  # shared with the backend's internal endpoints (#145)
+          valueFrom:
+            secretKeyRef:
+              name: stella-internal-key
+              key: internal-api-key
         - name: LIVEKIT_API_KEY
           valueFrom:
             secretKeyRef:

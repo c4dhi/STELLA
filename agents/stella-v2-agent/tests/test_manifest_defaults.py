@@ -1,0 +1,68 @@
+"""The defaults an agent.yaml shows match the code's own fallbacks (#137, GitHub 866).
+
+STELLA puts every optional default from agent.yaml into the pod on deploy,
+restart and wake (withEnvDefaults in src/agents/deploy-request.ts), so the
+manifest value is what runs. The code's fallback only applies outside STELLA,
+or for an agent that declares no default. The two disagreed (300 ms vs 0 for
+the transcript debounce, 3000 ms vs 15000 for the expert timeout); Felix kept
+what runs (23 Nov 2026), so the code now falls back to the same values.
+"""
+from pathlib import Path
+
+import pytest
+import yaml
+
+from stella_agent_sdk.platform_env import PLATFORM_ENV
+from stella_v2_agent.pipeline.expert_pool import DEFAULT_EXPERT_TIMEOUT_MS
+
+AGENTS = Path(__file__).resolve().parents[2]
+SDK_DEFAULTS = {v.name: v.default for v in PLATFORM_ENV}
+
+# Agent-owned variables with a default, and the default their code uses.
+# Jev runs v2's ExpertPool, so it shares v2's.
+AGENT_DEFAULTS = {
+    "stella-v2-agent": {"EXPERT_TIMEOUT_MS": str(DEFAULT_EXPERT_TIMEOUT_MS)},
+    "stella-jev-agent": {"EXPERT_TIMEOUT_MS": str(DEFAULT_EXPERT_TIMEOUT_MS)},
+    "stella-light-agent": {},
+}
+
+
+def optional_defaults(agent: str) -> dict:
+    manifest = yaml.safe_load((AGENTS / agent / "agent.yaml").read_text())
+    return {
+        e["name"]: str(e["default"])
+        for e in manifest.get("env", {}).get("optional", [])
+        if e.get("default") is not None
+    }
+
+
+@pytest.mark.parametrize("agent", sorted(AGENT_DEFAULTS))
+def test_sdk_owned_defaults_match_the_sdk(agent):
+    shown = optional_defaults(agent)
+    wrong = {
+        name: (value, SDK_DEFAULTS[name])
+        for name, value in shown.items()
+        if name in SDK_DEFAULTS and SDK_DEFAULTS[name] is not None and value != SDK_DEFAULTS[name]
+    }
+    assert wrong == {}, f"{agent}/agent.yaml default vs the SDK's: {wrong}"
+
+
+@pytest.mark.parametrize("agent", sorted(AGENT_DEFAULTS))
+def test_agent_owned_defaults_match_the_code(agent):
+    shown = optional_defaults(agent)
+    for name, code_default in AGENT_DEFAULTS[agent].items():
+        assert shown.get(name) == code_default, f"{agent}/agent.yaml {name}: {shown.get(name)} vs code {code_default}"
+
+
+def test_expert_pool_runs_that_default_when_unset(monkeypatch):
+    from stella_v2_agent.pipeline.expert_pool import ExpertPool
+
+    monkeypatch.delenv("EXPERT_TIMEOUT_MS", raising=False)
+    pool = ExpertPool(object(), object(), compiler_version="test")
+    assert pool._timeout_ms == DEFAULT_EXPERT_TIMEOUT_MS == 3000
+
+
+def test_the_sdk_debounce_falls_back_to_what_the_manifests_run(monkeypatch):
+    from stella_agent_sdk.audio.pipeline import DEFAULT_TRANSCRIPT_DEBOUNCE_MS
+
+    assert SDK_DEFAULTS["TRANSCRIPT_DEBOUNCE_MS"] == str(DEFAULT_TRANSCRIPT_DEBOUNCE_MS) == "300"

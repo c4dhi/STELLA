@@ -2,7 +2,8 @@
 // Uses BroadcastChannel to share SSE connection across tabs (reduces HTTP connections)
 import { create } from 'zustand'
 import { apiClient } from '../services/ApiClient'
-import type { UserMessage, UserNotificationEvent } from '../lib/api-types'
+import { UserMessageType, type UserMessage, type UserNotificationEvent } from '../lib/api-types'
+import { useToastStore } from './toastStore'
 
 interface NotificationState {
   unreadCount: number
@@ -254,6 +255,18 @@ export const useNotificationStore = create<NotificationState & NotificationActio
             messages: [event.message!, ...state.messages],
             unreadCount: event.unreadCount ?? state.unreadCount + 1,
           }))
+          // A failed build deserves a toast wherever the user is, not just in
+          // the inbox: this is the one message type nobody wants to miss.
+          if (event.message.type === UserMessageType.AGENT_BUILD_FAILED) {
+            useToastStore.getState().addToast({
+              type: 'error',
+              message: event.message.title,
+              duration: 8000,
+              ...(event.message.relatedEntityId && {
+                link: { to: `/settings/agent-library?agent=${event.message.relatedEntityId}`, label: 'View build log' },
+              }),
+            })
+          }
         }
         break
 

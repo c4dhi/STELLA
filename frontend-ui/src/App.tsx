@@ -12,6 +12,7 @@ import StatusPage from './pages/StatusPage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import FacePreviewPage from './pages/FacePreviewPage'
 import { ToastContainer } from './components/Toast'
+import { OfflineBanner } from './components/OfflineBanner'
 import PlanBuilderModal from './components/settings/PlanBuilder/PlanBuilderModal'
 import GlobalConfiguratorModal from './components/configurator/GlobalConfiguratorModal'
 import { useAuthStore } from './store/authStore'
@@ -40,6 +41,9 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      {/* Offline banner, on every screen including participant pages */}
+      <OfflineBanner />
+
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 

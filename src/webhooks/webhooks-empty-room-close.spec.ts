@@ -10,7 +10,7 @@ import { WebhooksService } from './webhooks.service.js';
  * still finishes closing either way.
  */
 describe('empty-room auto-close follows the session setting', () => {
-  function setup(session: { status: string; closeWhenEmpty: boolean | null; projectCloses: boolean }) {
+  function setup(session: { status: string; closeWhenEmpty: boolean | null; projectCloses: boolean; startingAgents?: number }) {
     const prisma: any = {
       session: {
         findUnique: jest.fn(async () => ({
@@ -24,6 +24,7 @@ describe('empty-room auto-close follows the session setting', () => {
         })),
         update: jest.fn(async () => ({})),
       },
+      agentInstance: { count: jest.fn(async () => session.startingAgents ?? 0) },
     };
     const livekit: any = { listRoomParticipants: jest.fn(async () => []) };
     const sessions: any = { close: jest.fn(async () => ({})) };
@@ -36,7 +37,17 @@ describe('empty-room auto-close follows the session setting', () => {
   it('closes an empty session whose project closes empty sessions', async () => {
     const { service, sessions } = setup({ status: 'ACTIVE', closeWhenEmpty: null, projectCloses: true });
     await service.handleParticipantInactivity('s1', 'participant-1');
-    expect(sessions.close).toHaveBeenCalledWith('s1');
+    expect(sessions.close).toHaveBeenCalledWith('s1', 'automatic');
+  });
+
+  it('closes even while an agent is still starting: the stop deletes its pod (#188)', async () => {
+    // A wake re-creating the agent's pod isn't in the room yet. Close goes
+    // ahead; stopAgent marks the row STOPPING, so keepNewPod refuses the new
+    // pod and deletes it. Waiting for STARTING instead could block close for
+    // good when a create never finishes.
+    const { service, sessions } = setup({ status: 'ACTIVE', closeWhenEmpty: null, projectCloses: true, startingAgents: 1 });
+    await service.handleParticipantInactivity('s1', 'participant-1');
+    expect(sessions.close).toHaveBeenCalledWith('s1', 'automatic');
   });
 
   it('keeps an empty session open when its project keeps sessions open', async () => {
@@ -67,12 +78,12 @@ describe('empty-room auto-close follows the session setting', () => {
 
     const close = setup({ status: 'ACTIVE', closeWhenEmpty: true, projectCloses: false });
     await close.service.handleParticipantInactivity('s1', 'agent-a1');
-    expect(close.sessions.close).toHaveBeenCalledWith('s1');
+    expect(close.sessions.close).toHaveBeenCalledWith('s1', 'automatic');
   });
 
   it.each([true, false])('a CLOSING session still finishes closing when its last agent leaves (closeWhenEmpty=%s)', async (closeWhenEmpty) => {
     const { service, sessions } = setup({ status: 'CLOSING', closeWhenEmpty, projectCloses: closeWhenEmpty });
     await service.finalizeClosingSessionOnAgentLeave('s1', 'agent-a1', 'room-1');
-    expect(sessions.close).toHaveBeenCalledWith('s1');
+    expect(sessions.close).toHaveBeenCalledWith('s1', 'automatic');
   });
 });

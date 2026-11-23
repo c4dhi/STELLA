@@ -33,6 +33,7 @@ function makeService(agentTypesById: Record<string, { id: string; packagePath: s
     { get: jest.fn().mockReturnValue('local') } as any,
     prisma as any,
     {} as any,
+    {} as any,
   )
   return { service, prisma, buildLogs }
 }
@@ -66,7 +67,7 @@ describe('AgentBuildService: never two builds of one agent type at once', () => 
     await flush()
 
     expect(executeBuild).toHaveBeenCalledTimes(2)
-    expect(executeBuild).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'a1' }), r2.buildLogId)
+    expect(executeBuild).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'a1' }), r2.buildLogId, undefined)
   })
 
   it('a request while one is already queued supersedes it, not piling both up', async () => {
@@ -90,7 +91,7 @@ describe('AgentBuildService: never two builds of one agent type at once', () => 
 
     // r2 never runs; only r1 (the original) and r3 (the one that superseded r2) do.
     expect(executeBuild).toHaveBeenCalledTimes(2)
-    expect(executeBuild).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'a1' }), r3.buildLogId)
+    expect(executeBuild).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'a1' }), r3.buildLogId, undefined)
   })
 
   it('marks a same-tick queued-build race loser instead of leaving it stuck pending', async () => {
@@ -165,6 +166,7 @@ describe('AgentBuildService: never two builds of one agent type at once', () => 
     expect(executeBuild).toHaveBeenLastCalledWith(
       expect.objectContaining({ version: '1.0.1', packagePath: 'p2' }),
       r2.buildLogId,
+      undefined,
     )
   })
 

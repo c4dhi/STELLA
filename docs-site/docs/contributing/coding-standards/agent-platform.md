@@ -76,7 +76,7 @@ Before writing a helper, search for the owner. Two copies of a rule always drift
 ## 7. Every change ships with its proof
 
 - Specs for the rule itself, plus a spec that pins the single source (defaults agree, no slug literals, generated files current).
-- New spec files go into `.github/workflows/agent-validation-unit-tests.yml`.
+- Every spec under `src/` already runs in CI (`.github/workflows/backend-tests.yml`). For a spec on an agent-manifest path specifically, also add it to `.github/workflows/agent-validation-unit-tests.yml`'s fixed list, since that workflow triggers on non-`src` paths (`agent.yaml`, expert configs, docs schemas) backend-tests.yml doesn't cover.
 - A CHANGELOG entry under Unreleased, and docs in `docs-site/docs/agent-sdk` when authors see the change.
 
 ## Checklist for a change

@@ -2,10 +2,12 @@ import { AccessToken } from 'livekit-server-sdk'
 
 /**
  * How long an uploaded agent's LiveKit token is valid: the same as a
- * participant token. The token is only checked when the agent first joins and
- * when it calls the chat-history API; once connected, LiveKit refreshes the
- * agent's credentials itself. Every restart or auto-pause wake creates a new
- * pod (restartPolicy Never), and the backend signs a new token for it.
+ * participant token. LiveKit checks it only when the agent first joins; once
+ * connected, LiveKit refreshes the agent's credentials itself. The chat-history
+ * API keeps accepting it after it expires for as long as the agent runs
+ * (agent-history-token.ts, #165), since an agent outlives any token lifetime.
+ * Every restart or auto-pause wake creates a new pod (restartPolicy Never),
+ * and the backend signs a new token for it.
  */
 export const UPLOADED_AGENT_TOKEN_TTL = '24h'
 

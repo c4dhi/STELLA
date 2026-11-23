@@ -427,6 +427,9 @@ export interface AgentBuildStatus {
   errorMessage?: string
   startedAt: string
   completedAt?: string
+  // The stored output of this build (#961), so a window reopened after the
+  // build finished still has something to show. Never present in a list.
+  buildOutput?: string
 }
 
 // Agent build trigger response
@@ -1254,6 +1257,7 @@ export interface ProjectWithPublicConfig extends Project {
 
 export enum UserMessageType {
   PROJECT_INVITATION = 'PROJECT_INVITATION',
+  AGENT_BUILD_FAILED = 'AGENT_BUILD_FAILED',
 }
 
 export enum ProjectInvitationStatus {
@@ -1713,8 +1717,9 @@ export interface ExpertDefault {
   output_schema?: Record<string, unknown>
   trigger_criteria?: string
   always_triggered?: boolean
-  history_limit?: number
   min_confidence?: number
+  /** On by default only for configurations authored against this prompt compiler or later. */
+  enabled_from_compiler?: string
   verdict_directives?: Record<
     string,
     { action?: string; template?: string; description?: string; template_i18n?: Record<string, string> }
@@ -1762,10 +1767,36 @@ export interface PipelineThreshold {
   default?: number
 }
 
+/**
+ * A setting a configuration may change (#996), keyed `<stage>.<name>`: declared
+ * in agent.yaml (`settings:` or a pipeline slot). The value lives at
+ * `nodes.<stage>.<name>`; the backend refuses any other key, and values that
+ * do not fit the declaration.
+ */
+export interface ConfigSetting {
+  key: string
+  type: 'string' | 'text' | 'boolean' | 'integer' | 'number' | 'enum' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives'
+  label?: string
+  description?: string
+  default?: unknown
+  group?: string
+  advanced?: boolean
+  min?: number
+  max?: number
+  step?: number
+  unit?: string
+  options?: { value: string; label?: string }[]
+  format?: string
+  maxLength?: number
+  isCustom?: boolean
+}
+
 export interface PipelineSchema {
   nodes: PipelineNode[]
   edges: PipelineEdge[]
   thresholds: PipelineThreshold[]
+  /** Every setting the agent declares; the backend always sends it. */
+  settings?: ConfigSetting[]
 }
 
 export interface AgentConfigurationPayload {

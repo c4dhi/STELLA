@@ -30,6 +30,8 @@ import { BatchListenerStatusDto } from './dto/batch-listener-status.dto.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { Public } from '../common/decorators/public.decorator.js';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard.js';
+import { InternalKeyGuard } from '../auth/guards/internal-key.guard.js';
+import { MonitoringLogDto, MonitoringStatusDto } from './dto/monitoring.dto.js';
 import {
   AllowSessionParticipant,
   SessionAccessGuard,
@@ -413,15 +415,9 @@ export class SessionsController {
    * Allows Python service to submit logs for display in the dashboard.
    */
   @Public()
+  @UseGuards(InternalKeyGuard)
   @Post('internal/monitoring/logs')
-  async storeMonitoringLog(
-    @Body() logData: {
-      level: 'log' | 'debug' | 'warn' | 'error';
-      message: string;
-      sessionId?: string;
-      data?: any;
-    },
-  ) {
+  async storeMonitoringLog(@Body() logData: MonitoringLogDto) {
     return this.sessionsService.storeMonitoringLog(logData);
   }
 
@@ -430,12 +426,9 @@ export class SessionsController {
    * Allows Python service to report which sessions it's actively monitoring.
    */
   @Public()
+  @UseGuards(InternalKeyGuard)
   @Post('internal/monitoring/status')
-  async updateMonitoringStatus(
-    @Body() statusData: {
-      connectedSessions: string[];
-    },
-  ) {
+  async updateMonitoringStatus(@Body() statusData: MonitoringStatusDto) {
     return this.sessionsService.updateMonitoringStatus(statusData);
   }
 

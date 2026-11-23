@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Check that the Python examples in the SDK docs work against the SDK (#887).
+Check that the Python examples in the docs work against the SDK (#887, #157).
 
 Every ```python block in the SDK docs must parse, and every import
 in it must resolve: the module exists and has each name imported from it.
@@ -10,7 +10,9 @@ line before its fence; such blocks are skipped.
 
 A block titled with a file path (```python title="my_agent/tools.py") stands
 for the reader's own module, so imports of a package defined that way on the
-same page are not looked up.
+same page are not looked up. A page whose examples import the reader's own
+package without defining it there (tests of "your agent") names it once with
+`<!-- reader-package: my_agent -->`; every other import is still checked.
 
 Usage: python scripts/check-sdk-doc-examples.py [doc paths...]
 Run it in a venv with the SDK installed (pip install -e agents/stella-ai-agent-sdk).
@@ -31,11 +33,18 @@ DEFAULT_PATHS = [
     "docs-site/docs/guides/build-your-own-agent.md",
     "docs-site/docs/agents/stella-agent/index.md",
     "docs-site/docs/contributing/coding-standards/python.md",
+    # Outside the SDK section, with Python examples (#157).
+    "docs-site/docs/guides/custom-tools.md",
+    "docs-site/docs/contributing/coding-standards/testing.md",
+    "docs-site/docs/architecture/environment-variables.md",
+    "docs-site/docs/deployment/monitoring.md",
+    "docs-site/docs/architecture/kubernetes-orchestration.md",
 ]
 PSEUDO = "<!-- pseudo-code -->"
 # A fence may carry attributes after the language, e.g. ```python title="src/agent.py".
 FENCE = re.compile(r"^(\s*)```(\w+)?(?:\s.*)?$")
 TITLE = re.compile(r'title="([\w./-]+)\.py"')
+READER_PACKAGE = re.compile(r"<!--\s*reader-package:\s*([\w, ]+?)\s*-->")
 
 
 def python_blocks(path: Path):
@@ -59,9 +68,13 @@ def python_blocks(path: Path):
         i = j + 1
 
 
-def page_packages(titles) -> set[str]:
-    """Top-level packages the page itself defines, from titles like my_agent/agent."""
-    return {t.split("/")[0] for t in titles if t and "/" in t}
+def page_packages(titles, text: str = "") -> set[str]:
+    """Top-level packages the page itself defines, from titles like my_agent/agent,
+    plus any it names as the reader's own with a reader-package marker."""
+    own = {t.split("/")[0] for t in titles if t and "/" in t}
+    for m in READER_PACKAGE.finditer(text):
+        own.update(name.strip() for name in m.group(1).split(",") if name.strip())
+    return own
 
 
 def import_problems(code: str, own: frozenset[str] = frozenset()) -> list[tuple[int, str]]:
@@ -107,7 +120,7 @@ def main(argv: list[str]) -> int:
     failures = blocks = 0
     for path in files(argv or DEFAULT_PATHS):
         page = list(python_blocks(path))
-        own = frozenset(page_packages(title for _, _, title in page))
+        own = frozenset(page_packages((title for _, _, title in page), path.read_text(encoding="utf-8")))
         for line, code, _ in page:
             blocks += 1
             for offset, problem in import_problems(code, own):

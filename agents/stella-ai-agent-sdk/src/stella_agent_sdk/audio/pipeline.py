@@ -54,6 +54,7 @@ from stella_agent_sdk.livekit.room import RoomManager
 from stella_agent_sdk.services.stt_client import STTClient, TranscriptEvent
 from stella_agent_sdk.services.tts_client import TTSClient
 from stella_agent_sdk.messages.types import BargeInDecision
+from stella_agent_sdk.client_channel import tts_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +262,11 @@ _PLAYOUT_FRAME_BYTES = _PLAYOUT_FRAME_SAMPLES * _BYTES_PER_SAMPLE
 # RTF or a non-zero "bridged Xms" says 200ms is not enough (a slower GPU than the
 # one this was tuned on), and lowers it slowly back toward this floor.
 _DEFAULT_TTS_PREROLL_MS = 200
+
+#: Transcript debounce when TRANSCRIPT_DEBOUNCE_MS is unset. platform_env and the
+#: built-in agents' agent.yaml show the same value (pinned by stella-v2-agent's
+#: tests/test_manifest_defaults.py).
+DEFAULT_TRANSCRIPT_DEBOUNCE_MS = 300
 
 # How synthesized speech is played (STELLA_TTS_PLAYBACK, a per-deployment agent
 # setting declared in agent.yaml):
@@ -585,23 +591,16 @@ class AudioPipeline:
 
         # Transcript debouncing (secondary defense against rapid successive finals).
         #
-        # Off by default. The window only pays for itself if a second final can
-        # actually land inside it, and with either STT provider in this tree it
-        # cannot: both refuse to emit a final until they have seen a fixed span
-        # of silence, and both reset to IDLE immediately afterwards, so the
-        # floor between two consecutive finals is that span. whisper waits
-        # VAD_SILENCE_DURATION_MS + VAD_CONTINUATION_WINDOW_MS (500 + 600 in
-        # prod), sherpa waits SHERPA_SILENCE_THRESHOLD (1.5s). Both are far
-        # wider than any sane debounce window, and the continuation window is
-        # already the mechanism that stitches a mid-sentence pause back into
-        # one turn — it cancels its own pending final when speech resumes.
-        #
-        # So the sleep was a fixed tax on every turn (300ms straight off
-        # time-to-first-audio, measured from stt_end) guarding against an event
-        # the upstream endpointing makes unreachable. Set TRANSCRIPT_DEBOUNCE_MS
-        # to re-enable it for an STT provider that CAN fragment inside the
-        # window; the aggregation path below is unchanged and still correct.
-        self._debounce_window_ms = _env_int("TRANSCRIPT_DEBOUNCE_MS", 0)
+        # 300 ms by default: what the built-in agents' agent.yaml declare, and
+        # STELLA puts that default into every pod, so it is what has run since
+        # 2.0.0 (#137, kept by Felix on 23 Nov 2026). With either STT provider in
+        # this tree a second final can hardly land inside the window: both wait
+        # for a fixed span of silence before a final (whisper
+        # VAD_SILENCE_DURATION_MS + VAD_CONTINUATION_WINDOW_MS, sherpa
+        # SHERPA_SILENCE_THRESHOLD), and the continuation window already stitches
+        # a mid-sentence pause back into one turn. The window costs its length off
+        # time-to-first-audio on every turn; TRANSCRIPT_DEBOUNCE_MS=0 turns it off.
+        self._debounce_window_ms = _env_int("TRANSCRIPT_DEBOUNCE_MS", DEFAULT_TRANSCRIPT_DEBOUNCE_MS)
         self._pending_transcript: Optional[TranscriptEvent] = None
         self._pending_transcript_time: float = 0
         self._debounce_task: Optional[asyncio.Task] = None
@@ -613,7 +612,7 @@ class AudioPipeline:
         self._interrupt_mode = os.getenv("INTERRUPT_MODE", "none")
 
         # TTS enabled flag
-        self._tts_enabled = os.getenv("TTS_ENABLED", "true").lower() != "false"
+        self._tts_enabled = tts_enabled()
         # Which interface the participant uses ("voice" or "text"), set by the
         # screen (stella.interaction_mode). In "text" nothing is spoken and
         # speech from the microphone is not a turn; the TTS and STT connections

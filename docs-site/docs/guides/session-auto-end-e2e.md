@@ -81,7 +81,7 @@ first agent message ─► cap timer armed (SessionTimeoutService)
 - **Agent logs**: `[SESSION END] signal received …`, then `[SESSION END] terminal interrupt — closing the session`, then the farewell. The agent stops itself (disconnects).
 - **Frontend**: the warning banner shows before the cap; the **timeout overlay appears only after the agent's goodbye** (on the agent's `session_ended` data signal, or — as a fallback — when the LiveKit room is torn down). It must NOT appear at the cap instant.
 - **SSE** (`/projects/:id/events` or admin dashboard): a `session.closed` event.
-- **Invitation**: `SELECT status FROM "Invitation" WHERE "sessionId" = '<id>';` → `REVOKED` after close.
+- **Invitation**: `SELECT status FROM "Invitation" WHERE "sessionId" = '<id>';` → `REVOKED` after close. An automatic close notes each invitation's previous status, so if the session reopens (someone rejoins) they are restored; a close from **Close session** keeps them revoked.
 - **Participant disconnect**: the human is kicked from the room (backend `close()` deletes the LiveKit room) — the participant client sees `Disconnected` and the overlay, never a dead room.
 
 ## Stall / deadline path

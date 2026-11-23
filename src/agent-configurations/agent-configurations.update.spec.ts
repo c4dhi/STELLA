@@ -19,7 +19,7 @@ const agentTypeRow = {
   version: '2.0.0',
   compilerVersion: '1.0.0',
   pipelineSchema: {
-    nodes: [{ id: 'planner' }],
+    nodes: [{ id: 'planner', slots: [{ id: 'x', type: 'number' }] }],
     thresholds: [{ id: 'temperature', min: 0, max: 1 }],
   },
 };

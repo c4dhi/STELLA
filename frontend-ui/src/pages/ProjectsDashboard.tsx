@@ -240,7 +240,7 @@ export default function ProjectsDashboard() {
                 </p>
 
                 {/* Actions */}
-                <div className={`flex gap-2 pt-4 border-t ${
+                <div className={`flex gap-2 coarse:gap-3 pt-4 border-t ${
                   isDark ? 'border-border-dark' : 'border-border'
                 }`}>
                   <button

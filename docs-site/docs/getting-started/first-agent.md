@@ -58,7 +58,7 @@ Once deployed, you can:
 ## Step 4: Monitor Your Agent
 
 - View agent status in the session panel (Running, Starting, Stopped)
-- **Speech recognition warming up.** After a quiet spell, speech recognition can need up to about 30 seconds to get ready when a session starts. The session view then shows an **STT warming up** chip with a timer and a line on the agent card, and the participant sees "Getting ready to listen…". After 30 seconds it says it is taking longer than usual; if warming up fails, the chip turns red and the participant is asked to tell the study team. Nothing shows when the model is already warm
+- **Speech recognition warming up.** After a quiet spell, speech recognition can need up to about 30 seconds to get ready when a session starts. Right after a restart, while the speech models are still loading, it can take up to about 10 minutes; the agent is already in the room and waits for them. The session view then shows an **STT warming up** chip with a timer and a line on the agent card, and the participant sees "Getting ready to listen…". After 30 seconds it says it is taking longer than usual; if warming up fails, the chip turns red and the participant is asked to tell the study team. Nothing shows when the model is already warm
 - Click on the agent to see logs and metrics
 - Stop the agent when done to free up resources
 

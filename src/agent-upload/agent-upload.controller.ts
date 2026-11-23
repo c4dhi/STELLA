@@ -53,6 +53,22 @@ export function assertOwnsAgent(agentType: { userId: string | null }, req: Authe
   if (agentType.userId !== userId) throw new ForbiddenException('You do not own this agent')
 }
 
+/**
+ * Who may see an agent's builds (log, status, history): whoever sees the agent
+ * in their library. That is its owner, a member of a project it is shared
+ * with, or a system admin. A built-in has no owner, so only admins.
+ */
+export function canSeeAgentBuilds(
+  agentType: { isBuiltIn: boolean; userId: string | null },
+  who: { userId: string; isSystemAdmin?: boolean; memberOf: string[]; sharedWith: string[] },
+): boolean {
+  if (who.isSystemAdmin) return true
+  if (agentType.isBuiltIn || !agentType.userId) return false
+  if (agentType.userId === who.userId) return true
+  const shared = new Set(who.sharedWith)
+  return who.memberOf.some((projectId) => shared.has(projectId))
+}
+
 @Controller('agent-types')
 export class AgentUploadController {
   private readonly logger = new Logger(AgentUploadController.name)
@@ -184,7 +200,7 @@ export class AgentUploadController {
     // logged, not surfaced as an upload error, and the uploader can still
     // press Rebuild.
     try {
-      await this.agentBuildService.startBuild(agentType.id)
+      await this.agentBuildService.startBuild(agentType.id, userId)
     } catch (err) {
       this.logger.error(`Failed to start build for ${agentType.slug} (${agentType.id}): ${(err as Error).message}`)
     }
@@ -280,7 +296,7 @@ export class AgentUploadController {
     assertOwnsAgent(agentType, req)
 
     // Start build
-    const result = await this.agentBuildService.startBuild(id)
+    const result = await this.agentBuildService.startBuild(id, requireUserId(req))
 
     return {
       buildLogId: result.buildLogId,
@@ -289,12 +305,22 @@ export class AgentUploadController {
   }
 
   /**
-   * Get build status for an agent.
+   * Get build status for an agent, including its stored output (#961) so a
+   * window reopened after the build finished still has something to show —
+   * a build still running keeps streaming live over build-logs instead.
+   * Only ever on this single latest-build lookup, never on build-history.
    * GET /agent-types/:id/build-status
    */
   @Get(':id/build-status')
-  async getBuildStatus(@Param('id') id: string): Promise<BuildStatus | null> {
-    // Get latest build log for this agent
+  async getBuildStatus(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<BuildStatus | null> {
+    await this.visibleBuilds(id, req)
+    return this.latestBuildStatus(id)
+  }
+
+  /** Looks up the latest build log for an agent type and its output (#961),
+   *  with no access check of its own — callers reachable without one (the
+   *  SSE stream below) must not be newly gated by adding output here. */
+  private async latestBuildStatus(id: string): Promise<BuildStatus | null> {
     const latestBuild = await this.prisma.agentBuildLog.findFirst({
       where: { agentTypeId: id },
       orderBy: { startedAt: 'desc' },
@@ -304,7 +330,13 @@ export class AgentUploadController {
       return null
     }
 
-    return this.agentBuildService.getBuildStatus(latestBuild.id)
+    const status = await this.agentBuildService.getBuildStatus(latestBuild.id)
+    if (!status) {
+      return null
+    }
+
+    const buildOutput = await this.agentBuildService.getBuildOutput(latestBuild.id)
+    return { ...status, buildOutput: buildOutput ?? undefined }
   }
 
   /**
@@ -312,7 +344,8 @@ export class AgentUploadController {
    * GET /agent-types/:id/build-history
    */
   @Get(':id/build-history')
-  async getBuildHistory(@Param('id') id: string) {
+  async getBuildHistory(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    await this.visibleBuilds(id, req)
     return this.agentBuildService.getBuildHistory(id)
   }
 
@@ -321,7 +354,9 @@ export class AgentUploadController {
    * GET /agent-types/:id/build-logs (SSE)
    */
   @Sse(':id/build-logs')
-  streamBuildLogs(@Param('id') id: string): Observable<MessageEvent> {
+  async streamBuildLogs(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<Observable<MessageEvent>> {
+    // Checked before the stream opens: a refusal is an ordinary 403/404.
+    await this.visibleBuilds(id, req)
     // Poll for build status every 2 seconds
     return concat(
       // Send initial status
@@ -347,7 +382,7 @@ export class AgentUploadController {
   }
 
   private async buildLogEvent(id: string): Promise<MessageEvent> {
-    const status = await this.getBuildStatus(id)
+    const status = await this.latestBuildStatus(id)
     if (!status) {
       return { type: 'status', data: 'no_build' } as MessageEvent
     }
@@ -416,6 +451,26 @@ export class AgentUploadController {
     ])
     this.logger.log(`Agent type ${agentType.slug} shared with ${projectIds.length} project(s)`)
     return { projectIds }
+  }
+
+  /** 404 for an unknown agent, 403 unless the caller may see its builds (`canSeeAgentBuilds`). */
+  private async visibleBuilds(id: string, req: AuthenticatedRequest): Promise<void> {
+    const userId = requireUserId(req)
+    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
+    if (!agentType) throw new NotFoundException('Agent type not found')
+    const [memberships, shares] = req.user?.isSystemAdmin || agentType.userId === userId
+      ? [[], []]
+      : await Promise.all([
+          this.prisma.projectMembership.findMany({ where: { userId }, select: { projectId: true } }),
+          this.prisma.agentTypeProjectShare.findMany({ where: { agentTypeId: id }, select: { projectId: true } }),
+        ])
+    const allowed = canSeeAgentBuilds(agentType, {
+      userId,
+      isSystemAdmin: req.user?.isSystemAdmin,
+      memberOf: memberships.map((m) => m.projectId),
+      sharedWith: shares.map((s) => s.projectId),
+    })
+    if (!allowed) throw new ForbiddenException('You cannot see this agent\'s builds')
   }
 
   /** The caller's own upload: sharing is the owner's alone, not an admin's. */
