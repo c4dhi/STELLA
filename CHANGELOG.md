@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
+
 ### Fixed
 
-- **The agent settings show the defaults the agents really use.** For STELLA V2, Jev and Light, the configurator and the docs showed a transcript debounce of 300 ms where the agents use 0 (off), and for V2 and Jev an expert timeout of 3000 ms where they use 15000. Only the shown values change; what the agents do stays the same ([#866](https://github.com/c4dhi/STELLA/issues/866))
+- **STELLA Jev: the reply and the plan stay in step.** Jev decides which task a message answered and the reply moves on from it, but extraction used to decide on its own what to save, so Grace could ask again for something already saved, or move on from something never saved. Extraction now saves only what Jev picked. Tasks in the same state mentioned in passing are saved too (unconfirmed), and Grace doesn't ask about them again; a correction of a value already collected in this state overwrites it. When Jev is unsure, nothing is saved and the question comes again. Jev's decision and what was saved show as debug lines in the session chat. New Pipeline Configurator settings `forecast_threshold` and `also_threshold`. Jev agent only (#177)
+- **STELLA Jev: no medical warning on a weak guess.** "I cannot remember anything", said when asked for something nice from the week, was taken as a medical "high" at 0.44, and the reply opened with "I can't give medical advice". A medical or legal "low" or "high" now counts only from `safety_threshold` (0.6) up and otherwise steps down a level; "critical" always counts. Everyday forgetting is listed as no health concern, and the new `expert_context` setting tells Jev what kind of conversation it is. Jev agent only
 
 ## [2.0.1] - 2026-11-17
 

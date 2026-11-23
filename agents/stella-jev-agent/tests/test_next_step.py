@@ -198,22 +198,25 @@ def test_the_turn_holds_extraction_back_until_arbitration_and_says_where_the_pla
     assert pool.forecast.keys == ["name"]
 
 
-def test_needs_clarification_saves_nothing_and_forecasts_nothing():
+def test_a_confident_task_pick_saves_even_when_probing_finds_it_vague():
+    # Jev's own answers can disagree. The pick steers the reply, so it decides the saving too.
     answers = {
         **QUIET,
         "probing": _answer(no_probe=0.05, needs_clarification=0.9, gentle_redirect=0.05),
         ANSWERED_TASK: _answer(task_0=0.95, nothing=0.05),
     }
     pool = Pool(answers, LINEAR)
-    asyncio.run(pool.run(NAMES, "weiß nicht", [], CONTEXT))
-    pool._held is None or pytest.fail("held an extraction")
-    assert pool.forecast.next_state is None and pool.forecast.keys == []
+    asyncio.run(pool.run(NAMES, "Nur ein halber Liter", [], CONTEXT))
+    assert pool._held is not None
+    assert pool.last_pick["task_id"] == "t1" and pool.last_scope.keys == {"name": "answered"}
 
 
-def test_an_unsure_task_pick_makes_no_forecast_but_extraction_still_runs():
+def test_an_unsure_task_pick_saves_nothing_and_forecasts_nothing():
+    # Saving without a pick is what let extraction fill a task the reply then asked again.
     pool = Pool({**QUIET, ANSWERED_TASK: _answer(task_0=0.5, nothing=0.5)}, LINEAR)
     asyncio.run(pool.run(NAMES, "hm", [], CONTEXT))
-    assert pool._held is not None
+    assert pool._held is None
+    assert pool.last_pick is None
     assert pool.forecast.next_state is None
 
 
@@ -506,3 +509,65 @@ def test_a_stalled_plan_also_extracts_after_the_reply():
     pool = Pool(QUIET, LINEAR)
     asyncio.run(pool.run(NAMES, "x", [], {**CONTEXT, "progress": {"turns_without_deliverable": 3}}))
     assert pool.calls == [] and pool._held is not None
+
+
+def test_a_picked_correction_keeps_the_reply_on_the_current_task():
+    plan = [{"id": "a", "is_current": True, "tasks": [
+        {"id": "t0", "status": "completed", "deliverables": [{"key": "name", "status": "completed", "value": "Felix"}]},
+        *FULL_PLAN[0]["tasks"],
+    ]}]
+    pool = Pool({**QUIET, ANSWERED_TASK: _answer(task_0=0.05, task_1=0.05, fix_0=0.85, nothing=0.05)}, LINEAR)
+    asyncio.run(pool.run(NAMES, "Sag lieber Fritz", [], {"state": {"id": "a"}, "full_plan": plan}))
+    assert pool.last_pick["correction"] and pool.last_scope.correction
+    assert pool.forecast.next_state is None and pool.forecast.done_task is None
+
+
+TWO_OPEN = [{"id": "a", "is_current": True, "tasks": [_task("t1", "name"), _task("t2", "week")]}]
+NAME_DONE = {"id": "t0", "description": "t0", "status": "completed",
+             "deliverables": [{"key": "intro", "status": "completed", "value": "Felix"}]}
+
+
+def test_mentioning_the_other_open_task_saves_it_unconfirmed_and_the_reply_skips_it():
+    answers = {**QUIET, ANSWERED_TASK: _answer(task_0=0.9, task_1=0.05, nothing=0.05),
+               "also_task_1": _answer(yes=0.9, no=0.1)}
+    pool = Pool(answers, LINEAR)
+    asyncio.run(pool.run(NAMES, "Anna, und die Woche war ruhig", [], {"state": {"id": "a"}, "full_plan": TWO_OPEN}))
+    assert pool.last_scope.keys == {"name": "answered", "week": "mentioned"}
+    assert pool.forecast.done_tasks == ["t1", "t2"] and pool.forecast.mentioned == ["t2"]
+    assert pool.forecast.next_state == "b", "both tasks of the state are done, so the plan moves on"
+
+
+def test_an_unsure_mention_is_left_for_the_conversation():
+    answers = {**QUIET, ANSWERED_TASK: _answer(task_0=0.9, task_1=0.05, nothing=0.05),
+               "also_task_1": _answer(yes=0.75, no=0.25)}
+    pool = Pool(answers, LINEAR)
+    asyncio.run(pool.run(NAMES, "Anna, die Woche halt", [], {"state": {"id": "a"}, "full_plan": TWO_OPEN}))
+    assert pool.last_scope.keys == {"name": "answered"}
+    assert pool.forecast.next_state is None and pool.forecast.done_tasks == ["t1"]
+
+
+def test_one_message_can_answer_and_correct_an_earlier_answer():
+    plan = [{"id": "a", "is_current": True, "tasks": [NAME_DONE, _task("t1", "name"), _task("t2", "week")]}]
+    answers = {**QUIET, ANSWERED_TASK: _answer(task_0=0.85, task_1=0.05, fix_0=0.05, nothing=0.05),
+               "also_fix_0": _answer(yes=0.9, no=0.1)}
+    pool = Pool(answers, LINEAR)
+    asyncio.run(pool.run(NAMES, "Regnerisch, und sag lieber Fritz", [], {"state": {"id": "a"}, "full_plan": plan}))
+    assert pool.last_scope.keys == {"name": "answered", "intro": "corrected"}
+    assert pool.forecast.corrected == ["t0"] and pool.forecast.done_tasks == ["t1"]
+
+
+def test_the_main_pick_is_not_counted_twice():
+    answers = {**QUIET, ANSWERED_TASK: _answer(task_0=0.9, task_1=0.05, nothing=0.05),
+               "also_task_0": _answer(yes=0.95, no=0.05)}
+    pool = Pool(answers, LINEAR)
+    asyncio.run(pool.run(NAMES, "Anna", [], {"state": {"id": "a"}, "full_plan": TWO_OPEN}))
+    assert [p["task_id"] for p in pool.last_picks] == ["t1"]
+
+
+def test_an_answer_split_across_two_tasks_still_counts_when_its_own_yes_is_sure():
+    answers = {**QUIET, ANSWERED_TASK: _answer(task_0=0.6, task_1=0.35, nothing=0.05),
+               "also_task_0": _answer(yes=0.9, no=0.1), "also_task_1": _answer(yes=0.85, no=0.15)}
+    pool = Pool(answers, LINEAR)
+    asyncio.run(pool.run(NAMES, "Anna, und die Woche war ruhig", [], {"state": {"id": "a"}, "full_plan": TWO_OPEN}))
+    assert pool.last_pick["task_id"] == "t1" and pool.last_pick["p"] == 0.9
+    assert [p["task_id"] for p in pool.last_picks] == ["t1", "t2"]

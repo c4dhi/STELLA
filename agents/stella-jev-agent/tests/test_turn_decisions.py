@@ -421,3 +421,61 @@ def test_the_jev_client_can_be_closed_at_the_end_of_a_session():
     asyncio.run(jev.close())
     assert client.closed and jev._client is None
     assert hasattr(AsyncTypeSafeClient, "aclose"), "the real client has it too"
+
+
+def test_jevs_task_decision_is_posted_to_the_chat(monkeypatch: pytest.MonkeyPatch):
+    agent = _agent_with(monkeypatch, V2_TURN, {"answered": True, "latency_ms": 170.0})
+    agent._plan_config = {"states": [{"id": "b", "title": "Check-in"}]}
+    agent.expert_pool.last_answer = {"choice": "task_0", "p": 0.86}
+    agent.expert_pool.last_pick = {"task": {"description": "Wasser trinken"}, "task_id": "t1", "p": 0.86, "correction": False}
+    agent.expert_pool.forecast = SimpleNamespace(next_state="b", done_task="t1", keys=["water"])
+    outputs = asyncio.run(_outputs(agent))
+    debug = [o for o in outputs if o.type.value == "debug"]
+    assert [o.content for o in debug] == ['Jev: answered "Wasser trinken" (0.86), reply moves on to the state "Check-in"']
+    assert debug[0].metadata["task_id"] == "t1"
+
+
+def test_a_turn_without_a_task_question_posts_no_decision(monkeypatch: pytest.MonkeyPatch):
+    agent = _agent_with(monkeypatch, V2_TURN, {"answered": True, "latency_ms": 170.0})
+    assert not [o for o in asyncio.run(_outputs(agent)) if o.type.value == "debug"]
+
+
+async def _outputs(agent):
+    return [o async for o in agent.process(SimpleNamespace(session_id="s", metadata={}))]
+
+
+def test_an_unsure_medical_high_steps_down_and_prepends_nothing():
+    # "I cannot remember anything", asked for something nice from the week: high at 0.44.
+    unsure = _answer(none=0.30, low=0.20, high=0.44, critical=0.06)
+    pool = Pool(FakeJev(_answers(medical=unsure)), AskBack())
+
+    medical = _verdict(_run(pool), "medical")
+
+    assert medical.verdict == "low"
+    assert medical.raw_output["jev_choice"] == "high"
+    resolved = Arbitration(compiler_version="1.0.0").resolve(
+        [medical], {}, expert_configs=pool._registry.as_map(), user_input="x"
+    )
+    assert resolved.directive.action != "prepend"
+
+
+def test_safety_levels_need_the_floor_but_an_emergency_never_does():
+    from stella_jev_agent.questions import settle_safety
+    assert settle_safety({"none": 0.6, "low": 0.25, "high": 0.15}, "low", 0.6) == "none"
+    assert settle_safety({"none": 0.1, "low": 0.25, "high": 0.65}, "high", 0.6) == "high"
+    assert settle_safety({"none": 0.5, "critical": 0.3}, "critical", 0.6) == "critical"
+    assert settle_safety({"fits": 0.4}, "fits", 0.6) == "fits"
+
+
+def test_jev_reads_the_configured_setting():
+    jev = FakeJev(_answers())
+    pool = Pool(jev, AskBack())
+    pool.apply_config({"expert_context": "  A weekly chat with an older adult.  ", "safety_threshold": 0.7})
+
+    _run(pool)
+
+    assert jev.asked[0][0]["setting"] == "A weekly chat with an older adult."
+    assert pool.safety_threshold == 0.7
+    pool.apply_config({"expert_context": ""})
+    _run(pool)
+    assert "setting" not in jev.asked[-1][0]
