@@ -95,6 +95,7 @@ def idle_pipeline():
     """Agent silent, gate open — the floor is the user's."""
     pipe = AudioPipeline(FakeRoom(), stt_client=None, tts_client=None, session_id="s")
     pipe._is_listening = True
+    pipe._debounce_window_ms = 0  # this file tests the gate, not the debounce
     pipe._barge_in_enabled = True
     return pipe
 
