@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cut off at the bottom and couldn't be scrolled. (#908)
 - **Agents keep reading the chat history after their first hour.** An agent's room token expired after an hour (a day for uploaded agents), and from then on the agent could no longer load the conversation so far, even though it kept talking. The history API now accepts an agent's own token for as long as that agent runs, and refuses it once the agent stops or the session closes. Backend only: running agents are fixed by the upgrade, without a rebuild ([#923](https://github.com/c4dhi/STELLA/issues/923))
 - **A session that reopens gives its invitations back.** When a session closed on its own (the room went empty, the plan ended, the time ran out), its invitations were revoked, and when somebody rejoined and the session opened again, they stayed revoked: the participant's link no longer worked in a live session. Now an automatic close notes what each invitation was, and reopening restores it (or marks it expired if its own expiry has passed). Invitations revoked by hand, or by **Close session**, stay revoked ([#930](https://github.com/c4dhi/STELLA/issues/930))
+- **STELLA Jev: the reply and the plan stay in step.** Jev decides which task a message answered and the reply moves on from it, but extraction used to decide on its own what to save, so Grace could ask again for something already saved, or move on from something never saved. Extraction now saves only what Jev picked. Tasks in the same state mentioned in passing are saved too (unconfirmed), and Grace doesn't ask about them again; a correction of a value already collected in this state overwrites it. When Jev is unsure, nothing is saved and the question comes again. Jev's decision and what was saved show as debug lines in the session chat. New Pipeline Configurator settings `forecast_threshold` and `also_threshold`. Jev agent only (#177)
+- **STELLA Jev: no medical warning on a weak guess.** "I cannot remember anything", said when asked for something nice from the week, was taken as a medical "high" at 0.44, and the reply opened with "I can't give medical advice". A medical or legal "low" or "high" now counts only from `safety_threshold` (0.6) up and otherwise steps down a level; "critical" always counts. Everyday forgetting is listed as no health concern, and the new `expert_context` setting tells Jev what kind of conversation it is. Jev agent only
 
 ### Security
 
@@ -31,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes
 
 - **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy: a new nullable column on invitations. Invitations revoked before the upgrade are not restored
+- **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
 
 ## [2.0.1] - 2026-11-17
 

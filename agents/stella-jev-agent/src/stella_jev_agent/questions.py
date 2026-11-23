@@ -53,7 +53,10 @@ RECOGNISER_ARTIFACT = Choice(
 MEDICAL = Choice(
     instructions="Does the latest message raise a health or medical safety concern?",
     criteria={
-        "none": "No health concern, or only general wellness talk such as exercise, sleep or diet.",
+        "none": (
+            "No health concern, or only general wellness talk such as exercise, sleep or diet. Everyday "
+            "forgetting or not knowing what to say, such as not remembering anything nice from the week, is none."
+        ),
         "low": "A real but mild, non-acute health matter mentioned in passing.",
         "high": "A specific concern: concrete symptoms, medication, an injury, a mental-health concern, or a request for diagnosis or treatment.",
         "critical": "A possible emergency needing help now, such as chest pain, an overdose, a bad fall, stroke signs, or any suicidal thought or self-harm.",
@@ -152,6 +155,27 @@ RECOMMENDATIONS: Dict[str, Dict[str, str]] = {
 }
 
 
+SAFETY_LEVELS = ("high", "low")
+
+
+def settle_safety(probabilities: Dict[str, float], choice: str, floor: float) -> str:
+    """A medical or legal "high" or "low" only when Jev is sure enough of it.
+
+    Jev's top choice can win with little weight, such as "high" at 0.44, and a high
+    verdict prepends a fixed warning to the reply. Below the floor the verdict steps down
+    to the next level whose weight, with the levels above it, reaches the floor, else to
+    none. "critical" is never stepped down: a missed emergency costs more than a false one.
+    """
+    if choice not in SAFETY_LEVELS:
+        return choice
+    weight = 0.0
+    for level in SAFETY_LEVELS[SAFETY_LEVELS.index(choice):]:
+        weight += probabilities.get(level, 0.0)
+        if weight >= floor:
+            return level
+    return "none"
+
+
 def not_believable(common_sense: Dict[str, float], artifact: Dict[str, float]) -> float:
     """The probability that this should be asked back, from the two questions."""
     return max(common_sense[DOESNT_FIT], artifact["artifact"])
@@ -168,12 +192,14 @@ def turn_state(
     history: Optional[List[Dict[str, str]]],
     task: str = "",
     limit: int = 12,
+    setting: str = "",
 ) -> Dict[str, Any]:
-    """What Jev reads on an ordinary turn."""
-    state: Dict[str, Any] = {
-        "conversation": _render(history, limit),
-        "latest_message": said,
-    }
+    """What Jev reads on an ordinary turn. The setting says what kind of conversation this is."""
+    state: Dict[str, Any] = {}
+    if setting.strip():
+        state["setting"] = setting.strip()
+    state["conversation"] = _render(history, limit)
+    state["latest_message"] = said
     if task:
         state["current_task"] = task
     return state

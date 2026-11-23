@@ -16,11 +16,14 @@ Jev is TypeSafe's model. Every turn's text, and the recent history it judges, is
 |---|---|
 | Bridge | None. Nothing is said before the experts have decided |
 | Experts | One Jev call answers `common_sense`, `medical`, `legal`, `probing` and `timekeeper` |
-| `task_extraction`, `companion_router` | Still language models, because they write values or call tools. They run after Jev, and only when Jev says there may be something to do |
+| `task_extraction` | Still a language model, because it writes the values. It runs after the reply and saves only what Jev picked: the task the message answered, tasks in the same state mentioned in passing (saved unconfirmed, and the reply won't ask about them again) and corrections of a value already collected in this state (overwritten). When Jev is not sure which task was answered, nothing is saved and the question comes again. Two exceptions save without that limit: the answer to an ask-back, and a stalled plan. See [What gets saved](#what-gets-saved) |
+| `companion_router` | Still a language model, because it calls tools. It runs after Jev, and only when Jev says there may be something to route |
 | Reply | gpt-5.4-mini, as in V2, plus a question back when something doesn't fit. It doesn't wait for task extraction: it counts the answer as confirmed, and extraction saves it in the background |
 | Barge-in | Jev decides whether an interruption is a real one or only "mhm" |
 
 **Common sense.** When a message doesn't fit (asked how much they drink a day, someone says "Nine litres."; asked about a garden watering can, the same answer is fine), the agent asks back and saves nothing that turn. It asks at most once per statement, never twice in a row, and at most `max_ask_backs` times per session. A medical `critical` verdict always wins.
+
+**Medical and legal.** A "low" or "high" counts only when Jev is at least `safety_threshold` sure of it; a "high" prepends a fixed warning to the reply. "Everyday forgetting or not knowing what to say" is listed as no health concern. The experts run on the language model only when Jev can't be reached, and then `expert_context` isn't used.
 
 If Jev can't be reached in time, the experts run on the language model with the prompts in `config/experts/`, and on a barge-in the agent stops for the person.
 
@@ -33,11 +36,27 @@ Set in the [Pipeline Configurator](./stella-v2/pipeline-configurator.md), like V
 | Turn Taking | `take_back_window_ms` | 6000 | See [Take-back](#take-back). 0 is off |
 | Expert Pool | `ask_threshold` | 0.45 | How sure Jev must be that a message doesn't fit before the agent asks back |
 | Expert Pool | `max_ask_backs` | 3 | The most times it asks back in one session |
-| Expert Pool | `skip_threshold` | 0.8 | How sure Jev must be that there is nothing to record or route before task extraction and the companion router are skipped |
+| Expert Pool | `skip_threshold` | 0.8 | How sure Jev must be that there is nothing to route before the companion router is skipped. It skips task extraction only when the state has no open or collected task; otherwise Jev's pick decides |
+| Expert Pool | `forecast_threshold` | 0.7 | How sure Jev must be which task the latest message answered before the reply moves on and extraction saves it. Below it nothing is saved and the question comes again |
+| Expert Pool | `also_threshold` | 0.8 | How sure Jev must be that the message also settled another task in this state, or corrected a collected one, before that is saved too |
+| Expert Pool | `safety_threshold` | 0.6 | How sure Jev must be of a medical or legal "low" or "high" before it counts. Below it the verdict steps down a level (high to low to none), so a weak guess never prepends the fixed warning. "critical" always counts |
+| Expert Pool | `expert_context` | empty | A sentence or two on what kind of conversation this is and who the person is. Jev reads it with every message. Example: "A friendly weekly check-in chat with an older adult about their week. It is not a health service." |
 | Expert Pool | `jev_timeout_ms` | 1500 | How long to wait for Jev before the experts run on the language model |
 | Barge-in | `resume_threshold` | 0.7 | How sure Jev must be that an interruption is only an acknowledgement before the agent carries on |
 | Barge-in | `history_limit` | 6 | Recent turns Jev sees when judging an interruption |
 | Barge-in | `timeout_ms` | 1000 | How long to wait for Jev's barge-in decision. On a timeout the agent stops and responds |
+
+## What gets saved
+
+The reply is steered by Jev's pick before anything is saved, so extraction follows the same pick; otherwise the reply asks again for what is already saved, or moves on from what never was. In one call Jev answers which open task the message answered, and a yes or no for each other open task (mentioned in passing) and each task already collected in this state (corrected). Extraction gets state machine tools that write only those tasks, and refuses the rest.
+
+The trade-off: when Jev is unsure, nothing is saved that turn, and Grace asks again. Corrections reach only the current state.
+
+Each turn posts two debug lines to the session chat, which a transcript reader will see:
+- `Jev: answered "…" (0.86), also mentioned "…" (0.90), reply moves on to …`, or that it asks back first and saves nothing yet.
+- `Extraction saved …`, with what it refused or left unsaved.
+
+When extraction leaves a picked task unsaved or tries to write another, the analytics event `extraction_declined_pick` records which tasks, without any words.
 
 ## Take-back
 
