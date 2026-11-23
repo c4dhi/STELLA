@@ -16,9 +16,9 @@ grpcio-tools==1.85.1
 # group them; the ignore rule in .github/dependabot.yml still blocks 2.5+.
 # Lift together with the interpreter, never on its own.
 numpy==2.4.6
-soundfile>=0.12.0
+soundfile>=0.14.0
 # scipy 1.18 raised its floor to Python >=3.12 as well; same rule as numpy.
 scipy>=1.17.1,<1.18
 
 # Used by some init paths to fetch weights into the PVC.
-huggingface_hub>=1.29.0
+huggingface_hub>=1.33.0
