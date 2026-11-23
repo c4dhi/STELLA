@@ -20,7 +20,7 @@ Ships Agent SDK 0.11.0.
 
 ### Upgrade notes
 
-- **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy: a new nullable column on invitations. Invitations revoked before the upgrade are not restored
+- **Back up the database before you upgrade.** This release applies two database migrations on its own during the deploy: a new nullable column on invitations, and a new inbox message type for failed agent builds. Invitations revoked before the upgrade are not restored
 - **Agent SDK 0.11.0 is on PyPI before this release reaches production.** Rebuild uploaded agents to pick up the new SDK (speech wait, settings from `agent.yaml`, `{{capabilities}}`); they keep working without a rebuild. `BaseTool.guidance` is gone, see the SDK changelog
 - **The deploy creates one new secret on its own** (`stella-internal-key`, for the message recorder). Nothing to set by hand; while backend and recorder roll, the dashboard may miss a minute of recorder logs
 - **The orphaned-pod check starts log-only** (`AGENT_RECONCILER_MODE=log`). Set it to `delete` once its log looks right
