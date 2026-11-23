@@ -534,4 +534,17 @@ def test_jev_reads_as_much_conversation_as_the_prompts_it_answers_for():
     pool = Pool(FakeJev(), AskBack())
     assert pool._history_turns(["common_sense", "medical"]) == 12  # {{history_12}}, {{history_4}}
     assert pool._history_turns(["medical"]) == 4
-    assert pool._history_turns([]) == 0
+    assert pool._history_turns([]) == 1  # the last message, for Jev's own questions
+
+
+def test_without_any_history_placeholder_jev_reads_only_the_last_message():
+    # [-0:] would be the whole conversation (review of PR 997).
+    jev = FakeJev(_answers())
+    pool = Pool(jev, AskBack())
+    for name in NAMES:
+        config = pool._registry.get(name)
+        if config:
+            config.system_prompt = "Latest: {{user_message}}"
+    history = [{"role": "user", "content": f"turn {i}"} for i in range(20)]
+    asyncio.run(pool.run(NAMES, "said", history, {}))
+    assert jev.asked[0][0]["conversation"] == ["user: turn 19"]

@@ -74,7 +74,9 @@ def settle_safety(probabilities: Dict[str, float], choice: str, floor: float) ->
 
 
 def _render(history: Optional[List[Dict[str, str]]], limit: int) -> List[str]:
-    """The last turns as plain lines, oldest first."""
+    """The last ``limit`` turns as plain lines, oldest first; none for a limit of 0."""
+    if limit <= 0:
+        return []
     turns = (history or [])[-limit:]
     return [f"{t.get('role', 'user')}: {t.get('content', '')}" for t in turns]
 

@@ -42,6 +42,8 @@ from stella_jev_agent.questions import (
 logger = logging.getLogger(__name__)
 
 COMMON = "common_sense"
+# How much conversation Jev's own questions read when no expert prompt it answers asks for any.
+OWN_QUESTIONS_TURNS = 1
 # These verdicts speak a fixed template instead of the reply, so nothing could ask back.
 OVERRIDING_EXPERTS = {"medical", "legal"}
 # Extraction is where V2 skips a stalled optional task, so it must run on a stalled plan.
@@ -382,9 +384,14 @@ class JevExpertPool(ExpertPool):
     def _history_turns(self, expert_names: List[str]) -> int:
         """How much conversation Jev reads: as much as the longest {{history_N}} in
         the prompts of the experts it answers for. A prompt says what its expert
-        sees, whether a language model or Jev answers it."""
+        sees, whether a language model or Jev answers it.
+
+        At least the last message, even when no such prompt reads any: Jev's own
+        questions (has_answer, activity_intent, the next step) read the
+        conversation too, and a "yes" means nothing without what it answers.
+        """
         configs = (self._registry.get(name) for name in self._jev_experts(expert_names))
-        return max((history_turns(c.system_prompt) for c in configs if c), default=0)
+        return max((history_turns(c.system_prompt) for c in configs if c), default=0) or OWN_QUESTIONS_TURNS
 
     def _verdicts(self, expert_names: List[str], result: Any) -> List[ExpertVerdict]:
         verdicts = []
