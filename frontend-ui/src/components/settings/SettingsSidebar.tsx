@@ -212,9 +212,11 @@ export default function SettingsSidebar({ activeSection, onSectionChange }: Sett
 
   return (
     <aside
-      // min-h-0 lets the column shrink to the window; the nav list then scrolls
-      // on its own, so every section stays reachable on a short window (#158).
-      className={`w-72 shrink-0 min-h-0 border-r flex flex-col ${
+      // shrink-0/min-h-0 lets the column shrink to the window; the nav list then
+      // scrolls on its own, so every section stays reachable on a short window
+      // (#158). w-full md:w-72: full width below the phone breakpoint, same as
+      // every other Settings section (#102).
+      className={`w-full md:w-72 shrink-0 min-h-0 border-r flex flex-col ${
         isDark ? 'border-border-dark bg-surface-dark' : 'border-border bg-surface'
       }`}
     >

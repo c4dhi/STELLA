@@ -47,7 +47,7 @@ describe('empty-room auto-close follows the session setting', () => {
     // good when a create never finishes.
     const { service, sessions } = setup({ status: 'ACTIVE', closeWhenEmpty: null, projectCloses: true, startingAgents: 1 });
     await service.handleParticipantInactivity('s1', 'participant-1');
-    expect(sessions.close).toHaveBeenCalledWith('s1');
+    expect(sessions.close).toHaveBeenCalledWith('s1', 'automatic');
   });
 
   it('keeps an empty session open when its project keeps sessions open', async () => {

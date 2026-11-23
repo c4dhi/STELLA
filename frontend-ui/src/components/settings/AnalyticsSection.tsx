@@ -120,7 +120,10 @@ export default function AnalyticsSection() {
     return sessions
   }, [planSessions, planSortBy, planSortDir])
 
-  const selectClass = `rounded-lg px-3 py-2 text-sm ${
+  // max-w-full+truncate: a project or agent-type name longer than the
+  // viewport otherwise sizes the native <select> to its widest option,
+  // pushing it past the screen edge on phone (#102).
+  const selectClass = `max-w-full truncate rounded-lg px-3 py-2 text-sm ${
     isDark
       ? 'bg-surface-dark-tertiary text-content-inverse border border-border-dark'
       : 'bg-white text-content border border-neutral-200'
