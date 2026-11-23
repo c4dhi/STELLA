@@ -144,7 +144,10 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   // typing, the voice carries on. The agent is told on each switch.
   const textFace = isTextFace(currentVisualizer)
   const interactionMode: InteractionMode = textFace ? 'text' : 'voice'
-  const interactionModeRef = useRef<InteractionMode>('voice')
+  // Starts at the real initial mode (the face the invitation opens on), not a
+  // hardcoded 'voice': an agent can equally start in text (#205), and this
+  // ref is what tells a newly-seen agent which one is actually on.
+  const interactionModeRef = useRef<InteractionMode>(interactionMode)
 
   // The client channel to the agent (events out, replies in).
   const roomRef = useRef<Room | null>(null)
@@ -304,6 +307,15 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           sessionData.connectionInfo.serverUrl,
           sessionData.connectionInfo.token
         )
+
+        // An agent deployed before this invitation was created (#205) can
+        // already be in the room by the time we connect, so ParticipantConnected
+        // never fires for it. Tell any agent already here the room's mode too.
+        for (const participant of newRoom.remoteParticipants.values()) {
+          if (participant.identity.startsWith('agent-')) {
+            setTimeout(() => void announceInteractionMode(clientChannel, interactionModeRef.current), 1000)
+          }
+        }
 
         setRoom(newRoom)
         setIsConnecting(false)
@@ -904,10 +916,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
 
   // Handle participant joined (for real-time notifications)
   const handleParticipantConnected = useCallback((participant: RemoteParticipant) => {
-    // An agent that joins (or restarts) while the text interface is open starts
-    // in voice: tell it, once it has had a moment to start listening.
-    if (participant.identity.startsWith('agent-') && interactionModeRef.current === 'text') {
-      setTimeout(() => void announceInteractionMode(clientChannel, 'text'), 1000)
+    // An agent that joins (or restarts) always starts in voice unless a
+    // text-locked invitation told it otherwise at spawn (#205): tell it the
+    // room's actual mode either way, once it has had a moment to start
+    // listening, so a participant who never switches faces still corrects it.
+    if (participant.identity.startsWith('agent-')) {
+      setTimeout(() => void announceInteractionMode(clientChannel, interactionModeRef.current), 1000)
     }
     // Skip agents and the message recorder
     if (participant.identity.startsWith('agent-') || participant.identity === 'message-recorder') {
