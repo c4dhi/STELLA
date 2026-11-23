@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException, UnauthorizedException, ForbiddenException, BadRequestException, Logger, forwardRef, Inject } from '@nestjs/common';
 import { Observable, Subject, ReplaySubject, filter, map, finalize } from 'rxjs';
 import { OnEvent, EventEmitter2 } from '@nestjs/event-emitter';
-import { TokenVerifier } from 'livekit-server-sdk';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LiveKitService } from '../livekit/livekit.service.js';
 import { AgentsService } from '../agents/agents.service.js';
@@ -15,6 +14,8 @@ import { Prisma } from '@prisma/client';
 import type { PlanData, DeliverableValue } from '../state-machine/state-machine.service.js';
 import { attachTurnLanguage } from './turn-language.util.js';
 import { clientChannelRecord } from '../message-recorder/client-channel-record.js';
+import { agentMayReadHistory, readAgentToken } from './agent-history-token.js';
+import { REVOKED_BY_CLOSE, restoredStatus, restoresOnReopen, type CloseCause } from '../invitations/auto-revoke.js';
 
 /** Deliverable entry in the transcript summary section */
 interface TranscriptDeliverableSummaryEntry {
@@ -393,6 +394,35 @@ export class SessionsService {
   }
 
   /**
+   * Give back the invitations an automatic close revoked, when the session
+   * reopens (#170). Each goes back to the status it had, or to EXPIRED if its
+   * own expiry passed meanwhile. Invitations revoked by hand or by a manual
+   * close carry no earlier status and stay revoked.
+   */
+  async restoreAutoRevokedInvitations(sessionId: string): Promise<number> {
+    const revoked = await this.prisma.invitation.findMany({
+      where: { sessionId, status: 'REVOKED', statusBeforeAutoRevoke: { not: null } },
+      select: { id: true, statusBeforeAutoRevoke: true, expiresAt: true },
+    });
+    if (revoked.length === 0) return 0;
+    const now = new Date();
+    await this.prisma.$transaction(
+      revoked.map((inv) =>
+        this.prisma.invitation.updateMany({
+          // Still REVOKED: a hand revoke in between clears the earlier status anyway.
+          where: { id: inv.id, status: 'REVOKED' },
+          data: {
+            status: restoredStatus(inv.statusBeforeAutoRevoke!, inv.expiresAt, now),
+            statusBeforeAutoRevoke: null,
+          },
+        }),
+      ),
+    );
+    this.logger.log(`Session ${sessionId}: gave back ${revoked.length} invitation(s) revoked by its automatic close`);
+    return revoked.length;
+  }
+
+  /**
    * Graceful close (issue #198) — used by the auto-end paths (e.g. the max-duration
    * cap) so the agent is *not* cut off mid-sentence.
    *
@@ -471,7 +501,7 @@ export class SessionsService {
     // farewell and leaves), the webhook finalize closes it first and this close()
     // no-ops (idempotent).
     setTimeout(() => {
-      void this.close(id).catch((error) =>
+      void this.close(id, 'automatic').catch((error) =>
         this.logger.error(
           `Force-close after grace window failed for session ${id}: ${(error as Error).message}`,
         ),
@@ -505,7 +535,7 @@ export class SessionsService {
    * closing turn first should drive `CLOSING` + the interrupt themselves and only
    * then call `close()` to finalize.
    */
-  async close(id: string) {
+  async close(id: string, cause: CloseCause = 'manual') {
     const session = await this.prisma.session.findUnique({
       where: { id },
       include: { room: { select: { livekitRoomName: true } } },
@@ -536,18 +566,37 @@ export class SessionsService {
     // Stop all running agents using centralized function
     await this.agentsService.stopAllSessionAgents(id);
 
-    // Revoke all pending/accepted invitations
-    const revokedInvitations = await this.prisma.invitation.updateMany({
-      where: {
-        sessionId: id,
-        status: { in: ['PENDING', 'ACCEPTED'] },
-      },
-      data: { status: 'REVOKED' },
-    });
+    // Revoke all pending/accepted invitations. An automatic close notes each
+    // one's status, so reopening the session gives it back (#170); a manual
+    // close does not, and its invitations stay revoked.
+    const restore = restoresOnReopen(cause);
+    const revoked = await this.prisma.$transaction([
+      ...REVOKED_BY_CLOSE.map((before) =>
+        this.prisma.invitation.updateMany({
+          where: { sessionId: id, status: before },
+          data: { status: 'REVOKED', statusBeforeAutoRevoke: restore ? before : null },
+        }),
+      ),
+      // A manual close wins over an automatic one that overlapped it: stopping the
+      // agents above makes the agent-left webhook finalize with close(id, 'automatic'),
+      // which can revoke (and note statuses) before we get here. Forget those notes
+      // so a later rejoin doesn't give back a deliberately closed session's links.
+      ...(restore
+        ? []
+        : [
+            this.prisma.invitation.updateMany({
+              where: { sessionId: id, statusBeforeAutoRevoke: { not: null } },
+              data: { statusBeforeAutoRevoke: null },
+            }),
+          ]),
+    ]);
+    const revokedCount = revoked
+      .slice(0, REVOKED_BY_CLOSE.length)
+      .reduce((n, r) => n + r.count, 0);
 
-    if (revokedInvitations.count > 0) {
+    if (revokedCount > 0) {
       this.logger.log(
-        `Session ${id}: auto-revoked ${revokedInvitations.count} invitation(s)`,
+        `Session ${id}: revoked ${revokedCount} invitation(s) on ${cause} close${restore ? ' (given back if it reopens)' : ''}`,
       );
     }
 
@@ -1716,21 +1765,18 @@ export class SessionsService {
    * @param token JWT token signed with LIVEKIT_API_SECRET
    * @param sessionId Session ID the agent is requesting access to
    * @returns The decoded token claims if valid
-   * @throws UnauthorizedException if token is invalid
+   * @throws UnauthorizedException if token is invalid, or expired while its agent no longer runs
    * @throws ForbiddenException if token doesn't have access to the session
    */
   async validateAgentToken(token: string, sessionId: string): Promise<{ identity: string; room: string }> {
-    const apiKey = this.livekit.getApiKey();
-    const apiSecret = this.livekit.getApiSecret();
-
-    const verifier = new TokenVerifier(apiKey, apiSecret);
-
     try {
-      // Verify the token signature and expiration
-      const claims = await verifier.verify(token);
+      // Signature and issuer; an expired token of ours comes back marked expired (#165).
+      const { identity, room: roomName, expired } = await readAgentToken(
+        token,
+        this.livekit.getApiKey(),
+        this.livekit.getApiSecret(),
+      );
 
-      // Get the identity from claims
-      const identity = claims.sub;
       if (!identity) {
         throw new UnauthorizedException('Token missing identity (sub) claim');
       }
@@ -1740,8 +1786,6 @@ export class SessionsService {
         throw new ForbiddenException('Only agent tokens can access chat history');
       }
 
-      // Get the room from video grants
-      const roomName = claims.video?.room;
       if (!roomName) {
         throw new UnauthorizedException('Token missing room claim');
       }
@@ -1759,6 +1803,21 @@ export class SessionsService {
       // Verify the token's room matches the session's room
       if (session.room?.livekitRoomName !== roomName) {
         throw new ForbiddenException('Token does not have access to this session');
+      }
+
+      // An expired token still counts while the agent holding it runs: agents
+      // outlive any token lifetime, and an uploaded one cannot sign a new one.
+      const agent = expired
+        ? await this.prisma.agentInstance.findFirst({
+            where: { id: identity.slice('agent-'.length), sessionId },
+            select: { status: true },
+          })
+        : null;
+      if (!agentMayReadHistory({
+        expired,
+        agent: agent ? { agentStatus: agent.status, sessionStatus: session.status } : null,
+      })) {
+        throw new UnauthorizedException('Token expired and its agent is no longer running');
       }
 
       return { identity, room: roomName };

@@ -13,6 +13,8 @@ import PublicLinkModal from '../components/modals/PublicLinkModal'
 import ShareProjectModal from '../components/modals/ShareProjectModal'
 import ProfileButton from '../components/layout/ProfileButton'
 import { ProjectOverviewBanner } from '../components/dashboard/ProjectOverviewBanner'
+import { ProjectTitle } from '../components/dashboard/ProjectTitle'
+import ProjectModal from '../components/modals/ProjectModal'
 import { useToastStore } from '../store/toastStore'
 import { usePageVisibility } from '../hooks/usePageVisibility'
 import { getSharedSSEManager } from '../services/SharedSSEManager'
@@ -42,6 +44,7 @@ export default function SessionsDashboard() {
   const [sessionToDelete, setSessionToDelete] = useState<{ id: string; name: string } | null>(null)
   const [isPublicLinkModalOpen, setIsPublicLinkModalOpen] = useState(false)
   const [isShareModalOpen, setIsShareModalOpen] = useState(false)
+  const [isEditProjectOpen, setIsEditProjectOpen] = useState(false)
 
   // Pagination state
   const [totalSessions, setTotalSessions] = useState(0)
@@ -359,12 +362,13 @@ export default function SessionsDashboard() {
                 </span>
               </div>
 
-              {/* Title */}
-              <h1 className={`text-heading-sm font-semibold tracking-tight ${
-                isDark ? 'text-content-inverse' : 'text-content'
-              }`}>
-                {project?.name || 'Project Sessions'}
-              </h1>
+              {/* Title; the pencil shows for anyone who can open this screen, as Settings does on the start screen */}
+              <ProjectTitle
+                name={project?.name || 'Project Sessions'}
+                isDark={isDark}
+                canEdit={!!project}
+                onEdit={() => setIsEditProjectOpen(true)}
+              />
             </div>
           </div>
 
@@ -856,6 +860,19 @@ export default function SessionsDashboard() {
           onStatusChange={(enabled) => {
             // Update local project state to reflect the change
             setProject(prev => prev ? { ...prev, publicEnabled: enabled } : null)
+          }}
+        />
+      )}
+
+      {/* Edit Project Modal, the same one the start screen opens */}
+      {project && isEditProjectOpen && (
+        <ProjectModal
+          isOpen={isEditProjectOpen}
+          onClose={() => setIsEditProjectOpen(false)}
+          project={project}
+          onProjectUpdated={(updated) => {
+            setProject(prev => prev ? { ...prev, ...updated } : prev)
+            addToast({ message: 'Project settings updated', type: 'success' })
           }}
         />
       )}

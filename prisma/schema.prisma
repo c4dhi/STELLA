@@ -395,6 +395,10 @@ model Invitation {
 
   // Status tracking
   status     InvitationStatus @default(PENDING)
+  // Set when an automatic session close revoked this invitation: the status
+  // it had, given back when the session reopens (#170). Null for invitations
+  // revoked by hand or by a manual close, which stay revoked.
+  statusBeforeAutoRevoke InvitationStatus?
   createdAt  DateTime         @default(now())
   expiresAt  DateTime? // Organizer-configured expiration (null = indefinite)
   acceptedAt DateTime? // When participant accepted and joined

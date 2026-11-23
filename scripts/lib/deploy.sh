@@ -462,7 +462,27 @@ create_secrets() {
         --from-literal=env-var-encryption-key="${ENV_VAR_ENCRYPTION_KEY:-}" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
+    ensure_internal_key_secret
+
     verbose "Secrets created"
+}
+
+# The key the message recorder sends to the backend's internal monitoring
+# endpoints (#145), in a secret of its own: stella-ai-secrets is re-applied
+# from k8s/03-secrets.yaml and from the .env on every deploy, and kubectl
+# apply drops keys the newest apply doesn't carry, so a key kept there would
+# change on each redeploy under pods that weren't restarted. Nothing else
+# applies stella-internal-key: INTERNAL_API_KEY from .env sets it, otherwise
+# it is created once and then left alone.
+ensure_internal_key_secret() {
+    if [[ -n "${INTERNAL_API_KEY:-}" ]]; then
+        kubectl create secret generic stella-internal-key -n "$KUBERNETES_NAMESPACE" \
+            --from-literal=internal-api-key="$INTERNAL_API_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+    elif ! kubectl get secret stella-internal-key -n "$KUBERNETES_NAMESPACE" >/dev/null 2>&1; then
+        kubectl create secret generic stella-internal-key -n "$KUBERNETES_NAMESPACE" \
+            --from-literal=internal-api-key="$(openssl rand -hex 32)" >/dev/null
+    fi
 }
 
 # =============================================================================
@@ -1498,6 +1518,7 @@ show_dry_run_deployment() {
     echo -e "   ${ARROW} Would apply: k8s/03-secrets.yaml"
     echo -e "   ${ARROW} Would apply: k8s/05-rbac.yaml"
     echo -e "   ${ARROW} Would create: stella-ai-secrets"
+    echo -e "   ${ARROW} Would create: stella-internal-key (only if missing)"
     echo -e "   ${ARROW} Would apply: configmap"
     echo -e "   ${ARROW} Would apply: k8s/01-postgres.yaml"
     echo -e "   ${ARROW} Would apply: session-management-server"

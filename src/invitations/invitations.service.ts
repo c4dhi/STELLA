@@ -210,7 +210,8 @@ export class InvitationsService {
 
     await this.prisma.invitation.update({
       where: { id: invitationId },
-      data: { status: InvitationStatus.REVOKED },
+      // By hand: stays revoked even if an automatic close had noted it (#170).
+      data: { status: InvitationStatus.REVOKED, statusBeforeAutoRevoke: null },
     });
 
     this.logger.log(

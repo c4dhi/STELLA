@@ -146,7 +146,8 @@ export default function ParticipantConnectionModal({
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.95 }}
           className={`
-            backdrop-blur-xl rounded-[20px] w-full max-w-4xl p-5 md:p-8 max-h-full overflow-y-auto md:max-h-none md:overflow-visible
+            backdrop-blur-xl rounded-[20px] w-full max-w-4xl overflow-hidden
+            flex flex-col max-h-[calc(100dvh-2rem)]
             ${isDark
               ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
               : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
@@ -155,11 +156,11 @@ export default function ParticipantConnectionModal({
           onClick={(e) => e.stopPropagation()}
         >
           {isLoading ? (
-            <div className="text-center py-8">
+            <div className="text-center p-8">
               <div className={`text-sm font-light ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>Loading connection info...</div>
             </div>
           ) : error ? (
-            <div className="text-center py-8">
+            <div className="text-center p-8">
               <div className={`text-sm font-light ${isDark ? 'text-red-400' : 'text-red-600'}`}>{error}</div>
               <button
                 onClick={onClose}
@@ -177,7 +178,7 @@ export default function ParticipantConnectionModal({
             </div>
           ) : connectionInfo ? (
             <>
-              <div className="flex items-start justify-between mb-6">
+              <div className="shrink-0 flex items-start justify-between px-8 pt-8 mb-6">
                 <div>
                   <h2 className={`text-2xl font-light mb-2 ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
                     Connection Information
@@ -229,49 +230,54 @@ export default function ParticipantConnectionModal({
                 </button>
               </div>
 
+              <div className="flex-1 min-h-0 overflow-y-auto px-8 pb-6">
               {isWebParticipant ? (
                 /* Web Participant View - Show invitation link or revoked status */
                 <div className="space-y-6">
-                  {/* Status Banner */}
-                  {isRevoked ? (
-                    <div className={`
-                      p-6 rounded-xl text-center
-                      ${isDark ? 'bg-red-500/10 border border-red-500/20' : 'bg-red-50 border border-red-100'}
-                    `}>
-                      <Ban className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-red-400' : 'text-red-500'}`} />
-                      <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
-                        Access has been revoked
-                      </p>
-                      <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
-                        This participant can no longer access the session
-                      </p>
-                    </div>
-                  ) : (
-                    <div className={`
-                      p-6 rounded-xl text-center
-                      ${isDark ? 'bg-cyan-500/10 border border-cyan-500/20' : 'bg-cyan-50 border border-cyan-100'}
-                    `}>
-                      <Globe className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-cyan-400' : 'text-cyan-500'}`} />
-                      <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
-                        This participant joined via web browser
-                      </p>
-                      <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
-                        Share the link below if they need to reconnect
-                      </p>
-                    </div>
-                  )}
+                  {/* Status Banner, with the QR beside it so this doesn't cost the modal an extra row. */}
+                  {/* flex-col-reverse: on mobile the QR (second in DOM) renders above the banner, per Felix's request. */}
+                  <div className="flex flex-col-reverse sm:flex-row gap-4 items-stretch">
+                    {isRevoked ? (
+                      <div className={`
+                        flex-1 p-6 rounded-xl text-center flex flex-col justify-center
+                        ${isDark ? 'bg-red-500/10 border border-red-500/20' : 'bg-red-50 border border-red-100'}
+                      `}>
+                        <Ban className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-red-400' : 'text-red-500'}`} />
+                        <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
+                          Access has been revoked
+                        </p>
+                        <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
+                          This participant can no longer access the session
+                        </p>
+                      </div>
+                    ) : (
+                      <div className={`
+                        flex-1 p-6 rounded-xl text-center flex flex-col justify-center
+                        ${isDark ? 'bg-cyan-500/10 border border-cyan-500/20' : 'bg-cyan-50 border border-cyan-100'}
+                      `}>
+                        <Globe className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-cyan-400' : 'text-cyan-500'}`} />
+                        <p className={`text-sm font-light mb-1 ${isDark ? 'text-zinc-300' : 'text-neutral-700'}`}>
+                          This participant joined via web browser
+                        </p>
+                        <p className={`text-xs ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
+                          Share the link below if they need to reconnect
+                        </p>
+                      </div>
+                    )}
 
-                  {/* Invitation Link - Always show, but disable copy when revoked */}
-                  <div>
-                    <div className="mb-4">
+                    <div className="flex-shrink-0 flex items-center justify-center">
                       <JoinQrCode
                         value={webJoinUrl}
                         isDark={isDark}
                         revoked={isRevoked}
                         participantName={connectionInfo.participantName}
+                        size={112}
                       />
                     </div>
+                  </div>
 
+                  {/* Invitation Link - Always show, but disable copy when revoked */}
+                  <div>
                     <label className={`block text-xs font-light tracking-wider uppercase mb-2 ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}>
                       Invitation Link {isRevoked && <span className={isDark ? 'text-red-400' : 'text-red-500'}>(Disabled)</span>}
                     </label>
@@ -454,8 +460,9 @@ export default function ParticipantConnectionModal({
                   </div>
                 </div>
               )}
+              </div>
 
-              <div className={`mt-6 pt-6 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200/60'}`}>
+              <div className={`shrink-0 px-8 pb-8 pt-6 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200/60'}`}>
                 <div className="flex gap-3">
                   {/* Revoke button - only show when ACCEPTED and onRevoke is available */}
                   {currentStatus === 'ACCEPTED' && invitationId && onRevoke && (

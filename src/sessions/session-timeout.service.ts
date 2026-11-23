@@ -177,7 +177,7 @@ export class SessionTimeoutService implements OnModuleInit, OnModuleDestroy {
       `Session ${s.id} stuck in CLOSING past its grace window — force-finalizing`,
     );
     try {
-      await this.sessionsService.close(s.id);
+      await this.sessionsService.close(s.id, 'automatic');
     } catch (error) {
       this.logger.error(
         `Failed to finalize stuck CLOSING session ${s.id}: ${(error as Error).message}`,

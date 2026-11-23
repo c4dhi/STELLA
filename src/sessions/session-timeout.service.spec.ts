@@ -191,7 +191,7 @@ describe('SessionTimeoutService (max-duration cap)', () => {
     await service.onModuleInit();
     await jest.advanceTimersByTimeAsync(0);
 
-    expect(sessionsService.close).toHaveBeenCalledWith('s1');
+    expect(sessionsService.close).toHaveBeenCalledWith('s1', 'automatic');
     service.onModuleDestroy();
   });
 

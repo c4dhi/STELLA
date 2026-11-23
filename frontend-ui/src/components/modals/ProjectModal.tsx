@@ -13,7 +13,6 @@ import type {
   EnvVarTemplate,
   UpdatePublicConfigDto,
   PublicAgentConfig,
-  ProjectWithCounts,
   Project,
   AgentConfiguration,
   TtsCapabilities,
@@ -44,7 +43,7 @@ import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../sh
 interface ProjectModalProps {
   isOpen: boolean
   onClose: () => void
-  project?: ProjectWithCounts  // If provided = edit mode, else = create mode
+  project?: Project  // If provided = edit mode, else = create mode
   onProjectCreated?: (projectId: string) => void
   onProjectUpdated?: (project: Project) => void
 }
@@ -627,10 +626,11 @@ export default function ProjectModal({
     }
   }
 
-  // Determine modal size. The wizard's own cap already bounds its height; the
-  // plain (non-wizard) dialog has no height built into its width class, so it
-  // needs its own cap here instead.
-  const isWizardSized = isPublicWizard || step === 'complete'
+  // Determine modal size. The wizard steps share one fixed height so stepping through
+  // them doesn't resize the box; the complete step has its own short, fixed content and
+  // sizes to it instead, same as every non-wizard step (#173) — which in turn gets its
+  // own height cap, since its width class has none built in (#146).
+  const isWizardSized = isPublicWizard && step !== 'complete'
   const modalSizeClass = isWizardSized ? WIZARD_MODAL_SIZE : 'max-w-lg max-h-[calc(100dvh-2rem)]'
   // Centering a dialog whose height follows its step would move its top edge,
   // and with it the header and step bar, as steps differ in height. The
