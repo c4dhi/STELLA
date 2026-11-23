@@ -53,6 +53,9 @@
     "multer": "$multer",
     "ajv@8": "^8.20.0",
     "mysql2": "^3.24.5",
+    "body-parser": "^2.4.0",
+    "qs": "^6.17.1",
+    "ip-address": "^10.7.6",
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "^4.3.1"
     }
