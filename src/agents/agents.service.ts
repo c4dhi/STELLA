@@ -20,7 +20,7 @@ import {
   MetricsSummaryDto,
   PlanCompletionSessionDto,
 } from './dto/agent-metrics.dto.js';
-import { AgentStatus, Prisma, SessionStatus } from '@prisma/client';
+import { AgentStatus, InvitationStatus, Prisma, SessionStatus } from '@prisma/client';
 import { sanitizeAgentConfig } from '../common/utils/sanitize-config.js';
 import { assertDeployableAgentType } from './deployable-agent-type.util.js';
 import { EncryptionService } from '../env-var-templates/encryption.service.js';
@@ -388,9 +388,35 @@ export class AgentsService {
     // 4. Create K8s pod asynchronously (don't block response)
     // NOTE: In the new architecture, agents connect directly to LiveKit rooms via SDK
     // No need for session-management-server to join rooms
-    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, envVars, agentConfig, requirements, agentTypeRecord?.isBuiltIn ?? false);
+    //
+    // Computed fresh here rather than folded into `agentConfig` above: that object is what
+    // just got persisted as this agent's `agentConfig` (#205's own "a deployment sets no
+    // agent settings" check would reject a future spawn-from-saved-config that echoed an
+    // `interaction_mode` key back in as requested config). It only ever reaches the pod.
+    const initialInteractionMode = await this.resolveInitialInteractionMode(sessionId);
+    this.createAgentPodAsync(agent.id, session, sanitizedName, createAgentDto, agentType, envVars, agentConfig, requirements, agentTypeRecord?.isBuiltIn ?? false, initialInteractionMode);
 
     return agent;
+  }
+
+  /**
+   * A deployment starts the SDK's AudioPipeline in "text" from its first instant,
+   * rather than leaving it to default to "voice" until the frontend's post-join
+   * announcement arrives, when every invitation still relevant to this session
+   * (not revoked or expired) locks its participant to the text visualizer (#205:
+   * that announcement can be sent before the pipeline is constructed to receive
+   * it, and is then lost outright, not just late). No relevant invitation, or any
+   * one of them not locked to text, leaves the SDK's own default and the
+   * announcement unchanged -- this only ever narrows, never widens, voice mode.
+   */
+  private async resolveInitialInteractionMode(sessionId: string): Promise<'text' | undefined> {
+    const invitations = await this.prisma.invitation.findMany({
+      where: { sessionId, status: { in: [InvitationStatus.PENDING, InvitationStatus.ACCEPTED] } },
+      select: { visualizerType: true, visualizerLocked: true },
+    });
+    if (invitations.length === 0) return undefined;
+    const allTextLocked = invitations.every((inv) => inv.visualizerLocked && inv.visualizerType === 'text');
+    return allTextLocked ? 'text' : undefined;
   }
 
   /**
@@ -406,6 +432,7 @@ export class AgentsService {
     sanitizedConfig: Record<string, unknown>,
     requirements: AgentRequirements,
     isBuiltIn: boolean,
+    initialInteractionMode?: 'text',
   ): Promise<void> {
     try {
       // Get environment variables for LiveKit (agent pod needs these for gRPC config)
@@ -445,7 +472,9 @@ export class AgentsService {
           name: sanitizedName,
         })),
         ttsProvider: this.configService.get<string>('TTS_PROVIDER', 'opensource'),
-        agentConfig: sanitizedConfig,
+        agentConfig: initialInteractionMode
+          ? { ...sanitizedConfig, interaction_mode: initialInteractionMode }
+          : sanitizedConfig,
         forceRebuild: createAgentDto.forceRebuild,
         resolvedEnvVars,
         resources: requirements.resources,
@@ -1155,6 +1184,12 @@ export class AgentsService {
       await this.platformSettings.applyToPodEnv(merged, id),
     );
 
+    // Also read fresh, unlike agentConfig below (#205): whether this session's
+    // interface is locked to text can change after the original deploy (an
+    // invitation created, or revoked, later), and a restart/wake is exactly the
+    // "agent (re)joins an already-open text interface" moment the bug is about.
+    const initialInteractionMode = await this.resolveInitialInteractionMode(agent.sessionId);
+
     // Recreate Kubernetes pod with SAME agent ID
     try {
       const { podName, secretName } = await this.k8s.createAgentPod({
@@ -1181,7 +1216,11 @@ export class AgentsService {
         // verbatim on restart. A config later fixed from OUTDATED is NOT picked
         // up here; restart reproduces the original deployment, not the latest
         // configuration. Re-deploy the agent to adopt an updated config.
-        agentConfig,
+        // interaction_mode (#205, see above) is the one exception: it is not
+        // part of that snapshot and is merged in fresh, never persisted back.
+        agentConfig: initialInteractionMode
+          ? { ...agentConfig, interaction_mode: initialInteractionMode }
+          : agentConfig,
         agentType,
         resolvedEnvVars,
         resources: requirements.resources,
