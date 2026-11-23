@@ -23,6 +23,9 @@ Available placeholders:
   {{history_N}}               Last N messages from conversation (e.g. {{history_10}})
   {{user_message}}            The current user message
   {{language}}                Resolved session language (e.g. "German")
+  {{capabilities}}            (1.2.0) What the agent can do in this session right
+                              now, one line each (sm_context["capabilities"],
+                              from the state machine, #992)
   {{persona.<key>}}           A value defined once on the deployed Persona, so
                               identity is stated in one place and referenced
                               everywhere. Built-ins: name, voice, language.
@@ -31,7 +34,7 @@ Unknown placeholders are left as-is to avoid silently breaking prompts.
 """
 
 import re
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional
 
 from stella_agent_sdk.prompts.base import PromptCompiler
 
@@ -360,6 +363,53 @@ def _resolve_language(ctx: Dict[str, Any]) -> str:
 
 
 
+_MODE_LINES = {
+    "plan": "Mode: following a plan",
+    "activity": "Mode: inside an activity",
+    "companion": "Mode: open conversation, between activities",
+}
+
+
+def format_capabilities(capabilities: Optional[Dict[str, Any]]) -> str:
+    """What the agent can do, as prompt text: the mode, then one line each.
+
+    ``capabilities`` is the state machine's list (``{"mode", "capabilities":
+    [{"id", "kind", "title", "description"}]}``), with any entries an agent adds
+    from its own configuration already merged in. Empty when there is none, so a
+    prompt never claims a list it was not given. Shared by the {{capabilities}}
+    placeholder and agents that render their own prompts, so both read alike.
+    """
+    if not isinstance(capabilities, dict):
+        return ""
+    lines: List[str] = []
+    mode = capabilities.get("mode")
+    if mode in _MODE_LINES:
+        lines.append(_MODE_LINES[mode])
+    entries = capabilities.get("capabilities") or []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        description = str(entry.get("description") or "").strip()
+        if not title:
+            continue
+        lines.append(f"- {title}: {description}" if description else f"- {title}")
+    if lines and not entries:
+        lines.append("- Nothing beyond the conversation itself")
+    return "\n".join(lines)
+
+
+def _resolve_capabilities(ctx: Dict[str, Any]) -> str:
+    """{{capabilities}} (1.2.0): what the agent can do now (#992)."""
+    return format_capabilities(ctx.get("capabilities"))
+
+
+# Placeholders only some compiler versions resolve, by the version that added them.
+CAPABILITY_PLACEHOLDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
+    "capabilities": _resolve_capabilities,
+}
+
+
 # ---------------------------------------------------------------------------
 # Registry (simple placeholders only — history_N is handled separately)
 # ---------------------------------------------------------------------------
@@ -427,6 +477,10 @@ PLACEHOLDER_SPECS: List[Dict[str, Any]] = [
                     "Built-ins: name, voice, language; anything else comes from the "
                     "persona's own variables.",
      "preview": "Grace"},
+    {"name": "capabilities", "label": "capabilities", "parametric": False,
+     "description": "Compiler 1.2.0: what the agent can do in this session right now "
+                    "(the plan, or the activities on offer and going to sleep), one line each",
+     "preview": "Mode: open conversation, between activities\n- Memory quiz: Ten short questions\n- Go to sleep"},
 ]
 
 
@@ -463,6 +517,7 @@ def _compile_prompt(
     template: str,
     sm_context: Optional[Dict[str, Any]] = None,
     resolve_persona: bool = False,
+    extra: Optional[Dict[str, Callable[[Dict[str, Any]], str]]] = None,
 ) -> str:
     """Replace {{placeholder}} tokens in a prompt with resolved runtime values.
 
@@ -504,7 +559,7 @@ def _compile_prompt(
             # persona variable is author-supplied text and must not be able to
             # smuggle in a {{collected_deliverables}} of its own.
             return _resolve_persona(sm_context, persona_match.group(1))
-        resolver = PLACEHOLDER_REGISTRY.get(match.group(1))
+        resolver = (extra or {}).get(match.group(1)) or PLACEHOLDER_REGISTRY.get(match.group(1))
         if resolver is None:
             return token  # Unknown placeholder — leave as-is
         return resolver(sm_context)
@@ -572,6 +627,9 @@ COMPILER_VERSION = "1.0.0"
 # break every prompt and saved configuration pinned to it.
 COMPILER_VERSION_PERSONA = "1.1.0"
 
+# 1.2.0 adds {{capabilities}} (#992), separately registered for the same reason.
+COMPILER_VERSION_CAPABILITIES = "1.2.0"
+
 # The full set of placeholder names this compiler resolves. `history_N` is
 # parameterized (any positive integer N), represented here by the sentinel
 # "history_N".
@@ -590,6 +648,7 @@ def palette() -> List[Dict[str, Any]]:
 def validate_template(
     template: Optional[str],
     resolve_persona: bool = False,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Return the sorted, de-duplicated list of UNKNOWN placeholder names in a prompt.
 
@@ -607,7 +666,7 @@ def validate_template(
             continue  # {{history_N}} — always valid
         if resolve_persona and PERSONA_PATTERN.match(name):
             continue  # {{persona.*}} — the namespace is open by design
-        if name not in PLACEHOLDER_REGISTRY:
+        if name not in PLACEHOLDER_REGISTRY and name not in (extra or {}):
             unknown.add(name)
     return sorted(unknown)
 
@@ -653,11 +712,15 @@ class PlaceholderPromptCompiler(PromptCompiler):
 
     #: Whether this compiler version resolves the {{persona.*}} namespace.
     RESOLVES_PERSONA = False
+    #: Placeholders this version resolves on top of PLACEHOLDER_REGISTRY.
+    EXTRA_PLACEHOLDERS: Dict[str, Callable[[Dict[str, Any]], str]] = {}
 
     def compile(self, template: Optional[str]) -> Optional[str]:
         if not template:
             return template
-        return _compile_prompt(template, self._ctx, resolve_persona=self.RESOLVES_PERSONA)
+        return _compile_prompt(
+            template, self._ctx, resolve_persona=self.RESOLVES_PERSONA, extra=self.EXTRA_PLACEHOLDERS
+        )
 
     @classmethod
     def known_placeholders(cls) -> frozenset:
@@ -667,7 +730,9 @@ class PlaceholderPromptCompiler(PromptCompiler):
     @classmethod
     def validate(cls, template: Optional[str]) -> List[str]:
         """Unknown placeholders in ``template`` (see :func:`validate_template`)."""
-        return validate_template(template, resolve_persona=cls.RESOLVES_PERSONA)
+        return validate_template(
+            template, resolve_persona=cls.RESOLVES_PERSONA, extra=cls.EXTRA_PLACEHOLDERS
+        )
 
 
 class PersonaAwarePlaceholderCompiler(PlaceholderPromptCompiler):
@@ -687,3 +752,18 @@ class PersonaAwarePlaceholderCompiler(PlaceholderPromptCompiler):
     def known_placeholders(cls) -> frozenset:
         return KNOWN_PLACEHOLDERS | {"persona.*"}
 
+
+class CapabilityAwarePlaceholderCompiler(PersonaAwarePlaceholderCompiler):
+    """1.2.0 — everything 1.1.0 resolves, plus {{capabilities}} (#992).
+
+    What the agent can do in the session right now, from the state machine, so
+    an expert or a reply can tell what is outside the agent's role. 1.1.0 and
+    1.0.0 keep their exact behaviour: there {{capabilities}} stays as written.
+    """
+
+    VERSION = COMPILER_VERSION_CAPABILITIES
+    EXTRA_PLACEHOLDERS = CAPABILITY_PLACEHOLDERS
+
+    @classmethod
+    def known_placeholders(cls) -> frozenset:
+        return super().known_placeholders() | frozenset(CAPABILITY_PLACEHOLDERS)

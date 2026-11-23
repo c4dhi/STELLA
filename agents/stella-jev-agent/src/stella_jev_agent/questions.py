@@ -86,7 +86,8 @@ def turn_state(
     limit: int = 12,
     setting: str = "",
 ) -> Dict[str, Any]:
-    """What Jev reads on an ordinary turn. The setting says what kind of conversation this is."""
+    """What Jev reads on an ordinary turn. The setting says what kind of conversation
+    this is."""
     state: Dict[str, Any] = {}
     if setting.strip():
         state["setting"] = setting.strip()

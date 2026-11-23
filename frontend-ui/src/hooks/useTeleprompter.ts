@@ -51,6 +51,17 @@ const TELEPROMPTER_CLIENT_LAG_MS = 60
 // SDK has buffered ahead. Generous enough to leave genuine lookahead alone.
 const TELEPROMPTER_REBASE_TOLERANCE_MS = 600
 
+// How long to wait, after the schedule says this segment's speech has
+// finished, before treating speech as actually settled (#894 review).
+// TTS synthesizes and sends one sentence at a time, so there is a genuine
+// audible gap between sentences while the next one is still being
+// synthesized — settling the instant a segment's schedule runs out flips
+// speechSettled in that gap, mid-reply, which is exactly the case this
+// ticket is about. scheduleSettleCheck re-arms this on every new segment, so
+// it only fires once nothing new has arrived for this long after the
+// schedule ran out.
+const SPEECH_QUIET_WINDOW_MS = 500
+
 /** A span of speech scheduled on the wall clock (performance.now() ms). */
 interface Segment {
   charStart: number
@@ -209,9 +220,32 @@ export interface Teleprompter {
    * barge-in that the agent resumes is restored unchanged by {@link applyProgress}.
    */
   clearSpoken: () => void
+  /**
+   * True whenever there is nothing left to hear: text-only sessions (speech
+   * never starts), and the gap between turns in a voice session. False from
+   * the moment a turn's speech is scheduled until the schedule plays out, so
+   * a consumer can hold a state update until the words it describes have
+   * actually been heard (#894).
+   */
+  speechSettled: boolean
 }
 
-export function useTeleprompter(): Teleprompter {
+export interface TeleprompterOptions {
+  /**
+   * Which interface the participant is using (#149). In 'text' the agent
+   * speaks nothing, so no progress envelope ever arrives and the published
+   * text is the only progress there is — the same as a session with TTS off.
+   */
+  interactionMode?: 'voice' | 'text'
+  /**
+   * Whether the agent speaks its replies (#180). False for an agent running
+   * with TTS off, which says so with `stella.speech`: no progress envelope
+   * will come, so cues fire at the end of the text as in the text interface.
+   */
+  speaks?: boolean
+}
+
+export function useTeleprompter({ interactionMode = 'voice', speaks = true }: TeleprompterOptions = {}): Teleprompter {
   const [spokenChar, setSpokenChar] = useState(0)
   const [spokenTranscriptId, setSpokenTranscriptId] = useState('')
   const [frozenSpoken, setFrozenSpoken] = useState<Record<string, number>>({})
@@ -243,6 +277,12 @@ export function useTeleprompter(): Teleprompter {
   const scheduledUntilRef = useRef(0) // wall-clock ms the schedule reaches
   const frozenRef = useRef(false) // barge-in froze the cursor; hold position
   const rafRef = useRef<number | null>(null)
+  // speechSettled (#894): a plain setTimeout watcher on scheduledUntilRef,
+  // deliberately NOT driven by the rAF tick loop — prefers-reduced-motion
+  // skips that loop entirely (see applyProgress), but the audio still plays
+  // for the same duration, so this needs its own clock.
+  const [speechSettled, setSpeechSettled] = useState(true)
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Flips true the first time a progress envelope arrives (teleprompter live
   // this session). Until then agent bubbles render normally, so a TTS-off
   // session is never left permanently dimmed.
@@ -252,6 +292,17 @@ export function useTeleprompter(): Teleprompter {
   // detection through beginTranscript() keyed on this, so the faster agent_text
   // stream can never reset a turn whose highlight is already advancing.
   const transcriptIdRef = useRef('')
+  // The transcript whose cues the cue cursor walks. The same as the highlight
+  // binding while replies are spoken; for a reply nobody will hear it is bound
+  // here alone, so the face still gets its cues without the bubble dimming
+  // ahead of a voice that is never coming (#149).
+  const cueTranscriptRef = useRef('')
+  // Nothing of the reply will be spoken: the text interface, or an agent with
+  // TTS off. Either way the text is the only progress there is.
+  const unspokenRef = useRef(interactionMode === 'text' || !speaks)
+  useEffect(() => {
+    unspokenRef.current = interactionMode === 'text' || !speaks
+  }, [interactionMode, speaks])
   const textByTranscriptRef = useRef<Map<string, string>>(new Map())
   const prefersReducedMotionRef = useRef(
     typeof window !== 'undefined' &&
@@ -263,7 +314,7 @@ export function useTeleprompter(): Teleprompter {
   // loop and from every path that moves the cursor without one (reduced motion,
   // and a TTS-off session where there is no audio to track).
   const syncCues = useCallback((cursor: number) => {
-    const cues = cuesByTranscriptRef.current.get(transcriptIdRef.current)
+    const cues = cuesByTranscriptRef.current.get(cueTranscriptRef.current)
     if (!cues || cues.length === 0) return
     const previous = cueCursorRef.current
     if (cursor <= previous) return
@@ -367,6 +418,37 @@ export function useTeleprompter(): Teleprompter {
     }
   }, [])
 
+  // speechSettled watcher (#894): cancel whatever settle check was pending —
+  // a new segment pushed the target further out, or there's nothing to wait
+  // for any more.
+  const clearSettleTimer = useCallback(() => {
+    if (settleTimerRef.current != null) {
+      clearTimeout(settleTimerRef.current)
+      settleTimerRef.current = null
+    }
+  }, [])
+
+  const markUnsettled = useCallback(() => {
+    clearSettleTimer()
+    setSpeechSettled(false)
+  }, [clearSettleTimer])
+
+  const markSettledNow = useCallback(() => {
+    clearSettleTimer()
+    setSpeechSettled(true)
+  }, [clearSettleTimer])
+
+  // Re-arm the watcher for the current scheduledUntilRef, replacing any
+  // earlier one (segments chain, so each call pushes the target further out).
+  const scheduleSettleCheck = useCallback(() => {
+    clearSettleTimer()
+    const remaining = Math.max(0, scheduledUntilRef.current + SPEECH_QUIET_WINDOW_MS - performance.now())
+    settleTimerRef.current = setTimeout(() => {
+      settleTimerRef.current = null
+      setSpeechSettled(true)
+    }, remaining)
+  }, [clearSettleTimer])
+
   const clearFrozen = useCallback((transcriptId: string) => {
     setFrozenSpoken(prev => {
       if (prev[transcriptId] == null) return prev
@@ -384,6 +466,7 @@ export function useTeleprompter(): Teleprompter {
     (transcriptId: string) => {
       if (!transcriptId || transcriptIdRef.current === transcriptId) return
       transcriptIdRef.current = transcriptId
+      cueTranscriptRef.current = transcriptId
       resetSchedule()
       // Position only — the previous reply ended its own expression when the
       // agent stopped speaking (see the watchdog below).
@@ -401,10 +484,37 @@ export function useTeleprompter(): Teleprompter {
     [resetSchedule, rewindCues, relaxExpression]
   )
 
+  // A reply in the text interface is never spoken (#149): no progress envelope
+  // will arrive and no cursor will move, so the published text IS its progress.
+  //
+  // Keyed on the interface, not on "no progress seen yet": the first spoken
+  // reply of a session also arrives before its first progress, and treating it
+  // as unspoken would fire all of its cues — a closing [sleep] included — the
+  // moment its text landed.
+  const syncUnspoken = useCallback(
+    (transcriptId: string) => {
+      if (cueTranscriptRef.current !== transcriptId) {
+        cueTranscriptRef.current = transcriptId
+        rewindCues()
+        // With no audio a new message is the only turn boundary there is, so
+        // it is what lets the previous reply's expression go (see beginTranscript).
+        relaxExpression()
+      }
+      const text = textByTranscriptRef.current.get(transcriptId)
+      if (text) syncCues(text.length)
+    },
+    [rewindCues, relaxExpression, syncCues]
+  )
+
   const noteAgentText = useCallback(
     (transcriptId: string, text: string) => {
       if (!transcriptId) return
       textByTranscriptRef.current.set(transcriptId, text)
+      // Text interface: never spoken, never highlighted — see syncUnspoken.
+      if (unspokenRef.current) {
+        syncUnspoken(transcriptId)
+        return
+      }
       // Once live, bind each new reply on its first chunk so it renders dimmed
       // ahead of the voice and lights up as the audio catches up.
       if (!activeRef.current) {
@@ -415,7 +525,7 @@ export function useTeleprompter(): Teleprompter {
       beginTranscript(transcriptId)
       setSpokenText(text)
     },
-    [beginTranscript, syncCues]
+    [beginTranscript, syncCues, syncUnspoken]
   )
 
   const noteEmotionCues = useCallback(
@@ -426,6 +536,10 @@ export function useTeleprompter(): Teleprompter {
       const ordered = [...cues].sort((a, b) => a.char - b.char)
       cuesByTranscriptRef.current.set(transcriptId, ordered)
       setCuesByTranscript(prev => ({ ...prev, [transcriptId]: ordered }))
+      if (unspokenRef.current) {
+        syncUnspoken(transcriptId)
+        return
+      }
       // With TTS off there is no audio to track and no cursor will ever move,
       // so nothing past offset 0 would ever fire. Fall back to the text itself:
       // published text IS the progress in that mode.
@@ -434,7 +548,7 @@ export function useTeleprompter(): Teleprompter {
         if (text) syncCues(text.length)
       }
     },
-    [syncCues]
+    [syncCues, syncUnspoken]
   )
 
   const applyProgress = useCallback(
@@ -463,11 +577,11 @@ export function useTeleprompter(): Teleprompter {
         // continues on the SAME message from where it stopped, over the
         // remaining audio. Harmless for a fresh sentence (already unfrozen).
         frozenRef.current = false
-        if (prefersReducedMotionRef.current) {
-          setSpokenChar(target) // no animation — step straight to this tick's target
-          syncCues(target)
-          return
-        }
+        markUnsettled()
+        // Computed before the reduced-motion branch so scheduledUntilRef (and
+        // the settle watcher) track the real audio duration regardless of
+        // whether the word-by-word highlight animates — the audio plays for
+        // the same length of time either way (#894).
         const now = performance.now()
         const { startAt, endAt, rebase } = planSegment({
           now,
@@ -475,9 +589,15 @@ export function useTeleprompter(): Teleprompter {
           durationMs: data.duration_ms ?? 0,
           scheduledUntil: scheduledUntilRef.current,
         })
+        scheduledUntilRef.current = endAt
+        scheduleSettleCheck()
+        if (prefersReducedMotionRef.current) {
+          setSpokenChar(target) // no animation — step straight to this tick's target
+          syncCues(target)
+          return
+        }
         if (rebase) segmentsRef.current = segmentsRef.current.filter(s => s.startAt <= now)
         segmentsRef.current.push({ charStart: spoken, charEnd: target, startAt, endAt })
-        scheduledUntilRef.current = endAt
         ensureLoop()
       } else if (state === 'spoken') {
         // The schedule normally carries the cursor to the end on its own.
@@ -504,9 +624,11 @@ export function useTeleprompter(): Teleprompter {
         frozenRef.current = true
         setSpokenChar(spoken)
         setFrozenSpoken(prev => ({ ...prev, [transcriptId]: spoken }))
+        // Nothing left to wait for: playback has genuinely stopped (#894).
+        markSettledNow()
       }
     },
-    [beginTranscript, clearFrozen, ensureLoop, resetSchedule, resetCues, syncCues]
+    [beginTranscript, clearFrozen, ensureLoop, resetSchedule, resetCues, syncCues, markUnsettled, markSettledNow, scheduleSettleCheck]
   )
 
   /**
@@ -559,10 +681,11 @@ export function useTeleprompter(): Teleprompter {
     setSpokenText('')
   }, [])
 
-  // Cancel any pending animation frame on unmount.
+  // Cancel any pending animation frame or settle timer on unmount.
   useEffect(
     () => () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
+      if (settleTimerRef.current != null) clearTimeout(settleTimerRef.current)
     },
     []
   )
@@ -580,5 +703,6 @@ export function useTeleprompter(): Teleprompter {
     faceState,
     cuesByTranscript,
     clearSpoken,
+    speechSettled,
   }
 }

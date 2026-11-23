@@ -149,6 +149,7 @@ class ExpertConfig:
     # Per-verdict deterministic response directives: {verdict_value: VerdictDirective}.
     # Drives literature-informed override/prepend/short_circuit at arbitration time.
     verdict_directives: Dict[str, VerdictDirective] = field(default_factory=dict)
+    enabled_from_compiler: str = ""
 
     def __post_init__(self) -> None:
         # Coerce verdict_directives whether they arrive as dicts (JSON/config) or instances.
@@ -178,6 +179,7 @@ class ExpertConfig:
             min_confidence=data.get("min_confidence", 0.0),
             tools=list(data.get("tools") or []),
             verdict_directives=data.get("verdict_directives", {}),
+            enabled_from_compiler=str(data.get("enabled_from_compiler") or ""),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -199,4 +201,5 @@ class ExpertConfig:
             "verdict_directives": {
                 k: v.to_dict() for k, v in self.verdict_directives.items()
             },
+            "enabled_from_compiler": self.enabled_from_compiler,
         }

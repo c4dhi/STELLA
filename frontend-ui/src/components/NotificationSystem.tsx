@@ -245,7 +245,7 @@ const NotificationToast = ({
         {/* Dismiss button */}
         <motion.button
           onClick={handleDismiss}
-          className={`opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded-full transition-all duration-200 ${
+          className={`opacity-0 group-hover:opacity-100 coarse:opacity-100 w-5 h-5 flex items-center justify-center rounded-full transition-all duration-200 ${
             isDark ? 'hover:bg-zinc-700' : 'hover:bg-neutral-100'
           }`}
           whileHover={{ scale: 1.1 }}

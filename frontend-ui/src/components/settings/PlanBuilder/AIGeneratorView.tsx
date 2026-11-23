@@ -258,7 +258,7 @@ For example: 'A sales process with lead qualification, demo scheduling, proposal
             }`}>
               Try an example:
             </p>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 coarse:gap-3">
               {EXAMPLE_PROMPTS.map((example) => (
                 <motion.button
                   key={example.title}

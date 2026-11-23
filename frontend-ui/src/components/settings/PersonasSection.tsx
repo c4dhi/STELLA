@@ -220,7 +220,7 @@ export default function PersonasSection() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5 coarse:gap-2.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => handleDuplicate(persona)}

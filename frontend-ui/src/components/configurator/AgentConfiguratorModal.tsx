@@ -137,7 +137,7 @@ export default function AgentConfiguratorModal({
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
-      className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm"
+      className="fixed inset-0 z-[110] flex items-center justify-center p-2 sm:p-4 bg-black/30 backdrop-blur-sm"
       onClick={requestClose}
     >
       <motion.div
@@ -154,12 +154,12 @@ export default function AgentConfiguratorModal({
         `}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className={`px-4 py-3 border-b flex items-center gap-3 ${isDark ? 'border-zinc-700/80' : 'border-neutral-200'}`}>
+        {/* Header — wraps to several rows below lg so it never gets clipped sideways */}
+        <div className={`px-4 py-3 border-b flex flex-wrap items-center gap-3 ${isDark ? 'border-zinc-700/80' : 'border-neutral-200'}`}>
           {/* Close (X) button — left */}
           <motion.button
             onClick={requestClose}
-            className={`p-2 rounded-xl transition-colors ${
+            className={`p-2 rounded-xl transition-colors shrink-0 ${
               isDark
                 ? 'text-content-inverse-secondary hover:text-content-inverse hover:bg-surface-dark-secondary'
                 : 'text-content-secondary hover:text-content hover:bg-surface-secondary'
@@ -173,7 +173,7 @@ export default function AgentConfiguratorModal({
           </motion.button>
 
           {/* Title + info */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isDark ? 'bg-primary-500/10' : 'bg-primary-50'}`}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={isDark ? 'text-primary-400' : 'text-primary-600'}>
                 <path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -194,14 +194,15 @@ export default function AgentConfiguratorModal({
             </div>
           </div>
 
-          {/* Name & description inputs */}
-          <div className="flex-1 flex gap-2.5 ml-3">
+          {/* Name & description inputs — own full-width row below lg, since there's
+              no room to keep them inline with the title and Save button there */}
+          <div className="flex gap-2.5 w-full order-1 lg:order-none lg:w-auto lg:flex-1 lg:ml-3">
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Configuration name..."
-              className={`flex-1 max-w-[220px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
+              className={`flex-1 min-w-0 lg:max-w-[220px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
                 isDark
                   ? 'bg-surface-dark-secondary border border-border-dark text-content-inverse placeholder:text-content-inverse-tertiary focus:border-border-dark-secondary'
                   : 'bg-surface-secondary border border-border text-content placeholder:text-content-tertiary focus:border-border-secondary'
@@ -212,7 +213,7 @@ export default function AgentConfiguratorModal({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Description (optional)"
-              className={`flex-1 max-w-[280px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
+              className={`flex-1 min-w-0 lg:max-w-[280px] px-3 py-1.5 rounded-lg text-body-sm focus:outline-none transition-all ${
                 isDark
                   ? 'bg-surface-dark-secondary border border-border-dark text-content-inverse placeholder:text-content-inverse-tertiary focus:border-border-dark-secondary'
                   : 'bg-surface-secondary border border-border text-content placeholder:text-content-tertiary focus:border-border-secondary'
@@ -220,11 +221,11 @@ export default function AgentConfiguratorModal({
             />
           </div>
 
-          {/* Save button — right */}
+          {/* Save button — right on lg, its own full-width row on mobile/tablet */}
           <motion.button
             onClick={handleSave}
             disabled={!name.trim()}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-body-sm font-medium transition-all ${
+            className={`flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-body-sm font-medium transition-all w-full lg:w-auto order-2 lg:order-none ${
               isDark
                 ? 'bg-primary text-white shadow-lg shadow-primary/20 hover:bg-primary/90'
                 : 'bg-neutral-900 text-white shadow-lg shadow-neutral-900/20 hover:bg-neutral-800'
@@ -241,10 +242,13 @@ export default function AgentConfiguratorModal({
           </motion.button>
         </div>
 
-        {/* Body — horizontal split: pipeline left, expert sidebar right */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Left: Pipeline visualization */}
-          <div className="flex-1 min-w-0">
+        {/* Body — side by side from lg up; below lg there isn't room for a
+            440px sidebar next to the canvas, so it drops below instead and
+            the whole area scrolls vertically rather than clipping either one */}
+        <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+          {/* Pipeline visualization — fixed height below lg so ReactFlow has
+              room to fit the whole pipeline at a readable zoom */}
+          <div className="h-[36vh] shrink-0 lg:h-auto lg:flex-1 lg:min-w-0">
             <PipelineView
               schema={pipelineSchema}
               configuration={configuration}
@@ -254,8 +258,15 @@ export default function AgentConfiguratorModal({
             />
           </div>
 
-          {/* Right: Expert sidebar (always visible) */}
-          <div className={`w-[440px] shrink-0 border-l overflow-hidden ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+          {/* Expert sidebar (always visible) — full width below the canvas on
+              narrow screens, a fixed-width column beside it from lg up. Its
+              own height is explicit (not auto) below lg too: ExpertSidebar's
+              root is h-full, which against an auto-height parent in a column
+              flex container resolves to whatever sliver is left over rather
+              than its actual content height, squeezing its list down to
+              nothing — so it gets a real height to fill instead, and scrolls
+              internally rather than relying on the whole body's scroll. */}
+          <div className={`w-full h-[42vh] shrink-0 lg:h-auto lg:w-[440px] lg:shrink-0 border-t lg:border-t-0 lg:border-l overflow-hidden ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
             <ExpertSidebar
               experts={state.experts}
               poolExperts={state.poolExperts}
@@ -275,7 +286,7 @@ export default function AgentConfiguratorModal({
 
         {/* Footer: Inline thresholds */}
         {pipelineSchema.thresholds.length > 0 && (
-          <div className={`px-6 py-2.5 border-t flex items-center gap-5 shrink-0 ${isDark ? 'border-zinc-700/80' : 'border-neutral-200'}`}>
+          <div className={`px-6 py-2.5 border-t flex flex-wrap items-center gap-3 lg:gap-5 shrink-0 ${isDark ? 'border-zinc-700/80' : 'border-neutral-200'}`}>
             <span className={`text-[10px] font-medium tracking-wide uppercase ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
               Thresholds
             </span>

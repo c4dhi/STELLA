@@ -23,7 +23,7 @@ import WizardProgress from '../shared/WizardProgress'
 import ConnectorsStep from '../shared/ConnectorsStep'
 import type { AvailableConnector } from '../../lib/api-types'
 import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
-import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE } from '../shared/wizardLayout'
+import { WIZARD_CARD_GRID, WIZARD_MODAL_SIZE, WIZARD_OVERLAY_ALIGN } from '../shared/wizardLayout'
 import { choiceCardClass, SelectedBadge } from '../shared/wizardChoice'
 import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
 import DiscardChangesDialog from '../shared/DiscardChangesDialog'
@@ -123,7 +123,6 @@ export default function DeployAgentModal({
     () => assignSlots(connectorSlots, availableConnectors, selectedConnectors),
     [connectorSlots, availableConnectors, selectedConnectors],
   )
-  const showConnectorsStep = connectorSlots.length > 0 || availableConnectors.length > 0
 
 
   // Determine dynamic steps based on agent requirements
@@ -172,16 +171,16 @@ export default function DeployAgentModal({
     if (runsPlans) {
       steps.push(runMode === 'companion' ? 'activities' : 'plan')
     }
-    if (showConnectorsStep) {
-      steps.push('connectors')
-    }
+    // Always shown, even with none yet: it's how someone with no connectors
+    // finds out they exist (#891).
+    steps.push('connectors')
     if (supportsVoiceSelection) {
       steps.push('voice')
     }
     // Where the settings start from, then the settings themselves (#892).
     steps.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length))
     return steps
-  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, showConnectorsStep, isLoadingEnvVars, envVarTemplates.length])
+  }, [needs, runsPlans, selectedType?.pipelineSchema, supportsVoiceSelection, runMode, isLoadingEnvVars, envVarTemplates.length])
 
   // Start From drops out of the steps when the templates finish loading and
   // there are none (or the fetch failed). Move on to the settings rather than
@@ -391,7 +390,7 @@ export default function DeployAgentModal({
         needs.persona ? selectedPersona?.id : undefined,
         runsPlans ? runMode : undefined,
         runsPlans && runMode === 'companion' ? activityPlanIds : undefined,
-        showConnectorsStep ? bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors) : undefined,
+        bindingsFromChoices(connectorSlots, slotChoices, selectedConnectors),
       )
       onClose()
     } catch (err) {
@@ -467,7 +466,7 @@ export default function DeployAgentModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm"
+          className={`fixed inset-0 z-[100] flex justify-center p-4 ${WIZARD_OVERLAY_ALIGN} bg-black/20 backdrop-blur-sm`}
           onClick={handleClose}
         >
           <motion.div
@@ -475,9 +474,10 @@ export default function DeployAgentModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            layout
             className={`
               backdrop-blur-xl rounded-[20px] w-full ${WIZARD_MODAL_SIZE} overflow-hidden
-              flex flex-col max-h-[calc(100dvh-2rem)]
+              flex flex-col
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
                 : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'

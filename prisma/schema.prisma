@@ -527,6 +527,7 @@ model EnvVarTemplate {
 // Message types for user inbox
 enum UserMessageType {
   PROJECT_INVITATION // Invitation to collaborate on a project
+  AGENT_BUILD_FAILED // An uploaded agent's Docker build failed
   // Future: SYSTEM_ANNOUNCEMENT, PROJECT_UPDATE, etc.
 }
 

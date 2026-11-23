@@ -80,6 +80,22 @@ class FakeStateMachine:
         self.state = 0
         self.collected: Dict[str, Any] = {}
         self.calls: List[str] = []
+        # What STELLA would say she can do (#992), as the real client keeps it.
+        self.capabilities: Optional[Dict[str, Any]] = None
+
+    def _capabilities(self):
+        if self.plan:
+            return {"mode": "activity", "capabilities": [
+                {"id": "follow_plan", "kind": "plan", "title": self.plan.get("title", ""), "description": ""},
+                {"id": "leave_activity", "kind": "action", "title": "Leave the activity", "description": ""},
+            ]}
+        return {"mode": "companion", "capabilities": [
+            {"id": "go_to_sleep", "kind": "action", "title": "Go to sleep", "description": ""},
+        ]}
+
+    async def get_capabilities(self):
+        self.capabilities = self._capabilities()
+        return self.capabilities
 
     def _state(self):
         return self.plan["states"][self.state] if self.plan else None
@@ -94,7 +110,9 @@ class FakeStateMachine:
         self.plan = None
         return {"success": True}
 
-    async def get_full_state(self):
+    async def get_full_state(self, include_capabilities=False):
+        if include_capabilities:
+            self.capabilities = self._capabilities()
         if not self.plan:
             return None
         return {
@@ -597,7 +615,7 @@ async def test_completing_the_plan_through_a_tool_returns_to_free_flow():
     session_completed, and the agent ended the WHOLE companion session."""
     session = await _companion_in_activity()
 
-    async def full_state_at_end():
+    async def full_state_at_end(include_capabilities=False):
         return {"plan_id": PLAN["id"], "current_state_id": "__end__", "states": []}
 
     session.sm.get_full_state = full_state_at_end
@@ -614,7 +632,7 @@ async def test_completing_the_plan_through_a_tool_returns_to_free_flow():
 async def test_a_plan_mode_session_still_ends_at_its_end():
     session = Session(companion=False, sm=FakeStateMachine(plan=PLAN))
 
-    async def full_state_at_end():
+    async def full_state_at_end(include_capabilities=False):
         return {"plan_id": PLAN["id"], "current_state_id": "__end__", "states": []}
 
     session.sm.get_full_state = full_state_at_end
@@ -722,7 +740,7 @@ async def test_a_finished_activity_lets_the_device_sleep_again():
     session = await _companion_in_activity()
     sent = _record_sleep_signals(session)
 
-    async def full_state_at_end():
+    async def full_state_at_end(include_capabilities=False):
         return {"plan_id": PLAN["id"], "current_state_id": "__end__", "states": []}
 
     session.sm.get_full_state = full_state_at_end
@@ -1057,7 +1075,7 @@ async def test_an_opener_already_spoken_is_not_greeted_or_reacted_to_again():
 
 
 async def _finish(session):
-    async def full_state_at_end():
+    async def full_state_at_end(include_capabilities=False):
         return {"plan_id": PLAN["id"], "current_state_id": "__end__", "states": []}
 
     session.sm.get_full_state = full_state_at_end

@@ -76,6 +76,35 @@ interface BuiltInExpertDefault {
   outputSchema?: Record<string, unknown>
   verdictVocabulary: string[]
   defaultVerdictDirectives: Record<string, VerdictDirective>
+  /** On by default only for configurations authored against this compiler or later. */
+  enabledFromCompiler?: string
+}
+
+/**
+ * Whether a built-in expert the configuration has not switched on or off runs.
+ * One with a compiler floor is on only for configurations authored against
+ * that version or later; a new configuration (nothing saved yet) always is.
+ */
+export function enabledByDefault(
+  enabledFromCompiler: string | undefined,
+  saved: { minCompilerVersion: string | null } | null,
+): boolean {
+  if (!enabledFromCompiler || !saved) return true
+  return compilerAtLeast(saved.minCompilerVersion, enabledFromCompiler)
+}
+
+/** `version` >= `floor` as dotted numbers; anything unreadable is not. */
+export function compilerAtLeast(version: string | null | undefined, floor: string): boolean {
+  const parse = (v: string) => v.split('.').map((x) => (/^\d+$/.test(x) ? Number(x) : NaN))
+  if (!version) return false
+  const a = parse(version)
+  const b = parse(floor)
+  if ([...a, ...b].some(Number.isNaN)) return false
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0)
+    if (d !== 0) return d > 0
+  }
+  return true
 }
 
 /** Build the built-in expert defaults from the agent's published config/experts/*.json. */
@@ -100,6 +129,7 @@ function builtInsFromPublished(published: ExpertDefault[]): BuiltInExpertDefault
       outputSchema: raw.output_schema,
       verdictVocabulary: vocab,
       defaultVerdictDirectives: directives,
+      enabledFromCompiler: raw.enabled_from_compiler || undefined,
     }
   })
 }
@@ -222,6 +252,10 @@ export function useConfiguratorState(
   // `companion`, the assessment pool on `experts`. When capabilities aren't
   // provided (older flow), show everything.
   const capabilities = useConfiguratorStore((s) => s.capabilities)
+  // A saved configuration keeps the compiler version it was authored against;
+  // a new one gets the agent's current one. An expert with a compiler floor is
+  // on by default only from that version, as the agent itself decides (#191).
+  const editingConfig = useConfiguratorStore((s) => s.editingConfig)
   const hasPlans = !capabilities || capabilities.includes('plans')
   const hasExperts = !capabilities || capabilities.includes('experts')
   const hasCompanion = !capabilities || capabilities.includes('companion')
@@ -258,7 +292,10 @@ export function useConfiguratorState(
       result.push({
         name: builtin.name,
         description: (ov.description as string) ?? builtin.description,
-        enabled: ov.enabled !== undefined ? Boolean(ov.enabled) : true,
+        enabled:
+          ov.enabled !== undefined
+            ? Boolean(ov.enabled)
+            : enabledByDefault(builtin.enabledFromCompiler, editingConfig),
         alwaysTriggered: ov.always_triggered !== undefined ? Boolean(ov.always_triggered) : builtin.alwaysTriggered,
         triggerCriteria: (ov.trigger_criteria as string) ?? builtin.triggerCriteria,
         model: (ov.model as string) ?? builtin.model,
@@ -312,7 +349,7 @@ export function useConfiguratorState(
     result.sort((a, b) => b.arbitrationPriority - a.arbitrationPriority)
 
     return result
-  }, [overrides, customs, backgroundSet, builtInDefaults, hasExperts])
+  }, [overrides, customs, backgroundSet, builtInDefaults, hasExperts, editingConfig])
 
   // ----- Derived views -----
 

@@ -261,6 +261,7 @@ Settings for agent deployment and management.
 | `AGENT_IMAGE` | No | `conversational-ai-server:latest` | Docker image for agent pods |
 | `AGENTS_DIR` | No | `./agents` | Directory containing agent definitions |
 | `DEFAULT_AGENT_TYPE` | No | `stella-v2-agent` | The agent type a deployment gets when it names none: deploy, restart, wake, public projects (`src/agents/default-agent-type.ts`) |
+| `AGENT_RECONCILER_MODE` | No | `log` | Every 10 minutes the backend compares agent pods with agent rows. It removes a pod whose agent is gone or stopped for over 5 minutes, and marks a RUNNING agent STOPPED once two sweeps in a row (about 10 minutes apart) have found its pod missing. It never touches a RUNNING or STARTING agent's pod. `log` only logs what it would do, `delete` does it, `off` skips it (`src/agents/orphaned-agent-pods.ts`) |
 
 ### Connectors
 
@@ -322,6 +323,7 @@ These environment variables are read by the STELLA Agent SDK inside each agent p
 | `TRANSCRIPT_DEBOUNCE_MS` | No | `0` | Debounce window in milliseconds for aggregating rapid successive final transcripts. Off by default since 1.2.0: neither STT provider can emit a second final inside the window, so the old 300 ms only added delay |
 | `STELLA_AUDIO_QUEUE_MAX_FRAMES` | No | `3000` | Most incoming audio the agent holds for speech recognition, in 10 ms frames (`3000` is 30 s, about 3 MB). When full, the oldest audio is dropped and a warning is logged, so a stalled recognition stream cannot fill the pod's memory. Longer than any recognition reconnect, so a normal reconnect loses nothing |
 | `STT_WARMUP_ENABLED` | No | `true` | Warm up the STT model on agent start and when participants join. Set to `false` to skip warmup |
+| `STELLA_SPEECH_WAIT_SECONDS` | No | `720` | How long an agent waits for the STT and TTS services at start while they are still loading their models (their startupProbe's 10 min plus 2). The participant sees "Getting ready to listen…" meanwhile; after it, the agent stops |
 | `STELLA_TTS_PLAYBACK` | No | `auto` | Agent setting, per deployment; a deployment that leaves it at `auto` follows the platform default a system admin sets in Settings → Platform Defaults (from the next session). `auto` (and unset) starts each session in `stream` and switches once to `sentence` — never back — after 3 consecutive sentences synthesize slower than real time. `stream` always starts each sentence as it is generated; `sentence` always generates it whole first and then plays it, as 1.1.0 did. See [the TTS pipeline](./tts-pipeline.md) |
 | `STELLA_TTS_PREROLL_MS` | No | auto | Jitter buffer (ms) held before each sentence plays. Unset, the agent picks it from the measured speed of the voice on this hardware (200 ms up to 3 s); setting a value pins it. Watch the agent log for "Pre-roll A -> B", "bridged" silence or "Playout starved". See [tuning guidance](./tts-pipeline.md#tuning-the-pre-roll-for-your-hardware) |
 | `TTS_PROGRESS_TICK_MS` | No | `200` | How often a teleprompter progress envelope is emitted during playback |
@@ -459,15 +461,23 @@ STELLA provides a secure mechanism for injecting environment variables into agen
 Agents using the STELLA SDK can access environment variables through the standard Python `os.environ`:
 
 ```python
+import asyncio
 import os
-from stella_agent import run_agent_from_env
+
+from stella_agent_sdk import BaseAgent, run_agent_from_env
 
 # Access environment variables
 openai_key = os.environ.get("OPENAI_API_KEY")
 elevenlabs_key = os.environ.get("ELEVENLABS_API_KEY")
 
-# Or use the SDK helper that configures everything
-run_agent_from_env()
+
+class MyAgent(BaseAgent):
+    ...
+
+
+# run_agent_from_env reads the platform's own variables (LiveKit, STT, TTS,
+# session) and runs the agent until the session ends.
+asyncio.run(run_agent_from_env(MyAgent()))
 ```
 
 ### Security Features

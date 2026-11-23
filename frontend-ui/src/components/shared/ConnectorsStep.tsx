@@ -60,7 +60,17 @@ export default function ConnectorsStep({ slots, available, loading, loadError, s
       </div>
 
       {available.length === 0 ? (
-        <p className={muted}>You have no connectors yet.</p>
+        <p className={muted}>
+          Connectors let an agent use outside tools and data through an MCP server. You have none yet — add one in{' '}
+          <Link
+            to="/settings/connectors"
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`underline-offset-2 hover:underline ${isDark ? 'text-zinc-300 hover:text-zinc-100' : 'text-neutral-700 hover:text-neutral-900'}`}
+          >
+            Settings → Connectors (opens in a new tab) ↗
+          </Link>
+        </p>
       ) : (
         <div className={WIZARD_CARD_GRID}>
           {available.map((c) => {
@@ -122,14 +132,16 @@ export default function ConnectorsStep({ slots, available, loading, loadError, s
         </div>
       )}
 
-      <Link
-        to="/settings/connectors"
-        target="_blank"
-        rel="noopener noreferrer"
-        className={`inline-block text-xs ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-900'} underline-offset-2 hover:underline`}
-      >
-        Add or test connectors in Settings → Connectors (opens in a new tab) ↗
-      </Link>
+      {available.length > 0 && (
+        <Link
+          to="/settings/connectors"
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`inline-block text-xs ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-900'} underline-offset-2 hover:underline`}
+        >
+          Add or test connectors in Settings → Connectors (opens in a new tab) ↗
+        </Link>
+      )}
     </div>
   )
 }

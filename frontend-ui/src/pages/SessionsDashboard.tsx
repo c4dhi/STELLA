@@ -590,11 +590,13 @@ export default function SessionsDashboard() {
                 }`}
                 onClick={() => navigate(`/session/${session.id}`)}
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
+                {/* Phones (#184): the actions drop under the details, so the row
+                    never runs past the screen. */}
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 sm:gap-0">
+                  <div className="flex-1 min-w-0">
                     {/* Session Name & Status */}
-                    <div className="flex items-center gap-3 mb-2">
-                      <h3 className={`text-heading-sm ${isDark ? 'text-content-inverse' : 'text-content'}`}>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2">
+                      <h3 className={`text-heading-sm break-words min-w-0 ${isDark ? 'text-content-inverse' : 'text-content'}`}>
                         {session.name || `Session ${new Date(session.createdAt).toLocaleDateString()}`}
                       </h3>
                       <span className={session.status === 'ACTIVE' ? 'badge-success' : 'badge-neutral'}>
@@ -603,14 +605,14 @@ export default function SessionsDashboard() {
                     </div>
 
                     {/* Room Name */}
-                    <div className={`text-caption font-mono mb-3 ${
+                    <div className={`text-caption font-mono mb-3 break-all ${
                       isDark ? 'text-content-inverse-tertiary' : 'text-content-tertiary'
                     }`}>
                       {session.room.livekitRoomName}
                     </div>
 
                     {/* Stats */}
-                    <div className={`flex gap-6 text-body-sm ${
+                    <div className={`flex flex-wrap gap-x-6 gap-y-1 text-body-sm ${
                       isDark ? 'text-content-inverse-secondary' : 'text-content-secondary'
                     }`}>
                       <div>
@@ -706,7 +708,7 @@ export default function SessionsDashboard() {
                   </div>
 
                   {/* Actions */}
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 coarse:gap-3 self-end sm:self-auto">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()

@@ -516,3 +516,30 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Touch screens: every control gets at least a 40 px tap area (#183).
+   Only for a coarse pointer (phones, tablets), so mouse and trackpad are
+   untouched. The control keeps its look and size: an invisible ::after
+   reaches out to 40 x 40 around it, centred, and never shrinks a control
+   that is already bigger (min(0px, …) keeps the inset at 0 then). Vertical
+   and horizontal insets resolve against the control's own box, because it
+   is the containing block. Native checkboxes and radios can't take a
+   pseudo-element; their label is the tap target. Selects grow to 40 px. */
+@media (pointer: coarse) {
+  :is(button, a[href], [role='button'], [role='tab'], [role='switch'], [role='menuitem'], summary):not(.absolute, .fixed, .sticky) {
+    position: relative;
+  }
+  /* A select can't take a pseudo-element either, so it grows instead;
+     selects are form fields, where 40 px is the normal height anyway. */
+  select {
+    min-height: 40px;
+  }
+  :is(button, a[href], [role='button'], [role='tab'], [role='switch'], [role='menuitem'], summary)::after {
+    content: '';
+    position: absolute;
+    top: min(0px, calc(50% - 20px));
+    bottom: min(0px, calc(50% - 20px));
+    left: min(0px, calc(50% - 20px));
+    right: min(0px, calc(50% - 20px));
+  }
+}
