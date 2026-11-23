@@ -15,6 +15,13 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **What the agent can do, from the session** (#992). `StateMachineClient.get_capabilities()` returns the mode (`plan`, `activity` or `companion`) and what the agent can do in it, worked out by STELLA from the plan, the activities on offer and the connector tools the agent type calls in that mode. `get_full_state(include_capabilities=True)` brings the same list in the per-turn call, also when no plan is loaded, and keeps it in `StateMachineClient.capabilities`. The client is told the agent's id (`agent_id`), so the list is for this agent. Needs a STELLA with `GetCapabilities`.
 - **Prompt compiler 1.2.0: `{{capabilities}}`** (#992). It resolves `sm_context["capabilities"]` to the mode and one line per entry. `prompts.format_capabilities()` renders the same text for prompts an agent renders itself. 1.0.0 and 1.1.0 are unchanged and leave the token as written.
+- **Settings from `agent.yaml`** (#996). `AgentSettings.from_manifest()` reads the settings an agent declares (the manifest's `settings:` section and its `pipelineSchema` slots) with their defaults; `apply(pipeline_config)` takes a saved configuration's values and `get(key)` returns the value or the manifest default, so a default lives in `agent.yaml` only. An undeclared key raises `KeyError`. The manifest is found at `./agent.yaml` or `STELLA_AGENT_MANIFEST`. New dependency: `pyyaml` (reinstall the SDK, `pip install -e .`, in an existing venv).
+- **`prompts.history_turns(template)`** (#996): the largest `N` of a prompt's `{{history_N}}`, else 0, for a component that reads the conversation on a prompt's behalf.
+- **`{{last_goal_attempt}}`** (#996): in goal mode, the expert's last attempt to close or skip the goal when it was held back; empty otherwise. In every compiler version, so a prompt using it runs under any of them.
+
+### Removed
+
+- **`BaseTool.guidance`** (#996). Nothing appends a tool's usage text to a prompt any more: a prompt that drives state through the state-machine tools carries `STATE_MACHINE_TOOL_GUIDANCE` itself, where the Configurator shows it. An agent that set `guidance` on its own tools should put that text in its prompts instead; the attribute is no longer read.
 
 ### Fixed
 
