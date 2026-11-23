@@ -77,3 +77,29 @@ def test_switched_off_it_is_not_asked():
     verdicts = _run(pool, WITH, {"capabilities": COMPANION})
     assert CAPABILITIES not in jev.questions
     assert all(v.expert_name != CAPABILITIES for v in verdicts)
+
+
+def _default(key):
+    from stella_jev_agent.pool import jev_settings
+
+    return jev_settings().get(key)
+
+
+def test_both_default_reply_prompts_carry_the_list():
+    # The verdict tells the reply to name things from the list, so the reply
+    # has to see it; it comes through the configured guidelines (#192 review).
+    from stella_v2_agent.models.arbitration_result import ResponseDirective
+    from stella_v2_agent.prompts.response_prompt import build_response_system_prompt
+
+    for key in ("response_generator.conversation_guidelines", "companion.free_conversation_guidelines"):
+        prompt = build_response_system_prompt(
+            sm_context={"capabilities": COMPANION},
+            directive=ResponseDirective(),
+            conversation_history=[],
+            custom_guidelines=_default(key),
+        )
+        assert "- Memory quiz: Ten questions" in prompt and "- Go to sleep" in prompt, key
+        empty = build_response_system_prompt(
+            sm_context={}, directive=ResponseDirective(), conversation_history=[], custom_guidelines=_default(key),
+        )
+        assert "What you can do in this conversation" not in empty, key
