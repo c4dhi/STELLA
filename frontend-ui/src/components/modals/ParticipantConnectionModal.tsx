@@ -178,7 +178,7 @@ export default function ParticipantConnectionModal({
             </div>
           ) : connectionInfo ? (
             <>
-              <div className="shrink-0 flex items-start justify-between px-8 pt-8 mb-6">
+              <div className="shrink-0 flex items-start justify-between px-5 md:px-8 pt-5 md:pt-8 mb-6">
                 <div>
                   <h2 className={`text-2xl font-light mb-2 ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
                     Connection Information
@@ -230,7 +230,7 @@ export default function ParticipantConnectionModal({
                 </button>
               </div>
 
-              <div className="flex-1 min-h-0 overflow-y-auto px-8 pb-6">
+              <div className="flex-1 min-h-0 overflow-y-auto px-5 md:px-8 pb-6">
               {isWebParticipant ? (
                 /* Web Participant View - Show invitation link or revoked status */
                 <div className="space-y-6">
@@ -462,7 +462,7 @@ export default function ParticipantConnectionModal({
               )}
               </div>
 
-              <div className={`shrink-0 px-8 pb-8 pt-6 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200/60'}`}>
+              <div className={`shrink-0 px-5 md:px-8 pb-5 md:pb-8 pt-6 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200/60'}`}>
                 <div className="flex gap-3">
                   {/* Revoke button - only show when ACCEPTED and onRevoke is available */}
                   {currentStatus === 'ACCEPTED' && invitationId && onRevoke && (

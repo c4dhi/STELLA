@@ -626,11 +626,11 @@ export default function ProjectModal({
     }
   }
 
-  // Determine modal size. The wizard steps share one fixed height so stepping through
-  // them doesn't resize the box; the complete step has its own short, fixed content and
-  // sizes to it instead, same as every non-wizard step (#173) — which in turn gets its
-  // own height cap, since its width class has none built in (#146).
-  const isWizardSized = isPublicWizard && step !== 'complete'
+  // Determine modal size. WIZARD_MODAL_SIZE is only a height cap (#146), not a fixed
+  // height, so the complete step already sizes to its own short content without having
+  // to escape it — escaping would narrow the box and move its top edge on the last step,
+  // which #146 exists to prevent between steps.
+  const isWizardSized = isPublicWizard || step === 'complete'
   const modalSizeClass = isWizardSized ? WIZARD_MODAL_SIZE : 'max-w-lg max-h-[calc(100dvh-2rem)]'
   // Centering a dialog whose height follows its step would move its top edge,
   // and with it the header and step bar, as steps differ in height. The
