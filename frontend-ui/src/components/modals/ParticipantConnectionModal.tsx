@@ -146,7 +146,8 @@ export default function ParticipantConnectionModal({
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.95 }}
           className={`
-            backdrop-blur-xl rounded-[20px] w-full max-w-4xl p-8
+            backdrop-blur-xl rounded-[20px] w-full max-w-4xl overflow-hidden
+            flex flex-col max-h-[calc(100dvh-2rem)]
             ${isDark
               ? 'bg-zinc-800 border border-zinc-700 shadow-[0_8px_40px_rgba(0,0,0,0.5)]'
               : 'bg-white border border-neutral-200 shadow-[0_1px_40px_rgba(0,0,0,0.12)]'
@@ -155,11 +156,11 @@ export default function ParticipantConnectionModal({
           onClick={(e) => e.stopPropagation()}
         >
           {isLoading ? (
-            <div className="text-center py-8">
+            <div className="text-center p-8">
               <div className={`text-sm font-light ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>Loading connection info...</div>
             </div>
           ) : error ? (
-            <div className="text-center py-8">
+            <div className="text-center p-8">
               <div className={`text-sm font-light ${isDark ? 'text-red-400' : 'text-red-600'}`}>{error}</div>
               <button
                 onClick={onClose}
@@ -177,7 +178,7 @@ export default function ParticipantConnectionModal({
             </div>
           ) : connectionInfo ? (
             <>
-              <div className="flex items-start justify-between mb-6">
+              <div className="shrink-0 flex items-start justify-between px-8 pt-8 mb-6">
                 <div>
                   <h2 className={`text-2xl font-light mb-2 ${isDark ? 'text-zinc-100' : 'text-neutral-900'}`}>
                     Connection Information
@@ -229,6 +230,7 @@ export default function ParticipantConnectionModal({
                 </button>
               </div>
 
+              <div className="flex-1 min-h-0 overflow-y-auto px-8 pb-6">
               {isWebParticipant ? (
                 /* Web Participant View - Show invitation link or revoked status */
                 <div className="space-y-6">
@@ -458,8 +460,9 @@ export default function ParticipantConnectionModal({
                   </div>
                 </div>
               )}
+              </div>
 
-              <div className={`mt-6 pt-6 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200/60'}`}>
+              <div className={`shrink-0 px-8 pb-8 pt-6 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200/60'}`}>
                 <div className="flex gap-3">
                   {/* Revoke button - only show when ACCEPTED and onRevoke is available */}
                   {currentStatus === 'ACCEPTED' && invitationId && onRevoke && (
