@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-23
+
+Ships with STELLA 2.1.0. New: capabilities from the session, `{{capabilities}}`, settings from `agent.yaml`, and the wait for speech services. Breaking: `BaseTool.guidance` is removed, and `STTClient.connect()`/`TTSClient.connect()` take `wait_seconds`.
+
 ### Added
 
 - **What the agent can do, from the session** (#992). `StateMachineClient.get_capabilities()` returns the mode (`plan`, `activity` or `companion`) and what the agent can do in it, worked out by STELLA from the plan, the activities on offer and the connector tools the agent type calls in that mode. `get_full_state(include_capabilities=True)` brings the same list in the per-turn call, also when no plan is loaded, and keeps it in `StateMachineClient.capabilities`. The client is told the agent's id (`agent_id`), so the list is for this agent. Needs a STELLA with `GetCapabilities`.
