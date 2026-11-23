@@ -43,7 +43,7 @@ PLATFORM_ENV: List[PlatformEnvVar] = [
     PlatformEnvVar(
         "TRANSCRIPT_DEBOUNCE_MS",
         "Window (ms) for joining rapid successive final transcripts into one turn. 0 disables it.",
-        "0",
+        "300",
         "turn-taking",
     ),
     # ── barge-in ─────────────────────────────────────────────────────────

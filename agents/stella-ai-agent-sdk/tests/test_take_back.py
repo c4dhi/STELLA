@@ -23,6 +23,7 @@ from test_gate_carry_over import FakeRoom, drive, ev, queued, start_speaking
 def _pipe(decision=BargeInDecision.COMMIT, window_ms=6000):
     pipe = AudioPipeline(FakeRoom(), stt_client=None, tts_client=None, session_id="s")
     pipe._is_listening = True
+    pipe._debounce_window_ms = 0  # this file tests the gate, not the debounce
     pipe._barge_in_enabled = True
     pipe.enable_take_back(window_ms)
 

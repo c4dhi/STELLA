@@ -142,7 +142,7 @@ These environment variables belong to the SDK (see [Platform Contract](./platfor
 | `STELLA_TTS_PLAYBACK` | `auto` | `stream` plays audio as it is synthesised; `sentence` waits for each whole sentence. `auto` streams and switches to `sentence` once if synthesis cannot keep up. |
 | `STELLA_TTS_PREROLL_MS` | unset | A fixed head start of audio before each sentence plays. Unset lets the SDK measure and adapt it. |
 | `TTS_PLAYOUT_BUFFER_MS` | `1000` | How much audio the room may queue ahead of playout. |
-| `TRANSCRIPT_DEBOUNCE_MS` | `0` | Joins final transcripts that arrive within this window into one turn. |
+| `TRANSCRIPT_DEBOUNCE_MS` | `300` | Joins final transcripts that arrive within this window into one turn. `0` turns it off. |
 
 Each turn also reports its timings (end of speech, first token, first audio byte and so on) as analytics events, which the analytics dashboard shows. Add your own with `AgentOutput.analytics_event(...)`.
 
