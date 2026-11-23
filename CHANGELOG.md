@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-23
+
+Agents that know their limits, and STELLA on a phone. Grace now says plainly
+what she can't do in a session and offers what she can, in STELLA V2 and Jev.
+Agents declare the settings a configuration may change in `agent.yaml`, and the
+Pipeline Configurator draws them all the same way. The session page, Settings,
+the pipeline configurator and the Plan Builder work on a phone. The first
+session after a restart keeps its agent, a reopened session gives its
+invitations back, and no agent is left running after its session closed.
+Ships Agent SDK 0.11.0.
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy: a new nullable column on invitations. Invitations revoked before the upgrade are not restored
+- **Agent SDK 0.11.0 is on PyPI before this release reaches production.** Rebuild uploaded agents to pick up the new SDK (speech wait, settings from `agent.yaml`, `{{capabilities}}`); they keep working without a rebuild. `BaseTool.guidance` is gone, see the SDK changelog
+- **The deploy creates one new secret on its own** (`stella-internal-key`, for the message recorder). Nothing to set by hand; while backend and recorder roll, the dashboard may miss a minute of recorder logs
+- **The orphaned-pod check starts log-only** (`AGENT_RECONCILER_MODE=log`). Set it to `delete` once its log looks right
+- **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
+- **Saved Pipeline Configurations are re-checked once** when the agent types are seeded: a key the agent does not declare (such as `always_run`, `background_experts`, `fast_path` or `response_generator.system_prompt`, which nothing read) is dropped from it. A value that no longer fits its declaration (a model not in the list, a number stored as text, a number out of range) marks the configuration outdated, and it can't be deployed until the value is fixed and the configuration saved again. The five configurations on prod all pass. Agents built with the SDK now need PyYAML, which the SDK pulls in
+- **A configuration that overrides an expert's prompt** keeps exactly that prompt: if it has no `{{history_N}}` or `{{user_message}}`, add them, and an overridden `task_extraction` or `companion_router` prompt needs the tool instructions its default now includes. None of the five configurations on prod overrides these. SDK: `BaseTool.guidance` is removed; write a tool's usage instructions into the prompt that uses it
+- **STELLA Jev decides from the expert configuration now**, so a configuration that changed a Jev expert's prompt or verdict descriptions changes what Jev decides. The default `ask_threshold` drops from 0.45 to 0.3 to match (see Added); a configuration that set it keeps its value
+
 ### Added
 
 - **The Build tab remembers the last build.** Reopening an agent's Build tab used to show nothing unless a build was running at that exact moment. It now loads the last build's stored log, status and time straight away; a build still in progress streams live as before (#961)
@@ -31,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The deploy wizards (Deploy agent, public project setup) always show the Connectors step**, even with no connectors yet — before, someone with none never found out connectors exist. With none, it says so in one line, linking to Settings → Connectors (opens in a new tab, so the wizard's progress isn't lost). A required slot with nothing to fill it still disables Continue, pointing at the same link ([#891](https://github.com/c4dhi/STELLA/issues/891))
 - **The QR code in a participant's connection info sits beside the "joined via web browser"/revoked box instead of its own row**, so the window isn't as tall. On a narrow screen it stacks above that box instead of below. The invite dialog is unchanged, with the QR above the link ([#939](https://github.com/c4dhi/STELLA/issues/939))
 - **Windows now size to their content instead of keeping a tall fixed height.** The "Public Project Created!" step no longer leaves empty space below a short confirmation. The invite dialog and the participant connection window now scroll their content with the footer always visible, instead of growing past the screen on a short window. The multi-step wizards (new project, deploy agent) keep one fixed height across their steps on purpose, and the plan builder, pipeline configurator, and prompt composer stay full-size as large editors ([#940](https://github.com/c4dhi/STELLA/issues/940))
+- **Dependencies updated**, including sherpa-onnx 2.0 for speech recognition, and minor and patch updates for the backend, frontend, docs site and the speech and recorder services
+- **Pull requests that touch the backend run its full test suite** before they can be merged (#952)
 
 ### Fixed
 
@@ -66,14 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **The message recorder's monitoring endpoints need an internal key.** Anyone who could reach the backend could post log lines and connection status into the session dashboard, and an unknown log level made the request fail with an error. Now the recorder sends a shared internal key that the deploy keeps in the cluster (`INTERNAL_API_KEY`, created on its own), requests without it are refused, and only the known log levels are accepted ([#889](https://github.com/c4dhi/STELLA/issues/889))
-
-### Upgrade notes
-
-- **Back up the database before you upgrade.** This release applies one database migration on its own during the deploy: a new nullable column on invitations. Invitations revoked before the upgrade are not restored
-- **Redeploy running STELLA Jev agents** after the upgrade so they run the fixed image; a running agent keeps the image it started with
-- **Saved Pipeline Configurations are re-checked once** when the agent types are seeded: a key the agent does not declare (such as `always_run`, `background_experts`, `fast_path` or `response_generator.system_prompt`, which nothing read) is dropped from it. A value that no longer fits its declaration (a model not in the list, a number stored as text, a number out of range) marks the configuration outdated, and it can't be deployed until the value is fixed and the configuration saved again. The five configurations on prod all pass. Agents built with the SDK now need PyYAML, which the SDK pulls in
-- **A configuration that overrides an expert's prompt** keeps exactly that prompt: if it has no `{{history_N}}` or `{{user_message}}`, add them, and an overridden `task_extraction` or `companion_router` prompt needs the tool instructions its default now includes. None of the five configurations on prod overrides these. SDK: `BaseTool.guidance` is removed; write a tool's usage instructions into the prompt that uses it
-- **STELLA Jev decides from the expert configuration now**, so a configuration that changed a Jev expert's prompt or verdict descriptions changes what Jev decides. The default `ask_threshold` drops from 0.45 to 0.3 to match (see Added); a configuration that set it keeps its value
+- **An uploaded agent's build log, status and history are shown only to people who can see that agent**
 
 ## [2.0.1] - 2026-11-17
 
