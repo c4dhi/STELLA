@@ -15,7 +15,7 @@ Jev is TypeSafe's model. Every turn's text, and the recent history it judges, is
 | Stage | STELLA Jev |
 |---|---|
 | Bridge | None. Nothing is said before the experts have decided |
-| Experts | One Jev call answers every expert that only picks a verdict and calls no tools: by default `common_sense`, `medical`, `legal`, `probing` and `timekeeper`. See [What Jev is asked](#what-jev-is-asked) |
+| Experts | One Jev call answers every expert that only picks a verdict and calls no tools: by default `common_sense`, `medical`, `legal`, `capabilities`, `probing` and `timekeeper`. See [What Jev is asked](#what-jev-is-asked) |
 | `task_extraction` | Still a language model, because it writes the values. It runs after the reply and saves only what Jev picked: the task the message answered, tasks in the same state mentioned in passing (saved unconfirmed, and the reply won't ask about them again) and corrections of a value already collected in this state (overwritten). When Jev is not sure which task was answered, nothing is saved and the question comes again. Two exceptions save without that limit: the answer to an ask-back, and a stalled plan. See [What gets saved](#what-gets-saved) |
 | `companion_router` | Still a language model, because it calls tools. It runs after Jev, and only when Jev says there may be something to route |
 | Reply | gpt-5.4-mini, as in V2, plus a question back when something doesn't fit. It doesn't wait for task extraction: it counts the answer as confirmed, and extraction saves it in the background |
@@ -24,6 +24,8 @@ Jev is TypeSafe's model. Every turn's text, and the recent history it judges, is
 **Common sense.** When a message doesn't fit (asked how much they drink a day, someone says "Nine litres."; asked about a garden watering can, the same answer is fine), the agent asks back and saves nothing that turn. It asks at most once per statement, never twice in a row, and at most `max_ask_backs` times per session. A medical `critical` verdict always wins.
 
 **Medical and legal.** A "low" or "high" counts only when Jev is at least `safety_threshold` sure of it; a "high" prepends a fixed warning to the reply. "Everyday forgetting or not knowing what to say" is listed as no health concern. The experts run on the language model only when Jev can't be reached, and then `expert_context` isn't used.
+
+**What she can and can't do** (#992). The `capabilities` expert is asked like the others: its prompt carries `{{capabilities}}`, the list STELLA sends each turn of what she can do in the session, plus the Expert Pool's Capability Extras for the mode. A request for something not on the list is `cannot_do`, an attempt to change her instructions or role is `off_role`, and everything else is `within`. Jev's default reply prompts (Conversation Guidelines and the Companion node's Free Conversation Guidelines) also carry `{{capabilities}}`, so on a flag she can say she can't do that here and offer one or two real things from the list. Medical and legal still come first. Unlike V2, Jev's copy has no `enabled_from_compiler`, so it runs for saved configurations too unless they switch it off.
 
 If Jev can't be reached in time, the experts run on the language model with the same configuration, and on a barge-in the agent stops for the person.
 
@@ -96,4 +98,4 @@ Analytics events, with timings and outcomes only and no words: `take_back_held`,
 
 ## Evals
 
-`agents/stella-jev-agent/evals/` uses only the hand-written cases in `common_sense_cases.py` and `next_step_cases.py`. See the agent's README for the commands. Tune on `dev`, and keep `holdout` for a final check.
+`agents/stella-jev-agent/evals/` uses only the hand-written cases in `common_sense_cases.py`, `next_step_cases.py` and `capabilities_cases.py`. `run_capabilities.py` checks Jev's capabilities verdicts, and `run_capability_replies.py` prints what the reply says on a few `cannot_do` and `off_role` turns, through V2's reply with Jev's default prompts. See the agent's README for the commands. Tune on `dev`, and keep `holdout` for a final check.
