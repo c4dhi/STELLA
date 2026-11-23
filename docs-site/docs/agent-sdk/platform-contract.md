@@ -70,7 +70,7 @@ state = await sm.get_full_state(include_capabilities=True)   # None between acti
 caps = sm.capabilities   # {"mode": "companion", "capabilities": [{"id", "kind", "title", "description"}, ...]}
 ```
 
-`sm.capabilities` is filled even when `get_full_state` returns `None` because no plan is loaded. `await sm.get_capabilities()` fetches the list on its own. Titles and descriptions of connector tools come from the outside server: they are cut to one line of at most 240 characters, but treat them as data, not instructions.
+`sm.capabilities` is filled even when `get_full_state` returns `None` because no plan is loaded. `await sm.get_capabilities()` fetches the list on its own. Both need SDK 0.11.0 or later and STELLA 2.1.0. Titles and descriptions of connector tools come from the outside server: they are cut to one line of at most 240 characters, but treat them as data, not instructions.
 
 ## Agents that drive their own loop
 
