@@ -46,11 +46,11 @@ Choose **Export**. The wizard asks whether to include metrics and logs (not need
 
 ## The upgrade
 
-Fetch the release, check out its tag, for example `v2.0.1`, and install that release's Node packages:
+Fetch the release, check out its tag, for example `v2.1.0`, and install that release's Node packages:
 
 ```bash
 git fetch --tags
-git checkout v2.0.1
+git checkout v2.1.0
 npm ci
 ```
 
@@ -74,11 +74,25 @@ All pods should be `Running` and ready, and started just now (the `AGE` column):
 kubectl -n ai-agents get pods
 ```
 
-Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v2.0.1`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
+Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v2.1.0`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
 
 ## Manual steps per version
 
 Run the steps of every version you pass, oldest first. A version not listed here needs none.
+
+### 2.1.0
+
+The deploy applies two new database migrations on its own (a column on invitations, so a session that reopens can give back the invitations its automatic close revoked, and a new inbox message type for failed agent builds), so back up first as described above. It also creates one new secret on its own, `stella-internal-key`, which the message recorder uses for its monitoring calls; there is nothing to set by hand.
+
+After the upgrade:
+
+- **Restart every running STELLA Jev agent** from its session, so it runs the new image. An agent that is already running keeps the image it started with.
+- **Check for outdated Pipeline Configurations.** When the agent types are seeded, every saved configuration is checked against what its agent declares. A key the agent doesn't declare is dropped. A value that no longer fits (a model not in the list, a number out of range) marks the configuration outdated, and it can't be deployed until the value is fixed and the configuration saved again in the Pipeline Configurator.
+- **Rebuild uploaded agents to get Agent SDK 0.11.0** (the wait for speech services after a restart, settings read from `agent.yaml`, `{{capabilities}}`). They keep working without a rebuild. Agent SDK 0.11.0 is on PyPI before this release reaches production. `BaseTool.guidance` is gone, so an agent that set it puts that text in its prompts instead.
+- **The orphaned agent pod check starts log-only.** It logs what it would remove every 10 minutes. Once the log looks right, set `AGENT_RECONCILER_MODE=delete` in the deploy environment and redeploy to let it act (see [Environment variables](../architecture/environment-variables.md)).
+- **Check configurations that override an expert's prompt.** An expert now gets exactly its configured prompt, and nothing appends the conversation or tool instructions any more. An overridden prompt without `{{history_N}}` or `{{user_message}}` needs them added. An overridden `task_extraction` or `companion_router` prompt needs the tool instructions its new default includes. In the SDK, `BaseTool.guidance` is gone, so a tool's usage text belongs in the prompt that uses it.
+- **Check STELLA Jev configurations that changed an expert.** Jev now decides from the expert configuration, so a changed prompt or verdict description in a Jev expert changes what Jev decides. The default `ask_threshold` drops from 0.45 to 0.3; a configuration that set its own value keeps it.
+- **The capabilities expert is off in configurations saved before 2.1.0**, production Grace's included. Switch it on in the Pipeline Configurator's Expert Pool where you want it.
 
 ### 2.0.1
 

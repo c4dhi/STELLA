@@ -126,7 +126,7 @@ The fields are the ones `env.optional` uses: `type`, `label`, `description`, `de
 
 - **In the Configurator**, clicking a stage shows every setting declared for it, each drawn by its type: text as a prompt editor, numbers, choices and switches in a grid (one grid per `group`, `advanced` ones last), `key_value` as name and text rows, `string_list` as one item per line, an expert list as the experts the sidebar edits. A `verdict_directives` setting is edited with its expert in the sidebar.
 - **When a configuration is saved or deployed**, STELLA checks every value against its declaration and refuses, with a 400, a key the agent does not declare or a value that does not fit its type, range, length or options. A saved configuration that still holds a key the agent no longer declares has that key dropped on deploy and when its agent type changes, like a removed node.
-- **In the agent**, `AgentSettings` from the SDK reads the declarations and their defaults from `agent.yaml`, so a default is written once:
+- **In the agent**, `AgentSettings` from the SDK (0.11.0 and later) reads the declarations and their defaults from `agent.yaml`, so a default is written once:
 
 ```python
 from stella_agent_sdk import AgentSettings

@@ -325,6 +325,7 @@ STELLA builds your agent itself, from the package's own `Dockerfile`; you don't 
 
 1. Zip the package: `agent.yaml`, the `Dockerfile` and your code.
 2. Upload it in **Settings → Agent Library**. STELLA validates `agent.yaml`, builds the image and reads the SDK version installed in it.
+   The agent's **Build** tab shows the build's status and log, live while it runs and the last build's stored log afterwards, with a **Copy** button for the log. If a build fails, whoever started it (or the agent's owner) gets a notice on any page and an inbox message with the first line of the error and a link to the log.
 3. If **Review uploaded agents** is on (the default), a system admin approves it in **Settings → Agent Review**; until then nobody can deploy it, you included. Then share it with the projects that should use it.
 
 Resources (CPU and memory requests and limits) come from the `resources` block of `agent.yaml`. See [Agent validation](../deployment/agent-validation.md) for review, sharing, new versions and deleting.
