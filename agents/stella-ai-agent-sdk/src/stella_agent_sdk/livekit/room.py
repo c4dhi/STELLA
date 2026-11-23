@@ -507,6 +507,19 @@ class RoomManager:
         identity = packet.participant.identity if packet.participant else "unknown"
         if self._on_data_received:
             self._on_data_received(identity, packet.data)
+        else:
+            # Nothing is registered yet (room.connect() ran, but whatever
+            # constructs the real handler -- e.g. AudioPipeline, which only
+            # exists once STT/TTS have connected -- has not). A single-slot
+            # callback (see on_data_received below) means this message is
+            # gone for good, not just late (#205): logged so a future loss
+            # -- the frontend's stella.interaction_mode announce, or
+            # anything else sent this early -- shows up instead of staying
+            # silent.
+            logger.warning(
+                f"[DATA] message from {identity} dropped: no handler registered yet "
+                f"({len(packet.data)} bytes)"
+            )
 
     @property
     def queued_playout_ms(self) -> float:

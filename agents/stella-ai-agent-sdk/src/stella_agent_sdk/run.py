@@ -398,6 +398,17 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             agent_id=agent_id,
         )
 
+        # 5a. A deployment already locked to the text interface (#205) says so
+        # here, so the pipeline starts in "text" from its very first instant
+        # instead of relying solely on the frontend's post-join announcement
+        # (stella.interaction_mode): that announcement can be sent before this
+        # pipeline exists to receive it, and is then lost, not just late. The
+        # announcement itself is untouched and still drives a mid-session
+        # voice<->text switch.
+        initial_interaction_mode = agent._session_config.config.get("interaction_mode")
+        if initial_interaction_mode in ("voice", "text"):
+            audio_pipeline.set_interaction_mode(initial_interaction_mode)
+
         # 6. Inject audio pipeline and agent identity into agent
         agent._audio_pipeline = audio_pipeline
         # Screen events reach the agent from the start, also for an agent that
