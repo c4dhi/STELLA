@@ -9,6 +9,12 @@ platform's changelog lives [at the repository root](https://github.com/c4dhi/STE
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`TRANSCRIPT_DEBOUNCE_MS` defaults to 300 ms** (#137). That is what the built-in agents' `agent.yaml` declare, and STELLA deploys a manifest's defaults, so 300 ms is what has run since 2.0.0; the SDK's own fallback (0) only applied outside STELLA or for an agent that declares no default. Such an agent now joins finals within 300 ms too, which adds up to 300 ms before each reply. Set `TRANSCRIPT_DEBOUNCE_MS=0` to keep it off. `stella_agent_sdk.audio.pipeline.DEFAULT_TRANSCRIPT_DEBOUNCE_MS` holds the value, and `platform_env` shows the same.
+
 ## [0.10.1] - 2026-11-17
 
 Ships with STELLA 2.0.1. Fixes only.

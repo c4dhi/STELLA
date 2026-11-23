@@ -1,9 +1,11 @@
-"""The defaults an agent.yaml shows match what the code runs (#137, GitHub 866).
+"""The defaults an agent.yaml shows match the code's own fallbacks (#137, GitHub 866).
 
-Optional env vars aren't put into the pod when unset, so the code's own
-default is what runs; the manifest's ``default`` is only what the
-configurator and the docs show. These were 300 ms (debounce) and 3000 ms
-(expert timeout) while the code ran 0 and 15000.
+STELLA puts every optional default from agent.yaml into the pod on deploy,
+restart and wake (withEnvDefaults in src/agents/deploy-request.ts), so the
+manifest value is what runs. The code's fallback only applies outside STELLA,
+or for an agent that declares no default. The two disagreed (300 ms vs 0 for
+the transcript debounce, 3000 ms vs 15000 for the expert timeout); Felix kept
+what runs (23 Nov 2026), so the code now falls back to the same values.
 """
 from pathlib import Path
 
@@ -57,4 +59,10 @@ def test_expert_pool_runs_that_default_when_unset(monkeypatch):
 
     monkeypatch.delenv("EXPERT_TIMEOUT_MS", raising=False)
     pool = ExpertPool(object(), object(), compiler_version="test")
-    assert pool._timeout_ms == DEFAULT_EXPERT_TIMEOUT_MS == 15000
+    assert pool._timeout_ms == DEFAULT_EXPERT_TIMEOUT_MS == 3000
+
+
+def test_the_sdk_debounce_falls_back_to_what_the_manifests_run(monkeypatch):
+    from stella_agent_sdk.audio.pipeline import DEFAULT_TRANSCRIPT_DEBOUNCE_MS
+
+    assert SDK_DEFAULTS["TRANSCRIPT_DEBOUNCE_MS"] == str(DEFAULT_TRANSCRIPT_DEBOUNCE_MS) == "300"

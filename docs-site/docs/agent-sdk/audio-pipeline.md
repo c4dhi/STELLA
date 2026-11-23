@@ -82,7 +82,7 @@ When the gate opens, speech heard during the reply is dropped as stale (echo or 
 |----------|---------|--------|
 | `TTS_ENABLED` | `true` | `false` runs text-only. |
 | `INTERRUPT_MODE` | `none` | `none` is strict turn-taking. |
-| `TRANSCRIPT_DEBOUNCE_MS` | `0` | Joins final transcripts that arrive within this window into one turn. Off by default: both STT providers already wait for a pause before a final. |
+| `TRANSCRIPT_DEBOUNCE_MS` | `300` | Joins final transcripts that arrive within this window into one turn. `0` turns it off, which saves its length on every turn: both STT providers already wait for a pause before a final. |
 
 ## Barge-in
 

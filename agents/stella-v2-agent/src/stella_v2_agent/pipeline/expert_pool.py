@@ -13,7 +13,7 @@ already hearing the bridge.
 
 Target latency: ~300-500ms wall-clock (parallelized).
 
-Timeout per expert: configurable via EXPERT_TIMEOUT_MS env var (default: 15000ms).
+Timeout per expert: configurable via EXPERT_TIMEOUT_MS env var (default: 3000ms).
 On timeout: returns a failure verdict for that expert.
 """
 
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 #: Per-expert timeout when EXPERT_TIMEOUT_MS is unset. agent.yaml shows the
 #: same value (pinned by tests/test_manifest_defaults.py).
-DEFAULT_EXPERT_TIMEOUT_MS = 15000
+DEFAULT_EXPERT_TIMEOUT_MS = 3000
 
 
 class ExpertPool:

@@ -16,7 +16,7 @@ Environment Variables (set by session-management-server):
 Optional Environment Variables:
     LLM_CONFIG_PATH: Path to LLM configuration file
     STELLA_EXPERTS_DIR: Path to directory containing expert JSON configs
-    EXPERT_TIMEOUT_MS: Timeout per expert in milliseconds (default: 15000)
+    EXPERT_TIMEOUT_MS: Timeout per expert in milliseconds (default: 3000)
 """
 
 import asyncio

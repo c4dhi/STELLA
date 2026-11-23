@@ -89,7 +89,7 @@ configSchema:
       agentDefault: "true"
     - name: TRANSCRIPT_DEBOUNCE_MS
       description: "Debounce window (ms) for aggregating rapid successive final transcripts. 0 to disable."
-      default: "0"
+      default: "300"
       type: integer
       label: "Transcript debounce"
       group: Timing
@@ -107,7 +107,7 @@ configSchema:
       unsetLabel: "Built-in experts"
     - name: EXPERT_TIMEOUT_MS
       description: "Timeout per expert in milliseconds"
-      default: "15000"
+      default: "3000"
       type: integer
       label: "Expert timeout"
       group: Timing
