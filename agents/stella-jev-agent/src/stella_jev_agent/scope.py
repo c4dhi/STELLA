@@ -88,7 +88,6 @@ class ScopedTool(BaseTool):
     def __init__(self, tool: BaseTool, scope: Scope):
         self._tool = tool
         self._scope = scope
-        self.guidance = tool.guidance
 
     @property
     def name(self) -> str:

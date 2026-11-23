@@ -33,7 +33,6 @@ QUIET_MEDICAL = _answer(none=0.97, low=0.01, high=0.01, critical=0.01)
 CRITICAL_MEDICAL = _answer(none=0.01, low=0.01, high=0.08, critical=0.9)
 CRITICAL_LEGAL = _answer(none=0.01, low=0.01, high=0.08, critical=0.9)
 QUIET_LEGAL = _answer(none=0.99, low=0.0, high=0.0, critical=0.01)
-SPEECH = _answer(speech=0.99, artifact=0.01)
 
 
 class FakeJev:
@@ -45,6 +44,7 @@ class FakeJev:
 
     async def ask(self, state, questions, timeout_s=0):
         self.asked.append((state, set(questions)))
+        self.questions = questions
         if self.fail:
             raise JevUnavailable("down")
         return SimpleNamespace(answers=self.answers, latency_ms=100.0)
@@ -53,10 +53,10 @@ class FakeJev:
 class Pool(JevExpertPool):
     """Records the language-model experts instead of calling them."""
 
-    def __init__(self, jev, ask_back):
+    def __init__(self, jev, ask_back, settings=None):
         super().__init__(
             None, ExpertRegistry(experts_dir=str(_OWN_EXPERTS_DIR)),
-            compiler_version="1.0.0", jev=jev, ask_back=ask_back,
+            compiler_version="1.0.0", jev=jev, ask_back=ask_back, settings=settings,
         )
         self.language_model_calls = []
 
@@ -68,10 +68,9 @@ class Pool(JevExpertPool):
 NAMES = [COMMON, "medical", "legal", "task_extraction", "companion_router"]
 
 
-def _answers(common=FITS_ANSWER, medical=QUIET_MEDICAL, has_answer=0.5, activity=0.99, artifact=SPEECH, legal=QUIET_LEGAL) -> Dict:
+def _answers(common=FITS_ANSWER, medical=QUIET_MEDICAL, has_answer=0.5, activity=0.99, legal=QUIET_LEGAL) -> Dict:
     return {
         COMMON: common,
-        "recogniser_artifact": artifact,
         "medical": medical,
         "legal": legal,
         "has_answer": _answer(no=1 - has_answer, yes=has_answer),
@@ -104,12 +103,33 @@ def test_a_misfit_asks_back_and_saves_nothing():
     assert pool.language_model_calls == []
 
 
-def test_a_caption_asks_back_even_when_the_first_question_passes_it():
-    ask_back = AskBack()
-    pool = Pool(FakeJev(_answers(artifact=_answer(speech=0.1, artifact=0.9))), ask_back)
+def test_jev_is_asked_each_expert_as_its_configuration_says():
+    jev = FakeJev(_answers(medical=_answer(none=0.01, low=0.01, high=0.97, critical=0.01)))
+    pool = Pool(jev, AskBack())
+    medical = pool._registry.get("medical")
+    medical.system_prompt = "Edited in the configurator. {{history_2}} Latest: {{user_message}}"
 
-    assert _verdict(_run(pool), COMMON).verdict == DOESNT_FIT
-    assert ask_back.now is True
+    verdicts = asyncio.run(pool.run(NAMES, "Mir ist schwindlig.", [{"role": "assistant", "content": "Wie geht's?"}], {}))
+
+    question = jev.questions["medical"]
+    assert "Edited in the configurator." in question.instructions
+    assert "Mir ist schwindlig." in question.instructions and "Wie geht's?" in question.instructions
+    assert "Respond with compact JSON" not in question.instructions
+    assert dict(question.criteria) == medical.verdict_descriptions()
+    # The reply is told what the configuration says the verdict means, nothing else.
+    assert _verdict(verdicts, "medical").recommendation == medical.verdict_descriptions()["high"]
+    # Extraction and the router write or call tools, so a language model answers them.
+    assert not {"task_extraction", "companion_router"} & set(jev.questions)
+
+
+def test_a_disabled_or_tool_calling_expert_is_not_asked_of_jev():
+    jev = FakeJev(_answers())
+    pool = Pool(jev, AskBack())
+    pool._registry.get("legal").enabled = False
+
+    asyncio.run(pool.run(NAMES, "x", [], {}))
+
+    assert "legal" not in jev.questions and COMMON in jev.questions
 
 
 def test_an_emergency_is_never_asked_back():
@@ -277,7 +297,7 @@ def test_jev_reads_the_turn_and_the_task():
     assert state["latest_message"] == "Neun Liter."
     assert state["conversation"] == ["assistant: Wie viel?"]
     assert state["current_task"] == "Trinken | Still to collect: Trinkmenge"
-    assert {"common_sense", "recogniser_artifact", "has_answer", "activity_intent"} <= questions
+    assert {"common_sense", "has_answer", "activity_intent"} <= questions
 
 
 def test_current_task_is_empty_without_a_plan():
@@ -479,3 +499,52 @@ def test_jev_reads_the_configured_setting():
     pool.apply_config({"expert_context": ""})
     _run(pool)
     assert "setting" not in jev.asked[-1][0]
+
+
+def test_the_pool_takes_its_defaults_from_agent_yaml_and_resets_between_configurations(tmp_path):
+    from stella_agent_sdk.settings import AgentSettings
+    manifest = tmp_path / "agent.yaml"
+    manifest.write_text(
+        "pipelineSchema:\n  nodes:\n    - id: expert_pool\n      slots:\n"
+        + "".join(
+            f"        - {{ id: {name}, type: number, default: {value} }}\n"
+            for name, value in [("ask_threshold", 0.3), ("skip_threshold", 0.9), ("forecast_threshold", 0.5),
+                                ("also_threshold", 0.95), ("safety_threshold", 0.75), ("max_ask_backs", 1),
+                                ("jev_timeout_ms", 900)]
+        )
+        + "        - { id: expert_context, type: text }\n"
+    )
+    jev = FakeJev(_answers())
+    jev.timeout_s = 1.5
+    ask_back = AskBack()
+    pool = Pool(jev, ask_back, settings=AgentSettings.from_manifest(manifest))
+
+    assert (pool.ask_threshold, pool.safety_threshold, pool.expert_context) == (0.3, 0.75, "")
+    # Left unset, the timeout and ask-back limit keep their own objects' defaults.
+    assert (jev.timeout_s, ask_back.max_per_session) == (1.5, 3)
+
+    pool.apply_config({"safety_threshold": 0.5, "jev_timeout_ms": 2000})
+    assert (pool.safety_threshold, jev.timeout_s) == (0.5, 2.0)
+    pool.apply_config({})
+    assert pool.safety_threshold == 0.75
+
+
+def test_jev_reads_as_much_conversation_as_the_prompts_it_answers_for():
+    # The prompt says what an expert sees, whether a language model or Jev answers it.
+    pool = Pool(FakeJev(), AskBack())
+    assert pool._history_turns(["common_sense", "medical"]) == 12  # {{history_12}}, {{history_4}}
+    assert pool._history_turns(["medical"]) == 4
+    assert pool._history_turns([]) == 1  # the last message, for Jev's own questions
+
+
+def test_without_any_history_placeholder_jev_reads_only_the_last_message():
+    # [-0:] would be the whole conversation (review of PR 997).
+    jev = FakeJev(_answers())
+    pool = Pool(jev, AskBack())
+    for name in NAMES:
+        config = pool._registry.get(name)
+        if config:
+            config.system_prompt = "Latest: {{user_message}}"
+    history = [{"role": "user", "content": f"turn {i}"} for i in range(20)]
+    asyncio.run(pool.run(NAMES, "said", history, {}))
+    assert jev.asked[0][0]["conversation"] == ["user: turn 19"]

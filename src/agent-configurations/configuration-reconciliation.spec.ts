@@ -30,7 +30,7 @@ function createPrisma(version: string, pipelineSchema: unknown, rows: ConfigRow[
 }
 
 const schema = {
-  nodes: [{ id: 'planner' }],
+  nodes: [{ id: 'planner', slots: [{ id: 'x', type: 'number' }] }],
   thresholds: [{ id: 'temperature', min: 0, max: 1 }],
 };
 const NOW = new Date('2026-06-02T00:00:00.000Z');
