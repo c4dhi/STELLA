@@ -481,13 +481,6 @@ export class PeerTransport implements Transport {
       room.on(RoomEvent.ParticipantConnected, (participant: RemoteParticipant) => {
         console.log(`👤 [JOIN] Participant connected: ${participant.identity} (${participant.name})`)
         this.onParticipantJoined(participant.identity, participant.name)
-        // This connection is always voice: there is no face/text concept here.
-        // An agent that joins (or restarts) can equally have started in text,
-        // if a text-locked invitation set that at spawn (#205) -- tell it
-        // voice is on here, once it has had a moment to start listening.
-        if (participant.identity.startsWith('agent-')) {
-          setTimeout(() => this.sendClientEvent('stella.interaction_mode', { mode: 'voice' }), 1000)
-        }
       })
 
       room.on(RoomEvent.ParticipantDisconnected, (participant: RemoteParticipant) => {
@@ -530,11 +523,6 @@ export class PeerTransport implements Transport {
       for (const participant of room.remoteParticipants.values()) {
         console.log(`👤 [EXISTING] Participant already in room: ${participant.identity} (${participant.name})`)
         this.onParticipantJoined(participant.identity, participant.name, true /* isExisting */)
-        // An agent deployed before we connected (#205) never fires
-        // ParticipantConnected for us; tell it voice is on here too.
-        if (participant.identity.startsWith('agent-')) {
-          setTimeout(() => this.sendClientEvent('stella.interaction_mode', { mode: 'voice' }), 1000)
-        }
       }
 
       // Publish microphone if available
