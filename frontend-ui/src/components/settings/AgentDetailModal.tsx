@@ -15,6 +15,17 @@ const TAB_LABELS: Record<'build' | 'overview' | 'config', string> = {
   config: 'Config',
 }
 
+/**
+ * What the Build tab should show as its (non-live) log on opening (#961): the
+ * last build's stored output when nothing is currently running, so a window
+ * reopened later still has something to read or copy. A running build
+ * streams its own log live instead — nothing to seed it with here.
+ */
+export function storedBuildLog(status: AgentBuildStatus | null, isBuilding: boolean): string[] {
+  if (isBuilding || !status?.buildOutput) return []
+  return [status.buildOutput]
+}
+
 interface AgentDetailModalProps {
   isOpen: boolean
   agent: AgentType | CustomAgentType | null
@@ -40,6 +51,7 @@ export default function AgentDetailModal({
   const [buildStatus, setBuildStatus] = useState<AgentBuildStatus | null>(null)
   const [buildLogs, setBuildLogs] = useState<string[]>([])
   const [isBuilding, setIsBuilding] = useState(false)
+  const [logsCopied, setLogsCopied] = useState(false)
 
   const isCustomAgent = agent && !agent.isBuiltIn
   const customAgent = agent as CustomAgentType
@@ -59,7 +71,9 @@ export default function AgentDetailModal({
       setBuildStatus(status)
       // A build already running (started by the upload itself, or queued
       // behind another) streams its log live, the same as one triggered here.
-      setIsBuilding(status?.status === 'pending' || status?.status === 'building')
+      const building = status?.status === 'pending' || status?.status === 'building'
+      setIsBuilding(building)
+      setBuildLogs(storedBuildLog(status, building))
     } catch (err) {
       console.error('Failed to load build status:', err)
     }
@@ -108,6 +122,17 @@ export default function AgentDetailModal({
         message: err instanceof Error ? err.message : 'Failed to start build',
         type: 'error',
       })
+    }
+  }
+
+  const handleCopyLogs = async () => {
+    try {
+      await navigator.clipboard.writeText(buildLogs.join('\n'))
+      setLogsCopied(true)
+      addToast({ message: 'Copied', type: 'success' })
+      setTimeout(() => setLogsCopied(false), 2000)
+    } catch (err) {
+      addToast({ message: 'Failed to copy', type: 'error' })
     }
   }
 
@@ -440,6 +465,34 @@ export default function AgentDetailModal({
                         </pre>
                       </div>
                     )}
+                    <button
+                      onClick={handleCopyLogs}
+                      disabled={buildLogs.length === 0}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                        logsCopied
+                          ? 'bg-green-500/10 text-green-500'
+                          : isDark
+                            ? 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
+                            : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                      }`}
+                    >
+                      {logsCopied ? (
+                        <>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M20 6L9 17l-5-5" />
+                          </svg>
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                          </svg>
+                          Copy log
+                        </>
+                      )}
+                    </button>
 
                     {/* Rebuild: the first build already started on upload, so a manual
                         click here is always a rebuild. */}

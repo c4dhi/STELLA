@@ -292,7 +292,9 @@ class BaseAgent(ABC):
         ``await self.plan_runtime.start(plan)``."""
         session_id = self._session_id or ""
         if self._plan_runtime is None or self._plan_runtime.session_id != session_id:
-            self._plan_runtime = PlanRuntime(session_id, address=self.state_machine_address)
+            self._plan_runtime = PlanRuntime(
+                session_id, address=self.state_machine_address, agent_id=self._agent_id
+            )
         return self._plan_runtime
 
     @property

@@ -44,6 +44,7 @@ function setup(opts: { session: SessionRow | null; finalizeCount?: number }) {
       }),
     },
     invitation: { updateMany: jest.fn(async () => ({ count: 2 })) },
+    $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
     participant: { updateMany: jest.fn(async () => ({ count: 1 })) },
     message: { create: jest.fn(async () => ({ id: 'm1' })) },
   };
@@ -105,11 +106,15 @@ describe('SessionsService.close (lifecycle)', () => {
     // Tears down the LiveKit room so any lingering participant is disconnected (#198).
     expect(livekit.deleteRoom).toHaveBeenCalledWith('room-1');
 
-    // Revokes pending/accepted invitations and marks participants left.
-    expect(prisma.invitation.updateMany).toHaveBeenCalledWith({
-      where: { sessionId: 's1', status: { in: ['PENDING', 'ACCEPTED'] } },
-      data: { status: 'REVOKED' },
-    });
+    // Revokes pending/accepted invitations and marks participants left. A
+    // manual close (the default) notes no earlier status, so nothing comes back
+    // on reopen (#170, covered in sessions-invitation-restore.spec.ts).
+    for (const before of ['PENDING', 'ACCEPTED']) {
+      expect(prisma.invitation.updateMany).toHaveBeenCalledWith({
+        where: { sessionId: 's1', status: before },
+        data: { status: 'REVOKED', statusBeforeAutoRevoke: null },
+      });
+    }
     expect(prisma.participant.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { sessionId: 's1', leftAt: null } }),
     );

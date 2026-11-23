@@ -87,19 +87,9 @@ tool.to_anthropic_schema()
 # {"name": "get_weather", "description": ..., "input_schema": {...}}
 ```
 
-### Guidance
+### Usage instructions
 
-`BaseTool.guidance` is a class attribute (empty by default) for how to use the tool beyond what its schema says. When you hand a model a set of tools, add the guidance of exactly those tools to the prompt, each distinct text once. That way the instructions travel with the tool and never reach a model that can't call it:
-
-```python
-from typing import List
-
-from stella_agent_sdk import BaseTool
-
-
-def tool_guidance(tools: List[BaseTool]) -> str:
-    return "\n\n".join(dict.fromkeys(t.guidance for t in tools if t.guidance))
-```
+A tool's schema says what it takes. How and when a model should use it belongs in the prompt of the model that gets the tool, written out there, not appended by code. The prompt is then the whole of what the model is told: it can be read and edited in the Configurator, and an optimizer that changes the prompt sees everything that shapes the answer.
 
 ### `ToolResult`
 
@@ -330,7 +320,7 @@ class PlanAgent(BaseAgent):
             self.registry.register(GetWeatherTool())    # plus your own
 ```
 
-These tools are the only way the conversation advances: nothing is completed implicitly. Their usage contract is `STATE_MACHINE_TOOL_GUIDANCE`, which is also each write tool's `guidance` (the three read tools have none). Append it to the prompt of any model that gets these tools; don't write your own version:
+These tools are the only way the conversation advances: nothing is completed implicitly. Their usage contract is `STATE_MACHINE_TOOL_GUIDANCE`. Start the prompt of any model that gets these tools from it: STELLA V2's and Jev's `task_extraction` default prompts include it word for word (a test pins that), and an agent that builds its prompt in code adds it there:
 
 ```python
 from stella_agent_sdk.tools.state_machine import STATE_MACHINE_TOOL_GUIDANCE, create_state_machine_tools

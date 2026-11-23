@@ -17,6 +17,6 @@ import { McpClientService } from './mcp-client.service.js';
   imports: [PrismaModule, EnvVarTemplatesModule],
   controllers: [ConnectorsController, ConnectorsGrpcController],
   providers: [McpClientService, ConnectorAuditService, ConnectorsService, ConnectorGatewayService],
-  exports: [ConnectorsService],
+  exports: [ConnectorsService, ConnectorGatewayService],
 })
 export class ConnectorsModule {}

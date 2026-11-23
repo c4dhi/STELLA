@@ -47,6 +47,9 @@ const StellaFace: React.FC<StellaFaceProps> = ({
   const faceState = useStore((s) => s.faceState);
   // The agent holds her awake while it is in the middle of something.
   const sleepAllowed = useStore((s) => s.faceSleepAllowed);
+  // A [sleep] that arrived while this face was not on screen (#149).
+  const sleepPending = useStore((s) => s.faceSleepPending);
+  const clearSleepPending = useStore((s) => s.clearFaceSleepPending);
   const sleepCommandSeq =
     faceState && resolveState(faceState.tag) === 'sleep' ? faceState.seq : 0;
   const expression = useMemo(() => resolveExpression(cueExpression), [cueExpression]);
@@ -84,6 +87,8 @@ const StellaFace: React.FC<StellaFaceProps> = ({
     sleepAfterMs: sleep?.afterMs,
     force: sleep?.force,
     sleepCommandSeq,
+    sleepPending,
+    onSleepHandled: clearSleepPending,
     sleepAllowed
   });
 

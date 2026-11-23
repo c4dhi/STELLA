@@ -93,7 +93,7 @@ def test_persona_version_ships_alongside_the_base_version():
 
     assert COMPILER_VERSION in available_versions()
     assert PersonaAwarePlaceholderCompiler.VERSION in available_versions()
-    assert latest_version() == PersonaAwarePlaceholderCompiler.VERSION
+    assert latest_version() == "1.2.0"  # {{capabilities}}, see test_capabilities_placeholder.py
     assert get_compiler(COMPILER_VERSION) is PlaceholderPromptCompiler
     assert not PlaceholderPromptCompiler.RESOLVES_PERSONA
     assert PersonaAwarePlaceholderCompiler.RESOLVES_PERSONA
@@ -154,7 +154,9 @@ def test_palette_specs_match_the_resolver_registry():
     # actually resolves, minus the parametric history_N (which has no plain resolver).
     spec_names = {s["name"] for s in palette()}
     non_parametric = {s["name"] for s in palette() if not s["parametric"]}
-    assert non_parametric == set(PLACEHOLDER_REGISTRY)
+    from stella_agent_sdk.prompts.placeholder_compiler import CAPABILITY_PLACEHOLDERS
+
+    assert non_parametric == set(PLACEHOLDER_REGISTRY) | set(CAPABILITY_PLACEHOLDERS)
     assert "history" in spec_names  # parametric {{history_N}}
     # palette() returns copies (callers can't mutate the source specs)
     palette()[0]["label"] = "mutated"
@@ -300,3 +302,18 @@ def test_speech_safe_forwarded_through_compile_entry_point():
         speech_safe=True,
     )
     assert out == "raw text"
+
+
+def test_history_turns_is_the_longest_history_a_prompt_reads():
+    from stella_agent_sdk.prompts import history_turns
+
+    assert history_turns("{{history_4}} then {{history_12}}") == 12
+    assert history_turns("no conversation") == 0
+    assert history_turns("") == 0
+
+
+def test_last_goal_attempt_resolves_from_the_context():
+    from stella_agent_sdk.prompts import compile as compile_prompt
+
+    assert compile_prompt("A{{last_goal_attempt}}B", "1.0.0", sm_context={"last_goal_attempt": "x"}) == "AxB"
+    assert compile_prompt("A{{last_goal_attempt}}B", "1.0.0", sm_context={}) == "AB"

@@ -116,6 +116,7 @@ from stella_agent_sdk.plan import (
     # Migration utilities
     normalize_plan,
 )
+from stella_agent_sdk.settings import AgentSettings, SettingDeclaration
 from stella_agent_sdk.tools import (
     BaseTool,
     ToolResult,
@@ -130,6 +131,9 @@ __all__ = [
     "__version__",
     # Session config (AGENT_CONFIG, typed)
     "SessionConfig",
+    # Settings agent.yaml declares, with their defaults (#996)
+    "AgentSettings",
+    "SettingDeclaration",
     "PersonaConfig",
     "ActivityConfig",
     # Participants

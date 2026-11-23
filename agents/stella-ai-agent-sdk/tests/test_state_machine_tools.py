@@ -169,18 +169,17 @@ async def test_a_task_that_was_never_pending_still_fails():
     assert "invalid task_id 'made-up'" in result.error
 
 
-def test_mutating_state_machine_tools_carry_their_guidance():
+def test_the_guidance_explains_every_mutating_state_machine_tool():
+    # A prompt that uses these tools carries this text itself; no tool appends it.
     from stella_agent_sdk.tools.state_machine import (
         STATE_MACHINE_TOOL_GUIDANCE,
         create_state_machine_tools,
     )
 
-    guided = {t.name for t in create_state_machine_tools(FakeClient()) if t.guidance}
-    assert guided == {"complete_task", "skip_task", "skip_state", "set_deliverable", "batch_update"}
-    assert all(
-        t.guidance == STATE_MACHINE_TOOL_GUIDANCE
-        for t in create_state_machine_tools(FakeClient()) if t.guidance
-    )
+    tools = create_state_machine_tools(FakeClient())
+    assert not any(hasattr(t, "guidance") for t in tools)
+    for name in ("complete_task", "skip_task", "skip_state", "set_deliverable", "batch_update"):
+        assert name in STATE_MACHINE_TOOL_GUIDANCE
 
 
 # ---------------------------------------------------------------------------

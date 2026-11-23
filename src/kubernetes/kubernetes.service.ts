@@ -299,6 +299,17 @@ export class KubernetesService {
     }
   }
 
+  /** Every agent pod in the namespace, by its `app=stella-ai-agent` label (#188). */
+  async listAgentPods(): Promise<{ name: string; agentId: string }[]> {
+    const response: any = await this.k8sApi.listNamespacedPod({
+      namespace: this.namespace,
+      labelSelector: 'app=stella-ai-agent',
+    });
+    return (response?.items ?? [])
+      .map((pod: any) => ({ name: pod.metadata?.name as string, agentId: pod.metadata?.labels?.agentId as string }))
+      .filter((pod: { name?: string; agentId?: string }) => !!pod.name && !!pod.agentId);
+  }
+
   async deletePod(podName: string): Promise<void> {
     try {
       await this.k8sApi.deleteNamespacedPod({

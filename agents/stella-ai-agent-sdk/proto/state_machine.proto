@@ -48,6 +48,10 @@ service StateMachineService {
 
   // Get full state machine state (for frontend updates)
   rpc GetFullState(GetFullStateRequest) returns (GetFullStateResponse);
+
+  // What the agent can do for the person right now, from what the session has
+  // (#992). GetFullState returns the same list with include_capabilities.
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
 }
 
 // ============================================================================
@@ -309,6 +313,12 @@ message GetCollectedDeliverablesResponse {
 
 message GetFullStateRequest {
   string session_id = 1;
+  // Also return what the agent can do (capabilities), worked out for agent_id,
+  // or for the session's newest live agent when agent_id is empty. Filled even
+  // when success is false because no plan is loaded (a companion between
+  // activities).
+  bool include_capabilities = 2;
+  string agent_id = 3;
 }
 
 message FullStateDeliverable {
@@ -358,4 +368,33 @@ message GetFullStateResponse {
   int32 turns_without_progress = 8;
   repeated FullStateState states = 9;
   map<string, string> collected_deliverables = 10;  // key -> JSON value
+  SessionCapabilities capabilities = 11;  // only with include_capabilities
+}
+
+// ============================================================================
+// GET CAPABILITIES (#992)
+// ============================================================================
+
+message GetCapabilitiesRequest {
+  string session_id = 1;
+  string agent_id = 2;  // empty: the session's newest live agent
+}
+
+message Capability {
+  // follow_plan, leave_activity, go_to_sleep, activity.<id>, <handle>.<tool>
+  string id = 1;
+  string kind = 2;  // "plan", "activity", "action", "tool"
+  string title = 3;
+  string description = 4;
+}
+
+message SessionCapabilities {
+  string mode = 1;  // "plan", "activity", "companion"
+  repeated Capability capabilities = 2;
+}
+
+message GetCapabilitiesResponse {
+  bool success = 1;
+  string error = 2;
+  SessionCapabilities capabilities = 3;
 }
