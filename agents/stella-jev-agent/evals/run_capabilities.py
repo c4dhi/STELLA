@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Jev's capabilities question on the hand-written cases (#992).
+"""Run Jev on the capabilities expert's hand-written cases (#992).
 
 Asked together with every other question of the ordinary turn, as the pool sends
 it, so the result also shows that bundling it costs the others nothing.
@@ -21,10 +21,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from typesafe_sdk import AsyncTypeSafeClient  # noqa: E402
 
 from capabilities_cases import CASES  # noqa: E402
-from stella_jev_agent.pool import JEV_EXPERTS  # noqa: E402
-from stella_jev_agent.questions import RECOGNISER_ARTIFACT, turn_state  # noqa: E402
+from stella_v2_agent.experts.registry import ExpertRegistry  # noqa: E402
+from stella_jev_agent.agent import _OWN_EXPERTS_DIR  # noqa: E402
+from stella_jev_agent.ask_back import AskBack  # noqa: E402
+from stella_jev_agent.jev import JevClient  # noqa: E402
+from stella_jev_agent.pool import JevExpertPool  # noqa: E402
+from stella_jev_agent.questions import turn_state  # noqa: E402
 
-QUESTIONS = {**JEV_EXPERTS, "recogniser_artifact": RECOGNISER_ARTIFACT}
+# Every expert Jev answers, asked as the pipeline asks them: from their default
+# configuration, compiled with 1.2.0 so {{capabilities}} carries STELLA's list.
+POOL = JevExpertPool(
+    None, ExpertRegistry(experts_dir=str(_OWN_EXPERTS_DIR)), compiler_version="1.2.0",
+    jev=JevClient(), ask_back=AskBack(),
+)
+NAMES = POOL._jev_experts(POOL._registry.get_enabled_names())
+
+
+def questions_for(c):
+    return POOL.expert_questions(NAMES, c["said"], c["history"], {"capabilities": c["capabilities"]})
 
 
 async def main():
@@ -35,13 +49,13 @@ async def main():
 
     gate = asyncio.Semaphore(4)
     async with AsyncTypeSafeClient(model="jev-latest", timeout=20.0) as client:
-        print(f"model: {client._config.default_model}  questions: {len(QUESTIONS)}")
+        print(f"model: {client._config.default_model}  questions: {len(NAMES)}")
 
         async def ask(c):
             async with gate:
                 started = time.monotonic()
-                state = turn_state(c["said"], c["history"], c["task"], capabilities=c["capabilities"])
-                response = await client.system_one(state, QUESTIONS)
+                state = turn_state(c["said"], c["history"], c["task"], POOL._history_turns(NAMES))
+                response = await client.system_one(state, questions_for(c))
                 return c, response.answers, (time.monotonic() - started) * 1000
 
         results = await asyncio.gather(*(ask(c) for c in CASES for _ in range(args.repeat)))

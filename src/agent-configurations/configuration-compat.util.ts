@@ -1,4 +1,9 @@
 import { createHash } from 'crypto';
+import {
+  checkConfigSettingValue,
+  configSettingsOf,
+  type ConfigSetting,
+} from '../agent-package/config-settings.js';
 
 /**
  * Pure compatibility helpers for AgentConfiguration overrides against an
@@ -17,7 +22,10 @@ export type ConfigOverrides = Record<string, unknown>;
 /**
  * Validate an override payload against a pipelineSchema. Throws an Error whose
  * message explains the first incompatibility found:
- *  - a node override referencing an unknown node id, or
+ *  - a node override referencing an unknown node id,
+ *  - a node value that is not a declared setting (#996): `nodes.n.x` must be
+ *    declared as setting `n.x`, as a pipeline slot or in `settings:`,
+ *  - a setting value that does not fit its declaration (type, range, options),
  *  - a threshold override that is unknown or outside its declared min/max range.
  *
  * Callers map the thrown Error to the appropriate transport (HTTP 400 in the
@@ -40,9 +48,23 @@ export function validateConfigurationAgainstSchema(
   const configNodes = config.nodes as Record<string, unknown> | undefined;
   if (configNodes && nodes) {
     const knownNodeIds = new Set(nodes.map((n) => n.id as string));
-    for (const nodeId of Object.keys(configNodes)) {
+    const settings = settingsByKey(pipelineSchema);
+    for (const [nodeId, values] of Object.entries(configNodes)) {
       if (!knownNodeIds.has(nodeId)) {
         throw new Error(`Unknown node ID in configuration: ${nodeId}`);
+      }
+      if (values === null || values === undefined) continue;
+      if (typeof values !== 'object' || Array.isArray(values)) {
+        throw new Error(`Node ${nodeId} in configuration must be an object of settings`);
+      }
+      for (const [name, value] of Object.entries(values as Record<string, unknown>)) {
+        const key = `${nodeId}.${name}`;
+        const setting = settings.get(key);
+        if (!setting) {
+          throw new Error(`Unknown setting in configuration: ${key} (the agent does not declare it)`);
+        }
+        const problem = checkConfigSettingValue(setting, value);
+        if (problem) throw new Error(`Setting ${key} ${problem}`);
       }
     }
   }
@@ -77,8 +99,8 @@ export function validateConfigurationAgainstSchema(
 }
 
 /**
- * Conservatively prune overrides that reference nodes/thresholds which no longer
- * exist in the schema. This is the only auto-mutation the reconciler performs:
+ * Conservatively prune overrides that reference nodes, settings or thresholds
+ * which no longer exist in the schema (or, for settings, never were declared). This is the only auto-mutation the reconciler performs:
  * it drops dangling references (a node/threshold the new schema removed) but
  * never clamps or rewrites values the user explicitly set. Out-of-range values
  * are left intact so re-validation flags them as OUTDATED for user review.
@@ -104,10 +126,25 @@ export function pruneRemovedOverrides(
   const configNodes = config.nodes as Record<string, unknown> | undefined;
   if (configNodes && nodes) {
     const knownNodeIds = new Set(nodes.map((n) => n.id as string));
+    const settings = settingsByKey(pipelineSchema);
     const kept: Record<string, unknown> = {};
     for (const [nodeId, value] of Object.entries(configNodes)) {
-      if (knownNodeIds.has(nodeId)) kept[nodeId] = value;
-      else prunedKeys.push(`nodes.${nodeId}`);
+      if (!knownNodeIds.has(nodeId)) {
+        prunedKeys.push(`nodes.${nodeId}`);
+        continue;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        kept[nodeId] = value;
+        continue;
+      }
+      // A setting the agent no longer declares, or never did, is a dangling
+      // reference like a removed node: dropped, never rewritten.
+      const node: Record<string, unknown> = {};
+      for (const [name, v] of Object.entries(value as Record<string, unknown>)) {
+        if (settings.has(`${nodeId}.${name}`)) node[name] = v;
+        else prunedKeys.push(`nodes.${nodeId}.${name}`);
+      }
+      kept[nodeId] = node;
     }
     result.nodes = kept;
   }
@@ -242,3 +279,11 @@ function canonicalJsonStringify(value: unknown): string {
     .map((k) => `${JSON.stringify(k)}:${canonicalJsonStringify(obj[k])}`)
     .join(',')}}`;
 }
+
+/** The schema's declared settings, by `<node>.<name>` key. */
+function settingsByKey(pipelineSchema: PipelineSchema): Map<string, ConfigSetting> {
+  return new Map(
+    configSettingsOf(pipelineSchema as Record<string, unknown> | null).map((s) => [s.key, s]),
+  );
+}
+

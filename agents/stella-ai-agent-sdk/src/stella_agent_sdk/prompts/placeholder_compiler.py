@@ -254,6 +254,14 @@ def _resolve_turns_without_progress(ctx: Dict[str, Any]) -> str:
     return f"TURNS WITHOUT PROGRESS: {turns}"
 
 
+def _resolve_last_goal_attempt(ctx: Dict[str, Any]) -> str:
+    """The expert's last attempt to close or skip the goal, when it was held back.
+
+    The runner writes it into ``sm_context["last_goal_attempt"]``; empty otherwise.
+    """
+    return ctx.get("last_goal_attempt") or ""
+
+
 def _resolve_current_state(ctx: Dict[str, Any]) -> str:
     """Current state name, description, and processing mode."""
     state = ctx.get("state", {})
@@ -417,6 +425,7 @@ PLACEHOLDER_REGISTRY: Dict[str, Any] = {
     "processing_mode": _resolve_processing_mode,
     "user_message": _resolve_user_message,
     "language": _resolve_language,
+    "last_goal_attempt": _resolve_last_goal_attempt,
 }
 
 
@@ -459,6 +468,10 @@ PLACEHOLDER_SPECS: List[Dict[str, Any]] = [
     {"name": "language", "label": "language", "parametric": False,
      "description": "Resolved session language (single source of truth, #214)",
      "preview": "German"},
+    {"name": "last_goal_attempt", "label": "last_goal_attempt", "parametric": False,
+     "description": "In goal mode: the expert's last attempt to close or skip the goal, "
+                    "when it was held back; empty otherwise",
+     "preview": "YOUR LAST ATTEMPT: you tried to complete `__goal__` and it was held back: ..."},
     {"name": "persona", "label": "persona.key", "parametric": True,
      "description": "A value defined on the deployed Persona (e.g. {{persona.name}}). "
                     "Built-ins: name, voice, language; anything else comes from the "
@@ -557,6 +570,16 @@ def _compile_prompt(
 def has_user_message_placeholder(template: str) -> bool:
     """Check if template contains {{user_message}}."""
     return "{{user_message}}" in template if template else False
+
+
+def history_turns(template: str) -> int:
+    """How many recent messages a prompt reads: the largest N of its {{history_N}}, else 0.
+
+    A prompt says what conversation it sees with {{history_N}}; nothing else adds
+    history to it. A component that reads the conversation on a prompt's behalf
+    (such as a classifier answering for an expert) takes the length from here.
+    """
+    return max((int(n) for n in HISTORY_PATTERN.findall(template or "")), default=0)
 
 
 def resolve_persona_tokens(text: Optional[str], persona: Optional[Dict[str, Any]]) -> Optional[str]:

@@ -80,6 +80,10 @@ export default function AgentConfiguratorModal({
   // Build stage summaries for pipeline nodes
   const stageSummaries = useMemo((): Record<string, StageSummary> => {
     const nodeConfig = (id: string) => (configuration.nodes?.[id] ?? {}) as Record<string, unknown>
+    // A badge shows the configured model, else the one the agent declares as default.
+    const model = (id: string) =>
+      (nodeConfig(id).model as string) ||
+      ((pipelineSchema.settings ?? []).find((s) => s.key === `${id}.model`)?.default as string | undefined)
 
     return {
       input_gate: {
@@ -87,7 +91,7 @@ export default function AgentConfiguratorModal({
         lines: [`${state.inputGateRules.length} trigger rules`],
         receivesPlanData: true,
         receivesProgressData: true,
-        modelBadge: (nodeConfig('input_gate').model as string) || 'gpt-5.4-mini',
+        modelBadge: model('input_gate'),
       },
       expert_pool: {
         type: 'expert_pool',
@@ -108,16 +112,16 @@ export default function AgentConfiguratorModal({
         type: 'response_generator',
         lines: ['Persona + guidelines'],
         receivesPlanData: true,
-        modelBadge: (nodeConfig('response_generator').model as string) || 'gpt-5.4-mini',
+        modelBadge: model('response_generator'),
       },
       bridge_generator: {
         type: 'bridge_generator',
         lines: ['Ultra-short bridge phrase'],
         receivesPlanData: false,
-        modelBadge: (nodeConfig('bridge_generator').model as string) || 'gpt-5.4-mini',
+        modelBadge: model('bridge_generator'),
       },
     }
-  }, [state.inputGateRules, state.poolExperts, state.bgExperts, state.arbitrationOrder, configuration])
+  }, [state.inputGateRules, state.poolExperts, state.bgExperts, state.arbitrationOrder, configuration, pipelineSchema.settings])
 
   const modifiedNodeCount = Object.keys(configuration.nodes || {}).filter(
     (k) => configuration.nodes?.[k] && Object.keys(configuration.nodes[k]).length > 0,
@@ -332,13 +336,12 @@ export default function AgentConfiguratorModal({
           {overlayNode && (
             <NodeDetailOverlay
               node={overlayNode}
+              settings={(pipelineSchema.settings ?? []).filter((s) => s.key.startsWith(`${overlayNode.id}.`))}
               configuration={configuration}
               onUpdateNodeConfig={state.updateNodeConfig}
               onClose={() => setOverlayNodeId(null)}
               isDark={isDark}
               experts={state.experts}
-              inputGateRules={state.inputGateRules}
-              arbitrationOrder={state.arbitrationOrder}
             />
           )}
         </AnimatePresence>

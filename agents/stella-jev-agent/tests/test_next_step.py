@@ -150,7 +150,6 @@ class FakeJev:
 
 QUIET = {
     "common_sense": _answer(fits=0.97, slight_doubt=0.02, doesnt_fit=0.01),
-    "recogniser_artifact": _answer(speech=0.99, artifact=0.01),
     "medical": _answer(none=0.97, low=0.01, high=0.01, critical=0.01),
     "legal": _answer(none=0.97, low=0.01, high=0.01, critical=0.01),
     "probing": _answer(no_probe=0.9, needs_clarification=0.05, gentle_redirect=0.05),

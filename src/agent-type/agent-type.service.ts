@@ -4,6 +4,7 @@ import { AgentType, AgentValidationStatus } from '@prisma/client'
 import { requirementsForListing, type AgentRequirements } from '../agents/agent-requirements.js'
 import { agentTypeAccessProblem } from '../agents/deployable-agent-type.util.js'
 import { PlatformSettingsService } from '../platform-settings/platform-settings.service.js'
+import { configSettingsOf } from '../agent-package/config-settings.js'
 
 /** Who is looking at the agent list, and in which project (optional). */
 export interface AgentTypeViewer {
@@ -108,7 +109,10 @@ export class AgentTypeService {
       capabilities: (t.capabilities as string[]) || [],
       defaultConfig: (t.defaultConfig as Record<string, unknown>) || {},
       configSchema: (t.configSchema as Record<string, unknown>) || null,
-      pipelineSchema: (t.pipelineSchema as Record<string, unknown>) || null,
+      // With its full settings list (#996), also for a row mapped before the list existed.
+      pipelineSchema: t.pipelineSchema
+        ? { ...(t.pipelineSchema as Record<string, unknown>), settings: configSettingsOf(t.pipelineSchema as Record<string, unknown>) }
+        : null,
       expertDefaults: (t.expertDefaults as Record<string, unknown>[]) || null,
       requirements: this.requirementsOf(t),
       ownerName: t.isBuiltIn ? null : (t.user?.name || t.user?.email || null),

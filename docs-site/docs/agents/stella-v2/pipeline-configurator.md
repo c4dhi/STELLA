@@ -57,6 +57,8 @@ It is on by default for new configurations and off for configurations saved befo
 
 Any built-in expert can carry `enabled_from_compiler` the same way.
 
+**What an expert sees**: its prompt, exactly as the Configurator shows it, with the placeholders resolved, followed by the output format and the verdicts (with their descriptions) from its configuration. Nothing else is added: the conversation reaches it only through `{{history_N}}` (the last N messages) and `{{user_message}}`, and tool instructions are part of the default prompts of the experts that call tools. A prompt without `{{history_N}}` sees no conversation. Jev answers its experts without a language model, from the same prompt and verdicts (without the output format), and reads as much conversation as the longest `{{history_N}}` among their prompts.
+
 **When to customize**: Add custom experts for domain-specific analysis (e.g., a "compliance" expert for regulated industries). Reorder expert priority to change which expert "wins" in arbitration conflicts. Wire each expert's verdicts to deterministic responses in the [Expert Module](#expert-module--verdict-responses).
 
 ### Arbitration
@@ -136,6 +138,8 @@ The **New Custom Expert** form uses the same prompt editor as the edit view (var
 Closing the Configurator (backdrop click or the close button) while there are unsaved changes prompts a **Discard changes?** confirmation. Clean configurations close immediately.
 
 ## Agent-Declared Defaults & Capability Gating
+
+The settings each stage shows are the ones the agent declares in its `agent.yaml` (as pipeline slots or in `settings:`), drawn by their type; the Configurator has no per-agent forms. A value the agent does not declare, or one out of its range, is refused on save. See [Configuration settings](../../agent-sdk/agent-manifest.md#configuration-settings).
 
 Experts and their default verdicts/actions are **declared by the agent**, not hardcoded in the UI. On seed/upload the platform reads each agent's `config/experts/*.json` and publishes them on `AgentType.expertDefaults`; the Configurator renders the agent's declared experts/verdicts/actions (with a transitional fallback to built-ins until re-seeded).
 

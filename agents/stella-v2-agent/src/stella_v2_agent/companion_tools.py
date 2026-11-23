@@ -52,7 +52,6 @@ def _activity_view(activity: Dict[str, Any]) -> Dict[str, str]:
 class ListActivitiesTool(BaseTool):
     """What the user can choose from, answered from the deploy-time snapshot."""
 
-    guidance = COMPANION_TOOL_GUIDANCE
 
     def __init__(self, activities: List[Dict[str, Any]]):
         self._activities = activities
@@ -85,7 +84,6 @@ class ListActivitiesTool(BaseTool):
 class StartActivityTool(BaseTool):
     """Propose starting the activity the user chose."""
 
-    guidance = COMPANION_TOOL_GUIDANCE
 
     def __init__(self, activities: List[Dict[str, Any]]):
         self._activities = activities
@@ -157,7 +155,6 @@ class StartActivityTool(BaseTool):
 class GoToSleepTool(BaseTool):
     """Propose ending the conversation: a goodbye, then the device sleeps."""
 
-    guidance = COMPANION_TOOL_GUIDANCE
 
     @property
     def name(self) -> str:

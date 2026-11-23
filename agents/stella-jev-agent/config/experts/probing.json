@@ -20,17 +20,17 @@
     "no_probe": {
       "action": "inform",
       "template": "",
-      "description": "TAP OUT (default). The user's message is clear; no follow-up question is needed."
+      "description": "Simply respond. They answered, or shared a remark, a story or a feeling worth responding to, even if it has nothing to do with the task. This is the default."
     },
     "needs_clarification": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. A specific follow-up question would collect a pending deliverable."
+      "description": "They tried to answer what the task needs, but left it open or too vague to record."
     },
     "gentle_redirect": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. The user went off-topic and should be gently steered back."
+      "description": "They have clearly been away from the task for several turns in a row. One remark is not enough."
     }
   }
 }

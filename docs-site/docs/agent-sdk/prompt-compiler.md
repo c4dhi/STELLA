@@ -61,9 +61,12 @@ compiler can actually resolve.
 | `{{processing_mode}}` | Processing mode (sequential / flexible / goal) |
 | `{{history_N}}` | The last **N** conversation messages, e.g. `{{history_8}}` |
 | `{{user_message}}` | The current user message |
+| `{{last_goal_attempt}}` | In goal mode, the expert's last attempt to close or skip the goal when it was held back; empty otherwise |
 | `{{capabilities}}` | **1.2.0 on:** what the agent can do in the session right now (the mode, then one line each), from `sm_context["capabilities"]`. See [capabilities](./platform-contract.md#what-the-agent-can-do-capabilities). `format_capabilities()` renders the same text for prompts an agent renders itself |
 
 `{{history_N}}` is **parametric**: `N` is any positive integer.
+
+The placeholders are the only way runtime context reaches a STELLA V2 or Jev expert: a prompt without `{{history_N}}` sees no conversation. `history_turns(template)` gives the largest `N` a prompt reads, for a component that reads the conversation on a prompt's behalf.
 
 Registered versions: `1.0.0` (the table above without `{{capabilities}}`), `1.1.0` (adds `{{persona.*}}`) and `1.2.0` (adds `{{capabilities}}`). An older version leaves a newer token as written. STELLA V2 does not run an expert whose prompt needs a newer version than the session's (it is switched off for that session and the log names the placeholder).
 

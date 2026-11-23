@@ -72,10 +72,10 @@ def test_start_activity_schema_pairs_ids_with_titles_and_descriptions():
     assert schema["properties"]["activity_id"]["enum"] == ["act-1", "act-2"]
 
 
-def test_every_companion_tool_carries_the_companion_guidance():
+def test_the_companion_tools_are_the_three_the_router_prompt_explains():
     tools = create_companion_tools(ACTIVITIES)
     assert {t.name for t in tools} == {"list_activities", "start_activity", "go_to_sleep"}
-    assert all(t.guidance == COMPANION_TOOL_GUIDANCE for t in tools)
+    assert all(f"`{t.name}`" in COMPANION_TOOL_GUIDANCE for t in tools)
 
 
 @pytest.mark.asyncio
