@@ -12,7 +12,7 @@ Conventions used on this page:
 
 - An input marked *optional* can be left out. On an `…_update` tool, every field except the id is optional, and a field left out stays as it is.
 - Ids are strings. Each id's description, as the assistant sees it, says which tool lists them.
-- Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets `403` if it calls one by name.
+- Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets "tool not found" if it calls one by name — it was never registered for that connection.
 - On failure, every tool returns `{ "error": { "status", "message" } }` instead of the result shown here. `404` also means "not yours".
 
 ## Account
@@ -79,6 +79,14 @@ Copy a persona the user can see — their own, or a system default — into a ne
 
 **Returns:** the new persona, as `personas_get` shows it.
 
+### `personas_delete` · `mcp:write` · system admins only
+
+Delete a persona. System defaults cannot be deleted. The underlying ownership check has no admin override, so this only reaches the calling admin's own personas, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `personaId`.
+
+**Returns:** `{ message }`.
+
 ## Plan templates
 
 What happens in a conversation: states, tasks, transitions and deliverables. See [Plan structure](../plan-structure/index.md).
@@ -128,6 +136,14 @@ Copy a plan template the user owns into a new one, named "`<name>` (Copy)".
 **Inputs:** `planId`.
 
 **Returns:** the new plan template, as `plan_templates_get` shows it.
+
+### `plan_templates_delete` · `mcp:write` · system admins only
+
+Delete a plan template. The underlying ownership check has no admin override, so this only reaches the calling admin's own plan templates, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `planId`.
+
+**Returns:** `{ message }`.
 
 ### `plan_templates_generate` · `mcp:write`
 
@@ -211,6 +227,14 @@ Copy a configuration the user owns into a new one, named "`<name>` (Copy)", for 
 
 **Returns:** the new configuration, as `agent_configurations_get` shows it.
 
+### `agent_configurations_delete` · `mcp:write` · system admins only
+
+Delete an agent configuration. The underlying ownership check has no admin override, so this only reaches the calling admin's own configurations, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `agentConfigurationId`.
+
+**Returns:** `{ message }`.
+
 ## Uploaded agents
 
 A custom agent you upload, built and reviewed the same as one uploaded through the web app. Deleting one is admin-only and not available here.
@@ -274,6 +298,14 @@ Share a custom agent with exactly these projects, replacing the current set. The
 **Inputs:** `agentTypeId`, `projectIds` (replaces the whole list).
 
 **Returns:** `{ projectIds }`.
+
+### `agent_uploads_delete` · `mcp:write` · system admins only
+
+Delete any uploaded agent type. Stops its running agents first, and removes its env var templates and agent configurations with it. Refused while a public project uses it or another user's agent of it still runs. Unlike the other delete tools in this section, this reaches every user's uploads, not only the calling admin's own — the underlying service has always let an admin bypass the ownership check here. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ success, stoppedAgents }`.
 
 ## Projects and sessions
 
@@ -385,6 +417,14 @@ Remove a collaborator from a project, and any invitation still pending for them.
 
 **Returns:** the project's collaborators afterward, as `project_collaborators_list` shows it.
 
+### `projects_delete` · `mcp:write` · system admins only
+
+Delete any project — any member, not just the owner. Stops every running agent in it first, then removes it and everything under it: sessions, invitations, collaborators. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `projectId`.
+
+**Returns:** `{ message }`.
+
 ### `sessions_list` · `mcp:read`
 
 The sessions in a project, newest first.
@@ -495,6 +535,14 @@ Per-stage latency for one session's turns, with a summary across stages. Differe
 
 **Returns:** `stages` (per-stage `count`, `mean_ms` and similar) and `summary`.
 
+### `sessions_delete` · `mcp:write` · system admins only
+
+Delete any session. Stops its agents first, then removes it and everything in it: the transcript, participants and plan state. Different from `sessions_close`, which ends a session but keeps its transcript readable. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `sessionId`.
+
+**Returns:** `{ message }`.
+
 ## Invitations
 
 The link a participant opens to join a session, without an account.
@@ -601,6 +649,14 @@ Change a template's name, description or variables.
 
 **Returns:** the template, as `env_var_templates_get` shows it.
 
+### `env_var_templates_delete` · `mcp:write` · system admins only
+
+Delete an env var template. The underlying ownership check has no admin override, so this only reaches the calling admin's own templates, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** `{ message }`.
+
 ## Agents
 
 ### `agents_deploy` · `mcp:write`
@@ -682,7 +738,7 @@ Stop an agent and remove its pod. The agent and its messages stay, and `agents_r
 
 ## Platform settings (system admins)
 
-The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets `403` calling them by name.
+The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets "tool not found" calling them by name — they were never registered for that connection.
 
 ### `platform_settings_get` · `mcp:read`
 
@@ -704,7 +760,7 @@ Turn **Review uploaded agents** on or off. While it is on (the default), no uplo
 
 ## Agent review (system admins)
 
-Reviewing uploaded agents, as in Settings → Agent Review. Approving an agent lets its code run in the cluster, so only a system admin sees these four tools; anyone else gets `403` calling them by name. Built-in agents are never reviewed.
+Reviewing uploaded agents, as in Settings → Agent Review. Approving an agent lets its code run in the cluster, so only a system admin sees these four tools; anyone else gets "tool not found" calling them by name — they were never registered for that connection. Built-in agents are never reviewed.
 
 ### `agent_reviews_list` · `mcp:read`
 
@@ -755,6 +811,74 @@ Reject an uploaded agent, so it cannot deploy, also when it was approved before.
 | `reason` | string | Required, not blank. Shown to the uploader |
 
 **Returns:** the agent, as `agent_reviews_get` shows it.
+
+## Admin (system admins)
+
+Live platform metrics, user management and measured voice capacity, as in Settings → Admin. Only a system admin sees these six tools; anyone else gets "tool not found" calling one by name — it was never registered for their connection.
+
+### `admin_dashboard_get` · `mcp:read`
+
+A snapshot of the whole platform: participants, sessions, agents by state, and messages. The same numbers the admin dashboard streams live.
+
+**Inputs:** none.
+
+**Returns:** `timestamp`, `activeParticipants`, `totalParticipants`, `activeSessions`, `totalSessions`, `runningAgents`, `startingAgents`, `failedAgents`, `pausedAgents`, `stoppedAgents`, `totalAgents`, `totalMessages`, `messagesToday`, `sessionsWithTimeout`.
+
+### `admin_users_list` · `mcp:read`
+
+Every registered user, newest first.
+
+**Inputs:** `page` (*optional*, default 1), `limit` (*optional*, default 50, max 200).
+
+**Returns:** `{ users, total, page, totalPages }`. Each user has `id`, `email`, `name`, `verified`, `isSystemAdmin`, `createdAt`, `projectCount`.
+
+### `admin_users_verify` · `mcp:write`
+
+Mark a user's account verified.
+
+**Inputs:** `userId` (from `admin_users_list`).
+
+**Returns:** the user, as `admin_users_list` shows one.
+
+### `admin_users_set_admin` · `mcp:write`
+
+Grant or revoke system admin on a user. An admin can revoke their own.
+
+**Inputs:** `userId` (from `admin_users_list`), `isAdmin` (boolean).
+
+**Returns:** the user, as `admin_users_list` shows one.
+
+### `admin_capacity_get` · `mcp:read`
+
+The newest load-test result for each environment + GPU pair: the most simultaneous conversations that kept the voice fluent, from a real run, never computed.
+
+**Inputs:** none.
+
+**Returns:** `{ items }`. Each item has `id`, `measuredAt`, `gpuName`, `gpuMemoryMb`, `environment`, `sttProvider`, `ttsProvider`, `gitRevision`, `maxSessions`, `limitedBy`, `reachedTopLevel`, `durationSeconds`, `criteria`, `levels`.
+
+### `admin_capacity_record` · `mcp:write`
+
+Record one finished load-test run. Normally posted by `scripts/load-test/load_test.py` itself; this tool's fields match that script's JSON output exactly.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `measuredAt` | ISO datetime | |
+| `gpuName` | string, ≤ 200 | |
+| `gpuMemoryMb` | integer ≥ 0, *optional*, nullable | |
+| `sttProvider` | string, ≤ 100, *optional* | |
+| `ttsProvider` | string, ≤ 100, *optional* | |
+| `environment` | string, ≤ 100 | e.g. "development" or "production" |
+| `gitRevision` | string, ≤ 64, *optional* | |
+| `maxSessions` | integer ≥ 0 | Highest simultaneous session count that kept the voice fluent |
+| `limitedBy` | array of strings | Why the next level failed; empty when the top level passed |
+| `reachedTopLevel` | boolean | True when even the highest level tried passed |
+| `durationSeconds` | integer ≥ 1 | |
+| `criteria` | object | |
+| `levels` | array of objects | |
+
+**Returns:** the recorded measurement, as `admin_capacity_get` shows one.
 
 ## Connectors
 

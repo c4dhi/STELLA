@@ -55,7 +55,7 @@ Every connection has one of two access levels, chosen when you sign in or create
 | Read | `mcp:read` | Only the read tools: lists, gets, transcripts, plan state, agent status and logs |
 | Read/write | `mcp:read` + `mcp:write` | Also the tools that create, update, start, stop and close things |
 
-A connection only gets the tools its scopes allow. A read-only connection that calls a write tool by name gets `403`.
+A connection only gets the tools its scopes allow. A read-only connection calling a write tool by name gets "tool not found" — it was never registered for that connection.
 
 Read/write covers starting and ending sessions, agents and invitation links, not only editing personas and plans.
 
@@ -66,11 +66,11 @@ Which tools need which scope:
 | `mcp:read` (36) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `projects_get`, `projects_stats`, `project_metrics_get`, `projects_public_link_get`, `project_collaborators_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_timeline_get`, `session_participants_list`, `session_analytics_get`, `session_invitations_list`, `env_var_templates_list`, `env_var_templates_get`, `agents_get`, `agent_logs_get`, `agent_metrics_get`, `agent_uploads_list`, `agent_uploads_build_status`, `agent_uploads_build_history`, `agent_uploads_shares_get`, `connectors_list`, `connectors_get`, `user_messages_list`, `user_messages_unread_count_get` |
 | `mcp:write` (34) | `personas_create`, `personas_update`, `personas_duplicate`, `plan_templates_create`, `plan_templates_update`, `plan_templates_duplicate`, `plan_templates_generate`, `agent_configurations_create`, `agent_configurations_update`, `agent_configurations_duplicate`, `env_var_templates_create`, `env_var_templates_update`, `env_var_templates_duplicate`, `projects_create`, `projects_update`, `projects_public_update`, `project_collaborators_invite`, `project_collaborators_remove`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `agent_uploads_create`, `agent_uploads_build`, `agent_uploads_shares_update`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set`, `user_messages_mark_read` |
 
-System admins also get `platform_settings_get` and `agent_reviews_list`/`agent_reviews_get` (`mcp:read`), and `platform_settings_update`, `agent_reviews_approve` and `agent_reviews_reject` (`mcp:write`). Nobody else sees them, and calling one by name answers `403`.
+System admins also get, with `mcp:read`: `platform_settings_get`, `agent_reviews_list`, `agent_reviews_get`, `admin_dashboard_get`, `admin_users_list`, `admin_capacity_get`; and with `mcp:write`: `platform_settings_update`, `agent_reviews_approve`, `agent_reviews_reject`, `admin_users_verify`, `admin_users_set_admin`, `admin_capacity_record`, and the delete tools — `projects_delete`, `sessions_delete`, `agent_configurations_delete`, `personas_delete`, `plan_templates_delete`, `env_var_templates_delete`, `agent_uploads_delete`. Nobody else sees them, and calling one by name answers "tool not found" — it was never registered for that connection.
 
 ## The tools
 
-There are 70 tools, plus 2 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
+There are 70 tools, plus 19 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
 
 - Ids are named after what they point to (`projectId`, `sessionId`, `agentId`, `invitationId`, `personaId`, `planId`, `agentConfigurationId`, `agentTypeId`, `envVarTemplateId`). The name is the same in every tool.
 - `…_list` returns `{ items }` with a summary of each, and `…_get` returns one in full.
@@ -89,18 +89,18 @@ A typical run looks like this:
 
 ## Limits
 
-- Nothing can be **deleted** over MCP. There are no delete tools. Connectors are deleted in Settings → Connectors; over MCP, `connector_shares_set` with `[]` stops other members' agents from using one.
+- **Deletes are system-admin only.** `projects_delete`, `sessions_delete`, `agent_configurations_delete`, `personas_delete`, `plan_templates_delete`, `env_var_templates_delete` and `agent_uploads_delete` don't exist for anyone else's connection — calling one by name gets "tool not found", not a refusal. `projects_delete` and `sessions_delete` take any id, as the REST endpoints do; the other four check ownership with no admin override, so today they only reach the calling admin's own rows, not every user's. Connectors still aren't deletable over MCP at all: they're deleted in Settings → Connectors, and `connector_shares_set` with `[]` only stops other members' agents from using one.
 - **Connector tokens:** `connectors_create` and `connectors_update` take a connector's token, so it passes through the assistant's chat. No tool returns it, and the audit log records it as `[redacted]`.
 - **Env var template values:** `env_var_templates_create` and `env_var_templates_update` take the actual secret values (API keys and the like), so they pass through the assistant's chat too. No tool returns them, and the audit log redacts the whole `variables` object, not just keys that look like secrets.
 - An assistant only reaches projects its user is a member of, and only personas, plans, configurations and env var templates its user owns. System-default personas can be read but not changed.
-- **Project collaborators:** only the project owner can invite or remove one; any member can read the list. Project deletion is not on MCP at all (system admins only, in the app).
+- **Project collaborators:** only the project owner can invite or remove one; any member can read the list. `projects_delete` is system admins only, same as in the app.
 - **Public project setup:** `projects_public_update` doesn't take raw plan content, pipeline config or env var values, the same as `agents_deploy`: it names a persona, agent configuration and env var template instead. Only the project owner can bind or move connectors on the public agent.
 - **Closed sessions:** agents are refused in a session that is closing or closed. `agents_deploy` and `agents_restart` fail there, and a closed session can't be reopened over MCP.
 - A session has at most one open invitation link. Revoke it before making a new one.
 - **Secrets:** `env_var_templates_list` returns variable names, never their values. `agents_deploy` doesn't take raw configuration or env var values: it names a plan, persona, configuration and env var template instead. Agent output leaves out the deployment snapshot and Kubernetes names.
 - `agents_stop` stops the agent and removes its pod; it doesn't delete the agent.
-- **Uploaded agents:** `agent_uploads_create` packs its files into a package itself, so it only takes text files — it can't carry a binary asset the web upload's `.zip` could. Deleting an upload is admin-only and not offered here.
-- **Inbox:** `user_messages_list` and `user_messages_mark_read` only ever see or touch the caller's own messages. Deleting one is not offered here, same as everything else.
+- **Uploaded agents:** `agent_uploads_create` packs its files into a package itself, so it only takes text files — it can't carry a binary asset the web upload's `.zip` could. `agent_uploads_delete` is system admins only, and can delete anyone's upload (the underlying service has always let an admin bypass the ownership check here).
+- **Inbox:** `user_messages_list` and `user_messages_mark_read` only ever see or touch the caller's own messages. There is no delete tool for a message.
 
 ## Audit log
 
