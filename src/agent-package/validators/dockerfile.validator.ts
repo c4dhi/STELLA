@@ -26,10 +26,26 @@ export class DockerfileValidator {
   private readonly fromLinePattern = /^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)(?:[ \t]+AS[ \t]+(\S+))?/i
   // Matches a real COPY --from=<ref>, on the same terms.
   private readonly copyFromPattern = /^[ \t]*COPY\b[\s\S]*?--from=(\S+)/i
+  // --mount=type=bind,from=<ref>,... on a RUN (or COPY) line pulls an image too.
+  private readonly mountFlagPattern = /--mount=(\S+)/gi
   // A heredoc redirection opened on an instruction line, e.g. `<<EOF`, `<<-'EOF'`.
   private readonly heredocMarkerPattern = /<<-?~?(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/g
+  // Only RUN, COPY and ADD read heredocs in real Docker; anything else (e.g. a
+  // LABEL value that happens to contain "<<") must never open one.
+  private readonly heredocCapableInstructionPattern = /^[ \t]*(RUN|COPY|ADD)\b/i
+  // The `# escape=` parser directive changes Docker's continuation character
+  // away from backslash - refused outright rather than honoured, since an
+  // unhandled one would let a "\"-continued line hide a real instruction.
+  private readonly escapeDirectivePattern = /^[ \t]*#[ \t]*escape[ \t]*=/im
+  // Only an explicit docker.io/index.docker.io + library/ prefix is the same
+  // image as the bare name; any other host (or a Docker Hub user/org
+  // namespace, which looks the same shape) is a different image and must
+  // never be normalized away.
+  private readonly officialRegistryPrefixPattern = /^(?:index\.docker\.io|docker\.io)\/library\//i
 
-  // Dangerous patterns that are blocked
+  // Dangerous patterns that are blocked - always checked against the raw
+  // file content, heredoc bodies included, since these are red flags no
+  // matter where they appear.
   private readonly blockedPatterns = [
     { pattern: /^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?scratch\b/im, message: 'FROM scratch is not allowed' },
     { pattern: /--privileged/i, message: '--privileged flag is not allowed' },
@@ -41,7 +57,7 @@ export class DockerfileValidator {
     { pattern: /--cap-drop=ALL.*--cap-add/i, message: 'Capability manipulation is not allowed' },
   ]
 
-  // Patterns that trigger warnings
+  // Patterns that trigger warnings - also checked against the raw content.
   private readonly warningPatterns = [
     { pattern: /apt-get\s+install[^&]*\n/i, message: 'Consider using apt-get install -y --no-install-recommends' },
     { pattern: /pip\s+install(?!.*--no-cache)/i, message: 'Consider using pip install --no-cache-dir' },
@@ -63,19 +79,27 @@ export class DockerfileValidator {
       }
     }
 
-    const logicalLines = this.toLogicalLines(content)
+    if (this.escapeDirectivePattern.test(content)) {
+      errors.push('Dockerfile parser directives (# escape=) are not supported')
+    }
+
+    const { lines: logicalLines, unclosedHeredoc } = this.toLogicalLines(content)
     const logicalContent = logicalLines.join('\n')
 
-    const { stages, externalCopyFromImages } = this.parseStagesAndCopies(logicalLines)
+    if (unclosedHeredoc) {
+      errors.push('Dockerfile has an unclosed heredoc')
+    }
+
+    const { stages, externalImageRefs } = this.parseStagesAndCopies(logicalLines)
 
     if (stages.length === 0) {
       errors.push('No FROM instruction found in Dockerfile')
     }
 
     // Every external image a build actually pulls from - every stage's own
-    // FROM, and every COPY --from that isn't just copying from an earlier
-    // stage - must be on the allowlist, not only the final stage's.
-    const externalImages = [...stages.filter((s) => s.isExternal).map((s) => s.rawImage), ...externalCopyFromImages]
+    // FROM, every COPY --from, and every --mount=...,from= that isn't just
+    // referencing an earlier stage - must be on the allowlist.
+    const externalImages = [...stages.filter((s) => s.isExternal).map((s) => s.rawImage), ...externalImageRefs]
     for (const image of externalImages) {
       if (!this.isAllowedBaseImage(image)) {
         errors.push(`Base image "${image}" is not in the allowed list. Allowed: ${SUPPORTED_BASE_IMAGES.join(', ')}`)
@@ -84,9 +108,10 @@ export class DockerfileValidator {
 
     const baseImage = this.resolveFinalImage(stages)
 
-    // Check for blocked patterns
+    // Check for blocked patterns - against the raw content, so a dangerous
+    // command hidden inside a real heredoc body is still caught.
     for (const { pattern, message } of this.blockedPatterns) {
-      if (pattern.test(logicalContent)) {
+      if (pattern.test(content)) {
         errors.push(message)
       }
     }
@@ -121,48 +146,55 @@ export class DockerfileValidator {
    * (and their closing delimiter), so matching below only ever sees the
    * Dockerfile's real top-level instruction lines - never a FROM or
    * COPY --from that only appears inside a continued RUN's arguments or a
-   * heredoc body passed to RUN.
+   * heredoc body passed to RUN/COPY/ADD. A heredoc that never closes marks
+   * the whole file unclosedHeredoc, since everything after it is ambiguous.
    */
-  private toLogicalLines(content: string): string[] {
+  private toLogicalLines(content: string): { lines: string[]; unclosedHeredoc: boolean } {
     const rawLines = content.split('\n')
     const logical: string[] = []
     let current: string | null = null
     let pendingHeredocDelimiters: string[] = []
 
-    for (const line of rawLines) {
+    const closeLogicalLine = (line: string) => {
+      logical.push(line)
+      if (this.heredocCapableInstructionPattern.test(line)) {
+        pendingHeredocDelimiters = this.findHeredocDelimiters(line)
+      }
+    }
+
+    for (const rawLine of rawLines) {
       if (pendingHeredocDelimiters.length > 0) {
-        if (line.trim() === pendingHeredocDelimiters[0]) {
+        if (rawLine.trim() === pendingHeredocDelimiters[0]) {
           pendingHeredocDelimiters.shift()
         }
         continue
       }
 
       if (current !== null) {
-        current += '\n' + line
-        if (!this.endsWithContinuation(line)) {
-          logical.push(current)
-          pendingHeredocDelimiters = this.findHeredocDelimiters(current)
+        current += '\n' + rawLine
+        if (!this.endsWithContinuation(rawLine)) {
+          closeLogicalLine(current)
           current = null
         }
         continue
       }
 
-      const trimmedStart = line.trimStart()
+      const trimmedStart = rawLine.trimStart()
       if (trimmedStart === '' || trimmedStart.startsWith('#')) {
         continue
       }
 
-      if (this.endsWithContinuation(line)) {
-        current = line
+      if (this.endsWithContinuation(rawLine)) {
+        current = rawLine
       } else {
-        logical.push(line)
-        pendingHeredocDelimiters = this.findHeredocDelimiters(line)
+        closeLogicalLine(rawLine)
       }
     }
     if (current !== null) {
       logical.push(current)
     }
-    return logical
+
+    return { lines: logical, unclosedHeredoc: pendingHeredocDelimiters.length > 0 }
   }
 
   private endsWithContinuation(line: string): boolean {
@@ -175,15 +207,16 @@ export class DockerfileValidator {
 
   /**
    * Walk the logical lines once, collecting every build stage (in order,
-   * with its alias if any) and every external COPY --from image - "external"
-   * meaning it isn't just a reference to an earlier stage's name or index.
+   * with its alias if any) and every external image reference from a
+   * COPY --from or a --mount=...,from= - "external" meaning it isn't just a
+   * reference to an earlier stage's name or index.
    */
   private parseStagesAndCopies(logicalLines: string[]): {
     stages: Stage[]
-    externalCopyFromImages: string[]
+    externalImageRefs: string[]
   } {
     const stages: Stage[] = []
-    const externalCopyFromImages: string[] = []
+    const externalImageRefs: string[] = []
     const knownStageRefs = new Set<string>()
     const isKnownStageRef = (ref: string) => knownStageRefs.has(ref.toLowerCase())
 
@@ -201,11 +234,30 @@ export class DockerfileValidator {
 
       const copyMatch = line.match(this.copyFromPattern)
       if (copyMatch && !isKnownStageRef(copyMatch[1])) {
-        externalCopyFromImages.push(copyMatch[1])
+        externalImageRefs.push(copyMatch[1])
+      }
+
+      for (const ref of this.findMountFromImages(line)) {
+        if (!isKnownStageRef(ref)) {
+          externalImageRefs.push(ref)
+        }
       }
     }
 
-    return { stages, externalCopyFromImages }
+    return { stages, externalImageRefs }
+  }
+
+  private findMountFromImages(logicalLine: string): string[] {
+    const refs: string[] = []
+    for (const match of logicalLine.matchAll(this.mountFlagPattern)) {
+      for (const attr of match[1].split(',')) {
+        const fromMatch = attr.match(/^from=(.+)$/i)
+        if (fromMatch) {
+          refs.push(fromMatch[1])
+        }
+      }
+    }
+    return refs
   }
 
   /** The image the final stage actually runs on, resolving stage-to-stage references. */
@@ -240,7 +292,7 @@ export class DockerfileValidator {
    * Check if base image is in allowed list.
    */
   private isAllowedBaseImage(image: string): boolean {
-    const normalizedImage = this.stripRegistryHost(image)
+    const normalizedImage = image.replace(this.officialRegistryPrefixPattern, '')
 
     return SUPPORTED_BASE_IMAGES.some((allowed) => {
       // Exact match
@@ -259,32 +311,6 @@ export class DockerfileValidator {
 
       return false
     })
-  }
-
-  /**
-   * Strip a registry host (and a following `library/`), never a Docker Hub
-   * user/org namespace: a host has a `.` or `:` in it, or is `localhost`
-   * (the same rule Docker itself uses to tell them apart), so
-   * `user/python:3.12-slim` is left alone and never matches `python:3.12-slim`.
-   */
-  private stripRegistryHost(image: string): string {
-    const firstSlash = image.indexOf('/')
-    if (firstSlash === -1) {
-      return image
-    }
-
-    const firstSegment = image.slice(0, firstSlash)
-    const looksLikeRegistryHost =
-      firstSegment === 'localhost' || firstSegment.includes('.') || firstSegment.includes(':')
-    if (!looksLikeRegistryHost) {
-      return image
-    }
-
-    let rest = image.slice(firstSlash + 1)
-    if (rest.startsWith('library/')) {
-      rest = rest.slice('library/'.length)
-    }
-    return rest
   }
 
   /**

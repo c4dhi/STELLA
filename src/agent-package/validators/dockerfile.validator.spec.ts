@@ -110,10 +110,10 @@ describe('DockerfileValidator', () => {
     expect(result.errors.some((e) => e.includes('user/python:3.12-slim'))).toBe(true)
   })
 
-  it('still allows an official image behind a real registry host, with or without the library/ namespace', () => {
+  it('still allows an official image behind docker.io or index.docker.io, library namespace included', () => {
     const content = [
       'FROM docker.io/library/python:3.12-slim AS builder',
-      'FROM myregistry.example.com:5000/python:3.12-slim',
+      'FROM index.docker.io/library/python:3.12-slim',
       'WORKDIR /app',
       'CMD ["./app"]',
     ].join('\n')
@@ -121,6 +121,22 @@ describe('DockerfileValidator', () => {
     const result = validator.validate(content)
 
     expect(result.valid).toBe(true)
+  })
+
+  it('rejects any other registry host, even one that looks legitimate', () => {
+    const content = ['FROM evil.io/python:3.12-slim', 'WORKDIR /app', 'CMD ["./app"]'].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('rejects a localhost registry host with a port the same way', () => {
+    const content = ['FROM localhost:5000/python:3.12-slim', 'WORKDIR /app', 'CMD ["./app"]'].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
   })
 
   it('rejects a disallowed base image in an earlier build stage, even when the final stage is allowed', () => {
@@ -159,6 +175,83 @@ describe('DockerfileValidator', () => {
       'RUN make build',
       'FROM python:3.12-slim',
       'COPY --from=0 /app /app',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(true)
+  })
+
+  it('still blocks a dangerous command hidden inside a real heredoc body', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'RUN <<EOF',
+      'sudo id',
+      'EOF',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('sudo is not allowed in Dockerfile')
+  })
+
+  it('does not let a LABEL value containing "<<" open a fake heredoc that hides a later real stage', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'LABEL x="<<NEVER"',
+      'FROM ubuntu:22.04',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.baseImage).toBe('ubuntu:22.04')
+    expect(result.valid).toBe(false)
+    expect(result.errors.some((e) => e.includes('ubuntu:22.04'))).toBe(true)
+  })
+
+  it('rejects a Dockerfile with an unclosed heredoc', () => {
+    const content = ['FROM python:3.12-slim', 'RUN <<EOF', 'echo hi', 'WORKDIR /app', 'CMD ["./app"]'].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('refuses a Dockerfile that sets a parser escape directive', () => {
+    const content = ['# escape=`', 'FROM python:3.12-slim', 'WORKDIR /app', 'CMD ["./app"]'].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('rejects a RUN --mount that pulls from a disallowed external image', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'RUN --mount=type=bind,from=ubuntu:22.04,target=/u cp -a /u /o',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.some((e) => e.includes('ubuntu:22.04'))).toBe(true)
+  })
+
+  it('allows a RUN --mount that references an earlier build stage, not an external image', () => {
+    const content = [
+      'FROM python:3.12-slim AS builder',
+      'RUN echo build',
+      'FROM python:3.12-slim',
+      'RUN --mount=type=bind,from=builder,target=/u cp -a /u /o',
       'WORKDIR /app',
       'CMD ["./app"]',
     ].join('\n')
