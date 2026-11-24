@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Globe, Lock, Check, Copy, ExternalLink, Clock, Power } from 'lucide-react'
+import { Globe, Lock, Check, Clock, Power } from 'lucide-react'
 import CloseWhenEmptySetting from '../shared/CloseWhenEmptySetting'
 import { closesOnTypeChange } from '../../lib/closeWhenEmpty'
 import { useThemeStore } from '../../store/themeStore'
@@ -39,6 +39,7 @@ import {
 import { WIZARD_MODAL_SIZE, WIZARD_OVERLAY_ALIGN } from '../shared/wizardLayout'
 import { choiceCardClass } from '../shared/wizardChoice'
 import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
+import PublicLinkDisplay from '../shared/PublicLinkDisplay'
 
 interface ProjectModalProps {
   isOpen: boolean
@@ -1311,44 +1312,14 @@ export default function ProjectModal({
                     Share this link with participants to let them join
                   </p>
 
-                  {/* Link display */}
-                  <div className={`
-                    flex items-center gap-2 p-4 rounded-xl mb-6
-                    ${isDark ? 'bg-zinc-700/50 border border-zinc-600' : 'bg-neutral-50 border border-neutral-200'}
-                  `}>
-                    <input
-                      type="text"
-                      value={publicLink}
-                      readOnly
-                      className={`flex-1 bg-transparent text-sm font-mono ${isDark ? 'text-zinc-200' : 'text-neutral-700'}`}
-                    />
-                    <button
-                      onClick={handleCopyLink}
-                      className={`
-                        p-2 rounded-lg transition-colors
-                        ${isDark
-                          ? 'hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200'
-                          : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-700'
-                        }
-                      `}
-                    >
-                      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                    </button>
-                    <a
-                      href={publicLink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={`
-                        p-2 rounded-lg transition-colors
-                        ${isDark
-                          ? 'hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200'
-                          : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-700'
-                        }
-                      `}
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  </div>
+                  {/* Link display, QR code above it, same as the participant connection screen */}
+                  <PublicLinkDisplay
+                    value={publicLink}
+                    isDark={isDark}
+                    copied={copied}
+                    onCopy={handleCopyLink}
+                    marginBottomClassName="mb-6"
+                  />
 
                   <button
                     onClick={handleClose}
