@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A public project's link now shows a QR code above it, in the "Public Project Created!" step and in the public link dialog (#204)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
