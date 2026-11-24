@@ -1,10 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AccessTokensModule } from '../access-tokens/access-tokens.module.js';
 import { AgentUploadModule } from '../agent-upload/agent-upload.module.js';
-import { AgentBuildModule } from '../agent-build/agent-build.module.js';
 import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module.js';
 import { AgentImageModule } from '../agent-image/agent-image.module.js';
-import { AgentPackageModule } from '../agent-package/agent-package.module.js';
 import { AgentsModule } from '../agents/agents.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { ConnectorsModule } from '../connectors/connectors.module.js';
@@ -74,8 +72,6 @@ const TOOL_PROVIDERS = [
     EnvVarTemplatesModule,
     ConnectorsModule,
     AgentUploadModule,
-    AgentPackageModule,
-    AgentBuildModule,
   ],
   controllers: [McpController],
   providers: [
