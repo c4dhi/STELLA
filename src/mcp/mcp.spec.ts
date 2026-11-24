@@ -23,6 +23,7 @@ import { AgentsTools } from './tools/agents.tools.js';
 import { EnvVarTemplatesTools } from './tools/env-var-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
+import { AgentUploadsTools } from './tools/agent-uploads.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import {
   CreateConnectorDto,
@@ -491,6 +492,106 @@ function setup() {
     setShares: jest.fn(async () => connectorRow),
     remove: jest.fn(),
   };
+  const agentTypeRows: Record<string, any> = {
+    'at-mine': {
+      id: 'at-mine',
+      slug: 'my-agent',
+      name: 'My Agent',
+      userId: 'u1',
+      isBuiltIn: false,
+      packagePath: 'storage/my-agent-1.0.0.zip',
+      version: '1.0.0',
+    },
+    'at-other': {
+      id: 'at-other',
+      slug: 'their-agent',
+      name: 'Their Agent',
+      userId: 'u2',
+      isBuiltIn: false,
+      packagePath: 'storage/their-agent-1.0.0.zip',
+      version: '1.0.0',
+    },
+    'at-builtin': {
+      id: 'at-builtin',
+      slug: 'builtin-agent',
+      name: 'Built-in',
+      userId: null,
+      isBuiltIn: true,
+      packagePath: null,
+      version: '1.0.0',
+    },
+  };
+  const uploadsPrisma = {
+    agentType: {
+      findUnique: jest.fn(async ({ where }: any) => {
+        if (where.id) return agentTypeRows[where.id] ?? null;
+        if (where.slug)
+          return Object.values(agentTypeRows).find((a) => a.slug === where.slug) ?? null;
+        return null;
+      }),
+      findMany: jest.fn(async () => [
+        {
+          id: 'at-mine',
+          slug: 'my-agent',
+          name: 'My Agent',
+          description: null,
+          icon: null,
+          version: '1.0.0',
+          validationStatus: 'PENDING',
+          validationNotes: null,
+          validatedAt: null,
+          capabilities: [],
+          defaultConfig: {},
+          configSchema: {},
+          pipelineSchema: {},
+          createdAt: new Date('2026-11-01T00:00:00Z'),
+          imageUrl: null,
+          sdkVersion: null,
+          projectShares: [{ projectId: 'p1' }],
+          buildLogs: [],
+        },
+      ]),
+      create: jest.fn(async ({ data }: any) => ({ id: 'at-new', ...data })),
+      update: jest.fn(async ({ where, data }: any) => ({ id: where.id, ...data })),
+    },
+    agentBuildLog: {
+      findFirst: jest.fn(async () => ({ id: 'build-1' })),
+    },
+    projectMembership: {
+      findMany: jest.fn(async () => [{ projectId: 'p1', project: { id: 'p1', name: 'Playground' } }]),
+    },
+    agentTypeProjectShare: {
+      findMany: jest.fn(async () => [{ projectId: 'p1' }]),
+      deleteMany: jest.fn(async () => ({ count: 0 })),
+      upsert: jest.fn(async () => ({})),
+    },
+    $transaction: jest.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
+  };
+  const agentPackage = {
+    validatePackage: jest.fn(async () => ({
+      valid: true,
+      errors: [],
+      warnings: [],
+      files: ['agent.yaml'],
+      manifest: {
+        metadata: { slug: 'new-agent', version: '1.0.0' },
+        image: {},
+        capabilities: [],
+      },
+    })),
+    storePackage: jest.fn(async () => ({ path: 'storage/new-agent-1.0.0.zip', size: 42, hash: 'h1' })),
+    readExpertDefaults: jest.fn(() => null),
+  };
+  const agentBuildForUploads = {
+    startBuild: jest.fn(async () => ({ buildLogId: 'build-new' })),
+    getBuildStatus: jest.fn(async () => ({
+      id: 'build-1',
+      status: 'success' as const,
+      startedAt: new Date('2026-11-01T00:00:00Z'),
+    })),
+    getBuildHistory: jest.fn(async () => [{ id: 'build-1', status: 'success' }]),
+    getBuildOutput: jest.fn(async () => 'built ok'),
+  };
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
@@ -513,6 +614,12 @@ function setup() {
     new PlatformSettingsTools(platformSettings as any),
     new AgentReviewsTools(agentReview as any),
     new ConnectorsTools(connectors as any),
+    new AgentUploadsTools(
+      uploadsPrisma as any,
+      { delete: jest.fn() } as any,
+      agentPackage as any,
+      agentBuildForUploads as any,
+    ),
   ];
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
@@ -532,6 +639,9 @@ function setup() {
     invitations,
     envVarTemplates,
     connectors,
+    uploadsPrisma,
+    agentPackage,
+    agentBuildForUploads,
     audit,
     tool,
   };
@@ -1081,6 +1191,7 @@ describe('One shape for every tool', () => {
     const updates = (await schemas()).filter((t) => t.name.endsWith('_update'));
     expect(updates.map((t) => t.name).sort()).toEqual([
       'agent_configurations_update',
+      'agent_uploads_shares_update',
       'connectors_update',
       'env_var_templates_update',
       'personas_update',
@@ -2043,5 +2154,191 @@ describe('MCP plan generator tool', () => {
     );
     expect(result.isError).toBe(true);
     expect(planGenerator.generate).not.toHaveBeenCalled();
+  });
+});
+
+describe('MCP agent upload tools', () => {
+  it('lists only read tools to a read-only token, and every tool to read/write', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining([
+        'agent_uploads_list',
+        'agent_uploads_build_status',
+        'agent_uploads_build_history',
+        'agent_uploads_shares_get',
+      ]),
+    );
+    for (const write of [
+      'agent_uploads_create',
+      'agent_uploads_build',
+      'agent_uploads_shares_update',
+    ]) {
+      expect(read).not.toContain(write);
+      expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
+    }
+  });
+
+  it('packs files into a zip, validates, stores and starts a build', async () => {
+    const { factory, agentPackage, agentBuildForUploads, uploadsPrisma, tool } = setup();
+    const result: any = await factory.run(
+      tool('agent_uploads_create'),
+      {
+        files: [
+          { path: 'agent.yaml', content: 'metadata:\n  slug: new-agent\n  version: 1.0.0\n' },
+          { path: 'main.py', content: 'print("hi")' },
+        ],
+      },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const [buffer] = agentPackage.validatePackage.mock.calls[0] as [Buffer];
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(agentPackage.storePackage).toHaveBeenCalledWith(buffer, 'new-agent-1.0.0.zip');
+    expect(uploadsPrisma.agentType.create).toHaveBeenCalled();
+    expect(agentBuildForUploads.startBuild).toHaveBeenCalledWith('at-new', 'u1');
+    expect(result.structuredContent).toMatchObject({
+      id: 'at-new',
+      slug: 'new-agent',
+      replacedVersion: null,
+    });
+  });
+
+  it('refuses image.imageUrl, and replaces the owner\'s existing slug on a higher version', async () => {
+    const { factory, agentPackage, uploadsPrisma, tool } = setup();
+    agentPackage.validatePackage.mockResolvedValueOnce({
+      valid: true,
+      errors: [],
+      warnings: [],
+      files: ['agent.yaml'],
+      manifest: { metadata: { slug: 'x', version: '1.0.0' }, image: { imageUrl: 'docker.io/x' }, capabilities: [] },
+    });
+    const refused: any = await factory.run(
+      tool('agent_uploads_create'),
+      { files: [{ path: 'agent.yaml', content: 'x' }] },
+      READ_WRITE,
+    );
+    expect(refused.isError).toBe(true);
+
+    agentPackage.validatePackage.mockResolvedValueOnce({
+      valid: true,
+      errors: [],
+      warnings: [],
+      files: ['agent.yaml'],
+      manifest: { metadata: { slug: 'my-agent', version: '2.0.0' }, image: {}, capabilities: [] },
+    });
+    const replaced: any = await factory.run(
+      tool('agent_uploads_create'),
+      { files: [{ path: 'agent.yaml', content: 'x' }] },
+      READ_WRITE,
+    );
+    expect(replaced.isError).toBeFalsy();
+    expect(uploadsPrisma.agentType.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'at-mine' } }),
+    );
+    expect(replaced.structuredContent).toMatchObject({ replacedVersion: '1.0.0' });
+  });
+
+  it('refuses re-uploading the same version, and another user\'s slug', async () => {
+    const { factory, agentPackage, tool } = setup();
+    agentPackage.validatePackage.mockResolvedValueOnce({
+      valid: true,
+      errors: [],
+      warnings: [],
+      files: ['agent.yaml'],
+      manifest: { metadata: { slug: 'my-agent', version: '1.0.0' }, image: {}, capabilities: [] },
+    });
+    const sameVersion: any = await factory.run(
+      tool('agent_uploads_create'),
+      { files: [{ path: 'agent.yaml', content: 'x' }] },
+      READ_WRITE,
+    );
+    expect(sameVersion.isError).toBe(true);
+
+    agentPackage.validatePackage.mockResolvedValueOnce({
+      valid: true,
+      errors: [],
+      warnings: [],
+      files: ['agent.yaml'],
+      manifest: { metadata: { slug: 'their-agent', version: '2.0.0' }, image: {}, capabilities: [] },
+    });
+    const notYours: any = await factory.run(
+      tool('agent_uploads_create'),
+      { files: [{ path: 'agent.yaml', content: 'x' }] },
+      READ_WRITE,
+    );
+    expect(notYours.isError).toBe(true);
+  });
+
+  it('lists only the caller\'s own uploads, mapped like the REST route', async () => {
+    const { factory, tool } = setup();
+    const result: any = await factory.run(tool('agent_uploads_list'), {}, READ);
+    expect(result.structuredContent.items[0]).toMatchObject({
+      id: 'at-mine',
+      slug: 'my-agent',
+      sharedProjectIds: ['p1'],
+      built: false,
+    });
+  });
+
+  it('build: owner may trigger, another user may not, admin may', async () => {
+    const { factory, agentBuildForUploads, tool } = setup();
+    const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
+    const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
+
+    const owned: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-mine' }, READ_WRITE);
+    expect(owned.isError).toBeFalsy();
+    expect(agentBuildForUploads.startBuild).toHaveBeenCalledWith('at-mine', 'u1');
+
+    const notOwned: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-other' }, READ_WRITE);
+    expect(notOwned.isError).toBe(true);
+
+    const asAdmin: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-other' }, ADMIN_RW);
+    expect(asAdmin.isError).toBeFalsy();
+  });
+
+  it('build_status answers null when never built, and the latest build otherwise', async () => {
+    const { factory, uploadsPrisma, tool } = setup();
+    uploadsPrisma.agentBuildLog.findFirst.mockResolvedValueOnce(null);
+    const never: any = await factory.run(tool('agent_uploads_build_status'), { agentTypeId: 'at-mine' }, READ);
+    expect(never.structuredContent).toEqual({ build: null });
+
+    const built: any = await factory.run(tool('agent_uploads_build_status'), { agentTypeId: 'at-mine' }, READ);
+    expect(built.structuredContent.build).toMatchObject({ status: 'success', buildOutput: 'built ok' });
+  });
+
+  it('build_history and build_status are refused to someone outside the owner\'s projects', async () => {
+    const { factory, uploadsPrisma, tool } = setup();
+    uploadsPrisma.projectMembership.findMany.mockResolvedValueOnce([]);
+    const result: any = await factory.run(tool('agent_uploads_build_history'), { agentTypeId: 'at-other' }, READ);
+    expect(result.isError).toBe(true);
+  });
+
+  it('shares: only the owner may see or change them, never an admin override, never on a built-in', async () => {
+    const { factory, uploadsPrisma, tool } = setup();
+    const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
+    const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
+
+    const owner: any = await factory.run(tool('agent_uploads_shares_get'), { agentTypeId: 'at-mine' }, READ);
+    expect(owner.isError).toBeFalsy();
+    expect(owner.structuredContent).toMatchObject({ projectIds: ['p1'] });
+
+    const asAdmin: any = await factory.run(tool('agent_uploads_shares_get'), { agentTypeId: 'at-other' }, ADMIN_RW);
+    expect(asAdmin.isError).toBe(true);
+
+    const onBuiltin: any = await factory.run(
+      tool('agent_uploads_shares_get'),
+      { agentTypeId: 'at-builtin' },
+      ADMIN_RW,
+    );
+    expect(onBuiltin.isError).toBe(true);
+
+    const updated: any = await factory.run(
+      tool('agent_uploads_shares_update'),
+      { agentTypeId: 'at-mine', projectIds: ['7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11'] },
+      READ_WRITE,
+    );
+    expect(updated.isError).toBeFalsy();
+    expect(uploadsPrisma.$transaction).toHaveBeenCalled();
   });
 });

@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { AccessTokensModule } from '../access-tokens/access-tokens.module.js';
 import { AgentUploadModule } from '../agent-upload/agent-upload.module.js';
+import { AgentBuildModule } from '../agent-build/agent-build.module.js';
 import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module.js';
 import { AgentImageModule } from '../agent-image/agent-image.module.js';
+import { AgentPackageModule } from '../agent-package/agent-package.module.js';
 import { AgentsModule } from '../agents/agents.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { ConnectorsModule } from '../connectors/connectors.module.js';
@@ -26,6 +28,7 @@ import { MCP_TOOL_PROVIDERS } from './mcp.types.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
+import { AgentUploadsTools } from './tools/agent-uploads.tools.js';
 import { CatalogTools } from './tools/catalog.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
 import { EnvVarTemplatesTools } from './tools/env-var-templates.tools.js';
@@ -48,6 +51,7 @@ const TOOL_PROVIDERS = [
   PlatformSettingsTools,
   AgentReviewsTools,
   ConnectorsTools,
+  AgentUploadsTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
@@ -70,6 +74,8 @@ const TOOL_PROVIDERS = [
     EnvVarTemplatesModule,
     ConnectorsModule,
     AgentUploadModule,
+    AgentPackageModule,
+    AgentBuildModule,
   ],
   controllers: [McpController],
   providers: [

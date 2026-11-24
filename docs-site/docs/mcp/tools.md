@@ -211,6 +211,70 @@ Copy a configuration the user owns into a new one, named "`<name>` (Copy)", for 
 
 **Returns:** the new configuration, as `agent_configurations_get` shows it.
 
+## Uploaded agents
+
+A custom agent you upload, built and reviewed the same as one uploaded through the web app. Deleting one is admin-only and not available here.
+
+### `agent_uploads_create` · `mcp:write`
+
+Upload a custom agent package, packed here from its files instead of a `.zip` — same validation and the same 50MB size limit as the web upload. Starts a build and sets it pending review. Uploading an existing slug of your own with a higher `metadata.version` replaces it in place; another user's slug, or a built-in's, is refused.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `files` | array of `{ path, content }` | Must include `agent.yaml`. Text files only — this tool cannot carry binary assets |
+
+**Returns:** `{ id, slug, name, version, validationStatus, replacedVersion, warnings }`. `replacedVersion` is the version this upload replaced, or `null` for a new agent.
+
+### `agent_uploads_list` · `mcp:read`
+
+The caller's own uploads.
+
+**Inputs:** none.
+
+**Returns:** `{ items }`. Each item has `id`, `slug`, `name`, `description`, `icon`, `version`, `validationStatus`, `validationNotes`, `validatedAt`, `capabilities`, `defaultConfig`, `configSchema`, `pipelineSchema`, `requirements`, `createdAt`, `built`, `sdkVersion`, `sharedProjectIds` and `sdkProblem`.
+
+### `agent_uploads_build` · `mcp:write`
+
+Start a build of an uploaded agent from its stored package. The owner or a system admin may trigger it.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ buildLogId, message }`.
+
+### `agent_uploads_build_status` · `mcp:read`
+
+The latest build of an uploaded agent, for whoever can see it in their library (its owner, a member of a project it is shared with, or a system admin).
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ build }`. `build` is `null` when the agent has never been built, otherwise its status, image name, error if any, and stored output.
+
+### `agent_uploads_build_history` · `mcp:read`
+
+Past builds of an uploaded agent, newest first. Same visibility as `agent_uploads_build_status`.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ items }`.
+
+### `agent_uploads_shares_get` · `mcp:read`
+
+The projects a custom agent is shared with, and the projects its owner could share it with. Only the owner may see this — not a system admin, and not on a built-in.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ projectIds, projects }`.
+
+### `agent_uploads_shares_update` · `mcp:write`
+
+Share a custom agent with exactly these projects, replacing the current set. Their members may then deploy it, but not change it. Only the owner may share it, and only with projects they are a member of.
+
+**Inputs:** `agentTypeId`, `projectIds` (replaces the whole list).
+
+**Returns:** `{ projectIds }`.
+
 ## Projects and sessions
 
 ### `projects_list` · `mcp:read`

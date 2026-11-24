@@ -63,14 +63,14 @@ Which tools need which scope:
 
 | Scope | Tools |
 |---|---|
-| `mcp:read` (25) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `projects_get`, `projects_stats`, `projects_public_link_get`, `project_collaborators_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `env_var_templates_get`, `agents_get`, `agent_logs_get`, `connectors_list`, `connectors_get` |
-| `mcp:write` (30) | `personas_create`, `personas_update`, `personas_duplicate`, `plan_templates_create`, `plan_templates_update`, `plan_templates_duplicate`, `plan_templates_generate`, `agent_configurations_create`, `agent_configurations_update`, `agent_configurations_duplicate`, `env_var_templates_create`, `env_var_templates_update`, `env_var_templates_duplicate`, `projects_create`, `projects_update`, `projects_public_update`, `project_collaborators_invite`, `project_collaborators_remove`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
+| `mcp:read` (29) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `projects_get`, `projects_stats`, `projects_public_link_get`, `project_collaborators_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `env_var_templates_get`, `agents_get`, `agent_logs_get`, `agent_uploads_list`, `agent_uploads_build_status`, `agent_uploads_build_history`, `agent_uploads_shares_get`, `connectors_list`, `connectors_get` |
+| `mcp:write` (33) | `personas_create`, `personas_update`, `personas_duplicate`, `plan_templates_create`, `plan_templates_update`, `plan_templates_duplicate`, `plan_templates_generate`, `agent_configurations_create`, `agent_configurations_update`, `agent_configurations_duplicate`, `env_var_templates_create`, `env_var_templates_update`, `env_var_templates_duplicate`, `projects_create`, `projects_update`, `projects_public_update`, `project_collaborators_invite`, `project_collaborators_remove`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `agent_uploads_create`, `agent_uploads_build`, `agent_uploads_shares_update`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
 
 System admins also get `platform_settings_get` and `agent_reviews_list`/`agent_reviews_get` (`mcp:read`), and `platform_settings_update`, `agent_reviews_approve` and `agent_reviews_reject` (`mcp:write`). Nobody else sees them, and calling one by name answers `403`.
 
 ## The tools
 
-There are 55 tools, plus 2 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
+There are 62 tools, plus 2 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
 
 - Ids are named after what they point to (`projectId`, `sessionId`, `agentId`, `invitationId`, `personaId`, `planId`, `agentConfigurationId`, `agentTypeId`, `envVarTemplateId`). The name is the same in every tool.
 - `…_list` returns `{ items }` with a summary of each, and `…_get` returns one in full.
@@ -99,6 +99,7 @@ A typical run looks like this:
 - A session has at most one open invitation link. Revoke it before making a new one.
 - **Secrets:** `env_var_templates_list` returns variable names, never their values. `agents_deploy` doesn't take raw configuration or env var values: it names a plan, persona, configuration and env var template instead. Agent output leaves out the deployment snapshot and Kubernetes names.
 - `agents_stop` stops the agent and removes its pod; it doesn't delete the agent.
+- **Uploaded agents:** `agent_uploads_create` packs its files into a package itself, so it only takes text files — it can't carry a binary asset the web upload's `.zip` could. Deleting an upload is admin-only and not offered here.
 
 ## Audit log
 
