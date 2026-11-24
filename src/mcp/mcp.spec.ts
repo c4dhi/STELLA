@@ -37,6 +37,7 @@ import { UpdatePublicConfigDto } from '../projects/dto/update-public-config.dto.
 import { InviteCollaboratorDto } from '../project-invitations/dto/project-invitation.dto.js';
 import { CreateEnvVarTemplateDto } from '../env-var-templates/dto/create-env-var-template.dto.js';
 import { UpdateEnvVarTemplateDto } from '../env-var-templates/dto/update-env-var-template.dto.js';
+import { GeneratePlanTemplateDto } from '../plan-templates/dto/generate-plan-template.dto.js';
 
 const USER = {
   userId: 'u1',
@@ -139,6 +140,13 @@ function setup() {
     create: jest.fn(async () => ({ id: 'pl2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
     duplicate: jest.fn(async (id: string) => ({ id: `${id}-copy`, from: 'duplicate' })),
+  };
+  const planGenerator = {
+    generate: jest.fn(async () => ({
+      content: { states: [{ id: 'generated-state' }] },
+      suggestedName: 'Walk check-in',
+      suggestedDescription: 'A short daily walk check-in.',
+    })),
   };
   const configurations = {
     findAllByUser: jest.fn(async () => [
@@ -486,7 +494,7 @@ function setup() {
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
-    new PlanTemplatesTools(plans as any),
+    new PlanTemplatesTools(plans as any, planGenerator as any),
     new AgentConfigurationsTools(configurations as any),
     new ProjectsTools(
       projects as any,
@@ -515,6 +523,7 @@ function setup() {
     agentReview,
     personas,
     plans,
+    planGenerator,
     configurations,
     projects,
     projectInvitations,
@@ -1994,5 +2003,45 @@ describe('MCP duplicate tools', () => {
     expect(result.structuredContent).toMatchObject({ id: 'e1-copy' });
     // Never asked for, and the service response holds no raw values anyway.
     expect(JSON.stringify(result)).not.toContain('variables');
+  });
+});
+
+describe('MCP plan generator tool', () => {
+  it('is write-only and saves nothing itself', () => {
+    const { factory } = setup();
+    expect(factory.toolNamesFor(READ)).not.toContain('plan_templates_generate');
+    expect(factory.toolNamesFor(READ_WRITE)).toContain(
+      'plan_templates_generate',
+    );
+  });
+
+  it('validates the prompt through the REST DTO and returns the generator result as is', async () => {
+    const { factory, planGenerator, tool } = setup();
+    const result: any = await factory.run(
+      tool('plan_templates_generate'),
+      { prompt: 'A daily walk check-in', context: 'For an elderly user' },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const dto = planGenerator.generate.mock.calls[0][0];
+    expect(dto).toBeInstanceOf(GeneratePlanTemplateDto);
+    expect(dto.prompt).toBe('A daily walk check-in');
+    expect(dto.context).toBe('For an elderly user');
+    expect(result.structuredContent).toEqual({
+      content: { states: [{ id: 'generated-state' }] },
+      suggestedName: 'Walk check-in',
+      suggestedDescription: 'A short daily walk check-in.',
+    });
+  });
+
+  it('refuses a prompt over 5000 characters', async () => {
+    const { factory, planGenerator, tool } = setup();
+    const result: any = await factory.run(
+      tool('plan_templates_generate'),
+      { prompt: 'x'.repeat(5001) },
+      READ_WRITE,
+    );
+    expect(result.isError).toBe(true);
+    expect(planGenerator.generate).not.toHaveBeenCalled();
   });
 });

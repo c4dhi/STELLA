@@ -6,6 +6,6 @@ import { PlanGeneratorService } from './plan-generator.service.js';
 @Module({
   controllers: [PlanTemplatesController],
   providers: [PlanTemplatesService, PlanGeneratorService],
-  exports: [PlanTemplatesService],
+  exports: [PlanTemplatesService, PlanGeneratorService],
 })
 export class PlanTemplatesModule {}
