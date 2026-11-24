@@ -14,6 +14,7 @@ Conventions used on this page:
 - Ids are strings. Each id's description, as the assistant sees it, says which tool lists them.
 - Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets "tool not found" if it calls one by name — it was never registered for that connection.
 - On failure, every tool returns `{ "error": { "status", "message" } }` instead of the result shown here. `404` also means "not yours".
+- A call with an unknown field, at the top level or nested inside one (e.g. a `connectorBindings` entry), is refused with an "Invalid arguments" error rather than having that field quietly dropped.
 
 ## Account
 
