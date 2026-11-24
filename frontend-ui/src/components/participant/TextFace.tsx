@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
+import { visualViewportBox, type ViewportBox } from '../../lib/visualViewportBox'
 import { Bot, HelpCircle, LayoutGrid, Maximize2, Minimize2 } from 'lucide-react'
 import ParticipantChatThread, {
   type ParticipantChatThreadHandle,
@@ -37,17 +38,21 @@ export default function TextFace({
 
   // On a phone, the layout viewport doesn't shrink when the on-screen
   // keyboard opens, so an `inset-0` composer stays sized for the full
-  // screen and the keyboard covers it. Track the visual viewport instead,
-  // which does shrink, so the composer rides up above the keyboard.
-  const [viewportHeight, setViewportHeight] = useState<number | null>(null)
+  // screen and the keyboard covers it. Follow the visual viewport instead:
+  // its height, and its offset too, because iOS also scrolls it.
+  const [viewportBox, setViewportBox] = useState<ViewportBox | undefined>(undefined)
 
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
-    const update = () => setViewportHeight(vv.height)
+    const update = () => setViewportBox(visualViewportBox(vv))
     update()
     vv.addEventListener('resize', update)
-    return () => vv.removeEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
   }, [])
 
   // The agent's name from its latest message.
@@ -60,7 +65,7 @@ export default function TextFace({
       animate={{ opacity: 1 }}
       transition={{ duration: 0.25 }}
       className="absolute inset-0 z-20 flex flex-col bg-[#0a0a12] text-white"
-      style={viewportHeight != null ? { height: viewportHeight } : undefined}
+      style={viewportBox}
     >
       <header className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-3 border-b border-white/10">
         <div className="flex items-center gap-3 min-w-0">
