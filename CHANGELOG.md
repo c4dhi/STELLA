@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP clients can now manage projects.** `projects_create`, `_get`, `_stats` and `_update`; set up and read a project's public link (`projects_public_update`, `_public_link_get`); and list its collaborators and metrics — the same JSON-RPC interface personas and plan templates already used. A project's raw plan, pipeline config and env vars are never sent over this interface, only their ids (#1025)
+
 ### Fixed
 
 - **A text-only session no longer opens with a window where the agent can speak.** An agent joining, restarting, or waking from an auto-pause into a session locked to the Text face used to start in voice and only learn it was text-only from the screen's own announcement, sent a moment after it joins; under a slow STT/TTS connect that announcement could be sent before the agent was ready to receive it and never arrive at all, so a reply generated in that window could be spoken instead of only shown as text (#1016). The deployment now tells the agent at spawn whenever the invitation it is joining already exists and is text-locked, so it starts in text from the first instant; a participant's own screen also now tells every agent already in the room, or that joins afterward, the room's real mode (voice or text) as soon as it connects, which is what closes the gap for an invitation created after the agent was already deployed. The mode is one value for the whole agent, so only a participant's own screen sends it: opening a running text-only session to look at it, from the session page, never switches the agent to voice. For researchers: a text-only study session should no longer have any agent audio in its recording from before the first reply; see [Text sessions](https://c4dhi.github.io/STELLA/docs/guides/text-sessions#what-it-changes-for-the-agent)
