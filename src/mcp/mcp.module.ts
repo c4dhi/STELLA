@@ -9,6 +9,7 @@ import { ConnectorsModule } from '../connectors/connectors.module.js';
 import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
 import { InvitationsModule } from '../invitations/invitations.module.js';
 import { McpOAuthModule } from '../mcp-oauth/mcp-oauth.module.js';
+import { MetricsModule } from '../metrics/metrics.module.js';
 import { PersonasModule } from '../personas/personas.module.js';
 import { PlanTemplatesModule } from '../plan-templates/plan-templates.module.js';
 import { PlatformSettingsModule } from '../platform-settings/platform-settings.module.js';
@@ -72,6 +73,7 @@ const TOOL_PROVIDERS = [
     EnvVarTemplatesModule,
     ConnectorsModule,
     AgentUploadModule,
+    MetricsModule,
   ],
   controllers: [McpController],
   providers: [

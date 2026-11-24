@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ResourceAccessService } from '../../auth/resource-access.service.js';
 import { ProjectsService } from '../../projects/projects.service.js';
 import { ProjectInvitationsService } from '../../project-invitations/project-invitations.service.js';
+import { MetricsService } from '../../metrics/metrics.service.js';
 import { CreateProjectDto } from '../../projects/dto/create-project.dto.js';
 import { UpdateProjectDto } from '../../projects/dto/update-project.dto.js';
 import { UpdatePublicConfigDto } from '../../projects/dto/update-public-config.dto.js';
@@ -56,6 +57,7 @@ export class ProjectsTools implements McpToolProvider {
     private readonly collaborators: ProjectInvitationsService,
     private readonly access: ResourceAccessService,
     private readonly config: ConfigService,
+    private readonly metrics: MetricsService,
   ) {}
 
   private baseUrl(): string {
@@ -175,6 +177,21 @@ export class ProjectsTools implements McpToolProvider {
         handler: async ({ projectId }, { auth }) => {
           this.access.assertProjectMember(auth.user, projectId);
           return { ...(await this.projects.getStats(projectId)) };
+        },
+      }),
+      defineTool({
+        name: 'project_metrics_get',
+        title: 'Get project metrics',
+        description:
+          'A fuller metrics snapshot than projects_stats: sessions by status (active/closed too), agents by ' +
+          "health state, participants currently online, messages sent today, and the project's agent type, " +
+          'plan template and public status.',
+        scope: 'mcp:read',
+        input: { projectId },
+        annotations: READ_ONLY,
+        handler: async ({ projectId }, { auth }) => {
+          this.access.assertProjectMember(auth.user, projectId);
+          return { ...(await this.metrics.getProjectMetrics(projectId)) };
         },
       }),
       defineTool({

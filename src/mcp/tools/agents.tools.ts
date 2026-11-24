@@ -14,6 +14,17 @@ import {
 } from '../mcp.types.js';
 
 const agentId = idArg('agent', 'sessions_get (agents)');
+const projectId = idArg('project', 'projects_list');
+const sessionId = idArg('session', 'sessions_list');
+const agentTypeId = idArg('agent type', 'agent_types_list');
+const dateRangeFields = {
+  from: z
+    .string()
+    .datetime()
+    .optional()
+    .describe('ISO date; defaults to 30 days ago'),
+  to: z.string().datetime().optional().describe('ISO date; defaults to now'),
+};
 
 /**
  * What a client needs to follow an agent. Leaves out the deployment snapshot
@@ -201,6 +212,42 @@ export class AgentsTools implements McpToolProvider {
           await this.access.assertAgentAccess(auth.user, agentId);
           await this.agents.remove(agentId);
           return agentSummary(await this.agents.findOne(agentId));
+        },
+      }),
+      defineTool({
+        name: 'agent_metrics_get',
+        title: 'Get agent type metrics',
+        description:
+          'Per-stage latency stats (mean/p50/p95/min/max) for every session of one agent type in a project over ' +
+          'a date range, with outlier sessions (any stage over 2x the global p50) and a summary across stages.',
+        scope: 'mcp:read',
+        input: { projectId, agentTypeId, ...dateRangeFields },
+        annotations: READ_ONLY,
+        handler: async ({ projectId, agentTypeId, from, to }, { auth }) => {
+          this.access.assertProjectMember(auth.user, projectId);
+          const slug = await this.agentTypeSlug(agentTypeId);
+          return {
+            ...(await this.agents.getAgentMetrics(
+              projectId,
+              slug,
+              from ? new Date(from) : new Date(Date.now() - 30 * 86400000),
+              to ? new Date(to) : new Date(),
+            )),
+          };
+        },
+      }),
+      defineTool({
+        name: 'session_analytics_get',
+        title: "Get a session's latency analytics",
+        description:
+          "Per-stage latency for one session's turns, with a summary across stages. Different from " +
+          'session_state_get (plan progress) and session_transcript_get (the messages themselves).',
+        scope: 'mcp:read',
+        input: { sessionId },
+        annotations: READ_ONLY,
+        handler: async ({ sessionId }, { auth }) => {
+          await this.access.assertSessionAccess(auth.user, sessionId);
+          return { ...(await this.agents.getSessionAnalytics(sessionId)) };
         },
       }),
     ];

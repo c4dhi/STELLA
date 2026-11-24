@@ -301,6 +301,24 @@ function setup() {
       key === 'PUBLIC_FRONTEND_URL' ? 'https://stella.test' : undefined,
     ),
   };
+  const metrics = {
+    getProjectMetrics: jest.fn(async (projectId: string) => ({
+      projectId,
+      timestamp: new Date('2026-10-01T00:00:00Z'),
+      sessions: { total: 3, active: 1, closed: 2 },
+      agents: { total: 2, running: 1, starting: 0, failed: 0, stopped: 1 },
+      participants: { total: 4, online: 1 },
+      messages: { total: 50, todayCount: 5 },
+      project: {
+        name: 'Testing',
+        agentType: 'stella-v2-agent',
+        agentTypeName: 'STELLA V2',
+        planTemplateName: 'Onboarding',
+        isPublic: false,
+        createdAt: new Date('2026-09-01T00:00:00Z'),
+      },
+    })),
+  };
   const sessions = {
     findAll: jest.fn(async () => ({ data: [], total: 0, skip: 0, take: 20 })),
     getMessages: jest.fn(async () => ({
@@ -341,6 +359,40 @@ function setup() {
       participants: [],
       _count: { messages: 0 },
     })),
+    getTimeline: jest.fn(async () => ({
+      timeline: [
+        {
+          type: 'message',
+          data: {
+            id: 'm1',
+            timestamp: new Date('2026-10-01T00:00:00Z'),
+            role: 'user',
+            messageType: 'user_text',
+            content: 'hi',
+          },
+        },
+        {
+          type: 'event',
+          data: {
+            id: 'e1',
+            timestamp: new Date('2026-10-01T00:00:01Z'),
+            eventType: 'participant_joined',
+            data: { participantId: 'p1' },
+          },
+        },
+      ],
+      total: 2,
+    })),
+    listParticipants: jest.fn(async () => [
+      {
+        id: 'p1',
+        name: 'Alice',
+        identity: 'human',
+        joinedAt: new Date('2026-10-01T00:00:00Z'),
+        leftAt: null,
+        lastSeenAt: new Date('2026-10-01T00:05:00Z'),
+      },
+    ]),
   };
   const agentRow = {
     id: 'a1',
@@ -358,6 +410,17 @@ function setup() {
     getLogs: jest.fn(async () => 'line 1\nline 2'),
     restart: jest.fn(async () => agentRow),
     remove: jest.fn(async () => ({ message: 'Agent stopped successfully' })),
+    getAgentMetrics: jest.fn(async () => ({
+      stages: [
+        { stage: 'ttfab', count: 5, mean_ms: 100, p50_ms: 90, p95_ms: 150, min_ms: 50, max_ms: 200 },
+      ],
+      outlierSessions: [],
+      summary: { totalSessions: 5 },
+    })),
+    getSessionAnalytics: jest.fn(async () => ({
+      stages: [{ stage: 'ttfab', count: 1, mean_ms: 100 }],
+      summary: { totalTurns: 1 },
+    })),
   };
   const invitations = {
     create: jest.fn(async () => ({
@@ -542,6 +605,7 @@ function setup() {
       projectInvitations as any,
       access,
       config as any,
+      metrics as any,
     ),
     new SessionsTools(
       sessions as any,
@@ -571,6 +635,7 @@ function setup() {
     projectInvitations,
     sessions,
     agents,
+    metrics,
     invitations,
     envVarTemplates,
     connectors,
@@ -789,8 +854,12 @@ describe('MCP session and agent tools', () => {
       expect.arrayContaining([
         'sessions_get',
         'session_invitations_list',
+        'session_timeline_get',
+        'session_participants_list',
         'agents_get',
         'agent_logs_get',
+        'agent_metrics_get',
+        'session_analytics_get',
         'env_var_templates_list',
       ]),
     );
@@ -856,6 +925,112 @@ describe('MCP session and agent tools', () => {
     expect(invitations.create).not.toHaveBeenCalled();
     expect(invitations.revoke).not.toHaveBeenCalled();
     for (const fn of Object.values(agents)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('gets a session timeline, newest first, with messages and events told apart', async () => {
+    const { factory, sessions, tool } = setup();
+    const other: any = await factory.run(
+      tool('session_timeline_get'),
+      { sessionId: 's2' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(sessions.getTimeline).not.toHaveBeenCalled();
+
+    const ok: any = await factory.run(
+      tool('session_timeline_get'),
+      { sessionId: 's1', skip: 0, take: 50 },
+      READ,
+    );
+    expect(sessions.getTimeline.mock.calls[0]).toEqual(['s1', 0, 50]);
+    expect(ok.structuredContent.total).toBe(2);
+    expect(ok.structuredContent.items[0]).toEqual({
+      type: 'message',
+      id: 'm1',
+      timestamp: '2026-10-01T00:00:00.000Z',
+      role: 'user',
+      messageType: 'user_text',
+      content: 'hi',
+    });
+    expect(ok.structuredContent.items[1]).toEqual({
+      type: 'event',
+      id: 'e1',
+      timestamp: '2026-10-01T00:00:01.000Z',
+      eventType: 'participant_joined',
+      data: { participantId: 'p1' },
+    });
+  });
+
+  it('lists every participant of a session, including ones who left', async () => {
+    const { factory, sessions, tool } = setup();
+    const other: any = await factory.run(
+      tool('session_participants_list'),
+      { sessionId: 's2' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(sessions.listParticipants).not.toHaveBeenCalled();
+
+    const ok: any = await factory.run(
+      tool('session_participants_list'),
+      { sessionId: 's1' },
+      READ,
+    );
+    expect(sessions.listParticipants).toHaveBeenCalledWith('s1');
+    expect(ok.structuredContent.items[0]).toEqual({
+      id: 'p1',
+      name: 'Alice',
+      identity: 'human',
+      joinedAt: '2026-10-01T00:00:00.000Z',
+      leftAt: null,
+      lastSeenAt: '2026-10-01T00:05:00.000Z',
+    });
+  });
+
+  it('gets agent type metrics by resolving the agent type id to its slug', async () => {
+    const { factory, agents, tool } = setup();
+    const other: any = await factory.run(
+      tool('agent_metrics_get'),
+      { projectId: 'p2', agentTypeId: 'at1' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(agents.getAgentMetrics).not.toHaveBeenCalled();
+
+    const unknownType: any = await factory.run(
+      tool('agent_metrics_get'),
+      { projectId: 'p1', agentTypeId: 'nope' },
+      READ,
+    );
+    expect(parse(unknownType).error.status).toBe(404);
+
+    const ok: any = await factory.run(
+      tool('agent_metrics_get'),
+      { projectId: 'p1', agentTypeId: 'at1' },
+      READ,
+    );
+    expect(agents.getAgentMetrics.mock.calls[0][0]).toBe('p1');
+    expect(agents.getAgentMetrics.mock.calls[0][1]).toBe('stella-v2-agent');
+    expect(ok.structuredContent.stages[0].stage).toBe('ttfab');
+  });
+
+  it('gets a session\'s latency analytics only inside the user projects', async () => {
+    const { factory, agents, tool } = setup();
+    const other: any = await factory.run(
+      tool('session_analytics_get'),
+      { sessionId: 's2' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(agents.getSessionAnalytics).not.toHaveBeenCalled();
+
+    const ok: any = await factory.run(
+      tool('session_analytics_get'),
+      { sessionId: 's1' },
+      READ,
+    );
+    expect(agents.getSessionAnalytics).toHaveBeenCalledWith('s1');
+    expect(ok.structuredContent.summary).toEqual({ totalTurns: 1 });
   });
 
   it('deploys an agent as the token owner, without raw config or env var values', async () => {
@@ -1606,6 +1781,7 @@ describe('MCP project tools', () => {
         'projects_list',
         'projects_get',
         'projects_stats',
+        'project_metrics_get',
         'projects_public_link_get',
         'project_collaborators_list',
       ]),
@@ -1628,10 +1804,11 @@ describe('MCP project tools', () => {
   });
 
   it('only shows a project the user is a member of', async () => {
-    const { factory, projects, tool } = setup();
+    const { factory, projects, metrics, tool } = setup();
     for (const name of [
       'projects_get',
       'projects_stats',
+      'project_metrics_get',
       'projects_public_link_get',
     ]) {
       const result: any = await factory.run(
@@ -1643,6 +1820,7 @@ describe('MCP project tools', () => {
     }
     expect(projects.findOne).not.toHaveBeenCalled();
     expect(projects.getStats).not.toHaveBeenCalled();
+    expect(metrics.getProjectMetrics).not.toHaveBeenCalled();
     expect(projects.getPublicLink).not.toHaveBeenCalled();
 
     const update: any = await factory.run(
@@ -1652,6 +1830,23 @@ describe('MCP project tools', () => {
     );
     expect(parse(update).error.status).toBe(404);
     expect(projects.update).not.toHaveBeenCalled();
+  });
+
+  it('gets a richer project metrics snapshot than projects_stats', async () => {
+    const { factory, metrics, tool } = setup();
+    const ok: any = await factory.run(
+      tool('project_metrics_get'),
+      { projectId: 'p1' },
+      READ,
+    );
+    expect(metrics.getProjectMetrics).toHaveBeenCalledWith('p1');
+    expect(ok.structuredContent).toMatchObject({
+      sessions: { total: 3, active: 1, closed: 2 },
+      agents: { total: 2, running: 1 },
+      participants: { total: 4, online: 1 },
+      messages: { total: 50, todayCount: 5 },
+      project: { name: 'Testing', planTemplateName: 'Onboarding' },
+    });
   });
 
   it('creates and updates a project through the REST DTOs', async () => {
