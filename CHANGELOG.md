@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A public project can run its agent as a companion.** The public setup offered only plan mode, even for agents that can be companions. It now asks "How should it run?" like the deploy dialog, and in companion mode you pick the activities she may offer. Every participant's agent starts that way. Plan-mode and existing public projects are unchanged (#1018)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
