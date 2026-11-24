@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateProjectDto } from './dto/create-project.dto.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
@@ -6,6 +6,7 @@ import { ProjectStatsDto } from './dto/project-stats.dto.js';
 import { UpdatePublicConfigDto } from './dto/update-public-config.dto.js';
 import { SessionStatus, AgentStatus } from '@prisma/client';
 import { AgentsService } from '../agents/agents.service.js';
+import { AGENT_TYPE_MANIFEST_SELECT, manifestOfAgentType, resolveAgentRequirements } from '../agents/agent-requirements.js';
 
 @Injectable()
 export class ProjectsService {
@@ -327,6 +328,7 @@ export class ProjectsService {
         updateData.publicMaxSessionDurationSeconds = dto.maxSessionDurationSeconds;
       }
       await this.checkPublicBindings(project, dto, callerId);
+      await this.checkPublicPlans(project, dto);
     } else {
       // When making private, optionally clear public config
       // Keep the publicToken so it can be re-enabled without losing the link
@@ -394,6 +396,57 @@ export class ProjectsService {
     const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
     if (ownerId && agentTypeId && (dto.agentConfig !== undefined || typeChanged)) {
       await this.agentsService.checkDeployable(agentTypeId, ownerId, project.id, bindings);
+    }
+  }
+
+  /**
+   * Companion mode and the plans it offers only make sense if the agent type
+   * actually declares companion support, and each plan id is one the owner
+   * can run — the agent always spawns as the project owner (see
+   * checkPublicBindings), never as whoever saves this config. Unchecked, a
+   * wrong save here only fails once a participant joins and the public link
+   * breaks, with nothing reported at save time. REST and MCP both go through
+   * this method, so they share the refusal.
+   */
+  private async checkPublicPlans(
+    project: { id: string; publicAgentTypeId: string | null },
+    dto: UpdatePublicConfigDto,
+  ): Promise<void> {
+    const agentConfig = dto.agentConfig;
+    if (!agentConfig) {
+      return;
+    }
+
+    if (agentConfig.mode === 'companion') {
+      const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
+      const agentType = agentTypeId
+        ? await this.prisma.agentType.findUnique({
+            where: { id: agentTypeId },
+            select: AGENT_TYPE_MANIFEST_SELECT,
+          })
+        : null;
+      const modes = agentType
+        ? resolveAgentRequirements(manifestOfAgentType(agentType)).plans?.modes
+        : undefined;
+      if (!modes?.includes('companion')) {
+        throw new BadRequestException('This agent type does not support companion mode');
+      }
+    }
+
+    if (agentConfig.availablePlanIds?.length) {
+      const owner = await this.prisma.projectMembership.findFirst({
+        where: { projectId: project.id, role: 'OWNER' },
+        select: { userId: true },
+      });
+      const ownerId = owner?.userId ?? null;
+      for (const planId of agentConfig.availablePlanIds) {
+        const template = ownerId
+          ? await this.prisma.planTemplate.findUnique({ where: { id: planId } })
+          : null;
+        if (!template || template.userId !== ownerId) {
+          throw new BadRequestException(`Plan ${planId} is not available to the project owner`);
+        }
+      }
     }
   }
 

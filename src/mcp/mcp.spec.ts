@@ -2018,6 +2018,98 @@ describe('MCP project tools', () => {
     });
   });
 
+  it('takes mode and availablePlanIds for companion mode, and returns them from projects_get', async () => {
+    const { factory, projects, tool } = setup();
+    const planA = '1a1e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a01';
+    const planB = '2b2e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a02';
+
+    const companion: any = await factory.run(
+      tool('projects_public_update'),
+      {
+        projectId: 'p1',
+        isPublic: true,
+        mode: 'companion',
+        availablePlanIds: [planA, planB],
+      },
+      READ_WRITE,
+    );
+    expect(companion.isError).toBeFalsy();
+    const [, dto] = projects.updatePublicConfig.mock.calls[0] as any[];
+    expect(dto.agentConfig).toMatchObject({
+      mode: 'companion',
+      availablePlanIds: [planA, planB],
+    });
+
+    // plan mode is unaffected: no mode/availablePlanIds sent, none required.
+    const planModeUpdate: any = await factory.run(
+      tool('projects_public_update'),
+      { projectId: 'p1', isPublic: true, name: 'Renamed' },
+      READ_WRITE,
+    );
+    expect(planModeUpdate.isError).toBeFalsy();
+    const [, planDto] = projects.updatePublicConfig.mock.calls[1] as any[];
+    expect(planDto.agentConfig.mode).toBeUndefined();
+    expect(planDto.agentConfig.availablePlanIds).toBeUndefined();
+
+    // projects_get surfaces both fields, same as the other MCP-visible fields.
+    projects.findOne.mockResolvedValueOnce({
+      id: 'p1',
+      name: 'Testing',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      updatedAt: new Date('2026-10-01T00:00:00Z'),
+      agentInactivityTimeoutMinutes: 5,
+      closeSessionWhenEmpty: false,
+      isPublic: true,
+      publicToken: 'public-join-secret',
+      publicAgentTypeId: 'at1',
+      publicAgentConfig: {
+        name: 'Public agent',
+        mode: 'companion',
+        availablePlanIds: [planA, planB],
+      },
+      publicVisualizerType: 'sphere',
+      publicVisualizerLocked: false,
+      publicMaxSessionDurationSeconds: null,
+      publicExpiresAt: null,
+      publicEnabled: true,
+      sessions: [],
+    });
+    const got: any = await factory.run(tool('projects_get'), { projectId: 'p1' }, READ);
+    expect(got.structuredContent.publicAgentConfig).toMatchObject({
+      mode: 'companion',
+      availablePlanIds: [planA, planB],
+    });
+  });
+
+  it('refuses availablePlanIds without mode "companion", and a malformed plan id, as the REST DTO would', async () => {
+    const { factory, tool } = setup();
+
+    const undeclaredMode: any = await factory.run(
+      tool('projects_public_update'),
+      {
+        projectId: 'p1',
+        isPublic: true,
+        availablePlanIds: ['1a1e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a01'],
+      },
+      READ_WRITE,
+    );
+    expect(parse(undeclaredMode).error.status).toBe(400);
+    expect(parse(undeclaredMode).error.message).toContain('companion');
+
+    const unusablePlan: any = await factory.run(
+      tool('projects_public_update'),
+      {
+        projectId: 'p1',
+        isPublic: true,
+        mode: 'companion',
+        availablePlanIds: ['not-a-uuid'],
+      },
+      READ_WRITE,
+    );
+    expect(parse(unusablePlan).error.status).toBe(400);
+    expect(parse(unusablePlan).error.message).toContain('availablePlanIds');
+  });
+
   it("never returns a public agent's raw plan, pipeline overrides or env var values, only names and whether they're set", async () => {
     const { factory, tool } = setup();
     for (const [name, args] of [

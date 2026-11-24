@@ -13,9 +13,11 @@ import {
   IsArray,
   ArrayMaxSize,
   IsIn,
+  Validate,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ConnectorBindingDto } from '../../agents/dto/create-agent.dto.js';
+import { AvailablePlanIdsNeedsCompanionMode } from './available-plan-ids.validator.js';
 
 /**
  * Agent configuration for public projects
@@ -77,6 +79,7 @@ export class PublicAgentConfigDto {
   @IsArray()
   @ArrayMaxSize(20)
   @IsUUID('4', { each: true })
+  @Validate(AvailablePlanIdsNeedsCompanionMode)
   availablePlanIds?: string[];
 }
 

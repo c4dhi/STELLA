@@ -11,6 +11,18 @@ const validate = (body: unknown) =>
 const PERSONA = '7d3c3a52-2b3e-4b8e-9d61-6f1d1c1f8a01';
 const CONFIGURATION = '0f6b2c1e-6a4d-4f0e-8c3b-2a9e5d7c4b10';
 const CONNECTOR = '1c3d221a-3b5f-4c2a-9e8d-7f6a5b4c3d2e';
+const PLAN = 'a3b2c1d0-4e5f-4a6b-8c9d-0e1f2a3b4c5d';
+
+/** A stored AgentType row with a manifest declaring the given plan modes. */
+const agentTypeRow = (modes: string[]) => ({
+  manifest: {
+    version: '2.0',
+    metadata: { name: 'ELIAS', slug: 'elias', version: '1.0.0', description: 'x' },
+    image: { dockerfile: 'Dockerfile' },
+    capabilities: modes.includes('companion') ? ['plans', 'companion'] : ['plans'],
+    features: { plans: { modes } },
+  },
+});
 
 describe('public project setup', () => {
   it('accepts the persona, configuration and connectors the setup wizard sends', async () => {
@@ -152,6 +164,87 @@ describe('public project setup', () => {
       await save(service, 'member-1', { agentTypeId: 'type-1', enabled: true });
       expect(agents.checkDeployable).not.toHaveBeenCalled();
       expect(stored().publicAgentConfig).toEqual({ name: 'ELIAS', ...bind('owner-private') });
+    });
+  });
+
+  describe('companion mode and the plans it offers', () => {
+    const setup = (opts: {
+      agentType?: unknown;
+      planTemplates?: Record<string, { userId: string }>;
+    }) => {
+      const prisma: any = {
+        project: {
+          findUnique: jest.fn(async () => ({ id: 'proj', publicAgentTypeId: 'type-1', publicAgentConfig: null })),
+          update: jest.fn(async ({ data }: any) => ({ id: 'proj', ...data })),
+        },
+        agentType: { findUnique: jest.fn(async () => opts.agentType ?? null) },
+        projectMembership: { findFirst: jest.fn(async () => ({ userId: 'owner-1' })) },
+        planTemplate: {
+          findUnique: jest.fn(async ({ where: { id } }: any) =>
+            opts.planTemplates?.[id] ? { id, ...opts.planTemplates[id] } : null,
+          ),
+        },
+      };
+      const agents: any = { checkDeployable: jest.fn(async () => undefined) };
+      return { prisma, service: new ProjectsService(prisma, agents) };
+    };
+    const save = (service: ProjectsService, dto: object) =>
+      service.updatePublicConfig('proj', { isPublic: true, agentTypeId: 'type-1', ...dto } as UpdatePublicConfigDto, 'owner-1');
+
+    it('refuses companion mode when the agent type does not declare it', async () => {
+      const { prisma, service } = setup({ agentType: agentTypeRow(['plan']) });
+      await expect(save(service, { agentConfig: { name: 'ELIAS', mode: 'companion' } })).rejects.toThrow(
+        'does not support companion mode',
+      );
+      expect(prisma.project.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses companion mode when the agent type has no plans feature at all', async () => {
+      const { service } = setup({ agentType: { manifest: null, slug: 'elias', name: 'ELIAS', description: 'x', version: '1.0.0' } });
+      await expect(save(service, { agentConfig: { name: 'ELIAS', mode: 'companion' } })).rejects.toThrow(
+        'does not support companion mode',
+      );
+    });
+
+    it('accepts companion mode when the agent type declares it', async () => {
+      const { prisma, service } = setup({ agentType: agentTypeRow(['plan', 'companion']) });
+      await save(service, { agentConfig: { name: 'ELIAS', mode: 'companion' } });
+      expect(prisma.project.update).toHaveBeenCalled();
+    });
+
+    it("refuses a plan id that isn't the owner's", async () => {
+      const { prisma, service } = setup({
+        agentType: agentTypeRow(['companion']),
+        planTemplates: { [PLAN]: { userId: 'someone-else' } },
+      });
+      await expect(
+        save(service, { agentConfig: { name: 'ELIAS', mode: 'companion', availablePlanIds: [PLAN] } }),
+      ).rejects.toThrow('is not available to the project owner');
+      expect(prisma.project.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses a plan id that doesn't exist", async () => {
+      const { service } = setup({ agentType: agentTypeRow(['companion']), planTemplates: {} });
+      await expect(
+        save(service, { agentConfig: { name: 'ELIAS', mode: 'companion', availablePlanIds: [PLAN] } }),
+      ).rejects.toThrow('is not available to the project owner');
+    });
+
+    it("accepts plan ids that are the owner's", async () => {
+      const { prisma, service } = setup({
+        agentType: agentTypeRow(['companion']),
+        planTemplates: { [PLAN]: { userId: 'owner-1' } },
+      });
+      await save(service, { agentConfig: { name: 'ELIAS', mode: 'companion', availablePlanIds: [PLAN] } });
+      expect(prisma.project.update).toHaveBeenCalled();
+    });
+
+    it('does not check plans at all in plan mode, or when agentConfig is absent', async () => {
+      const { prisma, service } = setup({ agentType: agentTypeRow(['plan']) });
+      await save(service, { agentConfig: { name: 'ELIAS' } });
+      expect(prisma.planTemplate.findUnique).not.toHaveBeenCalled();
+      await service.updatePublicConfig('proj', { isPublic: true } as UpdatePublicConfigDto, 'owner-1');
+      expect(prisma.project.update).toHaveBeenCalledTimes(2);
     });
   });
 });
