@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { AgentPackageService } from '../agent-package/agent-package.service.js'
+import { DockerfileValidator } from '../agent-package/validators/dockerfile.validator.js'
 import { execFile, ExecFileException } from 'child_process'
 import { promisify } from 'util'
 import * as fs from 'fs/promises'
@@ -65,6 +66,16 @@ export function parseSdkVersionOutput(stdout: string): string | null {
   return /^\d+(\.\d+)*([.-]?[A-Za-z0-9.]+)?$/.test(version) ? version : null
 }
 
+/**
+ * Whether a built image's RootFS layers show it sitting on top of a claimed
+ * base image: the base's layers, in order, must be an exact prefix of the
+ * built image's own. An empty base (nothing could be inspected) never
+ * matches, so a failed read refuses rather than vacuously passing.
+ */
+export function builtImageSitsOnBase(baseLayers: string[], builtLayers: string[]): boolean {
+  return baseLayers.length > 0 && baseLayers.every((layer, i) => layer === builtLayers[i])
+}
+
 export interface BuildResult {
   success: boolean
   imageName?: string
@@ -100,6 +111,7 @@ export class AgentBuildService {
     private prisma: PrismaService,
     private agentPackageService: AgentPackageService,
     private userMessagesService: UserMessagesService,
+    private dockerfileValidator: DockerfileValidator,
   ) {
     const nodeEnv = this.configService.get<string>('NODE_ENV', 'local')
     this.isProduction = nodeEnv === 'production'
@@ -265,6 +277,12 @@ export class AgentBuildService {
       this.logger.log(`Building image ${imageName}...`)
       const buildOutput = await this.buildDockerImage(imageName, extractedPath, dockerfilePath)
 
+      // The Dockerfile parse that gated the upload is checked once more, against
+      // what was actually built: an uploaded Dockerfile could in principle parse
+      // one way and build another. Mismatch, or anything that can't be
+      // determined, removes the image and refuses it.
+      await this.verifyBuiltBaseImage(imageName, dockerfilePath)
+
       // What the image really has installed decides deployability, not what the
       // package claims: a build outside the SDK support window fails here.
       const sdkVersion = await this.detectSdkVersion(imageName)
@@ -352,6 +370,62 @@ export class AgentBuildService {
     } catch {
       return null
     }
+  }
+
+  /**
+   * Confirms that the image just built actually sits on the allowed base
+   * image the Dockerfile claims, by comparing RootFS layers: the base
+   * image's layers, freshly pulled, must be an exact prefix of the built
+   * image's own layers. Removes the built image and throws, refusing the
+   * upload, on any mismatch or on anything that cannot be determined
+   * (the claim can't be read, the base can't be pulled, either image can't
+   * be inspected).
+   */
+  private async verifyBuiltBaseImage(imageName: string, dockerfilePath: string): Promise<void> {
+    let baseImage: string | undefined
+    try {
+      const dockerfileContent = await fs.readFile(dockerfilePath, 'utf-8')
+      baseImage = this.dockerfileValidator.validate(dockerfileContent).baseImage
+    } catch (error) {
+      await this.removeImage(imageName)
+      throw new Error(`Could not re-read the Dockerfile to verify ${imageName}'s base image: ${(error as Error).message}`)
+    }
+
+    if (!baseImage) {
+      await this.removeImage(imageName)
+      throw new Error(`Could not determine ${imageName}'s claimed base image after the build`)
+    }
+
+    try {
+      await execFileAsync('docker', ['pull', baseImage], { timeout: 120000 })
+      const [baseLayers, builtLayers] = await Promise.all([this.imageLayers(baseImage), this.imageLayers(imageName)])
+
+      if (!builtImageSitsOnBase(baseLayers, builtLayers)) {
+        throw new Error(`${imageName}'s layers do not sit on top of ${baseImage}'s`)
+      }
+    } catch (error) {
+      await this.removeImage(imageName)
+      throw new Error(`Refusing ${imageName}: could not verify it is built on the allowed ${baseImage}: ${(error as Error).message}`)
+    }
+  }
+
+  /** The RootFS layer diff ids of a local image, base to top, in order. */
+  private async imageLayers(imageName: string): Promise<string[]> {
+    const { stdout } = await execFileAsync('docker', ['image', 'inspect', imageName, '--format', '{{json .RootFS.Layers}}'], {
+      timeout: 30000,
+    })
+    const layers = JSON.parse(stdout.trim())
+    if (!Array.isArray(layers)) {
+      throw new Error(`Unexpected "docker image inspect" output for ${imageName}`)
+    }
+    return layers
+  }
+
+  /** Best-effort removal of a built image that failed verification; never throws. */
+  private async removeImage(imageName: string): Promise<void> {
+    await execFileAsync('docker', ['rmi', '-f', imageName], { timeout: 30000 }).catch((error) =>
+      this.logger.warn(`Failed to remove ${imageName} after a failed base-image check: ${(error as Error).message}`),
+    )
   }
 
   /**

@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { buildImageName, resolveDockerfilePath } from './agent-build.service.js'
+import { buildImageName, builtImageSitsOnBase, resolveDockerfilePath } from './agent-build.service.js'
 
 // The build runs `docker build` on the host with values from an uploaded package.
 describe('agent build input checks', () => {
@@ -32,5 +32,36 @@ describe('agent build input checks', () => {
   it('no longer runs anything through a shell', () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), 'src/agent-build/agent-build.service.ts'), 'utf8')
     expect(src).not.toMatch(/\bexecAsync\b|import \{[^}]*\bexec\b[^}]*\} from 'child_process'/)
+  })
+})
+
+// After the build, the built image's RootFS layers must sit on top of the
+// claimed base image's own - a second, independent check behind the static
+// Dockerfile parse (see DockerfileValidator).
+describe('builtImageSitsOnBase', () => {
+  const base = ['sha256:base1', 'sha256:base2']
+
+  it('matches when the base layers are an exact prefix of the built layers', () => {
+    expect(builtImageSitsOnBase(base, ['sha256:base1', 'sha256:base2', 'sha256:added'])).toBe(true)
+  })
+
+  it('matches when the built image added no new layers at all', () => {
+    expect(builtImageSitsOnBase(base, ['sha256:base1', 'sha256:base2'])).toBe(true)
+  })
+
+  it('refuses when the built image does not start with the base layers', () => {
+    expect(builtImageSitsOnBase(base, ['sha256:other1', 'sha256:other2', 'sha256:added'])).toBe(false)
+  })
+
+  it('refuses when a layer in the middle differs, even if the rest lines up', () => {
+    expect(builtImageSitsOnBase(base, ['sha256:base1', 'sha256:swapped', 'sha256:added'])).toBe(false)
+  })
+
+  it('refuses when the built image has fewer layers than the claimed base', () => {
+    expect(builtImageSitsOnBase(base, ['sha256:base1'])).toBe(false)
+  })
+
+  it('refuses an empty base rather than vacuously matching anything', () => {
+    expect(builtImageSitsOnBase([], ['sha256:base1', 'sha256:base2'])).toBe(false)
   })
 })
