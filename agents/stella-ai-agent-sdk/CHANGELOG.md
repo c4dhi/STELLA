@@ -11,6 +11,14 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`AGENT_CONFIG` carries `interaction_mode`** when the deployment is into a session locked to the Text face (#1016). `run_agent_from_env` applies it to the `AudioPipeline` right after constructing it, before anything else runs, so a reply can't reach the TTS speech worker during the window before the screen's own `stella.interaction_mode` announcement would otherwise arrive. It's a plain `AGENT_CONFIG` key, not a platform key (not in `PLATFORM_KEYS`): STELLA computes it from the session, not from what a deployer chooses.
+
+### Fixed
+
+- **A message that arrives before any data handler is registered no longer vanishes without a trace** (#1016). `RoomManager`'s data callback is a single-slot registration, so a message delivered before `AudioPipeline` constructs (which only happens once STT/TTS have connected) had nowhere to go and was silently dropped. It now logs a warning naming the sender and the message size.
+
 ## [0.11.0] - 2026-11-23
 
 Ships with STELLA 2.1.0. New: capabilities from the session, `{{capabilities}}`, settings from `agent.yaml`, and the wait for speech services. Breaking: `BaseTool.guidance` is removed, and `STTClient.connect()`/`TTSClient.connect()` take `wait_seconds`.

@@ -2,8 +2,10 @@ import { Injectable } from '@nestjs/common';
 import type { PlanTemplate } from '@prisma/client';
 import { z } from 'zod';
 import { PlanTemplatesService } from '../../plan-templates/plan-templates.service.js';
+import { PlanGeneratorService } from '../../plan-templates/plan-generator.service.js';
 import { CreatePlanTemplateDto } from '../../plan-templates/dto/create-plan-template.dto.js';
 import { UpdatePlanTemplateDto } from '../../plan-templates/dto/update-plan-template.dto.js';
+import { GeneratePlanTemplateDto } from '../../plan-templates/dto/generate-plan-template.dto.js';
 import {
   CREATES,
   McpToolProvider,
@@ -42,7 +44,10 @@ function planSummary(plan: PlanTemplate) {
 /** Plan templates: what happens in a conversation. */
 @Injectable()
 export class PlanTemplatesTools implements McpToolProvider {
-  constructor(private readonly plans: PlanTemplatesService) {}
+  constructor(
+    private readonly plans: PlanTemplatesService,
+    private readonly generator: PlanGeneratorService,
+  ) {}
 
   /** A plan as plan_templates_get shows it; creates and updates return this too. */
   private full(planId: string, userId: string) {
@@ -76,6 +81,30 @@ export class PlanTemplatesTools implements McpToolProvider {
           this.full(planId, auth.user.userId),
       }),
       defineTool({
+        name: 'plan_templates_generate',
+        title: 'Generate a plan template',
+        description:
+          'Draft a plan from a plain-language description, using the plan generator. Returns a ' +
+          'suggested name, description and content; nothing is saved. Pass content to ' +
+          'plan_templates_create to keep it.',
+        scope: 'mcp:write',
+        input: {
+          prompt: z
+            .string()
+            .min(1)
+            .max(5000)
+            .describe('What the plan should accomplish.'),
+          context: z.string().max(500).optional(),
+        },
+        annotations: CREATES,
+        handler: async (args, ctx) => {
+          const generated = await this.generator.generate(
+            await ctx.validate(GeneratePlanTemplateDto, args),
+          );
+          return { ...generated };
+        },
+      }),
+      defineTool({
         name: 'plan_templates_create',
         title: 'Create a plan template',
         description: 'Create a plan template owned by the user.',
@@ -88,6 +117,20 @@ export class PlanTemplatesTools implements McpToolProvider {
             await ctx.validate(CreatePlanTemplateDto, args),
           );
           return this.full(plan.id, ctx.auth.user.userId);
+        },
+      }),
+      defineTool({
+        name: 'plan_templates_duplicate',
+        title: 'Duplicate a plan template',
+        description:
+          'Copy a plan template the user owns into a new one, named "<name> (Copy)". Edit the copy with ' +
+          'plan_templates_update; the original is untouched.',
+        scope: 'mcp:write',
+        input: { planId },
+        annotations: CREATES,
+        handler: async ({ planId }, ctx) => {
+          const copy = await this.plans.duplicate(planId, ctx.auth.user.userId);
+          return this.full(copy.id, ctx.auth.user.userId);
         },
       }),
       defineTool({

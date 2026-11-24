@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { SessionStatus } from '@prisma/client';
 import { z } from 'zod';
 import { ResourceAccessService } from '../../auth/resource-access.service.js';
-import { ProjectsService } from '../../projects/projects.service.js';
 import { SessionsService } from '../../sessions/sessions.service.js';
 import { QuerySessionsDto } from '../../sessions/dto/query-sessions.dto.js';
 import { CreateSessionDto } from '../../sessions/dto/create-session.dto.js';
@@ -25,11 +24,10 @@ const projectId = idArg('project', 'projects_list');
 const sessionId = idArg('session', 'sessions_list');
 const invitationId = idArg('invitation', 'session_invitations_list');
 
-/** Projects and their sessions, only where the user is a member. */
+/** Sessions in projects, and their invitations, only where the user is a member. */
 @Injectable()
 export class SessionsTools implements McpToolProvider {
   constructor(
-    private readonly projects: ProjectsService,
     private readonly sessions: SessionsService,
     private readonly stateMachine: StateMachineService,
     private readonly invitations: InvitationsService,
@@ -77,32 +75,6 @@ export class SessionsTools implements McpToolProvider {
 
   tools() {
     return [
-      defineTool({
-        name: 'projects_list',
-        title: 'List projects',
-        description:
-          'Projects the user is a member of, with session counts. Sessions live in projects.',
-        scope: 'mcp:read',
-        input: {},
-        annotations: READ_ONLY,
-        handler: async (_args, { auth }) => ({
-          items: (await this.projects.findAll(auth.user.userId)).map(
-            (project) => ({
-              id: project.id,
-              name: project.name,
-              isOwner: project.isOwner,
-              isPublic: project.isPublic,
-              agentInactivityTimeoutMinutes:
-                project.agentInactivityTimeoutMinutes,
-              closeSessionWhenEmpty: project.closeSessionWhenEmpty,
-              activeSessions: project.activeSessions,
-              activeAgents: project.activeAgents,
-              totalSessions: project.totalSessions,
-              createdAt: project.createdAt,
-            }),
-          ),
-        }),
-      }),
       defineTool({
         name: 'sessions_list',
         title: 'List sessions',
@@ -338,6 +310,70 @@ export class SessionsTools implements McpToolProvider {
         handler: async ({ sessionId }, { auth }) => {
           await this.access.assertSessionAccess(auth.user, sessionId);
           return { state: await this.stateMachine.getFullState(sessionId) };
+        },
+      }),
+      defineTool({
+        name: 'session_timeline_get',
+        title: 'Get a session timeline',
+        description:
+          'Messages and room events of a session interleaved, newest first, one page at a time. Room events are ' +
+          'joins, leaves and similar; session_transcript_get has only the messages, oldest first.',
+        scope: 'mcp:read',
+        input: {
+          sessionId,
+          skip: z.number().int().min(0).optional(),
+          take: z.number().int().min(1).max(100).optional(),
+        },
+        annotations: READ_ONLY,
+        handler: async ({ sessionId, skip, take }, { auth }) => {
+          await this.access.assertSessionAccess(auth.user, sessionId);
+          const page = await this.sessions.getTimeline(sessionId, skip, take);
+          return {
+            items: page.timeline.map((entry) => {
+              const data = entry.data as Record<string, unknown>;
+              return 'eventType' in data
+                ? {
+                    type: 'event' as const,
+                    id: data.id,
+                    timestamp: data.timestamp,
+                    eventType: data.eventType,
+                    data: data.data,
+                  }
+                : {
+                    type: 'message' as const,
+                    id: data.id,
+                    timestamp: data.timestamp,
+                    role: data.role,
+                    messageType: data.messageType,
+                    content: data.content,
+                  };
+            }),
+            total: page.total,
+          };
+        },
+      }),
+      defineTool({
+        name: 'session_participants_list',
+        title: "List a session's participants",
+        description:
+          'Every participant who joined a session, including ones who left, newest first. sessions_get has only ' +
+          'who is in it right now.',
+        scope: 'mcp:read',
+        input: { sessionId },
+        annotations: READ_ONLY,
+        handler: async ({ sessionId }, { auth }) => {
+          await this.access.assertSessionAccess(auth.user, sessionId);
+          const participants = await this.sessions.listParticipants(sessionId);
+          return {
+            items: participants.map((p) => ({
+              id: p.id,
+              name: p.name,
+              identity: p.identity,
+              joinedAt: p.joinedAt,
+              leftAt: p.leftAt,
+              lastSeenAt: p.lastSeenAt,
+            })),
+          };
         },
       }),
     ];
