@@ -12,6 +12,7 @@ import { McpOAuthModule } from '../mcp-oauth/mcp-oauth.module.js';
 import { PersonasModule } from '../personas/personas.module.js';
 import { PlanTemplatesModule } from '../plan-templates/plan-templates.module.js';
 import { PlatformSettingsModule } from '../platform-settings/platform-settings.module.js';
+import { ProjectInvitationsModule } from '../project-invitations/project-invitations.module.js';
 import { ProjectsModule } from '../projects/projects.module.js';
 import { SessionsModule } from '../sessions/sessions.module.js';
 import { StateMachineModule } from '../state-machine/state-machine.module.js';
@@ -30,6 +31,7 @@ import { ConnectorsTools } from './tools/connectors.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
+import { ProjectsTools } from './tools/projects.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 
 // Adding a domain: write a *.tools.ts provider and list it here.
@@ -38,6 +40,7 @@ const TOOL_PROVIDERS = [
   PersonasTools,
   PlanTemplatesTools,
   AgentConfigurationsTools,
+  ProjectsTools,
   SessionsTools,
   AgentsTools,
   PlatformSettingsTools,
@@ -57,6 +60,7 @@ const TOOL_PROVIDERS = [
     PlanTemplatesModule,
     AgentConfigurationsModule,
     ProjectsModule,
+    ProjectInvitationsModule,
     SessionsModule,
     StateMachineModule,
     InvitationsModule,

@@ -182,6 +182,98 @@ The projects the user is a member of.
 
 **Returns:** `{ items }`. Each item has `id`, `name`, `isOwner`, `isPublic`, `agentInactivityTimeoutMinutes`, `closeSessionWhenEmpty` (whether a session closes once everyone has left; `false` keeps it open), `activeSessions`, `activeAgents`, `totalSessions` and `createdAt`.
 
+### `projects_get` · `mcp:read`
+
+One project: its settings, public setup, and its 10 most recent sessions with agent and participant counts. `sessions_list` has every session.
+
+**Inputs:** `projectId`.
+
+**Returns:** the project row, including its public setup fields (`isPublic`, `publicToken`, `publicAgentTypeId`, `publicVisualizerType`, `publicVisualizerLocked`, `publicMaxSessionDurationSeconds`, `publicExpiresAt`, `publicEnabled`) and `sessions` (up to 10, newest first, each with `agentCount`/`participantCount`).
+
+`publicAgentConfig`, when set, never carries raw plan content, pipeline config or env var values — the same rule `projects_public_update`'s input follows, applied to what this tool hands back. It comes back as `{ name, icon, agentConfigurationId, personaId, envVarTemplateId, connectorBindings, hasPlan, hasPipelineConfig, envVarKeys }`: `hasPlan`/`hasPipelineConfig` say whether a plan or pipeline override is set, without its content, and `envVarKeys` lists the env vars' names, never their values.
+
+### `projects_stats` · `mcp:read`
+
+Totals for a project.
+
+**Inputs:** `projectId`.
+
+**Returns:** `totalSessions`, `activeSessions`, `totalAgents`, `activeAgents`, `totalMessages`, `totalParticipants`.
+
+### `projects_create` · `mcp:write`
+
+Create a project, owned by the caller.
+
+**Inputs:** `name` (string, 1–255), `agentInactivityTimeoutMinutes` (integer 1–1440 or `null`, *optional*; auto-stops an idle agent, `null` disables it), `closeSessionWhenEmpty` (boolean, *optional*; default `false`).
+
+**Returns:** the new project, as `projects_get` shows it.
+
+### `projects_update` · `mcp:write`
+
+Change a project's name or its session settings.
+
+**Inputs:** `projectId`, and the same fields as `projects_create`, all *optional*.
+
+**Returns:** the project, as `projects_get` shows it.
+
+### `projects_public_update` · `mcp:write`
+
+Turn a project public or private, and configure the agent a visitor gets on the public link. Only the project owner may bind or move connectors on it; the deploy check runs against the owner when one is bound.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `projectId` | id | |
+| `isPublic` | boolean | |
+| `agentTypeId` | id, *optional* | Default: STELLA V2 |
+| `name` | string, ≤ 255, *optional* | The public agent's display name; required the first time any field below is set |
+| `icon` | string, ≤ 10, *optional* | One emoji |
+| `agentConfigurationId` | id, *optional* | |
+| `personaId` | id, *optional* | Default: the default persona |
+| `envVarTemplateId` | id, *optional* | |
+| `connectorBindings` | up to 20 of `{ connectorId, slot?, handle? }`, *optional* | As in `agents_deploy`, from the owner's own connectors or those shared with the project |
+| `visualizerType` | string, ≤ 50, *optional* | e.g. `sphere`, `face`, `galaxy`, `text` |
+| `visualizerLocked` | boolean, *optional* | |
+| `maxSessionDurationSeconds` | integer 60–7200 or `null`, *optional* | |
+| `enabled` | boolean, *optional* | Pauses or resumes the public link without reconfiguring it |
+
+It takes no raw plan content, pipeline config or env var values, the same as `agents_deploy`. The fields given are merged onto the project's existing public setup rather than replacing it, so a plan, pipeline overrides or env vars already set (from the web app, say) are kept across a call that only touches, for example, `name` or `enabled`.
+
+**Returns:** the updated project, as `projects_get` shows it.
+
+### `projects_public_link_get` · `mcp:read`
+
+The link anyone can open to join a public project.
+
+**Inputs:** `projectId`.
+
+**Returns:** `{ publicLink, isEnabled }`. `publicLink` is `null` when the project is not public.
+
+### `project_collaborators_list` · `mcp:read`
+
+The members of a project and anyone invited but not yet responded.
+
+**Inputs:** `projectId`.
+
+**Returns:** `{ collaborators, pendingInvitations }`. Each collaborator has `userId`, `email`, `name`, `role` (`OWNER` or `COLLABORATOR`) and `joinedAt`. Each pending invitation has `invitationId`, `email`, `name`, `status` (`PENDING`) and `invitedAt`.
+
+### `project_collaborators_invite` · `mcp:write`
+
+Invite a registered user to a project by email. Only the project owner can invite.
+
+**Inputs:** `projectId`, `email`.
+
+**Returns:** the invitation: `id`, `projectId`, `projectName`, `inviterId`, `inviterName`, `inviterEmail`, `inviteeId`, `inviteeName`, `inviteeEmail`, `status`, `createdAt`, `respondedAt`.
+
+### `project_collaborators_remove` · `mcp:write`
+
+Remove a collaborator from a project, and any invitation still pending for them. Only the project owner can remove, and the owner can't remove themself.
+
+**Inputs:** `projectId`, `userId` (from `project_collaborators_list`).
+
+**Returns:** the project's collaborators afterward, as `project_collaborators_list` shows it.
+
 ### `sessions_list` · `mcp:read`
 
 The sessions in a project, newest first.
