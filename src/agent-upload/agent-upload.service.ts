@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { AgentValidationStatus } from '@prisma/client'
 import { AgentPackageService } from '../agent-package/agent-package.service.js'
 import { AgentBuildService, BuildStatus, resolveDockerfilePath } from '../agent-build/agent-build.service.js'
+import { AgentsService } from '../agents/agents.service.js'
 import { StorageService } from '../storage/storage.service.js'
 import { PrismaService } from '../prisma/prisma.service.js'
 import { DEFAULT_DOCKERFILE } from '../agent-package/manifest-defaults.js'
@@ -26,12 +27,10 @@ export function canSeeAgentBuilds(
 }
 
 /**
- * Uploaded (custom, non-built-in) agent types: upload, list, build and
- * sharing. Both the REST controller (agent-upload.controller.ts) and the MCP
- * tools (mcp/tools/agent-uploads.tools.ts) call this - neither duplicates the
- * logic itself. Deleting an upload stays on the controller: it reaches into
- * agents/sessions to stop running agents, which belongs to that surface, not
- * here.
+ * Uploaded (custom, non-built-in) agent types: upload, list, build, sharing
+ * and deletion. Both the REST controller (agent-upload.controller.ts) and the
+ * MCP tools (mcp/tools/agent-uploads.tools.ts, mcp/tools/admin.tools.ts) call
+ * this - neither duplicates the logic itself.
  */
 @Injectable()
 export class AgentUploadService {
@@ -40,6 +39,7 @@ export class AgentUploadService {
   constructor(
     private agentPackageService: AgentPackageService,
     private agentBuildService: AgentBuildService,
+    private agentsService: AgentsService,
     private storageService: StorageService,
     private prisma: PrismaService,
   ) {}
@@ -318,5 +318,63 @@ export class AgentUploadService {
       throw new ForbiddenException('Only its owner can share this agent')
     }
     return agentType
+  }
+
+  /**
+   * Delete a custom agent. Its owner's running agents are stopped first, and
+   * rows left RUNNING after their pod died are cleaned up. Refused while a
+   * public project uses it or another user's agent of it still runs. Only
+   * the uploader or a system admin may delete it.
+   */
+  async deleteAgent(id: string, userId: string, isSystemAdmin?: boolean) {
+    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
+    if (!agentType) throw new NotFoundException('Agent type not found')
+    if (agentType.isBuiltIn) throw new BadRequestException('Cannot delete built-in agents')
+    if (!isSystemAdmin && agentType.userId !== userId) {
+      throw new ForbiddenException('You do not own this agent')
+    }
+
+    // A public project would lose its agent: refuse, and say where to change it.
+    const publicProjects = await this.prisma.project.count({ where: { publicAgentTypeId: id } })
+    if (publicProjects > 0) {
+      throw new BadRequestException(
+        `${publicProjects} public project${publicProjects === 1 ? ' uses' : 's use'} ${agentType.name}. Pick another agent there, then delete it`,
+      )
+    }
+
+    // Agents of this type that still run: a row whose pod is gone is only
+    // cleaned up; the owner's own live agents are stopped; another user's live
+    // agent blocks the delete (it is their session).
+    const { live, stale } = await this.agentsService.runningAgentsOfType(id)
+    const ownerId = agentType.userId
+    const others = live.filter((a) => !ownerId || a.deployedByUserId !== ownerId)
+    if (others.length > 0) {
+      throw new BadRequestException(
+        `${agentType.name} still runs in ${others.length} session${others.length === 1 ? '' : 's'} of other users. It can be deleted once ${others.length === 1 ? 'that agent stops' : 'those agents stop'}`,
+      )
+    }
+    const toStop = [...stale, ...live.map((a) => a.id)]
+    for (const agentId of toStop) {
+      await this.agentsService.stopAgent(agentId)
+    }
+
+    // Env-var templates and configurations are scoped to this one type, so
+    // they go with it. Stopped agents keep their record (and transcript) and
+    // only lose the link; build logs cascade.
+    await this.prisma.$transaction([
+      this.prisma.envVarTemplate.deleteMany({ where: { agentTypeId: id } }),
+      this.prisma.agentConfiguration.deleteMany({ where: { agentTypeId: id } }),
+      this.prisma.agentInstance.updateMany({ where: { agentTypeId: id }, data: { agentTypeId: null } }),
+      this.prisma.agentType.delete({ where: { id } }),
+    ])
+
+    // The package last: if the row could not be deleted, it is still there.
+    if (agentType.packagePath) {
+      await this.storageService.delete(agentType.packagePath)
+    }
+
+    this.logger.log(`Deleted agent type: ${agentType.slug}`)
+
+    return { success: true, stoppedAgents: live.length }
   }
 }

@@ -24,30 +24,10 @@ function makeController() {
     assertCanSeeBuilds: jest.fn().mockResolvedValue(undefined),
     getShares: jest.fn().mockResolvedValue({ projectIds: [], projects: [] }),
     updateShares: jest.fn().mockResolvedValue({ projectIds: [] }),
+    deleteAgent: jest.fn().mockResolvedValue({ success: true, stoppedAgents: 0 }),
   }
-  const prisma = {
-    agentType: {
-      findUnique: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
-      delete: jest.fn().mockResolvedValue({}),
-    },
-    agentInstance: {
-      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-    },
-    project: { count: jest.fn().mockResolvedValue(0) },
-    envVarTemplate: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-    agentConfiguration: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-    $transaction: jest.fn().mockImplementation((ops: unknown) => Promise.all(ops as Promise<unknown>[])),
-  }
-  const storage = { delete: jest.fn().mockResolvedValue(undefined) }
-  const agents = {
-    stopAgent: jest.fn().mockResolvedValue({}),
-    runningAgentsOfType: jest.fn().mockResolvedValue({ live: [], stale: [] } as {
-      live: { id: string; deployedByUserId: string | null }[]
-      stale: string[]
-    }),
-  }
-  const controller = new AgentUploadController(agentUploadService as any, storage as any, prisma as any, agents as any)
-  return { controller, agentUploadService, prisma, storage, agents }
+  const controller = new AgentUploadController(agentUploadService as any)
+  return { controller, agentUploadService }
 }
 
 const zip = { originalname: 'a.zip', size: 1, buffer: Buffer.from('x') } as Express.Multer.File
@@ -94,6 +74,21 @@ describe('AgentUploadController: upload, my-agents, build and shares delegate to
 
     await controller.updateShares('a1', { projectIds: ['p1'] }, user('u1') as any)
     expect(agentUploadService.updateShares).toHaveBeenCalledWith('a1', 'u1', ['p1'])
+
+    await controller.deleteAgent('a1', user('u1', true) as any)
+    expect(agentUploadService.deleteAgent).toHaveBeenCalledWith('a1', 'u1', true)
+  })
+
+  it('refuses to delete without a signed-in user before touching the service', async () => {
+    const { controller, agentUploadService } = makeController()
+    await expect(controller.deleteAgent('a1', {} as any)).rejects.toThrow(UnauthorizedException)
+    expect(agentUploadService.deleteAgent).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a refusal from the service', async () => {
+    const { controller, agentUploadService } = makeController()
+    agentUploadService.deleteAgent.mockRejectedValue(new ForbiddenException('You do not own this agent'))
+    await expect(controller.deleteAgent('a1', user('someone-else') as any)).rejects.toThrow(ForbiddenException)
   })
 })
 
@@ -154,82 +149,5 @@ describe('the build-logs SSE event', () => {
     const stream = await controller.streamBuildLogs('a1', user('u1') as any)
     expect(agentUploadService.assertCanSeeBuilds).toHaveBeenCalledWith('a1', 'u1', false)
     expect(typeof stream.subscribe).toBe('function')
-  })
-})
-
-describe('deleting a custom agent', () => {
-  const upload = { id: 'a1', slug: 'my-agent', name: 'My agent', isBuiltIn: false, packagePath: 'p', userId: 'owner' }
-
-  it.each([
-    ['the owner', user('owner'), true],
-    ['a system admin', user('admin', true), true],
-    ['another user', user('someone-else'), false],
-  ])('delete: %s', async (_who, req, allowed) => {
-    const { controller, prisma } = makeController()
-    prisma.agentType.findUnique.mockResolvedValue(upload)
-    const run = controller.deleteAgent('a1', req as any)
-    if (allowed) await expect(run).resolves.toEqual({ success: true, stoppedAgents: 0 })
-    else await expect(run).rejects.toThrow(ForbiddenException)
-    expect(prisma.agentType.delete).toHaveBeenCalledTimes(allowed ? 1 : 0)
-  })
-
-  it('takes the type\'s templates and configurations with it, and the package last', async () => {
-    const { controller, prisma, storage } = makeController()
-    prisma.agentType.findUnique.mockResolvedValue(upload)
-    const order: string[] = []
-    prisma.$transaction.mockImplementation(async (ops: unknown) => {
-      order.push('db')
-      return Promise.all(ops as Promise<unknown>[])
-    })
-    storage.delete.mockImplementation(async () => {
-      order.push('package')
-    })
-    await controller.deleteAgent('a1', user('owner') as any)
-    expect(prisma.envVarTemplate.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
-    expect(prisma.agentConfiguration.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
-    expect(prisma.agentInstance.updateMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' }, data: { agentTypeId: null } })
-    expect(order).toEqual(['db', 'package'])
-  })
-
-  it('cleans up dead rows and stops the owner\'s own agents, then deletes it', async () => {
-    const { controller, prisma, agents } = makeController()
-    prisma.agentType.findUnique.mockResolvedValue(upload)
-    const order: string[] = []
-    agents.runningAgentsOfType.mockResolvedValue({ live: [{ id: 'mine', deployedByUserId: 'owner' }], stale: ['pod-gone'] })
-    agents.stopAgent.mockImplementation(async (id: unknown) => {
-      order.push(`stop ${id}`)
-      return {}
-    })
-    prisma.$transaction.mockImplementation(async (ops: unknown) => {
-      order.push('db')
-      return Promise.all(ops as Promise<unknown>[])
-    })
-    await expect(controller.deleteAgent('a1', user('owner') as any)).resolves.toEqual({ success: true, stoppedAgents: 1 })
-    expect(agents.runningAgentsOfType).toHaveBeenCalledWith('a1')
-    expect(order).toEqual(['stop pod-gone', 'stop mine', 'db'])
-  })
-
-  it('refuses while another user\'s agent of it still runs, and stops nothing', async () => {
-    const { controller, prisma, agents, storage } = makeController()
-    prisma.agentType.findUnique.mockResolvedValue(upload)
-    agents.runningAgentsOfType.mockResolvedValue({
-      live: [{ id: 'mine', deployedByUserId: 'owner' }, { id: 'theirs', deployedByUserId: 'member' }, { id: 'old', deployedByUserId: null }],
-      stale: ['pod-gone'],
-    })
-    await expect(controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('still runs in 2 sessions of other users')
-    expect(agents.stopAgent).not.toHaveBeenCalled()
-    expect(prisma.agentType.delete).not.toHaveBeenCalled()
-    expect(storage.delete).not.toHaveBeenCalled()
-  })
-
-  it('refuses a type a public project uses, before stopping anything, and keeps its package', async () => {
-    const { controller, prisma, agents, storage } = makeController()
-    prisma.agentType.findUnique.mockResolvedValue(upload)
-    prisma.project.count.mockResolvedValue(2)
-    agents.runningAgentsOfType.mockResolvedValue({ live: [{ id: 'live', deployedByUserId: 'owner' }], stale: [] })
-    await expect(controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('2 public projects use My agent')
-    expect(agents.stopAgent).not.toHaveBeenCalled()
-    expect(prisma.agentType.delete).not.toHaveBeenCalled()
-    expect(storage.delete).not.toHaveBeenCalled()
   })
 })
