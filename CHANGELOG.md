@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The task panel no longer flashes when you come back to a companion session.** Reloading or resuming a session opened the panel for any activity in its history, even a finished one, and the agent's first update closed it again. It now opens only for an activity that is still running, or when you pinned it open (#1011)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
