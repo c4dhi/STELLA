@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The participant text box works on a phone.** Tapping it on an iPhone zoomed the page, pushing the box and Send past the screen edge. The box no longer triggers the zoom, stays above the on-screen keyboard, and the "Enter sends" hint shows only with a physical keyboard (#1017)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
