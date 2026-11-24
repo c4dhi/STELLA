@@ -40,6 +40,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from stella_agent_sdk import AgentOutput
+from stella_agent_sdk.language import detect_language
 from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider
 
 from stella_v2_agent.companion_settings import CompanionSettings, load_settings
@@ -513,6 +514,22 @@ _OFFER_KINDS = {"activities_offered", "activity_started", "activity_start_propos
 # Going to sleep and being woken both start the opening over (`Companion.rest`).
 _WOKEN_KIND = "woken_up"
 _RESTART_KINDS = {_DECISIONS[Change.DISMISSED][0], _WOKEN_KIND}
+
+
+def language_from_history(
+    history: List[Dict[str, Any]], *, supported: Tuple[str, ...] = ("de", "en"), bar: float = 0.85,
+) -> Optional[str]:
+    """The language the user was last speaking, read from the transcript (#159).
+
+    A pod that wakes a paused session has resolved no language yet: that only
+    happens on the first user turn it handles. When the first thing it does is
+    the wake opening, this is what keeps her from greeting a German speaker in
+    English. Only the user's own words count, the last three of them, and only
+    as clearly as a typed turn would have to be (the resolver's text bar).
+    """
+    said = [e.get("content", "") for e in history if e.get("role") == "user"][-3:]
+    language, confidence = detect_language(" ".join(said))
+    return language if language in supported and confidence >= bar else None
 
 
 def opening_from_history(messages: List[Any]) -> Tuple[bool, bool]:

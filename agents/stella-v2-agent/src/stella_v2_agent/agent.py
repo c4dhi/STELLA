@@ -63,6 +63,7 @@ from stella_v2_agent.companion import (
     ExitStep,
     commands_from,
     decision as companion_decision,
+    language_from_history,
     opening_from_history,
     started_label,
     woken_tag,
@@ -1758,7 +1759,15 @@ class StellaV2Agent(BaseAgent):
             return
         history = await self._fetch_conversation_history(limit=self._custom_history_limit)
         sm_context = await self._fetch_sm_context() if self.sm_client else {}
-        language = self.language_resolver.forced or getattr(self, "_session_language", None)
+        # A fresh pod (a wake after auto-pause) has resolved no language yet:
+        # apply the deployment/persona pin, then fall back to the transcript, so
+        # the opening is not written in English by default (#159).
+        self._apply_session_language_pin()
+        language = (
+            self.language_resolver.forced
+            or getattr(self, "_session_language", None)
+            or language_from_history(history)
+        )
         sm_context["language"] = language
         sm_context["language_pinned"] = bool(self.language_resolver.forced)
         voice = (self._persona_config or {}).get("voice") or None

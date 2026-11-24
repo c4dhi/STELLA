@@ -135,3 +135,77 @@ async def test_plan_mode_is_left_alone():
     agent._companion_mode = False
     await agent._rehydrate_opening()
     agent.get_chat_history.assert_not_called()
+
+
+# ── the wake opening speaks the conversation's language (#159, 23 Nov) ─────
+# On production 2.1.0, waking Grace after a pause greeted a German speaker in
+# English: a fresh pod resolves its language only on the first user turn, and
+# the wake opening comes before any.
+
+from stella_agent_sdk.language import LanguageResolver
+from stella_v2_agent.companion import language_from_history
+
+GERMAN = [
+    {"role": "assistant", "content": "Hallo! Wie geht es dir?"},
+    {"role": "user", "content": "Mir geht es gut, ich habe heute schön im Garten gearbeitet."},
+]
+
+
+def test_the_users_last_words_give_the_language():
+    assert language_from_history(GERMAN) == "de"
+
+
+def test_only_the_users_words_count():
+    assert language_from_history([{"role": "assistant", "content": "Wie geht es dir? Schön!"}]) is None
+
+
+def test_too_little_to_go_on_gives_no_language():
+    assert language_from_history([{"role": "user", "content": "ok"}]) is None
+    assert language_from_history([]) is None
+
+
+def _waking_agent(history, persona_language=None):
+    agent = StellaV2Agent.__new__(StellaV2Agent)
+    agent._companion_mode = True
+    agent.companion = Companion(activities=ACTIVITIES)
+    agent._audio_pipeline = None
+    agent.sm_client = None
+    agent._custom_history_limit = 20
+    agent._persona_config = {"language": persona_language} if persona_language else {}
+    agent.language_resolver = LanguageResolver(forced="")
+    agent._session_language = None
+    agent._fetch_conversation_history = AsyncMock(return_value=history)
+    seen = {}
+
+    async def generate(**kwargs):
+        seen.update(kwargs["sm_context"])
+        if False:
+            yield None
+
+    agent.response_generator = type("G", (), {"generate": staticmethod(generate)})()
+    return agent, seen
+
+
+async def _wake(agent):
+    return [o async for o in agent._say_unprompted("s1", "Greet them.", "They have not said anything yet.")]
+
+
+@pytest.mark.asyncio
+async def test_waking_a_fresh_pod_greets_in_the_transcripts_language():
+    agent, seen = _waking_agent(GERMAN)
+    await _wake(agent)
+    assert seen["language"] == "de"
+
+
+@pytest.mark.asyncio
+async def test_the_personas_language_wins_over_the_transcript():
+    agent, seen = _waking_agent([{"role": "user", "content": "I am fine thanks, how are you today?"}], persona_language="de")
+    await _wake(agent)
+    assert seen["language"] == "de"
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_with_no_transcript_has_no_language_as_before():
+    agent, seen = _waking_agent([])
+    await _wake(agent)
+    assert seen["language"] is None
