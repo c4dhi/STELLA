@@ -24,8 +24,8 @@ export class DockerfileValidator {
   // Matches a real FROM instruction: the start of a logical line (see
   // toLogicalLines), never the word "from" elsewhere in the file.
   private readonly fromLinePattern = /^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)(?:[ \t]+AS[ \t]+(\S+))?/i
-  // Matches a real COPY --from=<ref>, on the same terms.
-  private readonly copyFromPattern = /^[ \t]*COPY\b[\s\S]*?--from=(\S+)/i
+  // Every --from=<ref> on a real COPY line, not just the first.
+  private readonly copyFromFlagPattern = /--from=(\S+)/gi
   // --mount=type=bind,from=<ref>,... on a RUN (or COPY) line pulls an image too.
   private readonly mountFlagPattern = /--mount=(\S+)/gi
   // A heredoc redirection opened on an instruction line, e.g. `<<EOF`, `<<-'EOF'`.
@@ -33,10 +33,23 @@ export class DockerfileValidator {
   // Only RUN, COPY and ADD read heredocs in real Docker; anything else (e.g. a
   // LABEL value that happens to contain "<<") must never open one.
   private readonly heredocCapableInstructionPattern = /^[ \t]*(RUN|COPY|ADD)\b/i
+  // Real Docker/BuildKit heredoc-opening is pickier than our marker regex (no
+  // word-boundary or quoting awareness) - so instead of replicating that
+  // grammar exactly, any line *treated* as heredoc body that still looks
+  // like a real FROM or a from= reference fails the upload outright. That
+  // holds whether our heredoc detection turns out looser or stricter than
+  // Docker's.
+  private readonly hiddenFromLikePattern = /^[ \t]*FROM\b/i
+  private readonly hiddenFromAttrPattern = /\bfrom=/i
   // The `# escape=` parser directive changes Docker's continuation character
   // away from backslash - refused outright rather than honoured, since an
   // unhandled one would let a "\"-continued line hide a real instruction.
   private readonly escapeDirectivePattern = /^[ \t]*#[ \t]*escape[ \t]*=/im
+  // The `# syntax=` directive picks the BuildKit frontend image that builds
+  // the file - anything but the standard docker/dockerfile frontend can make
+  // the allowlist irrelevant, so only that one is accepted.
+  private readonly syntaxDirectivePattern = /^[ \t]*#[ \t]*syntax[ \t]*=[ \t]*(\S+)/im
+  private readonly allowedSyntaxDirectivePattern = /^docker\/dockerfile(:[\w.-]+)?$/i
   // Only an explicit docker.io/index.docker.io + library/ prefix is the same
   // image as the bare name; any other host (or a Docker Hub user/org
   // namespace, which looks the same shape) is a different image and must
@@ -83,11 +96,20 @@ export class DockerfileValidator {
       errors.push('Dockerfile parser directives (# escape=) are not supported')
     }
 
-    const { lines: logicalLines, unclosedHeredoc } = this.toLogicalLines(content)
+    const syntaxMatch = content.match(this.syntaxDirectivePattern)
+    if (syntaxMatch && !this.allowedSyntaxDirectivePattern.test(syntaxMatch[1])) {
+      errors.push('Dockerfile parser directives (# syntax=) must name docker/dockerfile, or be omitted')
+    }
+
+    const { lines: logicalLines, unclosedHeredoc, hiddenFromLikeLine } = this.toLogicalLines(content)
     const logicalContent = logicalLines.join('\n')
 
     if (unclosedHeredoc) {
       errors.push('Dockerfile has an unclosed heredoc')
+    }
+
+    if (hiddenFromLikeLine) {
+      errors.push('Dockerfile has a heredoc body that looks like a FROM instruction or an image reference')
     }
 
     const { stages, externalImageRefs } = this.parseStagesAndCopies(logicalLines)
@@ -149,11 +171,16 @@ export class DockerfileValidator {
    * heredoc body passed to RUN/COPY/ADD. A heredoc that never closes marks
    * the whole file unclosedHeredoc, since everything after it is ambiguous.
    */
-  private toLogicalLines(content: string): { lines: string[]; unclosedHeredoc: boolean } {
+  private toLogicalLines(content: string): {
+    lines: string[]
+    unclosedHeredoc: boolean
+    hiddenFromLikeLine: boolean
+  } {
     const rawLines = content.split('\n')
     const logical: string[] = []
     let current: string | null = null
     let pendingHeredocDelimiters: string[] = []
+    let hiddenFromLikeLine = false
 
     const closeLogicalLine = (line: string) => {
       logical.push(line)
@@ -166,6 +193,8 @@ export class DockerfileValidator {
       if (pendingHeredocDelimiters.length > 0) {
         if (rawLine.trim() === pendingHeredocDelimiters[0]) {
           pendingHeredocDelimiters.shift()
+        } else if (this.hiddenFromLikePattern.test(rawLine) || this.hiddenFromAttrPattern.test(rawLine)) {
+          hiddenFromLikeLine = true
         }
         continue
       }
@@ -194,7 +223,7 @@ export class DockerfileValidator {
       logical.push(current)
     }
 
-    return { lines: logical, unclosedHeredoc: pendingHeredocDelimiters.length > 0 }
+    return { lines: logical, unclosedHeredoc: pendingHeredocDelimiters.length > 0, hiddenFromLikeLine }
   }
 
   private endsWithContinuation(line: string): boolean {
@@ -232,9 +261,12 @@ export class DockerfileValidator {
         continue
       }
 
-      const copyMatch = line.match(this.copyFromPattern)
-      if (copyMatch && !isKnownStageRef(copyMatch[1])) {
-        externalImageRefs.push(copyMatch[1])
+      if (/^[ \t]*COPY\b/i.test(line)) {
+        for (const match of line.matchAll(this.copyFromFlagPattern)) {
+          if (!isKnownStageRef(match[1])) {
+            externalImageRefs.push(match[1])
+          }
+        }
       }
 
       for (const ref of this.findMountFromImages(line)) {

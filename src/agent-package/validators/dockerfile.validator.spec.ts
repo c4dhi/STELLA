@@ -260,4 +260,90 @@ describe('DockerfileValidator', () => {
 
     expect(result.valid).toBe(true)
   })
+
+  it('rejects a hidden FROM inside a heredoc opened by a word-glued "<<EOF" with no space', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'RUN echo x<<EOF',
+      'FROM ubuntu:22.04',
+      'EOF',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('rejects a hidden FROM inside a heredoc marker that is actually inside quotes', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      "RUN echo '<<EOF'",
+      'FROM ubuntu:22.04',
+      'EOF',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('still allows a real heredoc whose body has nothing that looks like a FROM or from=', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'RUN <<EOF',
+      'echo setting up',
+      'echo done',
+      'EOF',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(true)
+  })
+
+  it('rejects a # syntax= directive pointing at an arbitrary BuildKit frontend', () => {
+    const content = [
+      '# syntax=evil/frontend:1',
+      'FROM python:3.12-slim',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('allows the standard # syntax=docker/dockerfile directive', () => {
+    const content = [
+      '# syntax=docker/dockerfile:1',
+      'FROM python:3.12-slim',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(true)
+  })
+
+  it('reads every --from= on a COPY line, not just the first', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'COPY --from=0 --from=ubuntu:22.04 /app /app',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.some((e) => e.includes('ubuntu:22.04'))).toBe(true)
+  })
 })
