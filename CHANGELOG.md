@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **MCP clients can now manage projects.** `projects_create`, `_get`, `_stats` and `_update`; set up and read a project's public link (`projects_public_update`, `_public_link_get`); and list its collaborators and metrics — the same JSON-RPC interface personas and plan templates already used. A project's raw plan, pipeline config and env vars are never sent over this interface, only their ids (#1025)
+- **MCP clients can now duplicate, generate and upload too.** Env var templates, personas, plan templates and agent configurations can each be duplicated over MCP; `plan_templates_generate` drafts a plan from a prompt the same way the Plan Builder does; agents can be uploaded as a package (`agent_uploads_create`), going into review pending the same as a web upload, with their build and share state readable afterward. Session and agent metrics, session analytics/timeline/participants, and the inbox are also readable over MCP now (#1038)
 
 ### Fixed
 
