@@ -17,6 +17,7 @@ import { ProjectInvitationsModule } from '../project-invitations/project-invitat
 import { ProjectsModule } from '../projects/projects.module.js';
 import { SessionsModule } from '../sessions/sessions.module.js';
 import { StateMachineModule } from '../state-machine/state-machine.module.js';
+import { UserMessagesModule } from '../user-messages/user-messages.module.js';
 import { McpEnabledGuard } from './guards/mcp-enabled.guard.js';
 import { McpOriginGuard } from './guards/mcp-origin.guard.js';
 import { McpBearerGuard } from './guards/mcp-bearer.guard.js';
@@ -36,6 +37,7 @@ import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { ProjectsTools } from './tools/projects.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
+import { UserMessagesTools } from './tools/user-messages.tools.js';
 
 // Adding a domain: write a *.tools.ts provider and list it here.
 const TOOL_PROVIDERS = [
@@ -51,6 +53,7 @@ const TOOL_PROVIDERS = [
   AgentReviewsTools,
   ConnectorsTools,
   AgentUploadsTools,
+  UserMessagesTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
@@ -74,6 +77,7 @@ const TOOL_PROVIDERS = [
     ConnectorsModule,
     AgentUploadModule,
     MetricsModule,
+    UserMessagesModule,
   ],
   controllers: [McpController],
   providers: [

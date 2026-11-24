@@ -303,6 +303,14 @@ Totals for a project.
 
 **Returns:** `totalSessions`, `activeSessions`, `totalAgents`, `activeAgents`, `totalMessages`, `totalParticipants`.
 
+### `project_metrics_get` · `mcp:read`
+
+A fuller metrics snapshot than `projects_stats`: sessions and agents broken down by status, participants currently online, today's message count, and the project's agent type, plan template and public status.
+
+**Inputs:** `projectId`.
+
+**Returns:** `sessions` (`{ total, active, closed }`), `agents` (`{ total, running, starting, failed, stopped }`), `participants` (`{ total, online }`), `messages` (`{ total, todayCount }`), `project` (`{ name, agentType, agentTypeName, planTemplateName, isPublic, createdAt }`), `timestamp`.
+
 ### `projects_create` · `mcp:write`
 
 Create a project, owned by the caller.
@@ -457,6 +465,36 @@ Where a session stands in its plan.
 
 **Returns:** `{ state }`: the current state, progress, turn counters, task status per state and the collected deliverables. `state` is `null` when the session never ran a plan.
 
+### `session_timeline_get` · `mcp:read`
+
+Messages and room events (joins, leaves and similar) of a session, interleaved, newest first, one page at a time. `session_transcript_get` has only the messages, oldest first.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `sessionId` | id | |
+| `skip` | integer ≥ 0, *optional* | |
+| `take` | integer 1–100, *optional* | Default 50 |
+
+**Returns:** `{ items, total }`. Each item is `{ type: "message", id, timestamp, role, messageType, content }` or `{ type: "event", id, timestamp, eventType, data }`.
+
+### `session_participants_list` · `mcp:read`
+
+Every participant who joined a session, including ones who left, newest first. `sessions_get` has only who is in it right now.
+
+**Inputs:** `sessionId`.
+
+**Returns:** `{ items }`, each `{ id, name, identity, joinedAt, leftAt, lastSeenAt }`.
+
+### `session_analytics_get` · `mcp:read`
+
+Per-stage latency for one session's turns, with a summary across stages. Different from `session_state_get` (plan progress) and `session_transcript_get` (the messages themselves).
+
+**Inputs:** `sessionId`.
+
+**Returns:** `stages` (per-stage `count`, `mean_ms` and similar) and `summary`.
+
 ## Invitations
 
 The link a participant opens to join a session, without an account.
@@ -610,6 +648,21 @@ The last 100 lines of the agent's log.
 **Inputs:** `agentId`.
 
 **Returns:** `{ logs }`. It is empty once the agent's pod is gone.
+
+### `agent_metrics_get` · `mcp:read`
+
+Per-stage latency stats for every session of one agent type in a project over a date range, with outlier sessions (any stage over 2x the global p50) and a summary across stages.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `projectId` | id | |
+| `agentTypeId` | id | From `agent_types_list` |
+| `from` | ISO date, *optional* | Default 30 days ago |
+| `to` | ISO date, *optional* | Default now |
+
+**Returns:** `stages` (per-stage `count`, `mean_ms`, `p50_ms`, `p95_ms`, `min_ms`, `max_ms`), `outlierSessions`, `summary`.
 
 ### `agents_restart` · `mcp:write`
 
@@ -766,3 +819,29 @@ Members of those projects can bind the connector to their agents. The agents cal
 **Inputs:** `connectorId`, `projectIds` (up to 100, from `projects_list`).
 
 **Returns:** the connector, as `connectors_get` shows it.
+
+## Inbox
+
+### `user_messages_list` · `mcp:read`
+
+The caller's own inbox (project invitations and similar notifications), newest first.
+
+**Inputs:** `page` (integer ≥ 1, *optional*, default 1), `limit` (integer 1–100, *optional*, default 20).
+
+**Returns:** `{ messages, total, page, limit, totalPages }`. Each message has `id`, `type`, `title`, `body`, `read`, `createdAt`, `relatedEntityId`, `relatedEntityType` and a `metadata` object that depends on the type.
+
+### `user_messages_unread_count_get` · `mcp:read`
+
+The caller's number of unread inbox messages.
+
+**Inputs:** none.
+
+**Returns:** `{ count }`.
+
+### `user_messages_mark_read` · `mcp:write`
+
+Mark one of the caller's own inbox messages as read.
+
+**Inputs:** `messageId`, from `user_messages_list`.
+
+**Returns:** the message, as `user_messages_list` shows it, with `read: true`.

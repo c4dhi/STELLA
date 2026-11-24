@@ -24,6 +24,7 @@ import { EnvVarTemplatesTools } from './tools/env-var-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
 import { AgentUploadsTools } from './tools/agent-uploads.tools.js';
+import { UserMessagesTools } from './tools/user-messages.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import {
   CreateConnectorDto,
@@ -39,6 +40,7 @@ import { InviteCollaboratorDto } from '../project-invitations/dto/project-invita
 import { CreateEnvVarTemplateDto } from '../env-var-templates/dto/create-env-var-template.dto.js';
 import { UpdateEnvVarTemplateDto } from '../env-var-templates/dto/update-env-var-template.dto.js';
 import { GeneratePlanTemplateDto } from '../plan-templates/dto/generate-plan-template.dto.js';
+import { QueryMessagesDto } from '../user-messages/dto/user-message.dto.js';
 
 const USER = {
   userId: 'u1',
@@ -595,6 +597,45 @@ function setup() {
     }),
     updateShares: jest.fn(async (id: string, userId: string, projectIds: string[]) => ({ projectIds })),
   };
+  const userMessages = {
+    getMessages: jest.fn(async (userId: string, query: any) => ({
+      messages: [
+        {
+          id: 'msg1',
+          type: 'PROJECT_INVITATION',
+          title: 'You were invited',
+          body: null,
+          read: false,
+          createdAt: new Date('2026-10-01T00:00:00Z'),
+          relatedEntityId: 'inv1',
+          relatedEntityType: 'invitation',
+        },
+      ],
+      total: 1,
+      page: query.page ?? 1,
+      limit: query.limit ?? 20,
+      totalPages: 1,
+    })),
+    getUnreadCount: jest.fn(async () => ({ count: 1 })),
+    markAsRead: jest.fn(async (userId: string, messageId: string) => {
+      if (messageId === 'msg-other') {
+        throw new ForbiddenException('You do not have access to this message');
+      }
+      if (messageId === 'missing') {
+        throw new NotFoundException(`Message with ID ${messageId} not found`);
+      }
+      return {
+        id: messageId,
+        type: 'PROJECT_INVITATION',
+        title: 'You were invited',
+        body: null,
+        read: true,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        relatedEntityId: 'inv1',
+        relatedEntityType: 'invitation',
+      };
+    }),
+  };
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
@@ -619,6 +660,7 @@ function setup() {
     new AgentReviewsTools(agentReview as any),
     new ConnectorsTools(connectors as any),
     new AgentUploadsTools(agentUploadService as any),
+    new UserMessagesTools(userMessages as any),
   ];
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
@@ -640,6 +682,7 @@ function setup() {
     envVarTemplates,
     connectors,
     agentUploadService,
+    userMessages,
     audit,
     tool,
   };
@@ -2393,5 +2436,70 @@ describe('MCP agent upload tools', () => {
       'u1',
       ['7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11'],
     );
+  });
+});
+
+describe('MCP inbox tools', () => {
+  it('shows list and unread-count tools to a read-only token, and mark-read only with write', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining(['user_messages_list', 'user_messages_unread_count_get']),
+    );
+    expect(read).not.toContain('user_messages_mark_read');
+    expect(factory.toolNamesFor(READ_WRITE)).toContain('user_messages_mark_read');
+    expect(read.some((n) => n.startsWith('user_messages') && n.includes('delete'))).toBe(false);
+  });
+
+  it('lists the caller\'s own inbox messages, paginated', async () => {
+    const { factory, userMessages, tool } = setup();
+    const result: any = await factory.run(
+      tool('user_messages_list'),
+      { page: 2, limit: 10 },
+      READ,
+    );
+    const [userId, dto] = userMessages.getMessages.mock.calls[0] as any[];
+    expect(userId).toBe('u1');
+    expect(dto).toBeInstanceOf(QueryMessagesDto);
+    expect(dto.page).toBe(2);
+    expect(dto.limit).toBe(10);
+    expect(result.structuredContent).toMatchObject({
+      total: 1,
+      page: 2,
+      limit: 10,
+      messages: [expect.objectContaining({ id: 'msg1', read: false })],
+    });
+  });
+
+  it('gets the unread count for the caller', async () => {
+    const { factory, userMessages, tool } = setup();
+    const result: any = await factory.run(tool('user_messages_unread_count_get'), {}, READ);
+    expect(userMessages.getUnreadCount).toHaveBeenCalledWith('u1');
+    expect(result.structuredContent).toEqual({ count: 1 });
+  });
+
+  it('marks a message read only for its own owner', async () => {
+    const { factory, userMessages, tool } = setup();
+    const ok: any = await factory.run(
+      tool('user_messages_mark_read'),
+      { messageId: 'msg1' },
+      READ_WRITE,
+    );
+    expect(userMessages.markAsRead).toHaveBeenCalledWith('u1', 'msg1');
+    expect(ok.structuredContent).toMatchObject({ id: 'msg1', read: true });
+
+    const refused: any = await factory.run(
+      tool('user_messages_mark_read'),
+      { messageId: 'msg-other' },
+      READ_WRITE,
+    );
+    expect(refused.isError).toBe(true);
+
+    const missing: any = await factory.run(
+      tool('user_messages_mark_read'),
+      { messageId: 'missing' },
+      READ_WRITE,
+    );
+    expect(parse(missing).error.status).toBe(404);
   });
 });
