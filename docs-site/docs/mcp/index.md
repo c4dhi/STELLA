@@ -55,7 +55,7 @@ Every connection has one of two access levels, chosen when you sign in or create
 | Read | `mcp:read` | Only the read tools: lists, gets, transcripts, plan state, agent status and logs |
 | Read/write | `mcp:read` + `mcp:write` | Also the tools that create, update, start, stop and close things |
 
-A connection only gets the tools its scopes allow. A read-only connection that calls a write tool by name gets `403`.
+A connection only gets the tools its scopes allow. A read-only connection calling a write tool by name gets "tool not found" — it was never registered for that connection.
 
 Read/write covers starting and ending sessions, agents and invitation links, not only editing personas and plans.
 

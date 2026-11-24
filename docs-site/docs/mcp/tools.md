@@ -12,7 +12,7 @@ Conventions used on this page:
 
 - An input marked *optional* can be left out. On an `…_update` tool, every field except the id is optional, and a field left out stays as it is.
 - Ids are strings. Each id's description, as the assistant sees it, says which tool lists them.
-- Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets `403` if it calls one by name.
+- Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets "tool not found" if it calls one by name — it was never registered for that connection.
 - On failure, every tool returns `{ "error": { "status", "message" } }` instead of the result shown here. `404` also means "not yours".
 
 ## Account
@@ -738,7 +738,7 @@ Stop an agent and remove its pod. The agent and its messages stay, and `agents_r
 
 ## Platform settings (system admins)
 
-The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets `403` calling them by name.
+The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets "tool not found" calling them by name — they were never registered for that connection.
 
 ### `platform_settings_get` · `mcp:read`
 
@@ -760,7 +760,7 @@ Turn **Review uploaded agents** on or off. While it is on (the default), no uplo
 
 ## Agent review (system admins)
 
-Reviewing uploaded agents, as in Settings → Agent Review. Approving an agent lets its code run in the cluster, so only a system admin sees these four tools; anyone else gets `403` calling them by name. Built-in agents are never reviewed.
+Reviewing uploaded agents, as in Settings → Agent Review. Approving an agent lets its code run in the cluster, so only a system admin sees these four tools; anyone else gets "tool not found" calling them by name — they were never registered for that connection. Built-in agents are never reviewed.
 
 ### `agent_reviews_list` · `mcp:read`
 
