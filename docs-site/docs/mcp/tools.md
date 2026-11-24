@@ -71,6 +71,14 @@ Change a persona the user owns. System defaults can't be changed.
 
 **Returns:** the persona, as `personas_get` shows it.
 
+### `personas_duplicate` · `mcp:write`
+
+Copy a persona the user can see — their own, or a system default — into a new one they own, named "<name> (Copy)".
+
+**Inputs:** `personaId`.
+
+**Returns:** the new persona, as `personas_get` shows it.
+
 ## Plan templates
 
 What happens in a conversation: states, tasks, transitions and deliverables. See [Plan structure](../plan-structure/index.md).
@@ -112,6 +120,14 @@ Change a plan template the user owns.
 **Inputs:** `planId`, plus any fields of `plan_templates_create`. A new `content` replaces the whole plan.
 
 **Returns:** the plan template, as `plan_templates_get` shows it.
+
+### `plan_templates_duplicate` · `mcp:write`
+
+Copy a plan template the user owns into a new one, named "<name> (Copy)".
+
+**Inputs:** `planId`.
+
+**Returns:** the new plan template, as `plan_templates_get` shows it.
 
 ## Agent types and configurations
 
@@ -171,6 +187,14 @@ Change a configuration the user owns.
 **Inputs:** `agentConfigurationId`, plus `name`, `description` or `configuration`, each *optional*. A new `configuration` replaces all overrides.
 
 **Returns:** the configuration, as `agent_configurations_get` shows it.
+
+### `agent_configurations_duplicate` · `mcp:write`
+
+Copy a configuration the user owns into a new one, named "<name> (Copy)", for the same agent type.
+
+**Inputs:** `agentConfigurationId`.
+
+**Returns:** the new configuration, as `agent_configurations_get` shows it.
 
 ## Projects and sessions
 
@@ -316,6 +340,14 @@ The user's env var templates, which hold the API keys an agent needs.
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys`, `agentTypeId`, `invalid` and `needsCheck`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
 
 `invalid` maps each setting whose stored value does not fit its type or range to the reason, for example `{ "TTS_SPEED": "must be between 0.5 and 2" }`. `agents_deploy` refuses such a template until it is fixed in the app. `needsCheck` is `true` for a template that has not been saved since 1.6.0 made settings typed.
+
+### `env_var_templates_duplicate` · `mcp:write`
+
+Copy an env var template the user owns into a new one, named "<name> (Copy)", for the same `agentTypeId`. The variables themselves are carried over without being re-entered.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** the new template, with the same fields as one item of `env_var_templates_list` (`id`, `name`, `description`, `variableKeys`, `agentTypeId`, `invalid`, `needsCheck`).
 
 ### `agents_deploy` · `mcp:write`
 

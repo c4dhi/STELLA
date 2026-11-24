@@ -77,7 +77,15 @@ export class AgentsTools implements McpToolProvider {
           items: (
             await this.envVarTemplates.findAllByUser(auth.user.userId)
           ).map(
-            ({ id, name, description, variableKeys, agentTypeId, invalid, needsCheck }) => ({
+            ({
+              id,
+              name,
+              description,
+              variableKeys,
+              agentTypeId,
+              invalid,
+              needsCheck,
+            }) => ({
               id,
               name,
               description,
@@ -88,6 +96,31 @@ export class AgentsTools implements McpToolProvider {
             }),
           ),
         }),
+      }),
+      defineTool({
+        name: 'env_var_templates_duplicate',
+        title: 'Duplicate an env var template',
+        description:
+          'Copy an env var template the user owns into a new one, named "<name> (Copy)", for the same ' +
+          'agentTypeId. The variables themselves are carried over without being re-entered; env_var_templates_update ' +
+          'changes the copy.',
+        scope: 'mcp:write',
+        input: {
+          envVarTemplateId: idArg('env var template', 'env_var_templates_list'),
+        },
+        annotations: CREATES,
+        handler: async ({ envVarTemplateId }, ctx) => {
+          const copy = await this.envVarTemplates.duplicate(
+            envVarTemplateId,
+            ctx.auth.user.userId,
+          );
+          return {
+            ...(await this.envVarTemplates.findOne(
+              copy.id,
+              ctx.auth.user.userId,
+            )),
+          };
+        },
       }),
       defineTool({
         name: 'agents_deploy',
@@ -138,7 +171,7 @@ export class AgentsTools implements McpToolProvider {
                   .string()
                   .optional()
                   .describe(
-                    "A connector slot the agent type declares in agent.yaml (connectors)",
+                    'A connector slot the agent type declares in agent.yaml (connectors)',
                   ),
                 handle: z
                   .string()

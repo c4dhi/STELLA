@@ -64,13 +64,13 @@ Which tools need which scope:
 | Scope | Tools |
 |---|---|
 | `mcp:read` (20) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `agents_get`, `agent_logs_get`, `connectors_list`, `connectors_get` |
-| `mcp:write` (18) | `personas_create`, `personas_update`, `plan_templates_create`, `plan_templates_update`, `agent_configurations_create`, `agent_configurations_update`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
+| `mcp:write` (22) | `personas_create`, `personas_update`, `personas_duplicate`, `plan_templates_create`, `plan_templates_update`, `plan_templates_duplicate`, `agent_configurations_create`, `agent_configurations_update`, `agent_configurations_duplicate`, `env_var_templates_duplicate`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
 
 System admins also get `platform_settings_get` and `agent_reviews_list`/`agent_reviews_get` (`mcp:read`), and `platform_settings_update`, `agent_reviews_approve` and `agent_reviews_reject` (`mcp:write`). Nobody else sees them, and calling one by name answers `403`.
 
 ## The tools
 
-There are 38 tools, plus 2 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
+There are 42 tools, plus 2 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
 
 - Ids are named after what they point to (`projectId`, `sessionId`, `agentId`, `invitationId`, `personaId`, `planId`, `agentConfigurationId`, `agentTypeId`, `envVarTemplateId`). The name is the same in every tool.
 - `…_list` returns `{ items }` with a summary of each, and `…_get` returns one in full.
