@@ -5,6 +5,7 @@ import { CreateEnvVarTemplateDto } from '../../env-var-templates/dto/create-env-
 import { UpdateEnvVarTemplateDto } from '../../env-var-templates/dto/update-env-var-template.dto.js';
 import {
   CREATES,
+  DELETES,
   McpToolProvider,
   READ_ONLY,
   UPDATES,
@@ -146,6 +147,23 @@ export class EnvVarTemplatesTools implements McpToolProvider {
             envVarTemplateId,
             ctx.auth.user.userId,
             await ctx.validate(UpdateEnvVarTemplateDto, fields),
+          )),
+        }),
+      }),
+      defineTool({
+        name: 'env_var_templates_delete',
+        title: 'Delete an env var template',
+        description:
+          'Delete an env var template, as a system admin. The underlying ownership check has no admin ' +
+          "override, so today this only reaches the calling admin's own templates, not every user's.",
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { envVarTemplateId },
+        annotations: DELETES,
+        handler: async ({ envVarTemplateId }, ctx) => ({
+          ...(await this.envVarTemplates.remove(
+            envVarTemplateId,
+            ctx.auth.user.userId,
           )),
         }),
       }),

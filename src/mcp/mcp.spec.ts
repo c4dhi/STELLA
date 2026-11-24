@@ -26,6 +26,7 @@ import { ConnectorsTools } from './tools/connectors.tools.js';
 import { AgentUploadsTools } from './tools/agent-uploads.tools.js';
 import { UserMessagesTools } from './tools/user-messages.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
+import { AdminTools } from './tools/admin.tools.js';
 import {
   CreateConnectorDto,
   UpdateConnectorDto,
@@ -73,14 +74,27 @@ function setup() {
   });
   const platformSettings = {
     getView: jest.fn(async () => settingsView(true)),
-    setAgentReviewRequired: jest.fn(async (raw: boolean, _userId: string) => settingsView(raw)),
+    setAgentReviewRequired: jest.fn(async (raw: boolean, _userId: string) =>
+      settingsView(raw),
+    ),
   };
-  const reviewed = (validationStatus: string) => ({ id: 'up1', slug: 'my-agent', validationStatus });
+  const reviewed = (validationStatus: string) => ({
+    id: 'up1',
+    slug: 'my-agent',
+    validationStatus,
+  });
   const agentReview = {
     list: jest.fn(async (_state: string) => [reviewed('PENDING')]),
-    get: jest.fn(async (_id: string) => ({ ...reviewed('APPROVED'), buildLogs: [] })),
-    approve: jest.fn(async (_id: string, _adminId: string, _notes?: string) => reviewed('APPROVED')),
-    reject: jest.fn(async (_id: string, _adminId: string, _reason: string) => reviewed('REJECTED')),
+    get: jest.fn(async (_id: string) => ({
+      ...reviewed('APPROVED'),
+      buildLogs: [],
+    })),
+    approve: jest.fn(async (_id: string, _adminId: string, _notes?: string) =>
+      reviewed('APPROVED'),
+    ),
+    reject: jest.fn(async (_id: string, _adminId: string, _reason: string) =>
+      reviewed('REJECTED'),
+    ),
   };
   const personas = {
     findAllForUser: jest.fn(async () => [
@@ -119,6 +133,11 @@ function setup() {
         throw new NotFoundException('Persona missing not found');
       return { id: `${id}-copy`, name: 'Grace (Copy)' };
     }),
+    remove: jest.fn(async (id: string, _userId: string) => {
+      if (id === 'missing')
+        throw new NotFoundException('Persona missing not found');
+      return { message: 'Persona deleted successfully' };
+    }),
   };
   // Writes return a bare row; the tools must answer with what findOne gives.
   const plans = {
@@ -142,7 +161,13 @@ function setup() {
     })),
     create: jest.fn(async () => ({ id: 'pl2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
-    duplicate: jest.fn(async (id: string) => ({ id: `${id}-copy`, from: 'duplicate' })),
+    duplicate: jest.fn(async (id: string) => ({
+      id: `${id}-copy`,
+      from: 'duplicate',
+    })),
+    remove: jest.fn(async () => ({
+      message: 'Plan template deleted successfully',
+    })),
   };
   const planGenerator = {
     generate: jest.fn(async () => ({
@@ -179,7 +204,13 @@ function setup() {
     })),
     create: jest.fn(async () => ({ id: 'c2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
-    duplicate: jest.fn(async (id: string) => ({ id: `${id}-copy`, from: 'duplicate' })),
+    duplicate: jest.fn(async (id: string) => ({
+      id: `${id}-copy`,
+      from: 'duplicate',
+    })),
+    remove: jest.fn(async () => ({
+      message: 'Agent configuration deleted successfully',
+    })),
   };
   const projects = {
     findAll: jest.fn(async () => [
@@ -220,7 +251,10 @@ function setup() {
         envVarTemplateId: 'e1e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a66',
         envVars: { OPENAI_API_KEY: 'sk-super-secret' },
         connectorBindings: [
-          { connectorId: 'c1e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a77', slot: 'elias' },
+          {
+            connectorId: 'c1e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a77',
+            slot: 'elias',
+          },
         ],
       },
       publicVisualizerType: 'sphere',
@@ -247,16 +281,19 @@ function setup() {
       id,
       name: dto.name ?? 'Testing',
     })),
-    updatePublicConfig: jest.fn(async (id: string, dto: any, callerId: string) => ({
-      id,
-      isPublic: dto.isPublic,
-      publicAgentConfig: dto.agentConfig ?? null,
-      callerId,
-    })),
+    updatePublicConfig: jest.fn(
+      async (id: string, dto: any, callerId: string) => ({
+        id,
+        isPublic: dto.isPublic,
+        publicAgentConfig: dto.agentConfig ?? null,
+        callerId,
+      }),
+    ),
     getPublicLink: jest.fn(async (id: string, baseUrl: string) => ({
       publicLink: `${baseUrl}/p/public-join-secret`,
       isEnabled: true,
     })),
+    remove: jest.fn(async () => ({ message: 'Project deleted successfully' })),
   };
   const projectInvitations = {
     getCollaborators: jest.fn(async (projectId: string) => {
@@ -275,27 +312,33 @@ function setup() {
         pendingInvitations: [],
       };
     }),
-    inviteCollaborator: jest.fn(async (projectId: string, inviterId: string, dto: any) => {
-      if (projectId === 'p3')
-        throw new ForbiddenException('Only the project owner can perform this action');
-      return {
-        id: 'inv1',
-        projectId,
-        projectName: 'Testing',
-        inviterId,
-        inviterName: 'U',
-        inviterEmail: 'u@x.test',
-        inviteeId: 'u2',
-        inviteeName: 'Collaborator',
-        inviteeEmail: dto.email,
-        status: 'PENDING',
-        createdAt: new Date('2026-10-01T00:00:00Z'),
-        respondedAt: null,
-      };
-    }),
+    inviteCollaborator: jest.fn(
+      async (projectId: string, inviterId: string, dto: any) => {
+        if (projectId === 'p3')
+          throw new ForbiddenException(
+            'Only the project owner can perform this action',
+          );
+        return {
+          id: 'inv1',
+          projectId,
+          projectName: 'Testing',
+          inviterId,
+          inviterName: 'U',
+          inviterEmail: 'u@x.test',
+          inviteeId: 'u2',
+          inviteeName: 'Collaborator',
+          inviteeEmail: dto.email,
+          status: 'PENDING',
+          createdAt: new Date('2026-10-01T00:00:00Z'),
+          respondedAt: null,
+        };
+      },
+    ),
     removeCollaborator: jest.fn(async (projectId: string) => {
       if (projectId === 'p3')
-        throw new ForbiddenException('Only the project owner can perform this action');
+        throw new ForbiddenException(
+          'Only the project owner can perform this action',
+        );
     }),
   };
   const config = {
@@ -395,6 +438,7 @@ function setup() {
         lastSeenAt: new Date('2026-10-01T00:05:00Z'),
       },
     ]),
+    delete: jest.fn(async () => ({ message: 'Session deleted successfully' })),
   };
   const agentRow = {
     id: 'a1',
@@ -414,7 +458,15 @@ function setup() {
     remove: jest.fn(async () => ({ message: 'Agent stopped successfully' })),
     getAgentMetrics: jest.fn(async () => ({
       stages: [
-        { stage: 'ttfab', count: 5, mean_ms: 100, p50_ms: 90, p95_ms: 150, min_ms: 50, max_ms: 200 },
+        {
+          stage: 'ttfab',
+          count: 5,
+          mean_ms: 100,
+          p50_ms: 90,
+          p95_ms: 150,
+          min_ms: 50,
+          max_ms: 200,
+        },
       ],
       outlierSessions: [],
       summary: { totalSessions: 5 },
@@ -546,6 +598,12 @@ function setup() {
       }
       return { ...envVarTemplateRow, id: `${id}-copy`, name: 'Keys (Copy)' };
     }),
+    remove: jest.fn(async (id: string, userId: string) => {
+      if (id !== 'e1' || (userId !== 'u1' && userId !== 'admin-1')) {
+        throw new NotFoundException(`Env var template with ID ${id} not found`);
+      }
+      return { message: 'Environment variable template deleted successfully' };
+    }),
   };
   const connectors = {
     list: jest.fn(async () => [connectorRow]),
@@ -576,26 +634,43 @@ function setup() {
         built: false,
       },
     ]),
-    triggerBuild: jest.fn(async (id: string, userId: string, isSystemAdmin?: boolean) => {
-      if (id === 'at-other' && !isSystemAdmin) throw new ForbiddenException('You do not own this agent');
-      return { buildLogId: 'build-new', message: 'Build started' };
-    }),
+    triggerBuild: jest.fn(
+      async (id: string, userId: string, isSystemAdmin?: boolean) => {
+        if (id === 'at-other' && !isSystemAdmin)
+          throw new ForbiddenException('You do not own this agent');
+        return { buildLogId: 'build-new', message: 'Build started' };
+      },
+    ),
     getBuildStatus: jest.fn(async () => ({
       id: 'build-1',
       status: 'success' as const,
       buildOutput: 'built ok',
     })),
     getBuildHistory: jest.fn(async (id: string) => {
-      if (id === 'at-other') throw new ForbiddenException("You cannot see this agent's builds");
+      if (id === 'at-other')
+        throw new ForbiddenException("You cannot see this agent's builds");
       return [{ id: 'build-1', status: 'success' }];
     }),
     getShares: jest.fn(async (id: string) => {
       if (id === 'at-other' || id === 'at-builtin') {
         throw new ForbiddenException('Only its owner can share this agent');
       }
-      return { projectIds: ['p1'], projects: [{ id: 'p1', name: 'Playground' }] };
+      return {
+        projectIds: ['p1'],
+        projects: [{ id: 'p1', name: 'Playground' }],
+      };
     }),
-    updateShares: jest.fn(async (id: string, userId: string, projectIds: string[]) => ({ projectIds })),
+    updateShares: jest.fn(
+      async (id: string, userId: string, projectIds: string[]) => ({
+        projectIds,
+      }),
+    ),
+    deleteAgent: jest.fn(
+      async (id: string, _userId: string, _isSystemAdmin?: boolean) => ({
+        success: true,
+        stoppedAgents: 0,
+      }),
+    ),
   };
   const userMessages = {
     getMessages: jest.fn(async (userId: string, query: any) => ({
@@ -636,6 +711,88 @@ function setup() {
       };
     }),
   };
+  const admin = {
+    getDashboardMetrics: jest.fn(async () => ({
+      timestamp: '2026-10-01T00:00:00Z',
+      activeParticipants: 2,
+      totalParticipants: 10,
+      activeSessions: 1,
+      totalSessions: 5,
+      runningAgents: 1,
+      startingAgents: 0,
+      failedAgents: 0,
+      pausedAgents: 0,
+      stoppedAgents: 1,
+      totalAgents: 2,
+      totalMessages: 50,
+      messagesToday: 5,
+      sessionsWithTimeout: 3,
+    })),
+    listUsers: jest.fn(async (page = 1, limit = 50) => ({
+      users: [
+        {
+          id: 'u1',
+          email: 'u@x.test',
+          name: 'U',
+          verified: true,
+          isSystemAdmin: false,
+          createdAt: new Date('2026-10-01T00:00:00Z'),
+          projectCount: 1,
+        },
+      ],
+      total: 1,
+      page,
+      totalPages: 1,
+    })),
+    verifyUser: jest.fn(async (userId: string) => {
+      if (userId === 'missing') throw new NotFoundException('User not found');
+      return {
+        id: userId,
+        email: 'u@x.test',
+        name: 'U',
+        verified: true,
+        isSystemAdmin: false,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        projectCount: 1,
+      };
+    }),
+    toggleAdminStatus: jest.fn(async (userId: string, isAdmin: boolean) => {
+      if (userId === 'missing') throw new NotFoundException('User not found');
+      return {
+        id: userId,
+        email: 'u@x.test',
+        name: 'U',
+        verified: true,
+        isSystemAdmin: isAdmin,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        projectCount: 1,
+      };
+    }),
+  };
+  const capacityRow = {
+    id: 'cap1',
+    measuredAt: '2026-11-01T00:00:00Z',
+    gpuName: 'H100',
+    gpuMemoryMb: 81920,
+    environment: 'production',
+    sttProvider: 'deepgram',
+    ttsProvider: 'cartesia',
+    gitRevision: 'abc123',
+    maxSessions: 40,
+    limitedBy: [],
+    reachedTopLevel: true,
+    durationSeconds: 600,
+    criteria: { maxLatencyMs: 800 },
+    levels: [{ sessions: 40, passed: true }],
+  };
+  const capacity = {
+    latest: jest.fn(async () => [capacityRow]),
+    record: jest.fn(async (dto: any) => ({
+      ...capacityRow,
+      ...dto,
+      id: 'cap2',
+    })),
+  };
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
@@ -661,6 +818,7 @@ function setup() {
     new ConnectorsTools(connectors as any),
     new AgentUploadsTools(agentUploadService as any),
     new UserMessagesTools(userMessages as any),
+    new AdminTools(admin as any, capacity as any),
   ];
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
@@ -683,6 +841,8 @@ function setup() {
     connectors,
     agentUploadService,
     userMessages,
+    admin,
+    capacity,
     audit,
     tool,
   };
@@ -1057,7 +1217,7 @@ describe('MCP session and agent tools', () => {
     expect(ok.structuredContent.stages[0].stage).toBe('ttfab');
   });
 
-  it('gets a session\'s latency analytics only inside the user projects', async () => {
+  it("gets a session's latency analytics only inside the user projects", async () => {
     const { factory, agents, tool } = setup();
     const other: any = await factory.run(
       tool('session_analytics_get'),
@@ -1213,36 +1373,70 @@ describe('MCP session and agent tools', () => {
 
 describe('MCP agent review tools (system admins only)', () => {
   const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
-  const ADMIN_READ: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read'] };
-  const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
-  const REVIEW_TOOLS = ['agent_reviews_list', 'agent_reviews_get', 'agent_reviews_approve', 'agent_reviews_reject'];
+  const ADMIN_READ: McpAuthContext = {
+    user: ADMIN,
+    tokenId: 't2',
+    scopes: ['mcp:read'],
+  };
+  const ADMIN_RW: McpAuthContext = {
+    user: ADMIN,
+    tokenId: 't2',
+    scopes: ['mcp:read', 'mcp:write'],
+  };
+  const REVIEW_TOOLS = [
+    'agent_reviews_list',
+    'agent_reviews_get',
+    'agent_reviews_approve',
+    'agent_reviews_reject',
+  ];
 
   it('lists them only to a system admin, writes only with mcp:write', () => {
     const { factory } = setup();
-    expect(factory.toolNamesFor(READ_WRITE).filter((n) => REVIEW_TOOLS.includes(n))).toEqual([]);
-    expect(factory.toolNamesFor(ADMIN_READ).filter((n) => REVIEW_TOOLS.includes(n))).toEqual([
-      'agent_reviews_list',
-      'agent_reviews_get',
-    ]);
-    expect(factory.toolNamesFor(ADMIN_RW)).toEqual(expect.arrayContaining(REVIEW_TOOLS));
+    expect(
+      factory.toolNamesFor(READ_WRITE).filter((n) => REVIEW_TOOLS.includes(n)),
+    ).toEqual([]);
+    expect(
+      factory.toolNamesFor(ADMIN_READ).filter((n) => REVIEW_TOOLS.includes(n)),
+    ).toEqual(['agent_reviews_list', 'agent_reviews_get']);
+    expect(factory.toolNamesFor(ADMIN_RW)).toEqual(
+      expect.arrayContaining(REVIEW_TOOLS),
+    );
   });
 
   it('refuses a user approving their own upload by name, and records it', async () => {
     const { factory, tool, agentReview, audit } = setup();
-    const result: any = await factory.run(tool('agent_reviews_approve'), { agentTypeId: 'up1' }, READ_WRITE);
+    const result: any = await factory.run(
+      tool('agent_reviews_approve'),
+      { agentTypeId: 'up1' },
+      READ_WRITE,
+    );
     expect(parse(result).error.status).toBe(403);
     expect(agentReview.approve).not.toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ tool: 'agent_reviews_approve', success: false, errorCode: 'not_system_admin' }),
+      expect.objectContaining({
+        tool: 'agent_reviews_approve',
+        success: false,
+        errorCode: 'not_system_admin',
+      }),
     );
   });
 
   it('lists pending uploads unless another state is asked for', async () => {
     const { factory, tool, agentReview } = setup();
-    const result: any = await factory.run(tool('agent_reviews_list'), {}, ADMIN_READ);
+    const result: any = await factory.run(
+      tool('agent_reviews_list'),
+      {},
+      ADMIN_READ,
+    );
     expect(agentReview.list).toHaveBeenCalledWith('pending');
-    expect(result.structuredContent).toEqual({ items: [{ id: 'up1', slug: 'my-agent', validationStatus: 'PENDING' }] });
-    await factory.run(tool('agent_reviews_list'), { status: 'rejected' }, ADMIN_READ);
+    expect(result.structuredContent).toEqual({
+      items: [{ id: 'up1', slug: 'my-agent', validationStatus: 'PENDING' }],
+    });
+    await factory.run(
+      tool('agent_reviews_list'),
+      { status: 'rejected' },
+      ADMIN_READ,
+    );
     expect(agentReview.list).toHaveBeenLastCalledWith('rejected');
   });
 
@@ -1254,48 +1448,95 @@ describe('MCP agent review tools (system admins only)', () => {
       ADMIN_RW,
     );
     expect(agentReview.approve).toHaveBeenCalledWith('up1', 'admin-1', 'fine');
-    expect(approved.structuredContent).toEqual({ id: 'up1', slug: 'my-agent', validationStatus: 'APPROVED', buildLogs: [] });
-    await factory.run(tool('agent_reviews_reject'), { agentTypeId: 'up1', reason: 'opens a shell' }, ADMIN_RW);
-    expect(agentReview.reject).toHaveBeenCalledWith('up1', 'admin-1', 'opens a shell');
+    expect(approved.structuredContent).toEqual({
+      id: 'up1',
+      slug: 'my-agent',
+      validationStatus: 'APPROVED',
+      buildLogs: [],
+    });
+    await factory.run(
+      tool('agent_reviews_reject'),
+      { agentTypeId: 'up1', reason: 'opens a shell' },
+      ADMIN_RW,
+    );
+    expect(agentReview.reject).toHaveBeenCalledWith(
+      'up1',
+      'admin-1',
+      'opens a shell',
+    );
     expect(agentReview.get).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('MCP platform settings tools (system admins only)', () => {
   const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
-  const ADMIN_READ: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read'] };
-  const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
+  const ADMIN_READ: McpAuthContext = {
+    user: ADMIN,
+    tokenId: 't2',
+    scopes: ['mcp:read'],
+  };
+  const ADMIN_RW: McpAuthContext = {
+    user: ADMIN,
+    tokenId: 't2',
+    scopes: ['mcp:read', 'mcp:write'],
+  };
   const SETTINGS_TOOLS = ['platform_settings_get', 'platform_settings_update'];
 
   it('lists them only to a system admin, each with its scope', async () => {
     const { factory } = setup();
-    expect(factory.toolNamesFor(READ_WRITE)).toEqual(expect.not.arrayContaining(['platform_settings_get']));
-    expect(factory.toolNamesFor(READ_WRITE)).toEqual(expect.not.arrayContaining(['platform_settings_update']));
+    expect(factory.toolNamesFor(READ_WRITE)).toEqual(
+      expect.not.arrayContaining(['platform_settings_get']),
+    );
+    expect(factory.toolNamesFor(READ_WRITE)).toEqual(
+      expect.not.arrayContaining(['platform_settings_update']),
+    );
     expect(factory.toolNamesFor(ADMIN_READ)).toContain('platform_settings_get');
-    expect(factory.toolNamesFor(ADMIN_READ)).not.toContain('platform_settings_update');
-    expect(factory.toolNamesFor(ADMIN_RW)).toEqual(expect.arrayContaining(SETTINGS_TOOLS));
-    const listed = (await (await connect(factory, READ_WRITE)).listTools()).tools.map((t) => t.name);
+    expect(factory.toolNamesFor(ADMIN_READ)).not.toContain(
+      'platform_settings_update',
+    );
+    expect(factory.toolNamesFor(ADMIN_RW)).toEqual(
+      expect.arrayContaining(SETTINGS_TOOLS),
+    );
+    const listed = (
+      await (await connect(factory, READ_WRITE)).listTools()
+    ).tools.map((t) => t.name);
     expect(listed.filter((n) => SETTINGS_TOOLS.includes(n))).toEqual([]);
   });
 
   it('refuses a non-admin who calls them by name, and records it', async () => {
     const { factory, tool, platformSettings, audit } = setup();
     for (const name of SETTINGS_TOOLS) {
-      const result: any = await factory.run(tool(name), { agentReviewRequired: false }, READ_WRITE);
+      const result: any = await factory.run(
+        tool(name),
+        { agentReviewRequired: false },
+        READ_WRITE,
+      );
       expect(result.isError).toBe(true);
       expect(parse(result).error.status).toBe(403);
     }
     expect(platformSettings.getView).not.toHaveBeenCalled();
     expect(platformSettings.setAgentReviewRequired).not.toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ tool: 'platform_settings_update', success: false, errorCode: 'not_system_admin' }),
+      expect.objectContaining({
+        tool: 'platform_settings_update',
+        success: false,
+        errorCode: 'not_system_admin',
+      }),
     );
   });
 
   it('reads the switches without the cross-project deployment list', async () => {
     const { factory, tool } = setup();
-    const result: any = await factory.run(tool('platform_settings_get'), {}, ADMIN_READ);
-    expect(result.structuredContent).toEqual({ agentReviewRequired: true, mcpEnabled: true, ttsPlayback: null });
+    const result: any = await factory.run(
+      tool('platform_settings_get'),
+      {},
+      ADMIN_READ,
+    );
+    expect(result.structuredContent).toEqual({
+      agentReviewRequired: true,
+      mcpEnabled: true,
+      ttsPlayback: null,
+    });
   });
 
   it('turns review off as the admin and returns what _get shows', async () => {
@@ -1305,8 +1546,15 @@ describe('MCP platform settings tools (system admins only)', () => {
       { agentReviewRequired: false },
       ADMIN_RW,
     );
-    expect(platformSettings.setAgentReviewRequired).toHaveBeenCalledWith(false, 'admin-1');
-    expect(result.structuredContent).toEqual({ agentReviewRequired: false, mcpEnabled: true, ttsPlayback: null });
+    expect(platformSettings.setAgentReviewRequired).toHaveBeenCalledWith(
+      false,
+      'admin-1',
+    );
+    expect(result.structuredContent).toEqual({
+      agentReviewRequired: false,
+      mcpEnabled: true,
+      ttsPlayback: null,
+    });
   });
 });
 
@@ -1496,10 +1744,18 @@ describe('One shape for every tool', () => {
   it('never sends clients to agent_types_list for the pipeline schema (#820)', async () => {
     const offenders: string[] = [];
     for (const t of await schemas()) {
-      const texts = [t.description, ...Object.values(t.inputSchema.properties ?? {}).map((s: any) => s.description)];
+      const texts = [
+        t.description,
+        ...Object.values(t.inputSchema.properties ?? {}).map(
+          (s: any) => s.description,
+        ),
+      ];
       for (const text of texts) {
         if (!text) continue;
-        if ((/pipeline ?schema|configSchema/i.test(text)) && /agent_types_list/.test(text)) {
+        if (
+          /pipeline ?schema|configSchema/i.test(text) &&
+          /agent_types_list/.test(text)
+        ) {
           offenders.push(t.name);
         }
       }
@@ -2205,9 +2461,15 @@ describe('MCP env var template tools', () => {
     const { factory } = setup();
     const read = factory.toolNamesFor(READ);
     expect(read).toEqual(
-      expect.arrayContaining(['env_var_templates_list', 'env_var_templates_get']),
+      expect.arrayContaining([
+        'env_var_templates_list',
+        'env_var_templates_get',
+      ]),
     );
-    for (const write of ['env_var_templates_create', 'env_var_templates_update']) {
+    for (const write of [
+      'env_var_templates_create',
+      'env_var_templates_update',
+    ]) {
       expect(read).not.toContain(write);
       expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
     }
@@ -2245,7 +2507,10 @@ describe('MCP env var template tools', () => {
       {
         name: 'Keys',
         agentTypeId: AGENT_TYPE_UUID,
-        variables: { OPENAI_API_KEY: 'sk-super-secret', DATABASE_URL: 'postgres://u:p@host/db' },
+        variables: {
+          OPENAI_API_KEY: 'sk-super-secret',
+          DATABASE_URL: 'postgres://u:p@host/db',
+        },
       },
       READ_WRITE,
     );
@@ -2293,7 +2558,7 @@ describe('MCP env var template tools', () => {
     expect(dto.name).toBe('Renamed');
     expect(dto.removeKeys).toEqual(['TTS_SPEED']);
     // agentTypeId isn't on the update DTO: a template's type is immutable.
-    expect((dto as any).agentTypeId).toBeUndefined();
+    expect(dto.agentTypeId).toBeUndefined();
 
     const someoneElses: any = await factory.run(
       tool('env_var_templates_update'),
@@ -2453,73 +2718,136 @@ describe('MCP agent upload tools', () => {
       tool('agent_uploads_create'),
       {
         files: [
-          { path: 'agent.yaml', content: 'metadata:\n  slug: new-agent\n  version: 1.0.0\n' },
+          {
+            path: 'agent.yaml',
+            content: 'metadata:\n  slug: new-agent\n  version: 1.0.0\n',
+          },
           { path: 'main.py', content: 'print("hi")' },
         ],
       },
       READ_WRITE,
     );
     expect(result.isError).toBeFalsy();
-    const [buffer, userId] = agentUploadService.createFromPackage.mock.calls[0] as [Buffer, string];
+    const [buffer, userId] = agentUploadService.createFromPackage.mock.calls[0];
     expect(Buffer.isBuffer(buffer)).toBe(true);
     expect(userId).toBe('u1');
-    expect(result.structuredContent).toMatchObject({ id: 'at-new', slug: 'new-agent' });
+    expect(result.structuredContent).toMatchObject({
+      id: 'at-new',
+      slug: 'new-agent',
+    });
   });
 
-  it('lists the caller\'s own uploads, as the service returns them', async () => {
+  it("lists the caller's own uploads, as the service returns them", async () => {
     const { factory, agentUploadService, tool } = setup();
     const result: any = await factory.run(tool('agent_uploads_list'), {}, READ);
     expect(agentUploadService.getMyAgents).toHaveBeenCalledWith('u1');
-    expect(result.structuredContent.items[0]).toMatchObject({ id: 'at-mine', slug: 'my-agent' });
+    expect(result.structuredContent.items[0]).toMatchObject({
+      id: 'at-mine',
+      slug: 'my-agent',
+    });
   });
 
   it('build: passes the caller and admin flag through, and surfaces a refusal', async () => {
     const { factory, agentUploadService, tool } = setup();
     const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
-    const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
+    const ADMIN_RW: McpAuthContext = {
+      user: ADMIN,
+      tokenId: 't2',
+      scopes: ['mcp:read', 'mcp:write'],
+    };
 
-    const owned: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-mine' }, READ_WRITE);
+    const owned: any = await factory.run(
+      tool('agent_uploads_build'),
+      { agentTypeId: 'at-mine' },
+      READ_WRITE,
+    );
     expect(owned.isError).toBeFalsy();
-    expect(agentUploadService.triggerBuild).toHaveBeenCalledWith('at-mine', 'u1', false);
+    expect(agentUploadService.triggerBuild).toHaveBeenCalledWith(
+      'at-mine',
+      'u1',
+      false,
+    );
 
-    const notOwned: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-other' }, READ_WRITE);
+    const notOwned: any = await factory.run(
+      tool('agent_uploads_build'),
+      { agentTypeId: 'at-other' },
+      READ_WRITE,
+    );
     expect(notOwned.isError).toBe(true);
 
-    const asAdmin: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-other' }, ADMIN_RW);
+    const asAdmin: any = await factory.run(
+      tool('agent_uploads_build'),
+      { agentTypeId: 'at-other' },
+      ADMIN_RW,
+    );
     expect(asAdmin.isError).toBeFalsy();
-    expect(agentUploadService.triggerBuild).toHaveBeenCalledWith('at-other', 'admin-1', true);
+    expect(agentUploadService.triggerBuild).toHaveBeenCalledWith(
+      'at-other',
+      'admin-1',
+      true,
+    );
   });
 
   it('build_status wraps the service result as { build }', async () => {
     const { factory, agentUploadService, tool } = setup();
-    const result: any = await factory.run(tool('agent_uploads_build_status'), { agentTypeId: 'at-mine' }, READ);
-    expect(agentUploadService.getBuildStatus).toHaveBeenCalledWith('at-mine', 'u1', false);
-    expect(result.structuredContent.build).toMatchObject({ status: 'success', buildOutput: 'built ok' });
+    const result: any = await factory.run(
+      tool('agent_uploads_build_status'),
+      { agentTypeId: 'at-mine' },
+      READ,
+    );
+    expect(agentUploadService.getBuildStatus).toHaveBeenCalledWith(
+      'at-mine',
+      'u1',
+      false,
+    );
+    expect(result.structuredContent.build).toMatchObject({
+      status: 'success',
+      buildOutput: 'built ok',
+    });
 
     agentUploadService.getBuildStatus.mockResolvedValueOnce(null);
-    const never: any = await factory.run(tool('agent_uploads_build_status'), { agentTypeId: 'at-mine' }, READ);
+    const never: any = await factory.run(
+      tool('agent_uploads_build_status'),
+      { agentTypeId: 'at-mine' },
+      READ,
+    );
     expect(never.structuredContent).toEqual({ build: null });
   });
 
   it('build_history surfaces a refusal from the service', async () => {
     const { factory, tool } = setup();
-    const result: any = await factory.run(tool('agent_uploads_build_history'), { agentTypeId: 'at-other' }, READ);
+    const result: any = await factory.run(
+      tool('agent_uploads_build_history'),
+      { agentTypeId: 'at-other' },
+      READ,
+    );
     expect(result.isError).toBe(true);
   });
 
   it('shares: get and update pass through, and surface a refusal', async () => {
     const { factory, agentUploadService, tool } = setup();
 
-    const owner: any = await factory.run(tool('agent_uploads_shares_get'), { agentTypeId: 'at-mine' }, READ);
+    const owner: any = await factory.run(
+      tool('agent_uploads_shares_get'),
+      { agentTypeId: 'at-mine' },
+      READ,
+    );
     expect(owner.isError).toBeFalsy();
     expect(owner.structuredContent).toMatchObject({ projectIds: ['p1'] });
 
-    const refused: any = await factory.run(tool('agent_uploads_shares_get'), { agentTypeId: 'at-other' }, READ);
+    const refused: any = await factory.run(
+      tool('agent_uploads_shares_get'),
+      { agentTypeId: 'at-other' },
+      READ,
+    );
     expect(refused.isError).toBe(true);
 
     const updated: any = await factory.run(
       tool('agent_uploads_shares_update'),
-      { agentTypeId: 'at-mine', projectIds: ['7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11'] },
+      {
+        agentTypeId: 'at-mine',
+        projectIds: ['7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11'],
+      },
       READ_WRITE,
     );
     expect(updated.isError).toBeFalsy();
@@ -2536,14 +2864,21 @@ describe('MCP inbox tools', () => {
     const { factory } = setup();
     const read = factory.toolNamesFor(READ);
     expect(read).toEqual(
-      expect.arrayContaining(['user_messages_list', 'user_messages_unread_count_get']),
+      expect.arrayContaining([
+        'user_messages_list',
+        'user_messages_unread_count_get',
+      ]),
     );
     expect(read).not.toContain('user_messages_mark_read');
-    expect(factory.toolNamesFor(READ_WRITE)).toContain('user_messages_mark_read');
-    expect(read.some((n) => n.startsWith('user_messages') && n.includes('delete'))).toBe(false);
+    expect(factory.toolNamesFor(READ_WRITE)).toContain(
+      'user_messages_mark_read',
+    );
+    expect(
+      read.some((n) => n.startsWith('user_messages') && n.includes('delete')),
+    ).toBe(false);
   });
 
-  it('lists the caller\'s own inbox messages, paginated', async () => {
+  it("lists the caller's own inbox messages, paginated", async () => {
     const { factory, userMessages, tool } = setup();
     const result: any = await factory.run(
       tool('user_messages_list'),
@@ -2565,7 +2900,11 @@ describe('MCP inbox tools', () => {
 
   it('gets the unread count for the caller', async () => {
     const { factory, userMessages, tool } = setup();
-    const result: any = await factory.run(tool('user_messages_unread_count_get'), {}, READ);
+    const result: any = await factory.run(
+      tool('user_messages_unread_count_get'),
+      {},
+      READ,
+    );
     expect(userMessages.getUnreadCount).toHaveBeenCalledWith('u1');
     expect(result.structuredContent).toEqual({ count: 1 });
   });
@@ -2593,5 +2932,309 @@ describe('MCP inbox tools', () => {
       READ_WRITE,
     );
     expect(parse(missing).error.status).toBe(404);
+  });
+});
+
+describe('MCP delete tools (system admins only)', () => {
+  const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
+  const ADMIN_RW: McpAuthContext = {
+    user: ADMIN,
+    tokenId: 't2',
+    scopes: ['mcp:read', 'mcp:write'],
+  };
+  const DELETE_TOOLS = [
+    'projects_delete',
+    'sessions_delete',
+    'agent_configurations_delete',
+    'personas_delete',
+    'plan_templates_delete',
+    'env_var_templates_delete',
+    'agent_uploads_delete',
+  ];
+
+  it('are never listed to a non-admin, even with mcp:write', () => {
+    const { factory } = setup();
+    const readWrite = factory.toolNamesFor(READ_WRITE);
+    for (const name of DELETE_TOOLS) expect(readWrite).not.toContain(name);
+  });
+
+  it('are listed to a system admin with mcp:write, never with mcp:read alone', () => {
+    const { factory } = setup();
+    const adminRead = factory.toolNamesFor({
+      user: ADMIN,
+      tokenId: 't2',
+      scopes: ['mcp:read'],
+    });
+    const adminRW = factory.toolNamesFor(ADMIN_RW);
+    for (const name of DELETE_TOOLS) {
+      expect(adminRead).not.toContain(name);
+      expect(adminRW).toContain(name);
+    }
+  });
+
+  it('refuse a non-admin who calls one by name, and record it', async () => {
+    const { factory, tool, audit } = setup();
+    const args: Record<string, Record<string, unknown>> = {
+      projects_delete: { projectId: 'p1' },
+      sessions_delete: { sessionId: 's1' },
+      agent_configurations_delete: { agentConfigurationId: 'c1' },
+      personas_delete: { personaId: 'pe1' },
+      plan_templates_delete: { planId: 'pl1' },
+      env_var_templates_delete: { envVarTemplateId: 'e1' },
+      agent_uploads_delete: { agentTypeId: 'at-mine' },
+    };
+    for (const name of DELETE_TOOLS) {
+      const result: any = await factory.run(tool(name), args[name], READ_WRITE);
+      expect(result.isError).toBe(true);
+      expect(parse(result).error.status).toBe(403);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tool: name,
+          success: false,
+          errorCode: 'not_system_admin',
+        }),
+      );
+    }
+  });
+
+  it('delete a project, as the admin, with no owner check', async () => {
+    const { factory, tool, projects } = setup();
+    const result: any = await factory.run(
+      tool('projects_delete'),
+      { projectId: 'p1' },
+      ADMIN_RW,
+    );
+    expect(projects.remove).toHaveBeenCalledWith('p1');
+    expect(result.structuredContent).toEqual({
+      message: 'Project deleted successfully',
+    });
+  });
+
+  it('delete a session, as the admin, with no owner check', async () => {
+    const { factory, tool, sessions } = setup();
+    const result: any = await factory.run(
+      tool('sessions_delete'),
+      { sessionId: 's1' },
+      ADMIN_RW,
+    );
+    expect(sessions.delete).toHaveBeenCalledWith('s1');
+    expect(result.structuredContent).toEqual({
+      message: 'Session deleted successfully',
+    });
+  });
+
+  it("delete an agent configuration, scoped to the admin's own (no admin override on the service)", async () => {
+    const { factory, tool, configurations } = setup();
+    const result: any = await factory.run(
+      tool('agent_configurations_delete'),
+      { agentConfigurationId: 'c1' },
+      ADMIN_RW,
+    );
+    expect(configurations.remove).toHaveBeenCalledWith('c1', 'admin-1');
+    expect(result.structuredContent).toEqual({
+      message: 'Agent configuration deleted successfully',
+    });
+  });
+
+  it("delete a persona, scoped to the admin's own (no admin override on the service)", async () => {
+    const { factory, tool, personas } = setup();
+    const result: any = await factory.run(
+      tool('personas_delete'),
+      { personaId: 'pe1' },
+      ADMIN_RW,
+    );
+    expect(personas.remove).toHaveBeenCalledWith('pe1', 'admin-1');
+    expect(result.structuredContent).toEqual({
+      message: 'Persona deleted successfully',
+    });
+  });
+
+  it("delete a plan template, scoped to the admin's own (no admin override on the service)", async () => {
+    const { factory, tool, plans } = setup();
+    const result: any = await factory.run(
+      tool('plan_templates_delete'),
+      { planId: 'pl1' },
+      ADMIN_RW,
+    );
+    expect(plans.remove).toHaveBeenCalledWith('pl1', 'admin-1');
+    expect(result.structuredContent).toEqual({
+      message: 'Plan template deleted successfully',
+    });
+  });
+
+  it("delete an env var template, scoped to the admin's own (no admin override on the service)", async () => {
+    const { factory, tool, envVarTemplates } = setup();
+    const result: any = await factory.run(
+      tool('env_var_templates_delete'),
+      { envVarTemplateId: 'e1' },
+      ADMIN_RW,
+    );
+    expect(envVarTemplates.remove).toHaveBeenCalledWith('e1', 'admin-1');
+    expect(result.structuredContent).toEqual({
+      message: 'Environment variable template deleted successfully',
+    });
+  });
+
+  it("delete any user's uploaded agent, as the admin (AgentUploadService already bypasses ownership)", async () => {
+    const { factory, tool, agentUploadService } = setup();
+    const result: any = await factory.run(
+      tool('agent_uploads_delete'),
+      { agentTypeId: 'at-other' },
+      ADMIN_RW,
+    );
+    expect(agentUploadService.deleteAgent).toHaveBeenCalledWith(
+      'at-other',
+      'admin-1',
+      true,
+    );
+    expect(result.structuredContent).toEqual({
+      success: true,
+      stoppedAgents: 0,
+    });
+  });
+});
+
+describe('MCP admin tools (system admins only)', () => {
+  const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
+  const ADMIN_READ: McpAuthContext = {
+    user: ADMIN,
+    tokenId: 't2',
+    scopes: ['mcp:read'],
+  };
+  const ADMIN_RW: McpAuthContext = {
+    user: ADMIN,
+    tokenId: 't2',
+    scopes: ['mcp:read', 'mcp:write'],
+  };
+  const ADMIN_TOOLS = [
+    'admin_dashboard_get',
+    'admin_users_list',
+    'admin_users_verify',
+    'admin_users_set_admin',
+    'admin_capacity_get',
+    'admin_capacity_record',
+  ];
+
+  it('lists them only to a system admin, each with its scope', () => {
+    const { factory } = setup();
+    const readWrite = factory.toolNamesFor(READ_WRITE);
+    const adminRead = factory.toolNamesFor(ADMIN_READ);
+    const adminRW = factory.toolNamesFor(ADMIN_RW);
+    for (const name of ADMIN_TOOLS) expect(readWrite).not.toContain(name);
+    expect(adminRead).toEqual(
+      expect.arrayContaining([
+        'admin_dashboard_get',
+        'admin_users_list',
+        'admin_capacity_get',
+      ]),
+    );
+    expect(adminRead).not.toEqual(
+      expect.arrayContaining([
+        'admin_users_verify',
+        'admin_users_set_admin',
+        'admin_capacity_record',
+      ]),
+    );
+    expect(adminRW).toEqual(expect.arrayContaining(ADMIN_TOOLS));
+  });
+
+  it('refuses a non-admin who calls them by name, and records it', async () => {
+    const { factory, tool, audit } = setup();
+    const result: any = await factory.run(
+      tool('admin_dashboard_get'),
+      {},
+      READ_WRITE,
+    );
+    expect(result.isError).toBe(true);
+    expect(parse(result).error.status).toBe(403);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: 'admin_dashboard_get',
+        success: false,
+        errorCode: 'not_system_admin',
+      }),
+    );
+  });
+
+  it('reads the dashboard snapshot', async () => {
+    const { factory, tool, admin } = setup();
+    const result: any = await factory.run(
+      tool('admin_dashboard_get'),
+      {},
+      ADMIN_READ,
+    );
+    expect(admin.getDashboardMetrics).toHaveBeenCalled();
+    expect(result.structuredContent).toMatchObject({
+      activeSessions: 1,
+      totalAgents: 2,
+    });
+  });
+
+  it('lists users, paged', async () => {
+    const { factory, tool, admin } = setup();
+    const result: any = await factory.run(
+      tool('admin_users_list'),
+      { page: 2, limit: 10 },
+      ADMIN_READ,
+    );
+    expect(admin.listUsers).toHaveBeenCalledWith(2, 10);
+    expect(result.structuredContent).toMatchObject({ total: 1, totalPages: 1 });
+  });
+
+  it('verifies a user and sets their admin status', async () => {
+    const { factory, tool, admin } = setup();
+    await factory.run(tool('admin_users_verify'), { userId: 'u2' }, ADMIN_RW);
+    expect(admin.verifyUser).toHaveBeenCalledWith('u2');
+
+    const result: any = await factory.run(
+      tool('admin_users_set_admin'),
+      { userId: 'u2', isAdmin: true },
+      ADMIN_RW,
+    );
+    expect(admin.toggleAdminStatus).toHaveBeenCalledWith('u2', true);
+    expect(result.structuredContent).toMatchObject({ isSystemAdmin: true });
+
+    const missing: any = await factory.run(
+      tool('admin_users_verify'),
+      { userId: 'missing' },
+      ADMIN_RW,
+    );
+    expect(parse(missing).error.status).toBe(404);
+  });
+
+  it('reads and records measured capacity', async () => {
+    const { factory, tool, capacity } = setup();
+    const got: any = await factory.run(
+      tool('admin_capacity_get'),
+      {},
+      ADMIN_READ,
+    );
+    expect(capacity.latest).toHaveBeenCalled();
+    expect(got.structuredContent).toMatchObject({
+      items: [{ gpuName: 'H100', maxSessions: 40 }],
+    });
+
+    const recorded: any = await factory.run(
+      tool('admin_capacity_record'),
+      {
+        measuredAt: '2026-11-20T00:00:00.000Z',
+        gpuName: 'H100',
+        environment: 'production',
+        maxSessions: 42,
+        limitedBy: [],
+        reachedTopLevel: true,
+        durationSeconds: 600,
+        criteria: { maxLatencyMs: 800 },
+        levels: [{ sessions: 42, passed: true }],
+      },
+      ADMIN_RW,
+    );
+    expect(capacity.record).toHaveBeenCalledWith(
+      expect.objectContaining({ gpuName: 'H100', maxSessions: 42 }),
+    );
+    expect(recorded.structuredContent).toMatchObject({
+      id: 'cap2',
+      maxSessions: 42,
+    });
   });
 });

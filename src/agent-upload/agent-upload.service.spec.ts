@@ -25,10 +25,15 @@ function makeService(agentRecord: Record<string, unknown> | null = null, m = man
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'new', ...data })),
       update: jest.fn().mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data })),
+      delete: jest.fn().mockResolvedValue({}),
     },
     agentBuildLog: {
       findFirst: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
     },
+    project: { count: jest.fn().mockResolvedValue(0) },
+    envVarTemplate: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    agentConfiguration: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    agentInstance: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     $transaction: jest.fn().mockImplementation((ops: unknown) => Promise.all(ops as Promise<unknown>[])),
   }
   const pkg = {
@@ -42,9 +47,13 @@ function makeService(agentRecord: Record<string, unknown> | null = null, m = man
     getBuildOutput: jest.fn().mockResolvedValue(null as string | null),
     getBuildHistory: jest.fn().mockResolvedValue([] as unknown[]),
   }
+  const agents = {
+    runningAgentsOfType: jest.fn().mockResolvedValue({ live: [] as { id: string; deployedByUserId: string }[], stale: [] as string[] }),
+    stopAgent: jest.fn().mockResolvedValue({}),
+  }
   const storage = { delete: jest.fn().mockResolvedValue(undefined) }
-  const service = new AgentUploadService(pkg as any, build as any, storage as any, prisma as any)
-  return { service, prisma, pkg, build, storage }
+  const service = new AgentUploadService(pkg as any, build as any, agents as any, storage as any, prisma as any)
+  return { service, prisma, pkg, build, agents, storage }
 }
 
 const buffer = Buffer.from('x')
@@ -270,5 +279,72 @@ describe('who may see an agent build', () => {
     const { service } = makeService({ id: 'a1', isBuiltIn: true, userId: null })
     await expect(service.getBuildStatus('a1', 'someone')).rejects.toThrow(ForbiddenException)
     await expect(service.getBuildStatus('a1', 'admin', true)).resolves.toBeNull()
+  })
+})
+
+describe('deleteAgent', () => {
+  const upload = { id: 'a1', slug: 'my-agent', name: 'My Agent', isBuiltIn: false, userId: 'owner', packagePath: 'pkg/a1.zip' }
+
+  it('404s for an unknown agent', async () => {
+    const { service } = makeService(null)
+    await expect(service.deleteAgent('a1', 'owner')).rejects.toThrow(NotFoundException)
+  })
+
+  it('refuses to delete a built-in agent', async () => {
+    const { service } = makeService({ ...upload, isBuiltIn: true, userId: null })
+    await expect(service.deleteAgent('a1', 'owner')).rejects.toThrow(BadRequestException)
+  })
+
+  it('refuses a stranger, but lets an admin through', async () => {
+    const { service, prisma } = makeService(upload)
+    await expect(service.deleteAgent('a1', 'stranger')).rejects.toThrow(ForbiddenException)
+    expect(prisma.agentType.delete).not.toHaveBeenCalled()
+
+    const admin = makeService(upload)
+    await expect(admin.service.deleteAgent('a1', 'stranger', true)).resolves.toMatchObject({ success: true })
+  })
+
+  it('refuses while a public project still uses it', async () => {
+    const { service, prisma } = makeService(upload)
+    prisma.project.count.mockResolvedValue(1)
+    await expect(service.deleteAgent('a1', 'owner')).rejects.toThrow(BadRequestException)
+    expect(prisma.agentType.delete).not.toHaveBeenCalled()
+  })
+
+  it("refuses while another user's agent of it still runs, but stops the owner's own", async () => {
+    const { service, prisma, agents } = makeService(upload)
+    agents.runningAgentsOfType.mockResolvedValue({
+      live: [{ id: 'ag-owner', deployedByUserId: 'owner' }, { id: 'ag-other', deployedByUserId: 'someone-else' }],
+      stale: [],
+    })
+    await expect(service.deleteAgent('a1', 'owner')).rejects.toThrow(BadRequestException)
+    expect(agents.stopAgent).not.toHaveBeenCalled()
+    expect(prisma.agentType.delete).not.toHaveBeenCalled()
+  })
+
+  it("deletes the agent type, stopping the owner's live agents and cleaning up stale rows, plus its package", async () => {
+    const { service, prisma, agents, storage } = makeService(upload)
+    agents.runningAgentsOfType.mockResolvedValue({
+      live: [{ id: 'ag-owner', deployedByUserId: 'owner' }],
+      stale: ['ag-stale'],
+    })
+    const result = await service.deleteAgent('a1', 'owner')
+    expect(agents.stopAgent).toHaveBeenCalledWith('ag-stale')
+    expect(agents.stopAgent).toHaveBeenCalledWith('ag-owner')
+    expect(prisma.envVarTemplate.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
+    expect(prisma.agentConfiguration.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
+    expect(prisma.agentInstance.updateMany).toHaveBeenCalledWith({
+      where: { agentTypeId: 'a1' },
+      data: { agentTypeId: null },
+    })
+    expect(prisma.agentType.delete).toHaveBeenCalledWith({ where: { id: 'a1' } })
+    expect(storage.delete).toHaveBeenCalledWith('pkg/a1.zip')
+    expect(result).toEqual({ success: true, stoppedAgents: 1 })
+  })
+
+  it('skips deleting the package when none was ever stored', async () => {
+    const { service, storage } = makeService({ ...upload, packagePath: null })
+    await service.deleteAgent('a1', 'owner')
+    expect(storage.delete).not.toHaveBeenCalled()
   })
 })
