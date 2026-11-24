@@ -96,6 +96,7 @@ A typical run looks like this:
 - A session has at most one open invitation link. Revoke it before making a new one.
 - **Secrets:** `env_var_templates_list` returns variable names, never their values. `agents_deploy` doesn't take raw configuration or env var values: it names a plan, persona, configuration and env var template instead. Agent output leaves out the deployment snapshot and Kubernetes names.
 - `agents_stop` stops the agent and removes its pod; it doesn't delete the agent.
+- **Uploaded agents:** `agent_uploads_create` packs its files into a package itself, so it only takes text files — it can't carry a binary asset the web upload's `.zip` could. Deleting an upload is admin-only and not offered here.
 
 ## Audit log
 
