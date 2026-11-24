@@ -113,6 +113,19 @@ Change a plan template the user owns.
 
 **Returns:** the plan template, as `plan_templates_get` shows it.
 
+### `plan_templates_generate` · `mcp:write`
+
+Draft a plan from a plain-language description, using the plan generator. Nothing is saved — pass the returned `content` to `plan_templates_create` to keep it.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `prompt` | string, 1–5000 | What the plan should accomplish |
+| `context` | string, ≤ 500, *optional* | |
+
+**Returns:** `{ content, suggestedName, suggestedDescription }`.
+
 ## Agent types and configurations
 
 An agent configuration holds the pipeline settings for one agent type, as sparse overrides of that type's defaults.

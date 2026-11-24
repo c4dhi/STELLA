@@ -28,6 +28,7 @@ import {
 import { CreatePersonaDto } from '../personas/dto/create-persona.dto.js';
 import { CreateAgentDto } from '../agents/dto/create-agent.dto.js';
 import { CreateSessionDto } from '../sessions/dto/create-session.dto.js';
+import { GeneratePlanTemplateDto } from '../plan-templates/dto/generate-plan-template.dto.js';
 
 const USER = {
   userId: 'u1',
@@ -124,6 +125,13 @@ function setup() {
     })),
     create: jest.fn(async () => ({ id: 'pl2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
+  };
+  const planGenerator = {
+    generate: jest.fn(async () => ({
+      content: { states: [{ id: 'generated-state' }] },
+      suggestedName: 'Walk check-in',
+      suggestedDescription: 'A short daily walk check-in.',
+    })),
   };
   const configurations = {
     findAllByUser: jest.fn(async () => [
@@ -316,7 +324,7 @@ function setup() {
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
-    new PlanTemplatesTools(plans as any),
+    new PlanTemplatesTools(plans as any, planGenerator as any),
     new AgentConfigurationsTools(configurations as any),
     new SessionsTools(
       projects as any,
@@ -358,6 +366,7 @@ function setup() {
     agentReview,
     personas,
     plans,
+    planGenerator,
     configurations,
     sessions,
     agents,
@@ -1364,5 +1373,45 @@ describe('MCP connector tools', () => {
         slot: 'elias',
       }),
     ]);
+  });
+});
+
+describe('MCP plan generator tool', () => {
+  it('is write-only and saves nothing itself', () => {
+    const { factory } = setup();
+    expect(factory.toolNamesFor(READ)).not.toContain('plan_templates_generate');
+    expect(factory.toolNamesFor(READ_WRITE)).toContain(
+      'plan_templates_generate',
+    );
+  });
+
+  it('validates the prompt through the REST DTO and returns the generator result as is', async () => {
+    const { factory, planGenerator, tool } = setup();
+    const result: any = await factory.run(
+      tool('plan_templates_generate'),
+      { prompt: 'A daily walk check-in', context: 'For an elderly user' },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const dto = planGenerator.generate.mock.calls[0][0];
+    expect(dto).toBeInstanceOf(GeneratePlanTemplateDto);
+    expect(dto.prompt).toBe('A daily walk check-in');
+    expect(dto.context).toBe('For an elderly user');
+    expect(result.structuredContent).toEqual({
+      content: { states: [{ id: 'generated-state' }] },
+      suggestedName: 'Walk check-in',
+      suggestedDescription: 'A short daily walk check-in.',
+    });
+  });
+
+  it('refuses a prompt over 5000 characters', async () => {
+    const { factory, planGenerator, tool } = setup();
+    const result: any = await factory.run(
+      tool('plan_templates_generate'),
+      { prompt: 'x'.repeat(5001) },
+      READ_WRITE,
+    );
+    expect(result.isError).toBe(true);
+    expect(planGenerator.generate).not.toHaveBeenCalled();
   });
 });
