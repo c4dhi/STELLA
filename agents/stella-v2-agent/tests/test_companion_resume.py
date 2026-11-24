@@ -87,6 +87,34 @@ def test_only_what_came_after_the_last_sleep_counts():
     assert opening_from_history(HELLO + [OFFERED, SLEPT] + after) == (True, False)
 
 
+def _debug(metadata, at: str) -> ChatMessage:
+    """A debug note that is not a companion decision, as persisted."""
+    return ChatMessage(
+        id=f"debug-{at}", timestamp=at,
+        envelope={"type": "debug", "data": {"content": "note", "metadata": metadata}},
+        role="system", content="note", message_type="debug",
+    )
+
+
+def test_other_notes_with_a_decision_field_are_ignored():
+    # Live run, 24 Nov: a text barge-in persists `decision: "commit"` (a
+    # string). Reading it as a companion decision crashed every resumed pod
+    # whose conversation had ever been interrupted, so she never came back.
+    barge_in = _debug({"channel": "text", "decision": "commit", "transcript": "Ja"}, "2026-11-10T18:00:06Z")
+    assert opening_from_history(HELLO + [barge_in]) == (True, False)
+    assert opening_from_history(HELLO + [barge_in, OFFERED]) == (True, True)
+
+
+def test_malformed_entries_do_not_break_the_opening():
+    odd = [
+        _debug("just text", "2026-11-10T18:00:06Z"),
+        _debug({"decision": {"kind": 7}}, "2026-11-10T18:00:07Z"),
+        ChatMessage(id="x", timestamp="2026-11-10T18:00:08Z", envelope={"type": "debug", "data": "text"},
+                    role="system", content="", message_type="debug"),
+    ]
+    assert opening_from_history(HELLO + odd) == (True, False)
+
+
 def test_being_woken_with_no_reply_yet_is_a_fresh_opening():
     # The old pod died between the wake and her opening line.
     woke = _tag(woken_tag("s1"), "2026-11-10T19:00:00Z")

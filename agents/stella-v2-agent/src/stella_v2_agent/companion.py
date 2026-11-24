@@ -532,6 +532,18 @@ def language_from_history(
     return language if language in supported and confidence >= bar else None
 
 
+def recorded_decision(envelope: Any) -> Dict[str, Any]:
+    """The companion decision a persisted envelope records, or ``{}``.
+
+    Other notes use a ``decision`` field too (a barge-in stores the string
+    ``"commit"``), and a transcript is never trusted to be well formed, so
+    every level is checked before it is read."""
+    def field(value: Any, key: str) -> Any:
+        return value.get(key) if isinstance(value, dict) else None
+    found = field(field(field(envelope, "data"), "metadata"), "decision")
+    return found if isinstance(found, dict) else {}
+
+
 def opening_from_history(messages: List[Any]) -> Tuple[bool, bool]:
     """``(greeted, offered)`` as the recorded transcript leaves them (#159).
 
@@ -545,8 +557,7 @@ def opening_from_history(messages: List[Any]) -> Tuple[bool, bool]:
     """
     greeted = offered = False
     for msg in messages:
-        data = (getattr(msg, "envelope", None) or {}).get("data") or {}
-        kind = ((data.get("metadata") or {}).get("decision") or {}).get("kind")
+        kind = recorded_decision(getattr(msg, "envelope", None)).get("kind")
         if kind in _RESTART_KINDS:
             greeted = offered = False
         elif kind in _OFFER_KINDS:

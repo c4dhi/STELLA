@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A resumed companion no longer crashes if the user ever interrupted her.** Since 2.1.0, an agent resuming after an auto-pause read the transcript's notes and stopped with an error on a barge-in note, so she never came back to a conversation in which the user had cut in. Notes that are not her own decisions are now skipped (#159)
 - **A companion woken after a pause greets in the conversation's language.** The restarted agent knew no language until the user spoke, so the greeting on waking came out in English. It now takes the persona's language, or else the language of the user's last messages (#159)
 
 ## [2.1.0] - 2026-11-23

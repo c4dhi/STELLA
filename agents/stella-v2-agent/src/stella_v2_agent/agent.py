@@ -65,6 +65,7 @@ from stella_v2_agent.companion import (
     decision as companion_decision,
     language_from_history,
     opening_from_history,
+    recorded_decision,
     started_label,
     woken_tag,
     exit_dialogue,
@@ -1605,7 +1606,7 @@ class StellaV2Agent(BaseAgent):
                 break
             total_scanned += len(messages)
             for msg in reversed(messages):
-                decision = ((msg.envelope.get("data") or {}).get("metadata") or {}).get("decision") or {}
+                decision = recorded_decision(msg.envelope)
                 if decision.get("kind") == "activity_started" and decision.get("label") == label:
                     return parse_timestamp(msg.timestamp)
             if len(messages) < _ACTIVITY_START_PAGE_SIZE:
