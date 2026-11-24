@@ -51,30 +51,45 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
 # Install Python 3.11 and system dependencies
-# The deadsnakes PPA is fetched with retries: add-apt-repository resolves the
-# signing key through Launchpad's API, which intermittently answers
-# GPGKeyTemporarilyNotFoundError and would otherwise fail the whole build
-# ~20 minutes in (seen 2026-08-25). It still fails loudly after five attempts —
-# that matters, because without the PPA python3.11 resolves to jammy's own
-# 3.11.0~rc1, a release candidate we must never ship.
+# jammy's own python3.11 package is 3.11.0~rc1, a release candidate we must
+# never ship, and the deadsnakes PPA that used to supply a real 3.11 answered
+# 503 on about half its .deb downloads and failed the production release
+# three times in a row (23 Nov). Built from python.org's own source tarball
+# instead — no third-party apt repository or signing key involved, and
+# python.org's hash is checked before anything is extracted.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
-    tzdata \
-    && (for i in 1 2 3 4 5; do add-apt-repository -y ppa:deadsnakes/ppa && exit 0; sleep 10; done; exit 1) \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    python3.11-dev \
-    python3-pip \
     build-essential \
+    tzdata \
+    zlib1g-dev \
+    libssl-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    libffi-dev \
+    liblzma-dev \
     wget \
     curl \
     ca-certificates \
     libgomp1 \
     git \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && cd /tmp \
+    && wget -q https://www.python.org/ftp/python/3.11.18/Python-3.11.18.tgz \
+    && echo "5f62711b12470fd435f83f1451c1b1ef4a179aebc715c716874b0967567d814e  Python-3.11.18.tgz" | sha256sum -c - \
+    && tar -xzf Python-3.11.18.tgz \
+    && cd Python-3.11.18 \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make altinstall \
+    && cd / && rm -rf /tmp/Python-3.11.18* \
+    && ln -sf /usr/local/bin/python3.11 /usr/bin/python3.11 \
+    && ln -sf /usr/local/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/local/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip3.11 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip \
     && python3 -m pip install --upgrade pip \
+    && python3 --version \
+    && python3 -c "import ssl, ctypes, bz2, lzma, sqlite3; print('[STT] stdlib ssl/ctypes/bz2/lzma/sqlite3 present')" \
     && rm -rf /var/lib/apt/lists/*
 
 # CUDA environment (set by NVIDIA base image, but ensure they're available)
@@ -107,6 +122,7 @@ RUN if [ "$ENABLE_GPU" = "true" ]; then \
         echo "[STT] Installing GPU dependencies (faster-whisper, torch, ctranslate2)..." && \
         pip install --no-cache-dir -r requirements-gpu.txt && \
         pip install --no-cache-dir onnxruntime-gpu>=1.16.0 && \
+        python3 -c "import ctranslate2, faster_whisper; print('[STT] ctranslate2/faster_whisper import OK')" && \
         echo "[STT] GPU dependencies installed successfully"; \
     else \
         echo "[STT] Installing onnxruntime (CPU)..." && \
