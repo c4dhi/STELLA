@@ -1596,8 +1596,8 @@ export class AgentsService {
   async getAgentMetrics(
     projectId: string,
     agentSlug: string,
-    from: Date,
-    to: Date,
+    from: Date = new Date(Date.now() - 30 * 86400000),
+    to: Date = new Date(),
   ): Promise<AgentMetricsResponseDto> {
     // 1. Look up AgentType by slug
     const agentType = await this.prisma.agentType.findUnique({

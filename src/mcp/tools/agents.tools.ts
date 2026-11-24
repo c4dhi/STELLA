@@ -230,8 +230,8 @@ export class AgentsTools implements McpToolProvider {
             ...(await this.agents.getAgentMetrics(
               projectId,
               slug,
-              from ? new Date(from) : new Date(Date.now() - 30 * 86400000),
-              to ? new Date(to) : new Date(),
+              from ? new Date(from) : undefined,
+              to ? new Date(to) : undefined,
             )),
           };
         },
