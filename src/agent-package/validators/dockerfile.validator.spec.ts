@@ -346,4 +346,88 @@ describe('DockerfileValidator', () => {
     expect(result.valid).toBe(false)
     expect(result.errors.some((e) => e.includes('ubuntu:22.04'))).toBe(true)
   })
+
+  it('refuses any parser directive other than # syntax=, not only # escape=', () => {
+    const content = ['# foo=bar', 'FROM python:3.12-slim', 'WORKDIR /app', 'CMD ["./app"]'].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('does not treat a directive-looking comment after the first line as a directive', () => {
+    const content = ['FROM python:3.12-slim', '# escape=`', 'WORKDIR /app', 'CMD ["./app"]'].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(true)
+  })
+
+  it('still refuses a real Python heredoc whose body happens to start with "from" (a known, acceptable cost)', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'RUN python3 <<EOF',
+      'from pathlib import Path',
+      'print(Path.cwd())',
+      'EOF',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.some((e) => e.includes('from … import …'))).toBe(true)
+  })
+
+  it('reads a COPY --from= image even alongside other flags like --chown=', () => {
+    const content = [
+      'FROM python:3.12-slim',
+      'COPY --chown=1000:1000 --from=ubuntu:22.04 /app /app',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+    expect(result.errors.some((e) => e.includes('ubuntu:22.04'))).toBe(true)
+  })
+
+  it('rejects a FROM whose image is an unresolved build variable, failing closed rather than guessing', () => {
+    const content = ['ARG BASE=ubuntu:22.04', 'FROM ${BASE}', 'WORKDIR /app', 'CMD ["./app"]'].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(false)
+  })
+
+  it('still allows the final stage of a real multi-stage build with a cache mount', () => {
+    const content = [
+      'FROM python:3.11-slim AS builder',
+      'RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir -r requirements.txt',
+      'FROM python:3.12-slim',
+      'COPY --from=builder /app /app',
+      'WORKDIR /app',
+      'CMD ["python3", "app.py"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.baseImage).toBe('python:3.12-slim')
+    expect(result.valid).toBe(true)
+  })
+
+  it('does not mistake an ordinary descriptive comment for a parser directive', () => {
+    const content = [
+      '# ELIAS-Interviewer, built by STELLA from the uploaded package (build context = package root).',
+      'FROM python:3.12-slim',
+      'WORKDIR /app',
+      'CMD ["./app"]',
+    ].join('\n')
+
+    const result = validator.validate(content)
+
+    expect(result.valid).toBe(true)
+  })
 })
