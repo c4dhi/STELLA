@@ -57,28 +57,41 @@ WORKDIR /app
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 
-# The deadsnakes PPA is fetched with retries: add-apt-repository resolves the
-# signing key through Launchpad's API, which intermittently answers
-# GPGKeyTemporarilyNotFoundError and would otherwise fail the whole build
-# ~20 minutes in (seen 2026-08-25). It still fails loudly after five attempts —
-# that matters, because without the PPA python3.11 resolves to jammy's own
-# 3.11.0~rc1, a release candidate we must never ship.
+# jammy's own python3.11 package is 3.11.0~rc1, a release candidate we must
+# never ship, and the deadsnakes PPA that used to supply a real 3.11 answered
+# 503 on about half its .deb downloads and failed the production release
+# three times in a row (23 Nov). Built from python.org's own source tarball
+# instead — no third-party apt repository or signing key involved, and
+# python.org's hash is checked before anything is extracted.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common \
+    build-essential \
     tzdata \
-    && (for i in 1 2 3 4 5; do add-apt-repository -y ppa:deadsnakes/ppa && exit 0; sleep 10; done; exit 1) \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-venv \
-    python3.11-dev \
-    python3-pip \
+    zlib1g-dev \
+    libssl-dev \
+    libbz2-dev \
+    libreadline-dev \
+    libsqlite3-dev \
+    libffi-dev \
+    liblzma-dev \
+    wget \
     libsndfile1 \
     ffmpeg \
     curl \
     ca-certificates \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
-    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && cd /tmp \
+    && wget -q https://www.python.org/ftp/python/3.11.18/Python-3.11.18.tgz \
+    && echo "5f62711b12470fd435f83f1451c1b1ef4a179aebc715c716874b0967567d814e  Python-3.11.18.tgz" | sha256sum -c - \
+    && tar -xzf Python-3.11.18.tgz \
+    && cd Python-3.11.18 \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" \
+    && make altinstall \
+    && cd / && rm -rf /tmp/Python-3.11.18* \
+    && ln -sf /usr/local/bin/python3.11 /usr/bin/python3.11 \
+    && ln -sf /usr/local/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/local/bin/python3.11 /usr/bin/python \
     && python3 -m pip install --upgrade pip \
+    && python3 --version \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CUDA_HOME=/usr/local/cuda
