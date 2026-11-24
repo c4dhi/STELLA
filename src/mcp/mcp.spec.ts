@@ -930,6 +930,37 @@ describe('MCP server over the SDK client', () => {
     expect(result.content[0].text).not.toContain('10.0.0.3');
     expect(parse(result).error.status).toBe(500);
   });
+
+  it('refuses an unknown top-level key instead of dropping it', async () => {
+    const { factory, personas } = setup();
+    const result: any = await (
+      await connect(factory, READ)
+    ).callTool({
+      name: 'personas_get',
+      arguments: { personaId: 'pe1', bogus: 'x' },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Unrecognized key');
+    expect(result.content[0].text).toContain('bogus');
+    expect(personas.findOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown key nested inside an array item too', async () => {
+    const { factory, projects } = setup();
+    const result: any = await (
+      await connect(factory, READ_WRITE)
+    ).callTool({
+      name: 'projects_public_update',
+      arguments: {
+        projectId: 'p1',
+        isPublic: true,
+        connectorBindings: [{ connectorId: 'c1', bogus: 'x' }],
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('Unrecognized key');
+    expect(projects.updatePublicConfig).not.toHaveBeenCalled();
+  });
 });
 
 describe('MCP tool runner', () => {
@@ -1564,6 +1595,16 @@ describe('One shape for every tool', () => {
     const client = await connect(factory, READ_WRITE);
     return (await client.listTools()).tools;
   }
+
+  it('refuses an unknown key on every tool, not just the ones with their own test', async () => {
+    const offenders: string[] = [];
+    for (const t of await schemas()) {
+      if ((t.inputSchema as any).additionalProperties !== false) {
+        offenders.push(t.name);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 
   it('names every id after what it points to, and says where to get one', async () => {
     const offenders: string[] = [];
@@ -2330,7 +2371,11 @@ describe('MCP project tools', () => {
       publicEnabled: true,
       sessions: [],
     });
-    const got: any = await factory.run(tool('projects_get'), { projectId: 'p1' }, READ);
+    const got: any = await factory.run(
+      tool('projects_get'),
+      { projectId: 'p1' },
+      READ,
+    );
     expect(got.structuredContent.publicAgentConfig).toMatchObject({
       mode: 'companion',
       availablePlanIds: [planA, planB],

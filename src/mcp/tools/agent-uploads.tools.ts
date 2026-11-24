@@ -45,15 +45,17 @@ export class AgentUploadsTools implements McpToolProvider {
         input: {
           files: z
             .array(
-              z.object({
-                path: z
-                  .string()
-                  .min(1)
-                  .describe(
-                    'Path inside the package, e.g. "agent.yaml" or "src/main.py".',
-                  ),
-                content: z.string().describe("The file's text content."),
-              }),
+              z
+                .object({
+                  path: z
+                    .string()
+                    .min(1)
+                    .describe(
+                      'Path inside the package, e.g. "agent.yaml" or "src/main.py".',
+                    ),
+                  content: z.string().describe("The file's text content."),
+                })
+                .strict(),
             )
             .min(1)
             .describe(

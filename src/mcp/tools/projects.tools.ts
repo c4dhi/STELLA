@@ -27,21 +27,23 @@ const userId = idArg('user', 'project_collaborators_list');
 // values never come in over MCP, only ids.
 const connectorBindings = z
   .array(
-    z.object({
-      connectorId: idArg('connector', 'connectors_list with this projectId'),
-      slot: z
-        .string()
-        .optional()
-        .describe(
-          'A connector slot the agent type declares in agent.yaml (connectors)',
-        ),
-      handle: z
-        .string()
-        .optional()
-        .describe(
-          'Name the agent uses; defaults to the slot, then the connector handle',
-        ),
-    }),
+    z
+      .object({
+        connectorId: idArg('connector', 'connectors_list with this projectId'),
+        slot: z
+          .string()
+          .optional()
+          .describe(
+            'A connector slot the agent type declares in agent.yaml (connectors)',
+          ),
+        handle: z
+          .string()
+          .optional()
+          .describe(
+            'Name the agent uses; defaults to the slot, then the connector handle',
+          ),
+      })
+      .strict(),
   )
   .max(20)
   .optional()

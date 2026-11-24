@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An MCP tool call with an unknown or wrongly nested key is refused, not silently trimmed to the fields it recognizes.** Every tool's input schema is now strict: a typo in a field name, or a field nested one level too deep, gets an "Invalid arguments" error instead of a "successful" save that quietly ignored it (#212)
 - **The participant text box works on a phone.** Tapping it on an iPhone zoomed the page, pushing the box and Send past the screen edge. The box no longer triggers the zoom, stays above the on-screen keyboard, and the "Enter sends" hint shows only with a physical keyboard (#1017)
 - **A companion woken after a pause greets in the conversation's language.** The restarted agent knew no language until the user spoke, so the greeting on waking came out in English. It now takes the persona's language, or else the language of the user's last messages (#159)
 - **A resumed companion no longer crashes if the user ever interrupted her.** Since 2.1.0, an agent resuming after an auto-pause read the transcript's notes and stopped with an error on a barge-in note, so she never came back to a conversation in which the user had cut in. Notes that are not her own decisions are now skipped (#159)
