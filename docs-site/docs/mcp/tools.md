@@ -81,7 +81,7 @@ Copy a persona the user can see — their own, or a system default — into a ne
 
 ### `personas_delete` · `mcp:write` · system admins only
 
-Delete a persona. System defaults cannot be deleted. The underlying ownership check has no admin override, so this only reaches the calling admin's own personas, not every user's. Anyone else gets `403` calling it by name.
+Delete a persona. System defaults cannot be deleted. The underlying ownership check has no admin override, so this only reaches the calling admin's own personas, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
 
 **Inputs:** `personaId`.
 
@@ -139,7 +139,7 @@ Copy a plan template the user owns into a new one, named "`<name>` (Copy)".
 
 ### `plan_templates_delete` · `mcp:write` · system admins only
 
-Delete a plan template. The underlying ownership check has no admin override, so this only reaches the calling admin's own plan templates, not every user's. Anyone else gets `403` calling it by name.
+Delete a plan template. The underlying ownership check has no admin override, so this only reaches the calling admin's own plan templates, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
 
 **Inputs:** `planId`.
 
@@ -229,7 +229,7 @@ Copy a configuration the user owns into a new one, named "`<name>` (Copy)", for 
 
 ### `agent_configurations_delete` · `mcp:write` · system admins only
 
-Delete an agent configuration. The underlying ownership check has no admin override, so this only reaches the calling admin's own configurations, not every user's. Anyone else gets `403` calling it by name.
+Delete an agent configuration. The underlying ownership check has no admin override, so this only reaches the calling admin's own configurations, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
 
 **Inputs:** `agentConfigurationId`.
 
@@ -301,7 +301,7 @@ Share a custom agent with exactly these projects, replacing the current set. The
 
 ### `agent_uploads_delete` · `mcp:write` · system admins only
 
-Delete any uploaded agent type. Stops its running agents first, and removes its env var templates and agent configurations with it. Refused while a public project uses it or another user's agent of it still runs. Unlike the other delete tools in this section, this reaches every user's uploads, not only the calling admin's own — the underlying service has always let an admin bypass the ownership check here. Anyone else gets `403` calling it by name.
+Delete any uploaded agent type. Stops its running agents first, and removes its env var templates and agent configurations with it. Refused while a public project uses it or another user's agent of it still runs. Unlike the other delete tools in this section, this reaches every user's uploads, not only the calling admin's own — the underlying service has always let an admin bypass the ownership check here. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
 
 **Inputs:** `agentTypeId`.
 
@@ -419,7 +419,7 @@ Remove a collaborator from a project, and any invitation still pending for them.
 
 ### `projects_delete` · `mcp:write` · system admins only
 
-Delete any project — any member, not just the owner. Stops every running agent in it first, then removes it and everything under it: sessions, invitations, collaborators. Anyone else gets `403` calling it by name.
+Delete any project — any member, not just the owner. Stops every running agent in it first, then removes it and everything under it: sessions, invitations, collaborators. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
 
 **Inputs:** `projectId`.
 
@@ -537,7 +537,7 @@ Per-stage latency for one session's turns, with a summary across stages. Differe
 
 ### `sessions_delete` · `mcp:write` · system admins only
 
-Delete any session. Stops its agents first, then removes it and everything in it: the transcript, participants and plan state. Different from `sessions_close`, which ends a session but keeps its transcript readable. Anyone else gets `403` calling it by name.
+Delete any session. Stops its agents first, then removes it and everything in it: the transcript, participants and plan state. Different from `sessions_close`, which ends a session but keeps its transcript readable. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
 
 **Inputs:** `sessionId`.
 
@@ -651,7 +651,7 @@ Change a template's name, description or variables.
 
 ### `env_var_templates_delete` · `mcp:write` · system admins only
 
-Delete an env var template. The underlying ownership check has no admin override, so this only reaches the calling admin's own templates, not every user's. Anyone else gets `403` calling it by name.
+Delete an env var template. The underlying ownership check has no admin override, so this only reaches the calling admin's own templates, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
 
 **Inputs:** `envVarTemplateId`.
 
@@ -814,7 +814,7 @@ Reject an uploaded agent, so it cannot deploy, also when it was approved before.
 
 ## Admin (system admins)
 
-Live platform metrics, user management and measured voice capacity, as in Settings → Admin. Only a system admin sees these six tools; anyone else gets `403` calling them by name.
+Live platform metrics, user management and measured voice capacity, as in Settings → Admin. Only a system admin sees these six tools; anyone else gets "tool not found" calling one by name — it was never registered for their connection.
 
 ### `admin_dashboard_get` · `mcp:read`
 
