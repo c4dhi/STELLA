@@ -1766,7 +1766,11 @@ class StellaV2Agent(BaseAgent):
         language = (
             self.language_resolver.forced
             or getattr(self, "_session_language", None)
-            or language_from_history(history)
+            or language_from_history(
+                history,
+                supported=tuple(self.language_resolver.supported),
+                bar=self.language_resolver.text_bar,
+            )
         )
         sm_context["language"] = language
         sm_context["language_pinned"] = bool(self.language_resolver.forced)

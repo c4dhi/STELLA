@@ -209,3 +209,17 @@ async def test_a_new_session_with_no_transcript_has_no_language_as_before():
     agent, seen = _waking_agent([])
     await _wake(agent)
     assert seen["language"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_wake_uses_the_sessions_own_languages_and_bar():
+    # A deployment that tunes the resolver gets the same on wake (sable, PR 1024).
+    agent, seen = _waking_agent(GERMAN)
+    agent.language_resolver.supported = {"en"}
+    await _wake(agent)
+    assert seen["language"] is None
+
+    agent, seen = _waking_agent([{"role": "user", "content": "Ja, gut."}])
+    agent.language_resolver.text_bar = 0.1
+    await _wake(agent)
+    assert seen["language"] == "de"
