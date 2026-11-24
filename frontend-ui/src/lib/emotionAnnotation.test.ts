@@ -6,7 +6,7 @@
  * about where in the sentence we are.
  */
 import { describe, it, expect } from 'vitest'
-import { annotateWithCues } from './emotionAnnotation'
+import { annotateWithCues, displayedCues } from './emotionAnnotation'
 
 describe('annotateWithCues', () => {
   it('leaves an untagged reply exactly as it was', () => {
@@ -83,5 +83,17 @@ describe('annotateWithCues', () => {
     expect(text.replace(/\[[a-z_]+\]/g, '')).toBe('Hi there.')
     expect(text).toContain('[happy]')
     expect(text).toContain('[brow_flash]')
+  })
+})
+
+describe('the admin board shows tags only with Debug on (#208)', () => {
+  const cues = [{ char: 0, tag: 'happy' }]
+
+  it('passes the cues through while Debug is on', () => {
+    expect(displayedCues(true, cues)).toBe(cues)
+  })
+
+  it('shows the reply as spoken while Debug is off', () => {
+    expect(displayedCues(false, cues)).toBeUndefined()
   })
 })

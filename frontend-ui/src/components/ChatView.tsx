@@ -8,6 +8,7 @@ import { useThemeStore } from '../store/themeStore'
 import { useTeleprompter } from '../hooks/useTeleprompter'
 import ProcessingMessageView from './ProcessingMessageView'
 import ProcessingToggle from './ProcessingToggle'
+import { displayedCues } from '../lib/emotionAnnotation'
 import ParticipantNotification from './ParticipantNotification'
 import { foldParticipantEvents } from '../lib/participantEvents'
 import { MessageBubble, useMessaging } from './messaging'
@@ -677,11 +678,10 @@ export default function ChatView({
                       spokenChar={spokenChar}
                       spokenTranscriptId={spokenTranscriptId}
                       frozenSpoken={frozenSpoken}
-                      // Admin board only: show what the model actually tagged.
-                      // Without this there is no way to tell a reply the model
-                      // tagged from one it did not, which is the single thing
-                      // you want to know while tuning the face.
-                      cues={cuesByTranscript[message.id]}
+                      // Admin board only, and only with Debug on (#208): show
+                      // what the model actually tagged, for tuning the face.
+                      // Otherwise the operator reads the reply as spoken.
+                      cues={displayedCues(showProcessingMessages, cuesByTranscript[message.id])}
                     />
                   )
               ) : message.messageType === 'participant-run' ? (

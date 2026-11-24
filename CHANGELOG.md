@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The session page shows emotion tags only with Debug on.** It used to put the agent's emotion tags, such as "[happy]", back into every live reply, which read like a leak, most visibly with speech off. They now appear only while the chat's Debug toggle is on. Participants never saw them, and nothing changes for them (#1026)
 - **Dependencies updated**, minor and patch updates for the backend, frontend and docs site, including LiveKit (`livekit-client` 2.24→2.25, `livekit-server-sdk` 2.19→2.20, `@livekit/rtc-node` 1.2.2→1.2.3) and NestJS (12.5→12.6)
 
 ## [2.1.0] - 2026-11-23
