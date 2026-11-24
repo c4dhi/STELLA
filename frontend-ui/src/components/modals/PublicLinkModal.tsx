@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Check, Copy, ExternalLink, Globe, Users, XCircle, PlayCircle } from 'lucide-react'
+import { Check, Copy, Globe, Users, XCircle, PlayCircle } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
+import PublicLinkDisplay from '../shared/PublicLinkDisplay'
 
 interface PublicLinkModalProps {
   isOpen: boolean
@@ -82,7 +83,8 @@ export default function PublicLinkModal({
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
             className={`
-              relative w-full max-w-md rounded-2xl overflow-hidden shadow-2xl
+              relative w-full max-w-md max-h-[calc(100dvh-2rem)] rounded-2xl overflow-hidden shadow-2xl
+              flex flex-col
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700'
                 : 'bg-white border border-neutral-200'
@@ -90,7 +92,7 @@ export default function PublicLinkModal({
             `}
           >
             {/* Header */}
-            <div className={`px-6 pt-6 pb-4`}>
+            <div className={`shrink-0 px-6 pt-6 pb-4`}>
               <div className="flex items-center gap-3 mb-2">
                 <div className={`
                   w-10 h-10 rounded-xl flex items-center justify-center
@@ -109,8 +111,8 @@ export default function PublicLinkModal({
               </div>
             </div>
 
-            {/* Content */}
-            <div className="px-6 pb-6">
+            {/* Content: the only part that scrolls, so the footer stays on screen */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
               {/* Status indicator - now interactive */}
               <div className={`
                 flex items-center justify-between p-3 rounded-xl mb-4
@@ -168,46 +170,8 @@ export default function PublicLinkModal({
                 }
               </p>
 
-              {/* Link display */}
-              <div className={`
-                flex items-center gap-2 coarse:gap-3 p-4 rounded-xl mb-4
-                ${isDark ? 'bg-zinc-700/50 border border-zinc-600' : 'bg-neutral-50 border border-neutral-200'}
-              `}>
-                <input
-                  type="text"
-                  value={publicLink}
-                  readOnly
-                  className={`flex-1 bg-transparent text-sm font-mono truncate ${isDark ? 'text-zinc-200' : 'text-neutral-700'}`}
-                />
-                <button
-                  onClick={handleCopyLink}
-                  className={`
-                    p-2 rounded-lg transition-colors flex-shrink-0
-                    ${isDark
-                      ? 'hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200'
-                      : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-700'
-                    }
-                  `}
-                  title="Copy link"
-                >
-                  {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                </button>
-                <a
-                  href={publicLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={`
-                    p-2 rounded-lg transition-colors flex-shrink-0
-                    ${isDark
-                      ? 'hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200'
-                      : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-700'
-                    }
-                  `}
-                  title="Open in new tab"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                </a>
-              </div>
+              {/* Link display, QR code above it, same as the participant connection screen */}
+              <PublicLinkDisplay value={publicLink} isDark={isDark} copied={copied} onCopy={handleCopyLink} />
 
               {/* Info section */}
               <div className={`
@@ -227,7 +191,7 @@ export default function PublicLinkModal({
             </div>
 
             {/* Footer */}
-            <div className={`px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+            <div className={`shrink-0 px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
               <div className="flex gap-3">
                 <button
                   onClick={handleCopyLink}
