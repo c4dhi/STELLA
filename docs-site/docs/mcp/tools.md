@@ -188,7 +188,9 @@ One project: its settings, public setup, and its 10 most recent sessions with ag
 
 **Inputs:** `projectId`.
 
-**Returns:** the project row, including its public setup fields (`isPublic`, `publicToken`, `publicAgentTypeId`, `publicAgentConfig`, `publicVisualizerType`, `publicVisualizerLocked`, `publicMaxSessionDurationSeconds`, `publicExpiresAt`, `publicEnabled`) and `sessions` (up to 10, newest first, each with `_count.agents`/`_count.participants`).
+**Returns:** the project row, including its public setup fields (`isPublic`, `publicToken`, `publicAgentTypeId`, `publicVisualizerType`, `publicVisualizerLocked`, `publicMaxSessionDurationSeconds`, `publicExpiresAt`, `publicEnabled`) and `sessions` (up to 10, newest first, each with `agentCount`/`participantCount`).
+
+`publicAgentConfig`, when set, never carries raw plan content, pipeline config or env var values — the same rule `projects_public_update`'s input follows, applied to what this tool hands back. It comes back as `{ name, icon, agentConfigurationId, personaId, envVarTemplateId, connectorBindings, hasPlan, hasPipelineConfig, envVarKeys }`: `hasPlan`/`hasPipelineConfig` say whether a plan or pipeline override is set, without its content, and `envVarKeys` lists the env vars' names, never their values.
 
 ### `projects_stats` · `mcp:read`
 
@@ -236,7 +238,7 @@ Turn a project public or private, and configure the agent a visitor gets on the 
 | `maxSessionDurationSeconds` | integer 60–7200 or `null`, *optional* | |
 | `enabled` | boolean, *optional* | Pauses or resumes the public link without reconfiguring it |
 
-It takes no raw plan content, pipeline config or env var values, the same as `agents_deploy`.
+It takes no raw plan content, pipeline config or env var values, the same as `agents_deploy`. The fields given are merged onto the project's existing public setup rather than replacing it, so a plan, pipeline overrides or env vars already set (from the web app, say) are kept across a call that only touches, for example, `name` or `enabled`.
 
 **Returns:** the updated project, as `projects_get` shows it.
 
