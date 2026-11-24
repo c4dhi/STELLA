@@ -397,7 +397,7 @@ Make an open invitation link stop working. A participant who already joined stay
 
 **Returns:** the revoked invitation, as `session_invitations_list` shows each one.
 
-## Agents
+## Env var templates
 
 ### `env_var_templates_list` · `mcp:read`
 
@@ -408,6 +408,51 @@ The user's env var templates, which hold the API keys an agent needs.
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys`, `agentTypeId`, `invalid` and `needsCheck`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
 
 `invalid` maps each setting whose stored value does not fit its type or range to the reason, for example `{ "TTS_SPEED": "must be between 0.5 and 2" }`. `agents_deploy` refuses such a template until it is fixed in the app. `needsCheck` is `true` for a template that has not been saved since 1.6.0 made settings typed.
+
+### `env_var_templates_get` · `mcp:read`
+
+One env var template in full.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** the same fields as `env_var_templates_list`'s items, plus `settings`: the stored value of each declared setting whose type is readable (`string`, `boolean`, `integer`, `number`, `enum`). Secrets and custom variables still never show a value, only their name in `variableKeys`.
+
+### `env_var_templates_create` · `mcp:write`
+
+Create a template holding the variables an agent type needs, scoped to exactly that `agentTypeId`.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `name` | string, 1–255 | |
+| `description` | string, ≤ 2000, *optional* | |
+| `variables` | object, variable name to value | The actual secret values. They pass through this chat and are stored encrypted; no tool ever returns them |
+| `agentTypeId` | id | A template is scoped to exactly one agent type; it can't be changed after creation |
+
+Refused, naming each one, when a value does not fit what the agent type declares for it.
+
+**Returns:** the new template, as `env_var_templates_get` shows it.
+
+### `env_var_templates_update` · `mcp:write`
+
+Change a template's name, description or variables.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `envVarTemplateId` | id | |
+| `name` | string, 1–255, *optional* | |
+| `description` | string, ≤ 2000, *optional* | |
+| `variables` | object, variable name to value, *optional* | Adds or overwrites by name |
+| `removeKeys` | array of strings, *optional* | Deletes by name |
+
+`variables` and `removeKeys` are merged onto the existing (decrypted) values, so untouched secrets keep their stored value and are never re-sent. `agentTypeId` isn't here: it can't change after creation — duplicate the template under the desired type instead.
+
+**Returns:** the template, as `env_var_templates_get` shows it.
+
+## Agents
 
 ### `agents_deploy` · `mcp:write`
 

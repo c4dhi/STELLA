@@ -4,7 +4,6 @@ import { AgentImageService } from '../../agent-image/agent-image.service.js';
 import { AgentsService } from '../../agents/agents.service.js';
 import { CreateAgentDto } from '../../agents/dto/create-agent.dto.js';
 import { ResourceAccessService } from '../../auth/resource-access.service.js';
-import { EnvVarTemplatesService } from '../../env-var-templates/env-var-templates.service.js';
 import {
   CREATES,
   ENDS,
@@ -43,7 +42,6 @@ export function agentSummary(agent: Record<string, any>) {
 export class AgentsTools implements McpToolProvider {
   constructor(
     private readonly agents: AgentsService,
-    private readonly envVarTemplates: EnvVarTemplatesService,
     private readonly agentImages: AgentImageService,
     private readonly access: ResourceAccessService,
   ) {}
@@ -61,34 +59,6 @@ export class AgentsTools implements McpToolProvider {
 
   tools() {
     return [
-      defineTool({
-        name: 'env_var_templates_list',
-        title: 'List env var templates',
-        description:
-          "The user's env var templates (API keys for agents), with variable names only, never values. " +
-          "Pass one as envVarTemplateId to agents_deploy when the agent type's required env vars need it; " +
-          'a template only fits agents of its agentTypeId. invalid names the settings whose stored value does ' +
-          'not fit their type or range (agents_deploy refuses those until they are fixed in the app); ' +
-          'needsCheck is true for a template not saved since settings became typed.',
-        scope: 'mcp:read',
-        input: {},
-        annotations: READ_ONLY,
-        handler: async (_args, { auth }) => ({
-          items: (
-            await this.envVarTemplates.findAllByUser(auth.user.userId)
-          ).map(
-            ({ id, name, description, variableKeys, agentTypeId, invalid, needsCheck }) => ({
-              id,
-              name,
-              description,
-              variableKeys,
-              agentTypeId,
-              invalid,
-              needsCheck,
-            }),
-          ),
-        }),
-      }),
       defineTool({
         name: 'agents_deploy',
         title: 'Deploy an agent into a session',
@@ -138,7 +108,7 @@ export class AgentsTools implements McpToolProvider {
                   .string()
                   .optional()
                   .describe(
-                    "A connector slot the agent type declares in agent.yaml (connectors)",
+                    'A connector slot the agent type declares in agent.yaml (connectors)',
                   ),
                 handle: z
                   .string()

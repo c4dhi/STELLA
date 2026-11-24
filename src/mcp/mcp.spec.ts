@@ -20,6 +20,7 @@ import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js'
 import { ProjectsTools } from './tools/projects.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
+import { EnvVarTemplatesTools } from './tools/env-var-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
@@ -34,6 +35,8 @@ import { CreateProjectDto } from '../projects/dto/create-project.dto.js';
 import { UpdateProjectDto } from '../projects/dto/update-project.dto.js';
 import { UpdatePublicConfigDto } from '../projects/dto/update-public-config.dto.js';
 import { InviteCollaboratorDto } from '../project-invitations/dto/project-invitation.dto.js';
+import { CreateEnvVarTemplateDto } from '../env-var-templates/dto/create-env-var-template.dto.js';
+import { UpdateEnvVarTemplateDto } from '../env-var-templates/dto/update-env-var-template.dto.js';
 
 const USER = {
   userId: 'u1',
@@ -412,6 +415,51 @@ function setup() {
     status: 'untested',
     sharedWith: [],
   };
+  const envVarTemplateRow = {
+    id: 'e1',
+    userId: 'u1',
+    name: 'Keys',
+    description: null,
+    variableKeys: ['OPENAI_API_KEY', 'TTS_SPEED'],
+    agentTypeId: 'at1',
+    settings: { TTS_SPEED: '3' },
+    // What does not fit, and why, but never a value — not even a setting's.
+    invalid: { TTS_SPEED: 'must be between 0.5 and 2' },
+    needsCheck: true,
+    createdAt: new Date('2026-10-01T00:00:00Z'),
+    updatedAt: new Date('2026-10-01T00:00:00Z'),
+  };
+  const envVarTemplates = {
+    findAllByUser: jest.fn(async () => [envVarTemplateRow]),
+    findOne: jest.fn(async (id: string, userId: string) => {
+      if (id !== 'e1' || userId !== 'u1') {
+        throw new NotFoundException(`Env var template with ID ${id} not found`);
+      }
+      return envVarTemplateRow;
+    }),
+    create: jest.fn(async (userId: string, dto: any) => ({
+      ...envVarTemplateRow,
+      id: 'e2',
+      userId,
+      name: dto.name,
+      description: dto.description ?? null,
+      variableKeys: Object.keys(dto.variables),
+      agentTypeId: dto.agentTypeId,
+      settings: {},
+      invalid: {},
+      needsCheck: false,
+    })),
+    update: jest.fn(async (id: string, userId: string, dto: any) => {
+      if (id !== 'e1' || userId !== 'u1') {
+        throw new NotFoundException(`Env var template with ID ${id} not found`);
+      }
+      return {
+        ...envVarTemplateRow,
+        name: dto.name ?? envVarTemplateRow.name,
+        description: dto.description ?? envVarTemplateRow.description,
+      };
+    }),
+  };
   const connectors = {
     list: jest.fn(async () => [connectorRow]),
     listAvailable: jest.fn(async () => [{ ...connectorRow, owned: true }]),
@@ -439,26 +487,8 @@ function setup() {
       invitations as any,
       access,
     ),
-    new AgentsTools(
-      agents as any,
-      {
-        findAllByUser: jest.fn(async () => [
-          {
-            id: 'e1',
-            userId: 'u1',
-            name: 'Keys',
-            description: null,
-            variableKeys: ['OPENAI_API_KEY', 'TTS_SPEED'],
-            agentTypeId: 'at1',
-            settings: { TTS_SPEED: '3' },
-            invalid: { TTS_SPEED: 'must be between 0.5 and 2' },
-            needsCheck: true,
-          },
-        ]),
-      } as any,
-      agentImages as any,
-      access,
-    ),
+    new AgentsTools(agents as any, agentImages as any, access),
+    new EnvVarTemplatesTools(envVarTemplates as any),
     new PlatformSettingsTools(platformSettings as any),
     new AgentReviewsTools(agentReview as any),
     new ConnectorsTools(connectors as any),
@@ -478,6 +508,7 @@ function setup() {
     sessions,
     agents,
     invitations,
+    envVarTemplates,
     connectors,
     audit,
     tool,
@@ -1029,6 +1060,7 @@ describe('One shape for every tool', () => {
     expect(updates.map((t) => t.name).sort()).toEqual([
       'agent_configurations_update',
       'connectors_update',
+      'env_var_templates_update',
       'personas_update',
       'plan_templates_update',
       'projects_public_update',
@@ -1232,6 +1264,15 @@ describe('summarizeToolArgs', () => {
       truncated: true,
       keys: Object.keys(big),
     });
+  });
+
+  it('redacts a variables object whole, even when its own keys look innocuous', () => {
+    const summary = summarizeToolArgs({
+      name: 'Keys',
+      variables: { DATABASE_URL: 'postgres://u:p@host/db', FEATURE_FLAG: 'on' },
+    });
+    expect(summary.name).toBe('Keys');
+    expect(summary.variables).toBe('[redacted]');
   });
 });
 
@@ -1760,5 +1801,109 @@ describe('MCP project tools', () => {
       READ_WRITE,
     );
     expect(parse(remove).error.status).toBe(403);
+  });
+});
+
+describe('MCP env var template tools', () => {
+  it('lists and gets with read, creates and updates only with write, and offers no delete', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining(['env_var_templates_list', 'env_var_templates_get']),
+    );
+    for (const write of ['env_var_templates_create', 'env_var_templates_update']) {
+      expect(read).not.toContain(write);
+      expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
+    }
+    expect(
+      factory
+        .toolNamesFor(READ_WRITE)
+        .some((n) => n.startsWith('env_var_templates') && n.includes('delete')),
+    ).toBe(false);
+  });
+
+  it('only gets a template the user owns', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    const mine: any = await factory.run(
+      tool('env_var_templates_get'),
+      { envVarTemplateId: 'e1' },
+      READ,
+    );
+    expect(mine.structuredContent).toMatchObject({ id: 'e1', name: 'Keys' });
+
+    const someoneElses: any = await factory.run(
+      tool('env_var_templates_get'),
+      { envVarTemplateId: 'e2' },
+      READ,
+    );
+    expect(parse(someoneElses).error.status).toBe(404);
+    expect(envVarTemplates.findOne).toHaveBeenCalledWith('e2', 'u1');
+  });
+
+  const AGENT_TYPE_UUID = '2f1e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a33';
+
+  it('creates through the REST DTO and keeps variable values out of the audit log', async () => {
+    const { factory, envVarTemplates, audit, tool } = setup();
+    const result: any = await factory.run(
+      tool('env_var_templates_create'),
+      {
+        name: 'Keys',
+        agentTypeId: AGENT_TYPE_UUID,
+        variables: { OPENAI_API_KEY: 'sk-super-secret', DATABASE_URL: 'postgres://u:p@host/db' },
+      },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const [userId, dto] = envVarTemplates.create.mock.calls[0] as any[];
+    expect(userId).toBe('u1');
+    expect(dto).toBeInstanceOf(CreateEnvVarTemplateDto);
+    expect(dto.variables).toEqual({
+      OPENAI_API_KEY: 'sk-super-secret',
+      DATABASE_URL: 'postgres://u:p@host/db',
+    });
+
+    // DATABASE_URL's key alone would not match the generic secret-key
+    // redaction, even though its value is one; the whole variables object
+    // is redacted wholesale instead.
+    const entry = (audit.record.mock.calls[0] as any[])[0];
+    const summary = summarizeToolArgs(entry.args);
+    expect(summary.variables).toBe('[redacted]');
+    expect(JSON.stringify(summary)).not.toContain('sk-super-secret');
+    expect(JSON.stringify(summary)).not.toContain('postgres://u:p@host/db');
+  });
+
+  it('rejects input the REST DTO would reject', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    const bad: any = await factory.run(
+      tool('env_var_templates_create'),
+      { name: 'Keys', agentTypeId: AGENT_TYPE_UUID },
+      READ_WRITE,
+    );
+    expect(parse(bad).error.status).toBe(400);
+    expect(parse(bad).error.message).toContain('variables');
+    expect(envVarTemplates.create).not.toHaveBeenCalled();
+  });
+
+  it('updates only the given fields of a template the user owns', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    await factory.run(
+      tool('env_var_templates_update'),
+      { envVarTemplateId: 'e1', name: 'Renamed', removeKeys: ['TTS_SPEED'] },
+      READ_WRITE,
+    );
+    const [id, userId, dto] = envVarTemplates.update.mock.calls[0] as any[];
+    expect([id, userId]).toEqual(['e1', 'u1']);
+    expect(dto).toBeInstanceOf(UpdateEnvVarTemplateDto);
+    expect(dto.name).toBe('Renamed');
+    expect(dto.removeKeys).toEqual(['TTS_SPEED']);
+    // agentTypeId isn't on the update DTO: a template's type is immutable.
+    expect((dto as any).agentTypeId).toBeUndefined();
+
+    const someoneElses: any = await factory.run(
+      tool('env_var_templates_update'),
+      { envVarTemplateId: 'e2', name: 'Renamed' },
+      READ_WRITE,
+    );
+    expect(parse(someoneElses).error.status).toBe(404);
   });
 });

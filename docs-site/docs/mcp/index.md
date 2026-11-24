@@ -63,14 +63,14 @@ Which tools need which scope:
 
 | Scope | Tools |
 |---|---|
-| `mcp:read` (24) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `projects_get`, `projects_stats`, `projects_public_link_get`, `project_collaborators_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `agents_get`, `agent_logs_get`, `connectors_list`, `connectors_get` |
-| `mcp:write` (23) | `personas_create`, `personas_update`, `plan_templates_create`, `plan_templates_update`, `agent_configurations_create`, `agent_configurations_update`, `projects_create`, `projects_update`, `projects_public_update`, `project_collaborators_invite`, `project_collaborators_remove`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
+| `mcp:read` (25) | `whoami`, `personas_list`, `personas_get`, `plan_templates_list`, `plan_templates_get`, `agent_types_list`, `agent_types_get`, `agent_configurations_list`, `agent_configurations_get`, `projects_list`, `projects_get`, `projects_stats`, `projects_public_link_get`, `project_collaborators_list`, `sessions_list`, `sessions_get`, `session_transcript_get`, `session_state_get`, `session_invitations_list`, `env_var_templates_list`, `env_var_templates_get`, `agents_get`, `agent_logs_get`, `connectors_list`, `connectors_get` |
+| `mcp:write` (25) | `personas_create`, `personas_update`, `plan_templates_create`, `plan_templates_update`, `agent_configurations_create`, `agent_configurations_update`, `env_var_templates_create`, `env_var_templates_update`, `projects_create`, `projects_update`, `projects_public_update`, `project_collaborators_invite`, `project_collaborators_remove`, `sessions_create`, `sessions_update`, `sessions_close`, `session_invitations_create`, `session_invitations_revoke`, `agents_deploy`, `agents_restart`, `agents_stop`, `connectors_create`, `connectors_update`, `connectors_test`, `connector_shares_set` |
 
 System admins also get `platform_settings_get` and `agent_reviews_list`/`agent_reviews_get` (`mcp:read`), and `platform_settings_update`, `agent_reviews_approve` and `agent_reviews_reject` (`mcp:write`). Nobody else sees them, and calling one by name answers `403`.
 
 ## The tools
 
-There are 47 tools, plus 2 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
+There are 50 tools, plus 2 for system admins. The [tool reference](./tools.md) lists each one with its inputs and what it returns. They all follow one shape, which the server also explains to the assistant when it connects:
 
 - Ids are named after what they point to (`projectId`, `sessionId`, `agentId`, `invitationId`, `personaId`, `planId`, `agentConfigurationId`, `agentTypeId`, `envVarTemplateId`). The name is the same in every tool.
 - `…_list` returns `{ items }` with a summary of each, and `…_get` returns one in full.
@@ -91,6 +91,7 @@ A typical run looks like this:
 
 - Nothing can be **deleted** over MCP. There are no delete tools. Connectors are deleted in Settings → Connectors; over MCP, `connector_shares_set` with `[]` stops other members' agents from using one.
 - **Connector tokens:** `connectors_create` and `connectors_update` take a connector's token, so it passes through the assistant's chat. No tool returns it, and the audit log records it as `[redacted]`.
+- **Env var template values:** `env_var_templates_create` and `env_var_templates_update` take the actual secret values (API keys and the like), so they pass through the assistant's chat too. No tool returns them, and the audit log redacts the whole `variables` object, not just keys that look like secrets.
 - An assistant only reaches projects its user is a member of, and only personas, plans, configurations and env var templates its user owns. System-default personas can be read but not changed.
 - **Project collaborators:** only the project owner can invite or remove one; any member can read the list. Project deletion is not on MCP at all (system admins only, in the app).
 - **Public project setup:** `projects_public_update` doesn't take raw plan content, pipeline config or env var values, the same as `agents_deploy`: it names a persona, agent configuration and env var template instead. Only the project owner can bind or move connectors on the public agent.
