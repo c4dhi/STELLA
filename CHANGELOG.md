@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The session page shows emotion tags only with Debug on.** It used to put the agent's emotion tags, such as "[happy]", back into every live reply, which read like a leak, most visibly with speech off. They now appear only while the chat's Debug toggle is on. Participants never saw them, and nothing changes for them (#1026)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly

@@ -85,3 +85,12 @@ export function annotateWithCues(text: string, cues: DisplayCue[]): AnnotatedTex
 
   return { text: pieces.join(''), mapCursor }
 }
+
+/**
+ * The cues the admin board puts back into a reply: only while Debug is on
+ * (#208, Felix 24 Nov 2026). With it off the operator reads the reply as it
+ * is spoken, the same text a participant sees.
+ */
+export function displayedCues<T extends DisplayCue>(debugOn: boolean, cues: T[] | undefined): T[] | undefined {
+  return debugOn ? cues : undefined
+}
