@@ -71,7 +71,7 @@ model Project {
   isPublic               Boolean    @default(false)
   publicToken            String?    @unique
   publicAgentTypeId      String?
-  publicAgentConfig      Json?      // { name, icon, plan, envVarTemplateId }
+  publicAgentConfig      Json?      // { name, icon, plan | mode: 'companion' + availablePlanIds, envVarTemplateId, … }
   publicVisualizerType   String?
   publicVisualizerLocked Boolean    @default(false)
   publicExpiresAt        DateTime?

@@ -21,6 +21,8 @@ In the deploy flow, the **How should it run?** step offers *Plan* or *Companion*
 
 Those plans are **snapshotted into the deployment**. Editing a plan afterwards does not change what a running session offers, and a restart reproduces the original set. This is the same rule the persona and the pipeline configuration follow.
 
+A **public project** asks the same question in its setup. There, each participant's agent snapshots the activities when it starts, so a plan edited after setup reaches the next participant but not one already talking.
+
 ## What the user experiences
 
 | They say | What happens |
