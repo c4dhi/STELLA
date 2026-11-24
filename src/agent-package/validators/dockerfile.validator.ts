@@ -12,9 +12,13 @@ export interface DockerfileValidationResult {
 export class DockerfileValidator {
   private readonly logger = new Logger(DockerfileValidator.name)
 
+  // Matches a real FROM instruction (start of line, optional --platform flag),
+  // never the word "from" elsewhere in the file (a CMD string, a comment, a COPY --from flag).
+  private readonly fromInstructionPattern = /^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)/gim
+
   // Dangerous patterns that are blocked
   private readonly blockedPatterns = [
-    { pattern: /FROM\s+scratch/i, message: 'FROM scratch is not allowed' },
+    { pattern: /^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?scratch\b/im, message: 'FROM scratch is not allowed' },
     { pattern: /--privileged/i, message: '--privileged flag is not allowed' },
     { pattern: /--cap-add/i, message: '--cap-add flag is not allowed' },
     { pattern: /curl\s+[^|]*\|\s*(ba)?sh/i, message: 'Piping curl to shell is not allowed' },
@@ -92,27 +96,13 @@ export class DockerfileValidator {
    * Extract the base image from FROM instruction.
    */
   private extractBaseImage(content: string): string | null {
-    // Handle multi-stage builds - get the final FROM
-    const fromMatches = content.match(/FROM\s+([^\s]+)/gi)
-    if (!fromMatches || fromMatches.length === 0) {
+    // Handle multi-stage builds - get the final real FROM instruction
+    const matches = [...content.matchAll(this.fromInstructionPattern)]
+    if (matches.length === 0) {
       return null
     }
 
-    // Get the last FROM (final stage)
-    const lastFrom = fromMatches[fromMatches.length - 1]
-    const match = lastFrom.match(/FROM\s+([^\s]+)/i)
-    if (!match) {
-      return null
-    }
-
-    // Remove AS alias if present
-    let image = match[1]
-    const asIndex = image.toLowerCase().indexOf(' as ')
-    if (asIndex !== -1) {
-      image = image.substring(0, asIndex)
-    }
-
-    return image.trim()
+    return matches[matches.length - 1][1].trim()
   }
 
   /**
