@@ -1145,7 +1145,10 @@ export const useStore = create<
 
       return {
         agentTaskLists: newMap,
-        showTaskPanel: newMap.size > 0,
+        // Open only for something still running, as live updates do (#977):
+        // an ended activity in the history used to open it on every reload or
+        // resume, and the agent's first update then closed it again (#199).
+        showTaskPanel: anyActivityActive(newMap.values()) || state.taskPanelPinnedOpen,
         isTaskPanelInHistoryMode: false, // Latest state is not history mode
         currentHistoricalTimestamp: null,
         todoList: state.todoList || mostRecentUpdate.todoList // Legacy compat
