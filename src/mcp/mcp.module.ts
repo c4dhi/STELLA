@@ -27,6 +27,7 @@ import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
 import { CatalogTools } from './tools/catalog.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
+import { EnvVarTemplatesTools } from './tools/env-var-templates.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
@@ -40,6 +41,7 @@ const TOOL_PROVIDERS = [
   AgentConfigurationsTools,
   SessionsTools,
   AgentsTools,
+  EnvVarTemplatesTools,
   PlatformSettingsTools,
   AgentReviewsTools,
   ConnectorsTools,
