@@ -110,6 +110,11 @@ function setup() {
       id,
       ...(dto as object),
     })),
+    duplicate: jest.fn(async (id: string, _userId: string) => {
+      if (id === 'missing')
+        throw new NotFoundException('Persona missing not found');
+      return { id: `${id}-copy`, name: 'Grace (Copy)' };
+    }),
   };
   // Writes return a bare row; the tools must answer with what findOne gives.
   const plans = {
@@ -133,6 +138,7 @@ function setup() {
     })),
     create: jest.fn(async () => ({ id: 'pl2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
+    duplicate: jest.fn(async (id: string) => ({ id: `${id}-copy`, from: 'duplicate' })),
   };
   const configurations = {
     findAllByUser: jest.fn(async () => [
@@ -162,6 +168,7 @@ function setup() {
     })),
     create: jest.fn(async () => ({ id: 'c2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
+    duplicate: jest.fn(async (id: string) => ({ id: `${id}-copy`, from: 'duplicate' })),
   };
   const projects = {
     findAll: jest.fn(async () => [
@@ -432,10 +439,10 @@ function setup() {
   const envVarTemplates = {
     findAllByUser: jest.fn(async () => [envVarTemplateRow]),
     findOne: jest.fn(async (id: string, userId: string) => {
-      if (id !== 'e1' || userId !== 'u1') {
+      if ((id !== 'e1' && id !== 'e1-copy') || userId !== 'u1') {
         throw new NotFoundException(`Env var template with ID ${id} not found`);
       }
-      return envVarTemplateRow;
+      return { ...envVarTemplateRow, id };
     }),
     create: jest.fn(async (userId: string, dto: any) => ({
       ...envVarTemplateRow,
@@ -458,6 +465,12 @@ function setup() {
         name: dto.name ?? envVarTemplateRow.name,
         description: dto.description ?? envVarTemplateRow.description,
       };
+    }),
+    duplicate: jest.fn(async (id: string, userId: string) => {
+      if (id !== 'e1' || userId !== 'u1') {
+        throw new NotFoundException(`Env var template with ID ${id} not found`);
+      }
+      return { ...envVarTemplateRow, id: `${id}-copy`, name: 'Keys (Copy)' };
     }),
   };
   const connectors = {
@@ -1905,5 +1918,81 @@ describe('MCP env var template tools', () => {
       READ_WRITE,
     );
     expect(parse(someoneElses).error.status).toBe(404);
+  });
+});
+
+describe('MCP duplicate tools', () => {
+  const DUPLICATE_TOOLS = [
+    'personas_duplicate',
+    'plan_templates_duplicate',
+    'agent_configurations_duplicate',
+    'env_var_templates_duplicate',
+  ];
+
+  it('offers every duplicate tool only with write, never with read alone', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    const readWrite = factory.toolNamesFor(READ_WRITE);
+    for (const name of DUPLICATE_TOOLS) {
+      expect(read).not.toContain(name);
+      expect(readWrite).toContain(name);
+    }
+  });
+
+  it('copies a persona (including a system default) and returns it as personas_get would', async () => {
+    const { factory, personas, tool } = setup();
+    const result: any = await factory.run(
+      tool('personas_duplicate'),
+      { personaId: 'pe1' },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    expect(personas.duplicate).toHaveBeenCalledWith('pe1', 'u1');
+    // personas_duplicate re-fetches through findOne, same as personas_create.
+    expect(personas.findOne).toHaveBeenCalledWith('pe1-copy', 'u1');
+
+    const missing: any = await factory.run(
+      tool('personas_duplicate'),
+      { personaId: 'missing' },
+      READ_WRITE,
+    );
+    expect(parse(missing).error.status).toBe(404);
+  });
+
+  it('copies a plan template and returns it as plan_templates_get would', async () => {
+    const { factory, plans, tool } = setup();
+    await factory.run(
+      tool('plan_templates_duplicate'),
+      { planId: 'pl1' },
+      READ_WRITE,
+    );
+    expect(plans.duplicate).toHaveBeenCalledWith('pl1', 'u1');
+    expect(plans.findOne).toHaveBeenCalledWith('pl1-copy', 'u1');
+  });
+
+  it('copies an agent configuration and returns it as agent_configurations_get would', async () => {
+    const { factory, configurations, tool } = setup();
+    await factory.run(
+      tool('agent_configurations_duplicate'),
+      { agentConfigurationId: 'c1' },
+      READ_WRITE,
+    );
+    expect(configurations.duplicate).toHaveBeenCalledWith('c1', 'u1');
+    expect(configurations.findOne).toHaveBeenCalledWith('c1-copy', 'u1');
+  });
+
+  it('copies an env var template without re-entering its values', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    const result: any = await factory.run(
+      tool('env_var_templates_duplicate'),
+      { envVarTemplateId: 'e1' },
+      READ_WRITE,
+    );
+    expect(envVarTemplates.duplicate).toHaveBeenCalledWith('e1', 'u1');
+    // env_var_templates_duplicate re-fetches through findOne, same as the others.
+    expect(envVarTemplates.findOne).toHaveBeenCalledWith('e1-copy', 'u1');
+    expect(result.structuredContent).toMatchObject({ id: 'e1-copy' });
+    // Never asked for, and the service response holds no raw values anyway.
+    expect(JSON.stringify(result)).not.toContain('variables');
   });
 });

@@ -91,6 +91,20 @@ export class PlanTemplatesTools implements McpToolProvider {
         },
       }),
       defineTool({
+        name: 'plan_templates_duplicate',
+        title: 'Duplicate a plan template',
+        description:
+          'Copy a plan template the user owns into a new one, named "<name> (Copy)". Edit the copy with ' +
+          'plan_templates_update; the original is untouched.',
+        scope: 'mcp:write',
+        input: { planId },
+        annotations: CREATES,
+        handler: async ({ planId }, ctx) => {
+          const copy = await this.plans.duplicate(planId, ctx.auth.user.userId);
+          return this.full(copy.id, ctx.auth.user.userId);
+        },
+      }),
+      defineTool({
         name: 'plan_templates_update',
         title: 'Update a plan template',
         description:

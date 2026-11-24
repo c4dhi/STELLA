@@ -102,6 +102,29 @@ export class EnvVarTemplatesTools implements McpToolProvider {
         }),
       }),
       defineTool({
+        name: 'env_var_templates_duplicate',
+        title: 'Duplicate an env var template',
+        description:
+          'Copy an env var template the user owns into a new one, named "`<name>` (Copy)", for the same ' +
+          'agentTypeId. The variables themselves are carried over without being re-entered; env_var_templates_update ' +
+          'changes the copy.',
+        scope: 'mcp:write',
+        input: { envVarTemplateId },
+        annotations: CREATES,
+        handler: async ({ envVarTemplateId }, ctx) => {
+          const copy = await this.envVarTemplates.duplicate(
+            envVarTemplateId,
+            ctx.auth.user.userId,
+          );
+          return {
+            ...(await this.envVarTemplates.findOne(
+              copy.id,
+              ctx.auth.user.userId,
+            )),
+          };
+        },
+      }),
+      defineTool({
         name: 'env_var_templates_update',
         title: 'Update an env var template',
         description:
