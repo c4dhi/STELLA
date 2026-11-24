@@ -82,6 +82,8 @@ export class ProjectsTools implements McpToolProvider {
       personaId: config.personaId,
       envVarTemplateId: config.envVarTemplateId,
       connectorBindings: config.connectorBindings,
+      mode: config.mode,
+      availablePlanIds: config.availablePlanIds,
       hasPlan: config.plan !== undefined,
       hasPipelineConfig: config.pipelineConfig !== undefined,
       envVarKeys:
@@ -260,7 +262,8 @@ export class ProjectsTools implements McpToolProvider {
         title: 'Update a project’s public setup',
         description:
           'Turn a project public or private, and configure the agent a visitor gets on the public link: its ' +
-          'name, icon, agent configuration, persona, env var template and connector bindings, the visualizer ' +
+          'name, icon, agent configuration, persona, env var template and connector bindings, whether it follows ' +
+          'one plan or runs as a companion offering a set of plans as activities, the visualizer ' +
           '(e.g. sphere, face, galaxy, text) and whether it is locked, and the maximum session length (60 to ' +
           '7200 seconds). The public agent runs as the project owner, so only the owner may bind or move ' +
           'connectors; enabled pauses the link without losing its configuration.',
@@ -287,6 +290,18 @@ export class ProjectsTools implements McpToolProvider {
             'env_var_templates_list',
           ).optional(),
           connectorBindings,
+          mode: z
+            .enum(['plan', 'companion'])
+            .optional()
+            .describe(
+              'Absent = follow a single plan (set it elsewhere, e.g. the create-agent flow). ' +
+                '"companion" talks freely and offers availablePlanIds as activities.',
+            ),
+          availablePlanIds: z
+            .array(idArg('plan template', 'plan_templates_list'))
+            .max(20)
+            .optional()
+            .describe('Plans a companion may offer; requires mode "companion".'),
           visualizerType: z.string().max(50).optional(),
           visualizerLocked: z.boolean().optional(),
           maxSessionDurationSeconds: z
@@ -315,6 +330,8 @@ export class ProjectsTools implements McpToolProvider {
             personaId,
             envVarTemplateId,
             connectorBindings,
+            mode,
+            availablePlanIds,
             visualizerType,
             visualizerLocked,
             maxSessionDurationSeconds,
@@ -331,6 +348,8 @@ export class ProjectsTools implements McpToolProvider {
               personaId,
               envVarTemplateId,
               connectorBindings,
+              mode,
+              availablePlanIds,
             }).filter(([, value]) => value !== undefined),
           );
           // MCP can only ever send this subset of PublicAgentConfigDto's fields
@@ -345,6 +364,13 @@ export class ProjectsTools implements McpToolProvider {
               (current.publicAgentConfig as Record<string, unknown> | null) ??
               {};
             agentConfig = { ...existing, ...suppliedAgentConfig };
+            // Switching away from companion mode without resending the plan
+            // list would otherwise merge in the old availablePlanIds and trip
+            // the "needs companion mode" refusal on an update that never meant
+            // to touch them.
+            if (mode !== undefined && mode !== 'companion' && availablePlanIds === undefined) {
+              delete agentConfig.availablePlanIds;
+            }
           }
           const dto = await ctx.validate(UpdatePublicConfigDto, {
             isPublic,

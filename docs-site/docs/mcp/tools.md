@@ -293,7 +293,7 @@ One project: its settings, public setup, and its 10 most recent sessions with ag
 
 **Returns:** the project row, including its public setup fields (`isPublic`, `publicToken`, `publicAgentTypeId`, `publicVisualizerType`, `publicVisualizerLocked`, `publicMaxSessionDurationSeconds`, `publicExpiresAt`, `publicEnabled`) and `sessions` (up to 10, newest first, each with `agentCount`/`participantCount`).
 
-`publicAgentConfig`, when set, never carries raw plan content, pipeline config or env var values — the same rule `projects_public_update`'s input follows, applied to what this tool hands back. It comes back as `{ name, icon, agentConfigurationId, personaId, envVarTemplateId, connectorBindings, hasPlan, hasPipelineConfig, envVarKeys }`: `hasPlan`/`hasPipelineConfig` say whether a plan or pipeline override is set, without its content, and `envVarKeys` lists the env vars' names, never their values.
+`publicAgentConfig`, when set, never carries raw plan content, pipeline config or env var values — the same rule `projects_public_update`'s input follows, applied to what this tool hands back. It comes back as `{ name, icon, agentConfigurationId, personaId, envVarTemplateId, connectorBindings, mode, availablePlanIds, hasPlan, hasPipelineConfig, envVarKeys }`: `hasPlan`/`hasPipelineConfig` say whether a plan or pipeline override is set, without its content, `envVarKeys` lists the env vars' names, never their values, and `mode`/`availablePlanIds` (absent = plan mode) say whether the public agent runs as a companion and which plans it may offer — by id, same as the input.
 
 ### `projects_stats` · `mcp:read`
 
@@ -344,6 +344,8 @@ Turn a project public or private, and configure the agent a visitor gets on the 
 | `personaId` | id, *optional* | Default: the default persona |
 | `envVarTemplateId` | id, *optional* | |
 | `connectorBindings` | up to 20 of `{ connectorId, slot?, handle? }`, *optional* | As in `agents_deploy`, from the owner's own connectors or those shared with the project |
+| `mode` | `"plan"` or `"companion"`, *optional* | Absent = follow a single plan. `"companion"` talks freely and offers `availablePlanIds` as activities |
+| `availablePlanIds` | up to 20 ids, *optional* | Plans a companion may offer; refused unless `mode` is `"companion"` |
 | `visualizerType` | string, ≤ 50, *optional* | e.g. `sphere`, `face`, `galaxy`, `text` |
 | `visualizerLocked` | boolean, *optional* | |
 | `maxSessionDurationSeconds` | integer 60–7200 or `null`, *optional* | |
