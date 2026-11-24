@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { buildImageName, builtImageSitsOnBase, resolveDockerfilePath } from './agent-build.service.js'
+import { buildImageName, builtImageSitsOnBase, dockerBuildArgs, resolveDockerfilePath } from './agent-build.service.js'
 
 // The build runs `docker build` on the host with values from an uploaded package.
 describe('agent build input checks', () => {
@@ -32,6 +32,20 @@ describe('agent build input checks', () => {
   it('no longer runs anything through a shell', () => {
     const src = fs.readFileSync(path.resolve(process.cwd(), 'src/agent-build/agent-build.service.ts'), 'utf8')
     expect(src).not.toMatch(/\bexecAsync\b|import \{[^}]*\bexec\b[^}]*\} from 'child_process'/)
+  })
+})
+
+describe('dockerBuildArgs', () => {
+  it('always builds with --pull, so the build uses the same fresh base the after-build check compares against', () => {
+    expect(dockerBuildArgs('elias-interviewer:0.1.0', '/pkg', '/pkg/Dockerfile')).toEqual([
+      'build',
+      '--pull',
+      '-t',
+      'elias-interviewer:0.1.0',
+      '-f',
+      '/pkg/Dockerfile',
+      '/pkg',
+    ])
   })
 })
 

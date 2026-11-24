@@ -76,6 +76,16 @@ export function builtImageSitsOnBase(baseLayers: string[], builtLayers: string[]
   return baseLayers.length > 0 && baseLayers.every((layer, i) => layer === builtLayers[i])
 }
 
+/**
+ * `docker build` arguments. Always `--pull`: the after-build check compares
+ * the built image against a fresh pull of its claimed base, so the build
+ * itself must use that same fresh base, not whatever is already cached on
+ * the host - otherwise a stale local cache fails every legitimate upload.
+ */
+export function dockerBuildArgs(imageName: string, contextPath: string, dockerfilePath: string): string[] {
+  return ['build', '--pull', '-t', imageName, '-f', dockerfilePath, contextPath]
+}
+
 export interface BuildResult {
   success: boolean
   imageName?: string
@@ -459,7 +469,7 @@ export class AgentBuildService {
     contextPath: string,
     dockerfilePath: string,
   ): Promise<string> {
-    const args = ['build', '-t', imageName, '-f', dockerfilePath, contextPath]
+    const args = dockerBuildArgs(imageName, contextPath, dockerfilePath)
     this.logger.debug(`Executing: docker ${args.join(' ')}`)
 
     try {
