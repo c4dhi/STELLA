@@ -43,6 +43,19 @@ interface PublicAgentConfig {
   envVarTemplateId?: string;
   envVars?: Record<string, string>;
   connectorBindings?: Array<{ connectorId: string; slot?: string; handle?: string }>;
+  // Absent = follow `plan`. 'companion' offers these plans as activities (#207);
+  // they are resolved and snapshotted on each spawn, as on a normal deploy.
+  mode?: 'plan' | 'companion';
+  availablePlanIds?: string[];
+}
+
+/** The mode a public project's agent is deployed in, as the create-agent request takes it. */
+export function publicDeployMode(
+  agentConfig: PublicAgentConfig | null,
+): { mode?: 'companion'; availablePlanIds?: string[] } {
+  return agentConfig?.mode === 'companion'
+    ? { mode: 'companion', availablePlanIds: agentConfig.availablePlanIds ?? [] }
+    : {};
 }
 
 @Injectable()
@@ -94,8 +107,10 @@ export class PublicProjectsService {
     agentConfig: PublicAgentConfig | null,
   ): Record<string, unknown> {
     // No agent settings: a deployment passes only platform keys (see withAgentDefaults).
+    // A companion takes no single plan: its activities come from publicDeployMode.
+    const companion = agentConfig?.mode === 'companion';
     return {
-      ...(agentConfig?.plan ? { plan: agentConfig.plan } : {}),
+      ...(agentConfig?.plan && !companion ? { plan: agentConfig.plan } : {}),
       ...(agentConfig?.pipelineConfig
         ? { pipeline_config: agentConfig.pipelineConfig }
         : {}),
@@ -232,6 +247,7 @@ export class PublicProjectsService {
         envVarTemplateId: agentConfig?.envVarTemplateId,
         envVars: agentConfig?.envVars,
         connectorBindings: agentConfig?.connectorBindings,
+        ...publicDeployMode(agentConfig),
       },
       ownerId,
     );
@@ -299,6 +315,8 @@ export class PublicProjectsService {
       envVarTemplateId: agentConfig?.envVarTemplateId || null,
       envVars: agentConfig?.envVars || {},
       connectorBindings: agentConfig?.connectorBindings ?? [],
+      // The first spawn resolves the activities; a later wake replays its snapshot.
+      ...publicDeployMode(agentConfig),
       // Wake recreates it as this member: public agents run as the owner.
       deployedByUserId: ownerId,
     };
@@ -428,6 +446,7 @@ export class PublicProjectsService {
             envVarTemplateId: agentConfig?.envVarTemplateId,
             envVars: agentConfig?.envVars,
             connectorBindings: agentConfig?.connectorBindings,
+            ...publicDeployMode(agentConfig),
           },
           ownerId,
         );

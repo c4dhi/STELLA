@@ -12,6 +12,7 @@ import {
   MaxLength,
   IsArray,
   ArrayMaxSize,
+  IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ConnectorBindingDto } from '../../agents/dto/create-agent.dto.js';
@@ -66,6 +67,17 @@ export class PublicAgentConfigDto {
   @ValidateNested({ each: true })
   @Type(() => ConnectorBindingDto)
   connectorBindings?: ConnectorBindingDto[];
+
+  /** Absent = follow `plan`; 'companion' offers `availablePlanIds` as activities (#207). */
+  @IsOptional()
+  @IsIn(['plan', 'companion'])
+  mode?: 'plan' | 'companion';
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUUID('4', { each: true })
+  availablePlanIds?: string[];
 }
 
 /**

@@ -1161,6 +1161,9 @@ export interface PublicAgentConfig {
   envVars?: Record<string, string>
   /** Connectors every public session's agent may call; the owner's own. */
   connectorBindings?: { connectorId: string; slot?: string }[]
+  /** Absent = follow `plan`. 'companion' offers `availablePlanIds` as activities (#207). */
+  mode?: 'plan' | 'companion'
+  availablePlanIds?: string[]
 }
 
 /**

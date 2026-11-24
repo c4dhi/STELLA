@@ -19,7 +19,9 @@ import type {
   Persona,
   AvailableConnector,
 } from '../../lib/api-types'
-import { deployNeeds } from '../../lib/deployNeeds'
+import { deployNeeds, effectiveMode } from '../../lib/deployNeeds'
+import { publicSetupSteps } from '../../lib/publicSetupSteps'
+import type { AgentMode } from '../../lib/deployNeeds'
 import { settingsSteps } from '../../lib/agentSettings'
 import { assignSlots, bindingsFromChoices, initialSelection, unboundRequiredSlots } from '../../lib/connectorBindings'
 import ConnectorsStep from '../shared/ConnectorsStep'
@@ -31,6 +33,8 @@ import {
   ConfigurationSelectionStep,
   PersonaSelectionStep,
   PlanSelectionStep,
+  ModeSelectionStep,
+  ActivitySelectionStep,
   VisualizerSelectionStep,
   ExpirationSelectionStep,
   DEFAULT_EXPIRATION_OPTIONS,
@@ -48,7 +52,7 @@ interface ProjectModalProps {
   onProjectUpdated?: (project: Project) => void
 }
 
-type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'voice' | 'plan' | 'connectors' | 'envtemplate' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
+type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'voice' | 'plan' | 'connectors' | 'envtemplate' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
 type ProjectType = 'private' | 'public'
 
 // Predefined timeout options for auto-stop
@@ -65,8 +69,10 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'agent', number: 1, label: 'Select Agent' },
   { id: 'configure', number: 2, label: 'Configure' },
   { id: 'configuration', number: 3, label: 'Configuration' },
+  { id: 'mode', number: 4, label: 'Mode' },
   { id: 'persona', number: 4, label: 'Persona' },
   { id: 'plan', number: 5, label: 'Plan' },
+  { id: 'activities', number: 5, label: 'Activities' },
   { id: 'connectors', number: 7, label: 'Connectors' },
   { id: 'voice', number: 8, label: 'Voice & Language' },
   { id: 'envtemplate', number: 7, label: 'Start From' },
@@ -117,6 +123,9 @@ export default function ProjectModal({
   // Plan selection (PlanSelectionStep manages its own loading/fetching)
   const [planTemplates, setPlanTemplates] = useState<PlanTemplate[]>([])
   const [selectedPlan, setSelectedPlan] = useState<PlanTemplate | null>(null)
+  // Companion mode (#207): the agent talks freely and offers these plans as activities.
+  const [mode, setMode] = useState<AgentMode>('plan')
+  const [activityPlanIds, setActivityPlanIds] = useState<string[]>([])
   const [selectedConfiguration, setSelectedConfiguration] = useState<AgentConfiguration | null>(null)
   // Persona (agent identity). Null = the system default, resolved server-side.
   const [selectedPersona, setSelectedPersona] = useState<Persona | null>(null)
@@ -154,9 +163,11 @@ export default function ProjectModal({
   const [copied, setCopied] = useState(false)
 
   // What this agent needs, as the server resolved it from its agent.yaml.
-  // Public sessions run a single plan, so only the plan mode is offered here.
+  // Every mode it declares is offered, as in the deploy dialog (#207).
   const needs = useMemo(() => deployNeeds(selectedAgentType), [selectedAgentType])
-  const runsPlan = needs.modes.includes('plan')
+  const runsPlans = needs.modes.length > 0
+  // An agent that runs only one mode is not asked; it simply runs in it.
+  const runMode = effectiveMode(needs, mode)
 
   const requirements = selectedAgentType?.requirements
 
@@ -180,7 +191,7 @@ export default function ProjectModal({
   // The language the selected plan declares, if it declares one. A plan written
   // in German is German wherever it is deployed, so it — not the operator —
   // decides the session language, and the picker is skipped.
-  const planLanguage = planDeclaredLanguage(selectedPlan)
+  const planLanguage = runMode === 'companion' ? '' : planDeclaredLanguage(selectedPlan)
 
   const supportsVoiceSelection = useMemo(
     () => showsVoiceStep(ttsCapabilities, planLanguage),
@@ -209,31 +220,14 @@ export default function ProjectModal({
   }, [selectedAgentTypeId, isOpen])
 
   // Dynamic steps for public project (excluding basic)
-  const publicSteps = useMemo((): Step[] => {
-    const s: Step[] = ['agent', 'configure']
-    if (needs.configurator && selectedAgentType?.pipelineSchema) {
-      s.push('configuration')
-    }
-    // Persona BEFORE plan: identity is the thing an operator picks first, and a
-    // public visitor never gets to choose it — whatever is set here is what
-    // every session on this link runs with.
-    if (needs.persona) {
-      s.push('persona')
-    }
-    // Plan BEFORE voice: the plan may declare the language, and the voice step
-    // needs to know that to skip the picker.
-    if (runsPlan) {
-      s.push('plan')
-    }
-    // Always shown, even with none yet: it's how someone with no connectors
-    // finds out they exist (#891).
-    s.push('connectors')
-    if (supportsVoiceSelection) {
-      s.push('voice')
-    }
-    s.push(...settingsSteps(isLoadingEnvVars, envVarTemplates.length), 'visualizer', 'duration', 'expiration')
-    return s
-  }, [needs, runsPlan, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
+  const publicSteps = useMemo((): Step[] => [
+    ...publicSetupSteps(needs, runMode, {
+      configurator: !!selectedAgentType?.pipelineSchema,
+      voice: supportsVoiceSelection,
+    }),
+    ...settingsSteps(isLoadingEnvVars, envVarTemplates.length),
+    'visualizer', 'duration', 'expiration',
+  ], [needs, runMode, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
 
   // Start From drops out of the steps when the templates finish loading and
   // there are none (or the fetch failed). Move on to the settings rather than
@@ -336,6 +330,8 @@ export default function ProjectModal({
         setAgentName('')
         setAgentIcon('🤖')
         setSelectedPlan(null)
+        setMode('plan')
+        setActivityPlanIds([])
         setSelectedConfiguration(null)
         // Not reset when the agent type changes, unlike the configuration: a
         // persona is deliberately agent-type independent (#467).
@@ -428,6 +424,9 @@ export default function ProjectModal({
         return agentName.trim().length > 0
       case 'plan':
         return selectedPlan !== null || !needs.planRequired
+      case 'mode':
+      case 'activities':
+        return true
       case 'connectors':
         return unboundRequiredSlots(connectorSlots, slotChoices).length === 0
       case 'configuration':
@@ -499,7 +498,11 @@ export default function ProjectModal({
             icon: agentIcon,
           }
 
-          if (selectedPlan && runsPlan) {
+          if (runsPlans && runMode === 'companion') {
+            // Stored by id; each spawn snapshots them, as a normal deploy does.
+            agentConfig.mode = 'companion'
+            agentConfig.availablePlanIds = activityPlanIds
+          } else if (selectedPlan && runsPlans) {
             agentConfig.plan = selectedPlan.content as unknown as Record<string, unknown>
           }
 
@@ -595,6 +598,8 @@ export default function ProjectModal({
       case 'configure': return 'Configure Agent'
       case 'configuration': return 'Pipeline Configuration'
       case 'voice': return 'Voice & Language'
+      case 'mode': return 'How should it run?'
+      case 'activities': return 'Available Activities'
       case 'plan': return 'Select Plan'
       case 'connectors': return 'Connectors'
       case 'envtemplate': return 'Start From'
@@ -614,6 +619,8 @@ export default function ProjectModal({
       case 'agent': return 'Choose the agent that will be deployed for each participant'
       case 'configure': return 'Customize the agent appearance and settings'
       case 'voice': return 'Choose the voice and language every participant\'s agent uses'
+      case 'mode': return 'Follow one plan from the start, or talk freely and run activities on request'
+      case 'activities': return 'Plans the companion can offer when a participant asks what they can do'
       case 'plan': return 'Select a conversation plan for this agent'
       case 'connectors': return 'Outside tools every participant\'s agent may use, with your credentials'
       case 'envtemplate': return `Start from ${selectedAgentType?.name || 'the agent'}'s defaults or one of your saved templates`
@@ -1098,6 +1105,38 @@ export default function ProjectModal({
                     }}
                     personas={personas}
                     onPersonasChange={setPersonas}
+                    mode={runsPlans ? runMode : undefined}
+                  />
+                </motion.div>
+              )}
+
+              {/* Mode Step */}
+              {step === 'mode' && (
+                <motion.div
+                  key="mode"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <ModeSelectionStep mode={mode} onSelectMode={setMode} />
+                </motion.div>
+              )}
+
+              {/* Activities Step (companion mode) */}
+              {step === 'activities' && (
+                <motion.div
+                  key="activities"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <ActivitySelectionStep
+                    selectedPlanIds={activityPlanIds}
+                    onChange={setActivityPlanIds}
                   />
                 </motion.div>
               )}
