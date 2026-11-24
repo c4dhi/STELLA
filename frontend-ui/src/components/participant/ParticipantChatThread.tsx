@@ -135,6 +135,14 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
 
     const textSize = isPage ? 'text-[15px]' : 'text-sm'
 
+    // iOS Safari zooms the page on focus when a text input's font is under
+    // 16px; a hardware keyboard means there's a pointing device too, so this
+    // also decides whether the Enter/Shift+Enter hint makes sense to show.
+    const hasPhysicalKeyboard =
+      typeof window === 'undefined' || !window.matchMedia
+        ? true
+        : window.matchMedia('(pointer: fine)').matches
+
     return (
       <>
         {/* Messages */}
@@ -282,7 +290,7 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                   placeholder="Type your answer…"
                   aria-label="Your answer"
                   disabled={!room}
-                  className="flex-1 min-w-0 resize-none bg-transparent px-2 py-2 text-white text-[15px] leading-relaxed placeholder-white/40 focus:outline-none disabled:opacity-50"
+                  className="flex-1 min-w-0 resize-none bg-transparent px-2 py-2 text-white text-base leading-relaxed placeholder-white/40 focus:outline-none disabled:opacity-50"
                 />
               ) : (
                 <input
@@ -307,7 +315,9 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                 {isPage ? 'Send' : <Send className="w-5 h-5" />}
               </button>
             </div>
-            {hint && <p className="text-[11px] text-white/50 mt-2 text-center">{hint}</p>}
+            {hint && hasPhysicalKeyboard && (
+              <p className="text-[11px] text-white/50 mt-2 text-center">{hint}</p>
+            )}
           </div>
         </form>
       </>
