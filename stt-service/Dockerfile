@@ -84,8 +84,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/local/bin/python3.11 /usr/bin/python3.11 \
     && ln -sf /usr/local/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/local/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip3.11 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip \
     && python3 -m pip install --upgrade pip \
     && python3 --version \
+    && python3 -c "import ssl, ctypes, bz2, lzma, sqlite3; print('[STT] stdlib ssl/ctypes/bz2/lzma/sqlite3 present')" \
     && rm -rf /var/lib/apt/lists/*
 
 # CUDA environment (set by NVIDIA base image, but ensure they're available)
@@ -118,6 +122,7 @@ RUN if [ "$ENABLE_GPU" = "true" ]; then \
         echo "[STT] Installing GPU dependencies (faster-whisper, torch, ctranslate2)..." && \
         pip install --no-cache-dir -r requirements-gpu.txt && \
         pip install --no-cache-dir onnxruntime-gpu>=1.16.0 && \
+        python3 -c "import ctranslate2, faster_whisper; print('[STT] ctranslate2/faster_whisper import OK')" && \
         echo "[STT] GPU dependencies installed successfully"; \
     else \
         echo "[STT] Installing onnxruntime (CPU)..." && \

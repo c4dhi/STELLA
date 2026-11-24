@@ -90,8 +90,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/local/bin/python3.11 /usr/bin/python3.11 \
     && ln -sf /usr/local/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/local/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip3.11 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/bin/pip \
     && python3 -m pip install --upgrade pip \
     && python3 --version \
+    && python3 -c "import ssl, ctypes, bz2, lzma, sqlite3; print('[TTS] stdlib ssl/ctypes/bz2/lzma/sqlite3 present')" \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CUDA_HOME=/usr/local/cuda
@@ -115,7 +119,8 @@ ARG TTS_PROVIDER
 # Step 1 — base deps (always)
 # ----------------------------------------------------------------------------
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python3 -c "import soundfile; print('[TTS] soundfile import OK')"
 
 # ----------------------------------------------------------------------------
 # Step 2 — provider-specific installs (selected by TTS_PROVIDER)
@@ -145,7 +150,8 @@ RUN if [ "$TTS_PROVIDER" = "chatterbox" ]; then \
         else \
             pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cpu; \
         fi && \
-        pip install --no-cache-dir --no-deps "chatterbox-tts>=0.1.6"; \
+        pip install --no-cache-dir --no-deps "chatterbox-tts>=0.1.6" && \
+        python3 -c "import torch, torchaudio; print('[TTS] chatterbox torch/torchaudio import OK')"; \
     fi
 
 # Qwen3-TTS needs CUDA + torch 2.5.1+cu124 (CUDA-graph capture is
@@ -160,7 +166,8 @@ RUN if [ "$TTS_PROVIDER" = "qwen3" ]; then \
             torch==2.5.1+cu124 torchaudio==2.5.1+cu124 \
             --index-url https://download.pytorch.org/whl/cu124 && \
         echo "[TTS] Installing faster-qwen3-tts..." && \
-        pip install --no-cache-dir -r requirements-qwen3.txt; \
+        pip install --no-cache-dir -r requirements-qwen3.txt && \
+        python3 -c "import torch, torchaudio; print('[TTS] qwen3 torch/torchaudio import OK')"; \
     fi
 
 # ----------------------------------------------------------------------------
