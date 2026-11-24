@@ -9,6 +9,7 @@ import { ConnectorsModule } from '../connectors/connectors.module.js';
 import { EnvVarTemplatesModule } from '../env-var-templates/env-var-templates.module.js';
 import { InvitationsModule } from '../invitations/invitations.module.js';
 import { McpOAuthModule } from '../mcp-oauth/mcp-oauth.module.js';
+import { MetricsModule } from '../metrics/metrics.module.js';
 import { PersonasModule } from '../personas/personas.module.js';
 import { PlanTemplatesModule } from '../plan-templates/plan-templates.module.js';
 import { PlatformSettingsModule } from '../platform-settings/platform-settings.module.js';
@@ -16,6 +17,7 @@ import { ProjectInvitationsModule } from '../project-invitations/project-invitat
 import { ProjectsModule } from '../projects/projects.module.js';
 import { SessionsModule } from '../sessions/sessions.module.js';
 import { StateMachineModule } from '../state-machine/state-machine.module.js';
+import { UserMessagesModule } from '../user-messages/user-messages.module.js';
 import { McpEnabledGuard } from './guards/mcp-enabled.guard.js';
 import { McpOriginGuard } from './guards/mcp-origin.guard.js';
 import { McpBearerGuard } from './guards/mcp-bearer.guard.js';
@@ -26,13 +28,16 @@ import { MCP_TOOL_PROVIDERS } from './mcp.types.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
+import { AgentUploadsTools } from './tools/agent-uploads.tools.js';
 import { CatalogTools } from './tools/catalog.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
+import { EnvVarTemplatesTools } from './tools/env-var-templates.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { ProjectsTools } from './tools/projects.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
+import { UserMessagesTools } from './tools/user-messages.tools.js';
 
 // Adding a domain: write a *.tools.ts provider and list it here.
 const TOOL_PROVIDERS = [
@@ -43,9 +48,12 @@ const TOOL_PROVIDERS = [
   ProjectsTools,
   SessionsTools,
   AgentsTools,
+  EnvVarTemplatesTools,
   PlatformSettingsTools,
   AgentReviewsTools,
   ConnectorsTools,
+  AgentUploadsTools,
+  UserMessagesTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
@@ -68,6 +76,8 @@ const TOOL_PROVIDERS = [
     EnvVarTemplatesModule,
     ConnectorsModule,
     AgentUploadModule,
+    MetricsModule,
+    UserMessagesModule,
   ],
   controllers: [McpController],
   providers: [

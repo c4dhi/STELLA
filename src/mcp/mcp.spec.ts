@@ -20,8 +20,11 @@ import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js'
 import { ProjectsTools } from './tools/projects.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
+import { EnvVarTemplatesTools } from './tools/env-var-templates.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
 import { ConnectorsTools } from './tools/connectors.tools.js';
+import { AgentUploadsTools } from './tools/agent-uploads.tools.js';
+import { UserMessagesTools } from './tools/user-messages.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import {
   CreateConnectorDto,
@@ -34,6 +37,10 @@ import { CreateProjectDto } from '../projects/dto/create-project.dto.js';
 import { UpdateProjectDto } from '../projects/dto/update-project.dto.js';
 import { UpdatePublicConfigDto } from '../projects/dto/update-public-config.dto.js';
 import { InviteCollaboratorDto } from '../project-invitations/dto/project-invitation.dto.js';
+import { CreateEnvVarTemplateDto } from '../env-var-templates/dto/create-env-var-template.dto.js';
+import { UpdateEnvVarTemplateDto } from '../env-var-templates/dto/update-env-var-template.dto.js';
+import { GeneratePlanTemplateDto } from '../plan-templates/dto/generate-plan-template.dto.js';
+import { QueryMessagesDto } from '../user-messages/dto/user-message.dto.js';
 
 const USER = {
   userId: 'u1',
@@ -107,6 +114,11 @@ function setup() {
       id,
       ...(dto as object),
     })),
+    duplicate: jest.fn(async (id: string, _userId: string) => {
+      if (id === 'missing')
+        throw new NotFoundException('Persona missing not found');
+      return { id: `${id}-copy`, name: 'Grace (Copy)' };
+    }),
   };
   // Writes return a bare row; the tools must answer with what findOne gives.
   const plans = {
@@ -130,6 +142,14 @@ function setup() {
     })),
     create: jest.fn(async () => ({ id: 'pl2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
+    duplicate: jest.fn(async (id: string) => ({ id: `${id}-copy`, from: 'duplicate' })),
+  };
+  const planGenerator = {
+    generate: jest.fn(async () => ({
+      content: { states: [{ id: 'generated-state' }] },
+      suggestedName: 'Walk check-in',
+      suggestedDescription: 'A short daily walk check-in.',
+    })),
   };
   const configurations = {
     findAllByUser: jest.fn(async () => [
@@ -159,6 +179,7 @@ function setup() {
     })),
     create: jest.fn(async () => ({ id: 'c2', from: 'create' })),
     update: jest.fn(async (id: string) => ({ id, from: 'update' })),
+    duplicate: jest.fn(async (id: string) => ({ id: `${id}-copy`, from: 'duplicate' })),
   };
   const projects = {
     findAll: jest.fn(async () => [
@@ -282,6 +303,24 @@ function setup() {
       key === 'PUBLIC_FRONTEND_URL' ? 'https://stella.test' : undefined,
     ),
   };
+  const metrics = {
+    getProjectMetrics: jest.fn(async (projectId: string) => ({
+      projectId,
+      timestamp: new Date('2026-10-01T00:00:00Z'),
+      sessions: { total: 3, active: 1, closed: 2 },
+      agents: { total: 2, running: 1, starting: 0, failed: 0, stopped: 1 },
+      participants: { total: 4, online: 1 },
+      messages: { total: 50, todayCount: 5 },
+      project: {
+        name: 'Testing',
+        agentType: 'stella-v2-agent',
+        agentTypeName: 'STELLA V2',
+        planTemplateName: 'Onboarding',
+        isPublic: false,
+        createdAt: new Date('2026-09-01T00:00:00Z'),
+      },
+    })),
+  };
   const sessions = {
     findAll: jest.fn(async () => ({ data: [], total: 0, skip: 0, take: 20 })),
     getMessages: jest.fn(async () => ({
@@ -322,6 +361,40 @@ function setup() {
       participants: [],
       _count: { messages: 0 },
     })),
+    getTimeline: jest.fn(async () => ({
+      timeline: [
+        {
+          type: 'message',
+          data: {
+            id: 'm1',
+            timestamp: new Date('2026-10-01T00:00:00Z'),
+            role: 'user',
+            messageType: 'user_text',
+            content: 'hi',
+          },
+        },
+        {
+          type: 'event',
+          data: {
+            id: 'e1',
+            timestamp: new Date('2026-10-01T00:00:01Z'),
+            eventType: 'participant_joined',
+            data: { participantId: 'p1' },
+          },
+        },
+      ],
+      total: 2,
+    })),
+    listParticipants: jest.fn(async () => [
+      {
+        id: 'p1',
+        name: 'Alice',
+        identity: 'human',
+        joinedAt: new Date('2026-10-01T00:00:00Z'),
+        leftAt: null,
+        lastSeenAt: new Date('2026-10-01T00:05:00Z'),
+      },
+    ]),
   };
   const agentRow = {
     id: 'a1',
@@ -339,6 +412,17 @@ function setup() {
     getLogs: jest.fn(async () => 'line 1\nline 2'),
     restart: jest.fn(async () => agentRow),
     remove: jest.fn(async () => ({ message: 'Agent stopped successfully' })),
+    getAgentMetrics: jest.fn(async () => ({
+      stages: [
+        { stage: 'ttfab', count: 5, mean_ms: 100, p50_ms: 90, p95_ms: 150, min_ms: 50, max_ms: 200 },
+      ],
+      outlierSessions: [],
+      summary: { totalSessions: 5 },
+    })),
+    getSessionAnalytics: jest.fn(async () => ({
+      stages: [{ stage: 'ttfab', count: 1, mean_ms: 100 }],
+      summary: { totalTurns: 1 },
+    })),
   };
   const invitations = {
     create: jest.fn(async () => ({
@@ -412,6 +496,57 @@ function setup() {
     status: 'untested',
     sharedWith: [],
   };
+  const envVarTemplateRow = {
+    id: 'e1',
+    userId: 'u1',
+    name: 'Keys',
+    description: null,
+    variableKeys: ['OPENAI_API_KEY', 'TTS_SPEED'],
+    agentTypeId: 'at1',
+    settings: { TTS_SPEED: '3' },
+    // What does not fit, and why, but never a value — not even a setting's.
+    invalid: { TTS_SPEED: 'must be between 0.5 and 2' },
+    needsCheck: true,
+    createdAt: new Date('2026-10-01T00:00:00Z'),
+    updatedAt: new Date('2026-10-01T00:00:00Z'),
+  };
+  const envVarTemplates = {
+    findAllByUser: jest.fn(async () => [envVarTemplateRow]),
+    findOne: jest.fn(async (id: string, userId: string) => {
+      if ((id !== 'e1' && id !== 'e1-copy') || userId !== 'u1') {
+        throw new NotFoundException(`Env var template with ID ${id} not found`);
+      }
+      return { ...envVarTemplateRow, id };
+    }),
+    create: jest.fn(async (userId: string, dto: any) => ({
+      ...envVarTemplateRow,
+      id: 'e2',
+      userId,
+      name: dto.name,
+      description: dto.description ?? null,
+      variableKeys: Object.keys(dto.variables),
+      agentTypeId: dto.agentTypeId,
+      settings: {},
+      invalid: {},
+      needsCheck: false,
+    })),
+    update: jest.fn(async (id: string, userId: string, dto: any) => {
+      if (id !== 'e1' || userId !== 'u1') {
+        throw new NotFoundException(`Env var template with ID ${id} not found`);
+      }
+      return {
+        ...envVarTemplateRow,
+        name: dto.name ?? envVarTemplateRow.name,
+        description: dto.description ?? envVarTemplateRow.description,
+      };
+    }),
+    duplicate: jest.fn(async (id: string, userId: string) => {
+      if (id !== 'e1' || userId !== 'u1') {
+        throw new NotFoundException(`Env var template with ID ${id} not found`);
+      }
+      return { ...envVarTemplateRow, id: `${id}-copy`, name: 'Keys (Copy)' };
+    }),
+  };
   const connectors = {
     list: jest.fn(async () => [connectorRow]),
     listAvailable: jest.fn(async () => [{ ...connectorRow, owned: true }]),
@@ -422,16 +557,96 @@ function setup() {
     setShares: jest.fn(async () => connectorRow),
     remove: jest.fn(),
   };
+  const agentUploadService = {
+    createFromPackage: jest.fn(async (buffer: Buffer, userId: string) => ({
+      id: 'at-new',
+      slug: 'new-agent',
+      name: 'New Agent',
+      version: '1.0.0',
+      validationStatus: 'PENDING',
+      replacedVersion: null,
+      warnings: [],
+    })),
+    getMyAgents: jest.fn(async () => [
+      {
+        id: 'at-mine',
+        slug: 'my-agent',
+        name: 'My Agent',
+        sharedProjectIds: ['p1'],
+        built: false,
+      },
+    ]),
+    triggerBuild: jest.fn(async (id: string, userId: string, isSystemAdmin?: boolean) => {
+      if (id === 'at-other' && !isSystemAdmin) throw new ForbiddenException('You do not own this agent');
+      return { buildLogId: 'build-new', message: 'Build started' };
+    }),
+    getBuildStatus: jest.fn(async () => ({
+      id: 'build-1',
+      status: 'success' as const,
+      buildOutput: 'built ok',
+    })),
+    getBuildHistory: jest.fn(async (id: string) => {
+      if (id === 'at-other') throw new ForbiddenException("You cannot see this agent's builds");
+      return [{ id: 'build-1', status: 'success' }];
+    }),
+    getShares: jest.fn(async (id: string) => {
+      if (id === 'at-other' || id === 'at-builtin') {
+        throw new ForbiddenException('Only its owner can share this agent');
+      }
+      return { projectIds: ['p1'], projects: [{ id: 'p1', name: 'Playground' }] };
+    }),
+    updateShares: jest.fn(async (id: string, userId: string, projectIds: string[]) => ({ projectIds })),
+  };
+  const userMessages = {
+    getMessages: jest.fn(async (userId: string, query: any) => ({
+      messages: [
+        {
+          id: 'msg1',
+          type: 'PROJECT_INVITATION',
+          title: 'You were invited',
+          body: null,
+          read: false,
+          createdAt: new Date('2026-10-01T00:00:00Z'),
+          relatedEntityId: 'inv1',
+          relatedEntityType: 'invitation',
+        },
+      ],
+      total: 1,
+      page: query.page ?? 1,
+      limit: query.limit ?? 20,
+      totalPages: 1,
+    })),
+    getUnreadCount: jest.fn(async () => ({ count: 1 })),
+    markAsRead: jest.fn(async (userId: string, messageId: string) => {
+      if (messageId === 'msg-other') {
+        throw new ForbiddenException('You do not have access to this message');
+      }
+      if (messageId === 'missing') {
+        throw new NotFoundException(`Message with ID ${messageId} not found`);
+      }
+      return {
+        id: messageId,
+        type: 'PROJECT_INVITATION',
+        title: 'You were invited',
+        body: null,
+        read: true,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        relatedEntityId: 'inv1',
+        relatedEntityType: 'invitation',
+      };
+    }),
+  };
   const providers = [
     new CatalogTools(agentImages as any),
     new PersonasTools(personas as any),
-    new PlanTemplatesTools(plans as any),
+    new PlanTemplatesTools(plans as any, planGenerator as any),
     new AgentConfigurationsTools(configurations as any),
     new ProjectsTools(
       projects as any,
       projectInvitations as any,
       access,
       config as any,
+      metrics as any,
     ),
     new SessionsTools(
       sessions as any,
@@ -439,29 +654,13 @@ function setup() {
       invitations as any,
       access,
     ),
-    new AgentsTools(
-      agents as any,
-      {
-        findAllByUser: jest.fn(async () => [
-          {
-            id: 'e1',
-            userId: 'u1',
-            name: 'Keys',
-            description: null,
-            variableKeys: ['OPENAI_API_KEY', 'TTS_SPEED'],
-            agentTypeId: 'at1',
-            settings: { TTS_SPEED: '3' },
-            invalid: { TTS_SPEED: 'must be between 0.5 and 2' },
-            needsCheck: true,
-          },
-        ]),
-      } as any,
-      agentImages as any,
-      access,
-    ),
+    new AgentsTools(agents as any, agentImages as any, access),
+    new EnvVarTemplatesTools(envVarTemplates as any),
     new PlatformSettingsTools(platformSettings as any),
     new AgentReviewsTools(agentReview as any),
     new ConnectorsTools(connectors as any),
+    new AgentUploadsTools(agentUploadService as any),
+    new UserMessagesTools(userMessages as any),
   ];
   const factory = new McpServerFactory(providers, audit as any);
   const tool = (name: string) =>
@@ -472,13 +671,18 @@ function setup() {
     agentReview,
     personas,
     plans,
+    planGenerator,
     configurations,
     projects,
     projectInvitations,
     sessions,
     agents,
+    metrics,
     invitations,
+    envVarTemplates,
     connectors,
+    agentUploadService,
+    userMessages,
     audit,
     tool,
   };
@@ -693,8 +897,12 @@ describe('MCP session and agent tools', () => {
       expect.arrayContaining([
         'sessions_get',
         'session_invitations_list',
+        'session_timeline_get',
+        'session_participants_list',
         'agents_get',
         'agent_logs_get',
+        'agent_metrics_get',
+        'session_analytics_get',
         'env_var_templates_list',
       ]),
     );
@@ -760,6 +968,112 @@ describe('MCP session and agent tools', () => {
     expect(invitations.create).not.toHaveBeenCalled();
     expect(invitations.revoke).not.toHaveBeenCalled();
     for (const fn of Object.values(agents)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('gets a session timeline, newest first, with messages and events told apart', async () => {
+    const { factory, sessions, tool } = setup();
+    const other: any = await factory.run(
+      tool('session_timeline_get'),
+      { sessionId: 's2' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(sessions.getTimeline).not.toHaveBeenCalled();
+
+    const ok: any = await factory.run(
+      tool('session_timeline_get'),
+      { sessionId: 's1', skip: 0, take: 50 },
+      READ,
+    );
+    expect(sessions.getTimeline.mock.calls[0]).toEqual(['s1', 0, 50]);
+    expect(ok.structuredContent.total).toBe(2);
+    expect(ok.structuredContent.items[0]).toEqual({
+      type: 'message',
+      id: 'm1',
+      timestamp: '2026-10-01T00:00:00.000Z',
+      role: 'user',
+      messageType: 'user_text',
+      content: 'hi',
+    });
+    expect(ok.structuredContent.items[1]).toEqual({
+      type: 'event',
+      id: 'e1',
+      timestamp: '2026-10-01T00:00:01.000Z',
+      eventType: 'participant_joined',
+      data: { participantId: 'p1' },
+    });
+  });
+
+  it('lists every participant of a session, including ones who left', async () => {
+    const { factory, sessions, tool } = setup();
+    const other: any = await factory.run(
+      tool('session_participants_list'),
+      { sessionId: 's2' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(sessions.listParticipants).not.toHaveBeenCalled();
+
+    const ok: any = await factory.run(
+      tool('session_participants_list'),
+      { sessionId: 's1' },
+      READ,
+    );
+    expect(sessions.listParticipants).toHaveBeenCalledWith('s1');
+    expect(ok.structuredContent.items[0]).toEqual({
+      id: 'p1',
+      name: 'Alice',
+      identity: 'human',
+      joinedAt: '2026-10-01T00:00:00.000Z',
+      leftAt: null,
+      lastSeenAt: '2026-10-01T00:05:00.000Z',
+    });
+  });
+
+  it('gets agent type metrics by resolving the agent type id to its slug', async () => {
+    const { factory, agents, tool } = setup();
+    const other: any = await factory.run(
+      tool('agent_metrics_get'),
+      { projectId: 'p2', agentTypeId: 'at1' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(agents.getAgentMetrics).not.toHaveBeenCalled();
+
+    const unknownType: any = await factory.run(
+      tool('agent_metrics_get'),
+      { projectId: 'p1', agentTypeId: 'nope' },
+      READ,
+    );
+    expect(parse(unknownType).error.status).toBe(404);
+
+    const ok: any = await factory.run(
+      tool('agent_metrics_get'),
+      { projectId: 'p1', agentTypeId: 'at1' },
+      READ,
+    );
+    expect(agents.getAgentMetrics.mock.calls[0][0]).toBe('p1');
+    expect(agents.getAgentMetrics.mock.calls[0][1]).toBe('stella-v2-agent');
+    expect(ok.structuredContent.stages[0].stage).toBe('ttfab');
+  });
+
+  it('gets a session\'s latency analytics only inside the user projects', async () => {
+    const { factory, agents, tool } = setup();
+    const other: any = await factory.run(
+      tool('session_analytics_get'),
+      { sessionId: 's2' },
+      READ,
+    );
+    expect(parse(other).error.status).toBe(404);
+    expect(agents.getSessionAnalytics).not.toHaveBeenCalled();
+
+    const ok: any = await factory.run(
+      tool('session_analytics_get'),
+      { sessionId: 's1' },
+      READ,
+    );
+    expect(agents.getSessionAnalytics).toHaveBeenCalledWith('s1');
+    expect(ok.structuredContent.summary).toEqual({ totalTurns: 1 });
   });
 
   it('deploys an agent as the token owner, without raw config or env var values', async () => {
@@ -1028,7 +1342,9 @@ describe('One shape for every tool', () => {
     const updates = (await schemas()).filter((t) => t.name.endsWith('_update'));
     expect(updates.map((t) => t.name).sort()).toEqual([
       'agent_configurations_update',
+      'agent_uploads_shares_update',
       'connectors_update',
+      'env_var_templates_update',
       'personas_update',
       'plan_templates_update',
       'projects_public_update',
@@ -1232,6 +1548,15 @@ describe('summarizeToolArgs', () => {
       truncated: true,
       keys: Object.keys(big),
     });
+  });
+
+  it('redacts a variables object whole, even when its own keys look innocuous', () => {
+    const summary = summarizeToolArgs({
+      name: 'Keys',
+      variables: { DATABASE_URL: 'postgres://u:p@host/db', FEATURE_FLAG: 'on' },
+    });
+    expect(summary.name).toBe('Keys');
+    expect(summary.variables).toBe('[redacted]');
   });
 });
 
@@ -1499,6 +1824,7 @@ describe('MCP project tools', () => {
         'projects_list',
         'projects_get',
         'projects_stats',
+        'project_metrics_get',
         'projects_public_link_get',
         'project_collaborators_list',
       ]),
@@ -1521,10 +1847,11 @@ describe('MCP project tools', () => {
   });
 
   it('only shows a project the user is a member of', async () => {
-    const { factory, projects, tool } = setup();
+    const { factory, projects, metrics, tool } = setup();
     for (const name of [
       'projects_get',
       'projects_stats',
+      'project_metrics_get',
       'projects_public_link_get',
     ]) {
       const result: any = await factory.run(
@@ -1536,6 +1863,7 @@ describe('MCP project tools', () => {
     }
     expect(projects.findOne).not.toHaveBeenCalled();
     expect(projects.getStats).not.toHaveBeenCalled();
+    expect(metrics.getProjectMetrics).not.toHaveBeenCalled();
     expect(projects.getPublicLink).not.toHaveBeenCalled();
 
     const update: any = await factory.run(
@@ -1545,6 +1873,23 @@ describe('MCP project tools', () => {
     );
     expect(parse(update).error.status).toBe(404);
     expect(projects.update).not.toHaveBeenCalled();
+  });
+
+  it('gets a richer project metrics snapshot than projects_stats', async () => {
+    const { factory, metrics, tool } = setup();
+    const ok: any = await factory.run(
+      tool('project_metrics_get'),
+      { projectId: 'p1' },
+      READ,
+    );
+    expect(metrics.getProjectMetrics).toHaveBeenCalledWith('p1');
+    expect(ok.structuredContent).toMatchObject({
+      sessions: { total: 3, active: 1, closed: 2 },
+      agents: { total: 2, running: 1 },
+      participants: { total: 4, online: 1 },
+      messages: { total: 50, todayCount: 5 },
+      project: { name: 'Testing', planTemplateName: 'Onboarding' },
+    });
   });
 
   it('creates and updates a project through the REST DTOs', async () => {
@@ -1760,5 +2105,401 @@ describe('MCP project tools', () => {
       READ_WRITE,
     );
     expect(parse(remove).error.status).toBe(403);
+  });
+});
+
+describe('MCP env var template tools', () => {
+  it('lists and gets with read, creates and updates only with write, and offers no delete', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining(['env_var_templates_list', 'env_var_templates_get']),
+    );
+    for (const write of ['env_var_templates_create', 'env_var_templates_update']) {
+      expect(read).not.toContain(write);
+      expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
+    }
+    expect(
+      factory
+        .toolNamesFor(READ_WRITE)
+        .some((n) => n.startsWith('env_var_templates') && n.includes('delete')),
+    ).toBe(false);
+  });
+
+  it('only gets a template the user owns', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    const mine: any = await factory.run(
+      tool('env_var_templates_get'),
+      { envVarTemplateId: 'e1' },
+      READ,
+    );
+    expect(mine.structuredContent).toMatchObject({ id: 'e1', name: 'Keys' });
+
+    const someoneElses: any = await factory.run(
+      tool('env_var_templates_get'),
+      { envVarTemplateId: 'e2' },
+      READ,
+    );
+    expect(parse(someoneElses).error.status).toBe(404);
+    expect(envVarTemplates.findOne).toHaveBeenCalledWith('e2', 'u1');
+  });
+
+  const AGENT_TYPE_UUID = '2f1e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a33';
+
+  it('creates through the REST DTO and keeps variable values out of the audit log', async () => {
+    const { factory, envVarTemplates, audit, tool } = setup();
+    const result: any = await factory.run(
+      tool('env_var_templates_create'),
+      {
+        name: 'Keys',
+        agentTypeId: AGENT_TYPE_UUID,
+        variables: { OPENAI_API_KEY: 'sk-super-secret', DATABASE_URL: 'postgres://u:p@host/db' },
+      },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const [userId, dto] = envVarTemplates.create.mock.calls[0] as any[];
+    expect(userId).toBe('u1');
+    expect(dto).toBeInstanceOf(CreateEnvVarTemplateDto);
+    expect(dto.variables).toEqual({
+      OPENAI_API_KEY: 'sk-super-secret',
+      DATABASE_URL: 'postgres://u:p@host/db',
+    });
+
+    // DATABASE_URL's key alone would not match the generic secret-key
+    // redaction, even though its value is one; the whole variables object
+    // is redacted wholesale instead.
+    const entry = (audit.record.mock.calls[0] as any[])[0];
+    const summary = summarizeToolArgs(entry.args);
+    expect(summary.variables).toBe('[redacted]');
+    expect(JSON.stringify(summary)).not.toContain('sk-super-secret');
+    expect(JSON.stringify(summary)).not.toContain('postgres://u:p@host/db');
+  });
+
+  it('rejects input the REST DTO would reject', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    const bad: any = await factory.run(
+      tool('env_var_templates_create'),
+      { name: 'Keys', agentTypeId: AGENT_TYPE_UUID },
+      READ_WRITE,
+    );
+    expect(parse(bad).error.status).toBe(400);
+    expect(parse(bad).error.message).toContain('variables');
+    expect(envVarTemplates.create).not.toHaveBeenCalled();
+  });
+
+  it('updates only the given fields of a template the user owns', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    await factory.run(
+      tool('env_var_templates_update'),
+      { envVarTemplateId: 'e1', name: 'Renamed', removeKeys: ['TTS_SPEED'] },
+      READ_WRITE,
+    );
+    const [id, userId, dto] = envVarTemplates.update.mock.calls[0] as any[];
+    expect([id, userId]).toEqual(['e1', 'u1']);
+    expect(dto).toBeInstanceOf(UpdateEnvVarTemplateDto);
+    expect(dto.name).toBe('Renamed');
+    expect(dto.removeKeys).toEqual(['TTS_SPEED']);
+    // agentTypeId isn't on the update DTO: a template's type is immutable.
+    expect((dto as any).agentTypeId).toBeUndefined();
+
+    const someoneElses: any = await factory.run(
+      tool('env_var_templates_update'),
+      { envVarTemplateId: 'e2', name: 'Renamed' },
+      READ_WRITE,
+    );
+    expect(parse(someoneElses).error.status).toBe(404);
+  });
+});
+
+describe('MCP duplicate tools', () => {
+  const DUPLICATE_TOOLS = [
+    'personas_duplicate',
+    'plan_templates_duplicate',
+    'agent_configurations_duplicate',
+    'env_var_templates_duplicate',
+  ];
+
+  it('offers every duplicate tool only with write, never with read alone', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    const readWrite = factory.toolNamesFor(READ_WRITE);
+    for (const name of DUPLICATE_TOOLS) {
+      expect(read).not.toContain(name);
+      expect(readWrite).toContain(name);
+    }
+  });
+
+  it('copies a persona (including a system default) and returns it as personas_get would', async () => {
+    const { factory, personas, tool } = setup();
+    const result: any = await factory.run(
+      tool('personas_duplicate'),
+      { personaId: 'pe1' },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    expect(personas.duplicate).toHaveBeenCalledWith('pe1', 'u1');
+    // personas_duplicate re-fetches through findOne, same as personas_create.
+    expect(personas.findOne).toHaveBeenCalledWith('pe1-copy', 'u1');
+
+    const missing: any = await factory.run(
+      tool('personas_duplicate'),
+      { personaId: 'missing' },
+      READ_WRITE,
+    );
+    expect(parse(missing).error.status).toBe(404);
+  });
+
+  it('copies a plan template and returns it as plan_templates_get would', async () => {
+    const { factory, plans, tool } = setup();
+    await factory.run(
+      tool('plan_templates_duplicate'),
+      { planId: 'pl1' },
+      READ_WRITE,
+    );
+    expect(plans.duplicate).toHaveBeenCalledWith('pl1', 'u1');
+    expect(plans.findOne).toHaveBeenCalledWith('pl1-copy', 'u1');
+  });
+
+  it('copies an agent configuration and returns it as agent_configurations_get would', async () => {
+    const { factory, configurations, tool } = setup();
+    await factory.run(
+      tool('agent_configurations_duplicate'),
+      { agentConfigurationId: 'c1' },
+      READ_WRITE,
+    );
+    expect(configurations.duplicate).toHaveBeenCalledWith('c1', 'u1');
+    expect(configurations.findOne).toHaveBeenCalledWith('c1-copy', 'u1');
+  });
+
+  it('copies an env var template without re-entering its values', async () => {
+    const { factory, envVarTemplates, tool } = setup();
+    const result: any = await factory.run(
+      tool('env_var_templates_duplicate'),
+      { envVarTemplateId: 'e1' },
+      READ_WRITE,
+    );
+    expect(envVarTemplates.duplicate).toHaveBeenCalledWith('e1', 'u1');
+    // env_var_templates_duplicate re-fetches through findOne, same as the others.
+    expect(envVarTemplates.findOne).toHaveBeenCalledWith('e1-copy', 'u1');
+    expect(result.structuredContent).toMatchObject({ id: 'e1-copy' });
+    // Never asked for, and the service response holds no raw values anyway.
+    expect(JSON.stringify(result)).not.toContain('variables');
+  });
+});
+
+describe('MCP plan generator tool', () => {
+  it('is write-only and saves nothing itself', () => {
+    const { factory } = setup();
+    expect(factory.toolNamesFor(READ)).not.toContain('plan_templates_generate');
+    expect(factory.toolNamesFor(READ_WRITE)).toContain(
+      'plan_templates_generate',
+    );
+  });
+
+  it('validates the prompt through the REST DTO and returns the generator result as is', async () => {
+    const { factory, planGenerator, tool } = setup();
+    const result: any = await factory.run(
+      tool('plan_templates_generate'),
+      { prompt: 'A daily walk check-in', context: 'For an elderly user' },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const dto = planGenerator.generate.mock.calls[0][0];
+    expect(dto).toBeInstanceOf(GeneratePlanTemplateDto);
+    expect(dto.prompt).toBe('A daily walk check-in');
+    expect(dto.context).toBe('For an elderly user');
+    expect(result.structuredContent).toEqual({
+      content: { states: [{ id: 'generated-state' }] },
+      suggestedName: 'Walk check-in',
+      suggestedDescription: 'A short daily walk check-in.',
+    });
+  });
+
+  it('refuses a prompt over 5000 characters', async () => {
+    const { factory, planGenerator, tool } = setup();
+    const result: any = await factory.run(
+      tool('plan_templates_generate'),
+      { prompt: 'x'.repeat(5001) },
+      READ_WRITE,
+    );
+    expect(result.isError).toBe(true);
+    expect(planGenerator.generate).not.toHaveBeenCalled();
+  });
+});
+
+describe('MCP agent upload tools', () => {
+  it('lists only read tools to a read-only token, and every tool to read/write', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining([
+        'agent_uploads_list',
+        'agent_uploads_build_status',
+        'agent_uploads_build_history',
+        'agent_uploads_shares_get',
+      ]),
+    );
+    for (const write of [
+      'agent_uploads_create',
+      'agent_uploads_build',
+      'agent_uploads_shares_update',
+    ]) {
+      expect(read).not.toContain(write);
+      expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
+    }
+  });
+
+  // Package validation, slug replacement, ownership and sharing rules are all
+  // AgentUploadService's own logic, covered by agent-upload.service.spec.ts.
+  // These just check each tool reaches the service with the right arguments
+  // and passes its result (or its rejection) straight through.
+
+  it('packs files into a zip and passes the buffer and caller to the service', async () => {
+    const { factory, agentUploadService, tool } = setup();
+    const result: any = await factory.run(
+      tool('agent_uploads_create'),
+      {
+        files: [
+          { path: 'agent.yaml', content: 'metadata:\n  slug: new-agent\n  version: 1.0.0\n' },
+          { path: 'main.py', content: 'print("hi")' },
+        ],
+      },
+      READ_WRITE,
+    );
+    expect(result.isError).toBeFalsy();
+    const [buffer, userId] = agentUploadService.createFromPackage.mock.calls[0] as [Buffer, string];
+    expect(Buffer.isBuffer(buffer)).toBe(true);
+    expect(userId).toBe('u1');
+    expect(result.structuredContent).toMatchObject({ id: 'at-new', slug: 'new-agent' });
+  });
+
+  it('lists the caller\'s own uploads, as the service returns them', async () => {
+    const { factory, agentUploadService, tool } = setup();
+    const result: any = await factory.run(tool('agent_uploads_list'), {}, READ);
+    expect(agentUploadService.getMyAgents).toHaveBeenCalledWith('u1');
+    expect(result.structuredContent.items[0]).toMatchObject({ id: 'at-mine', slug: 'my-agent' });
+  });
+
+  it('build: passes the caller and admin flag through, and surfaces a refusal', async () => {
+    const { factory, agentUploadService, tool } = setup();
+    const ADMIN = { ...USER, userId: 'admin-1', isSystemAdmin: true };
+    const ADMIN_RW: McpAuthContext = { user: ADMIN, tokenId: 't2', scopes: ['mcp:read', 'mcp:write'] };
+
+    const owned: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-mine' }, READ_WRITE);
+    expect(owned.isError).toBeFalsy();
+    expect(agentUploadService.triggerBuild).toHaveBeenCalledWith('at-mine', 'u1', false);
+
+    const notOwned: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-other' }, READ_WRITE);
+    expect(notOwned.isError).toBe(true);
+
+    const asAdmin: any = await factory.run(tool('agent_uploads_build'), { agentTypeId: 'at-other' }, ADMIN_RW);
+    expect(asAdmin.isError).toBeFalsy();
+    expect(agentUploadService.triggerBuild).toHaveBeenCalledWith('at-other', 'admin-1', true);
+  });
+
+  it('build_status wraps the service result as { build }', async () => {
+    const { factory, agentUploadService, tool } = setup();
+    const result: any = await factory.run(tool('agent_uploads_build_status'), { agentTypeId: 'at-mine' }, READ);
+    expect(agentUploadService.getBuildStatus).toHaveBeenCalledWith('at-mine', 'u1', false);
+    expect(result.structuredContent.build).toMatchObject({ status: 'success', buildOutput: 'built ok' });
+
+    agentUploadService.getBuildStatus.mockResolvedValueOnce(null);
+    const never: any = await factory.run(tool('agent_uploads_build_status'), { agentTypeId: 'at-mine' }, READ);
+    expect(never.structuredContent).toEqual({ build: null });
+  });
+
+  it('build_history surfaces a refusal from the service', async () => {
+    const { factory, tool } = setup();
+    const result: any = await factory.run(tool('agent_uploads_build_history'), { agentTypeId: 'at-other' }, READ);
+    expect(result.isError).toBe(true);
+  });
+
+  it('shares: get and update pass through, and surface a refusal', async () => {
+    const { factory, agentUploadService, tool } = setup();
+
+    const owner: any = await factory.run(tool('agent_uploads_shares_get'), { agentTypeId: 'at-mine' }, READ);
+    expect(owner.isError).toBeFalsy();
+    expect(owner.structuredContent).toMatchObject({ projectIds: ['p1'] });
+
+    const refused: any = await factory.run(tool('agent_uploads_shares_get'), { agentTypeId: 'at-other' }, READ);
+    expect(refused.isError).toBe(true);
+
+    const updated: any = await factory.run(
+      tool('agent_uploads_shares_update'),
+      { agentTypeId: 'at-mine', projectIds: ['7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11'] },
+      READ_WRITE,
+    );
+    expect(updated.isError).toBeFalsy();
+    expect(agentUploadService.updateShares).toHaveBeenCalledWith(
+      'at-mine',
+      'u1',
+      ['7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11'],
+    );
+  });
+});
+
+describe('MCP inbox tools', () => {
+  it('shows list and unread-count tools to a read-only token, and mark-read only with write', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining(['user_messages_list', 'user_messages_unread_count_get']),
+    );
+    expect(read).not.toContain('user_messages_mark_read');
+    expect(factory.toolNamesFor(READ_WRITE)).toContain('user_messages_mark_read');
+    expect(read.some((n) => n.startsWith('user_messages') && n.includes('delete'))).toBe(false);
+  });
+
+  it('lists the caller\'s own inbox messages, paginated', async () => {
+    const { factory, userMessages, tool } = setup();
+    const result: any = await factory.run(
+      tool('user_messages_list'),
+      { page: 2, limit: 10 },
+      READ,
+    );
+    const [userId, dto] = userMessages.getMessages.mock.calls[0] as any[];
+    expect(userId).toBe('u1');
+    expect(dto).toBeInstanceOf(QueryMessagesDto);
+    expect(dto.page).toBe(2);
+    expect(dto.limit).toBe(10);
+    expect(result.structuredContent).toMatchObject({
+      total: 1,
+      page: 2,
+      limit: 10,
+      messages: [expect.objectContaining({ id: 'msg1', read: false })],
+    });
+  });
+
+  it('gets the unread count for the caller', async () => {
+    const { factory, userMessages, tool } = setup();
+    const result: any = await factory.run(tool('user_messages_unread_count_get'), {}, READ);
+    expect(userMessages.getUnreadCount).toHaveBeenCalledWith('u1');
+    expect(result.structuredContent).toEqual({ count: 1 });
+  });
+
+  it('marks a message read only for its own owner', async () => {
+    const { factory, userMessages, tool } = setup();
+    const ok: any = await factory.run(
+      tool('user_messages_mark_read'),
+      { messageId: 'msg1' },
+      READ_WRITE,
+    );
+    expect(userMessages.markAsRead).toHaveBeenCalledWith('u1', 'msg1');
+    expect(ok.structuredContent).toMatchObject({ id: 'msg1', read: true });
+
+    const refused: any = await factory.run(
+      tool('user_messages_mark_read'),
+      { messageId: 'msg-other' },
+      READ_WRITE,
+    );
+    expect(refused.isError).toBe(true);
+
+    const missing: any = await factory.run(
+      tool('user_messages_mark_read'),
+      { messageId: 'missing' },
+      READ_WRITE,
+    );
+    expect(parse(missing).error.status).toBe(404);
   });
 });

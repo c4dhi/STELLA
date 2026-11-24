@@ -110,6 +110,23 @@ export class PersonasTools implements McpToolProvider {
         },
       }),
       defineTool({
+        name: 'personas_duplicate',
+        title: 'Duplicate a persona',
+        description:
+          'Copy a persona the user can see (their own, or a system default) into a new one they own, named ' +
+          '"<name> (Copy)". Edit the copy with personas_update; the original is untouched.',
+        scope: 'mcp:write',
+        input: { personaId },
+        annotations: CREATES,
+        handler: async ({ personaId }, ctx) => {
+          const copy = await this.personas.duplicate(
+            personaId,
+            ctx.auth.user.userId,
+          );
+          return this.full(copy.id, ctx.auth.user.userId);
+        },
+      }),
+      defineTool({
         name: 'personas_update',
         title: 'Update a persona',
         description:

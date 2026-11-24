@@ -312,6 +312,70 @@ export class SessionsTools implements McpToolProvider {
           return { state: await this.stateMachine.getFullState(sessionId) };
         },
       }),
+      defineTool({
+        name: 'session_timeline_get',
+        title: 'Get a session timeline',
+        description:
+          'Messages and room events of a session interleaved, newest first, one page at a time. Room events are ' +
+          'joins, leaves and similar; session_transcript_get has only the messages, oldest first.',
+        scope: 'mcp:read',
+        input: {
+          sessionId,
+          skip: z.number().int().min(0).optional(),
+          take: z.number().int().min(1).max(100).optional(),
+        },
+        annotations: READ_ONLY,
+        handler: async ({ sessionId, skip, take }, { auth }) => {
+          await this.access.assertSessionAccess(auth.user, sessionId);
+          const page = await this.sessions.getTimeline(sessionId, skip, take);
+          return {
+            items: page.timeline.map((entry) => {
+              const data = entry.data as Record<string, unknown>;
+              return 'eventType' in data
+                ? {
+                    type: 'event' as const,
+                    id: data.id,
+                    timestamp: data.timestamp,
+                    eventType: data.eventType,
+                    data: data.data,
+                  }
+                : {
+                    type: 'message' as const,
+                    id: data.id,
+                    timestamp: data.timestamp,
+                    role: data.role,
+                    messageType: data.messageType,
+                    content: data.content,
+                  };
+            }),
+            total: page.total,
+          };
+        },
+      }),
+      defineTool({
+        name: 'session_participants_list',
+        title: "List a session's participants",
+        description:
+          'Every participant who joined a session, including ones who left, newest first. sessions_get has only ' +
+          'who is in it right now.',
+        scope: 'mcp:read',
+        input: { sessionId },
+        annotations: READ_ONLY,
+        handler: async ({ sessionId }, { auth }) => {
+          await this.access.assertSessionAccess(auth.user, sessionId);
+          const participants = await this.sessions.listParticipants(sessionId);
+          return {
+            items: participants.map((p) => ({
+              id: p.id,
+              name: p.name,
+              identity: p.identity,
+              joinedAt: p.joinedAt,
+              leftAt: p.leftAt,
+              lastSeenAt: p.lastSeenAt,
+            })),
+          };
+        },
+      }),
     ];
   }
 }

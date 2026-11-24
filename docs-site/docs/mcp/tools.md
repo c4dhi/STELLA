@@ -71,6 +71,14 @@ Change a persona the user owns. System defaults can't be changed.
 
 **Returns:** the persona, as `personas_get` shows it.
 
+### `personas_duplicate` · `mcp:write`
+
+Copy a persona the user can see — their own, or a system default — into a new one they own, named "`<name>` (Copy)".
+
+**Inputs:** `personaId`.
+
+**Returns:** the new persona, as `personas_get` shows it.
+
 ## Plan templates
 
 What happens in a conversation: states, tasks, transitions and deliverables. See [Plan structure](../plan-structure/index.md).
@@ -112,6 +120,29 @@ Change a plan template the user owns.
 **Inputs:** `planId`, plus any fields of `plan_templates_create`. A new `content` replaces the whole plan.
 
 **Returns:** the plan template, as `plan_templates_get` shows it.
+
+### `plan_templates_duplicate` · `mcp:write`
+
+Copy a plan template the user owns into a new one, named "`<name>` (Copy)".
+
+**Inputs:** `planId`.
+
+**Returns:** the new plan template, as `plan_templates_get` shows it.
+
+### `plan_templates_generate` · `mcp:write`
+
+Draft a plan from a plain-language description, using the plan generator. Nothing is saved — pass the returned `content` to `plan_templates_create` to keep it.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `prompt` | string, 1–5000 | What the plan should accomplish |
+| `context` | string, ≤ 500, *optional* | |
+
+**Returns:** `{ content, suggestedName, suggestedDescription }`.
+
+Answers `500` if the platform has no `OPENAI_PLAN_GENERATOR_API_KEY` configured — the generator is disabled, not refusing this particular request.
 
 ## Agent types and configurations
 
@@ -172,6 +203,78 @@ Change a configuration the user owns.
 
 **Returns:** the configuration, as `agent_configurations_get` shows it.
 
+### `agent_configurations_duplicate` · `mcp:write`
+
+Copy a configuration the user owns into a new one, named "`<name>` (Copy)", for the same agent type.
+
+**Inputs:** `agentConfigurationId`.
+
+**Returns:** the new configuration, as `agent_configurations_get` shows it.
+
+## Uploaded agents
+
+A custom agent you upload, built and reviewed the same as one uploaded through the web app. Deleting one is admin-only and not available here.
+
+### `agent_uploads_create` · `mcp:write`
+
+Upload a custom agent package, packed here from its files instead of a `.zip` — same validation and the same 50MB size limit as the web upload. Starts a build and sets it pending review. Uploading an existing slug of your own with a higher `metadata.version` replaces it in place; another user's slug, or a built-in's, is refused.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `files` | array of `{ path, content }` | Must include `agent.yaml`. Text files only — this tool cannot carry binary assets |
+
+**Returns:** `{ id, slug, name, version, validationStatus, replacedVersion, warnings }`. `replacedVersion` is the version this upload replaced, or `null` for a new agent.
+
+### `agent_uploads_list` · `mcp:read`
+
+The caller's own uploads.
+
+**Inputs:** none.
+
+**Returns:** `{ items }`. Each item has `id`, `slug`, `name`, `description`, `icon`, `version`, `validationStatus`, `validationNotes`, `validatedAt`, `capabilities`, `defaultConfig`, `configSchema`, `pipelineSchema`, `requirements`, `createdAt`, `built`, `sdkVersion`, `sharedProjectIds` and `sdkProblem`.
+
+### `agent_uploads_build` · `mcp:write`
+
+Start a build of an uploaded agent from its stored package. The owner or a system admin may trigger it.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ buildLogId, message }`.
+
+### `agent_uploads_build_status` · `mcp:read`
+
+The latest build of an uploaded agent, for whoever can see it in their library (its owner, a member of a project it is shared with, or a system admin).
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ build }`. `build` is `null` when the agent has never been built, otherwise its status, image name, error if any, and stored output.
+
+### `agent_uploads_build_history` · `mcp:read`
+
+Past builds of an uploaded agent, newest first. Same visibility as `agent_uploads_build_status`.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ items }`.
+
+### `agent_uploads_shares_get` · `mcp:read`
+
+The projects a custom agent is shared with, and the projects its owner could share it with. Only the owner may see this — not a system admin, and not on a built-in.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ projectIds, projects }`.
+
+### `agent_uploads_shares_update` · `mcp:write`
+
+Share a custom agent with exactly these projects, replacing the current set. Their members may then deploy it, but not change it. Only the owner may share it, and only with projects they are a member of.
+
+**Inputs:** `agentTypeId`, `projectIds` (replaces the whole list).
+
+**Returns:** `{ projectIds }`.
+
 ## Projects and sessions
 
 ### `projects_list` · `mcp:read`
@@ -199,6 +302,14 @@ Totals for a project.
 **Inputs:** `projectId`.
 
 **Returns:** `totalSessions`, `activeSessions`, `totalAgents`, `activeAgents`, `totalMessages`, `totalParticipants`.
+
+### `project_metrics_get` · `mcp:read`
+
+A fuller metrics snapshot than `projects_stats`: sessions and agents broken down by status, participants currently online, today's message count, and the project's agent type, plan template and public status.
+
+**Inputs:** `projectId`.
+
+**Returns:** `sessions` (`{ total, active, closed }`), `agents` (`{ total, running, starting, failed, stopped }`), `participants` (`{ total, online }`), `messages` (`{ total, todayCount }`), `project` (`{ name, agentType, agentTypeName, planTemplateName, isPublic, createdAt }`), `timestamp`.
 
 ### `projects_create` · `mcp:write`
 
@@ -354,6 +465,36 @@ Where a session stands in its plan.
 
 **Returns:** `{ state }`: the current state, progress, turn counters, task status per state and the collected deliverables. `state` is `null` when the session never ran a plan.
 
+### `session_timeline_get` · `mcp:read`
+
+Messages and room events (joins, leaves and similar) of a session, interleaved, newest first, one page at a time. `session_transcript_get` has only the messages, oldest first.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `sessionId` | id | |
+| `skip` | integer ≥ 0, *optional* | |
+| `take` | integer 1–100, *optional* | Default 50 |
+
+**Returns:** `{ items, total }`. Each item is `{ type: "message", id, timestamp, role, messageType, content }` or `{ type: "event", id, timestamp, eventType, data }`.
+
+### `session_participants_list` · `mcp:read`
+
+Every participant who joined a session, including ones who left, newest first. `sessions_get` has only who is in it right now.
+
+**Inputs:** `sessionId`.
+
+**Returns:** `{ items }`, each `{ id, name, identity, joinedAt, leftAt, lastSeenAt }`.
+
+### `session_analytics_get` · `mcp:read`
+
+Per-stage latency for one session's turns, with a summary across stages. Different from `session_state_get` (plan progress) and `session_transcript_get` (the messages themselves).
+
+**Inputs:** `sessionId`.
+
+**Returns:** `stages` (per-stage `count`, `mean_ms` and similar) and `summary`.
+
 ## Invitations
 
 The link a participant opens to join a session, without an account.
@@ -397,7 +538,7 @@ Make an open invitation link stop working. A participant who already joined stay
 
 **Returns:** the revoked invitation, as `session_invitations_list` shows each one.
 
-## Agents
+## Env var templates
 
 ### `env_var_templates_list` · `mcp:read`
 
@@ -408,6 +549,59 @@ The user's env var templates, which hold the API keys an agent needs.
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys`, `agentTypeId`, `invalid` and `needsCheck`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
 
 `invalid` maps each setting whose stored value does not fit its type or range to the reason, for example `{ "TTS_SPEED": "must be between 0.5 and 2" }`. `agents_deploy` refuses such a template until it is fixed in the app. `needsCheck` is `true` for a template that has not been saved since 1.6.0 made settings typed.
+
+### `env_var_templates_get` · `mcp:read`
+
+One env var template in full.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** the same fields as `env_var_templates_list`'s items, plus `settings`: the stored value of each declared setting whose type is readable (`string`, `boolean`, `integer`, `number`, `enum`). Secrets and custom variables still never show a value, only their name in `variableKeys`.
+
+### `env_var_templates_duplicate` · `mcp:write`
+
+Copy an env var template the user owns into a new one, named "`<name>` (Copy)", for the same `agentTypeId`. The variables themselves are carried over without being re-entered.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** the new template, as `env_var_templates_get` shows it.
+
+### `env_var_templates_create` · `mcp:write`
+
+Create a template holding the variables an agent type needs, scoped to exactly that `agentTypeId`.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `name` | string, 1–255 | |
+| `description` | string, ≤ 2000, *optional* | |
+| `variables` | object, variable name to value | The actual secret values. They pass through this chat and are stored encrypted; no tool ever returns them |
+| `agentTypeId` | id | A template is scoped to exactly one agent type; it can't be changed after creation |
+
+Refused, naming each one, when a value does not fit what the agent type declares for it.
+
+**Returns:** the new template, as `env_var_templates_get` shows it.
+
+### `env_var_templates_update` · `mcp:write`
+
+Change a template's name, description or variables.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `envVarTemplateId` | id | |
+| `name` | string, 1–255, *optional* | |
+| `description` | string, ≤ 2000, *optional* | |
+| `variables` | object, variable name to value, *optional* | Adds or overwrites by name |
+| `removeKeys` | array of strings, *optional* | Deletes by name |
+
+`variables` and `removeKeys` are merged onto the existing (decrypted) values, so untouched secrets keep their stored value and are never re-sent. `agentTypeId` isn't here: it can't change after creation — duplicate the template under the desired type instead.
+
+**Returns:** the template, as `env_var_templates_get` shows it.
+
+## Agents
 
 ### `agents_deploy` · `mcp:write`
 
@@ -454,6 +648,21 @@ The last 100 lines of the agent's log.
 **Inputs:** `agentId`.
 
 **Returns:** `{ logs }`. It is empty once the agent's pod is gone.
+
+### `agent_metrics_get` · `mcp:read`
+
+Per-stage latency stats for every session of one agent type in a project over a date range, with outlier sessions (any stage over 2x the global p50) and a summary across stages.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `projectId` | id | |
+| `agentTypeId` | id | From `agent_types_list` |
+| `from` | ISO date, *optional* | Default 30 days ago |
+| `to` | ISO date, *optional* | Default now |
+
+**Returns:** `stages` (per-stage `count`, `mean_ms`, `p50_ms`, `p95_ms`, `min_ms`, `max_ms`), `outlierSessions`, `summary`.
 
 ### `agents_restart` · `mcp:write`
 
@@ -610,3 +819,29 @@ Members of those projects can bind the connector to their agents. The agents cal
 **Inputs:** `connectorId`, `projectIds` (up to 100, from `projects_list`).
 
 **Returns:** the connector, as `connectors_get` shows it.
+
+## Inbox
+
+### `user_messages_list` · `mcp:read`
+
+The caller's own inbox (project invitations and similar notifications), newest first.
+
+**Inputs:** `page` (integer ≥ 1, *optional*, default 1), `limit` (integer 1–100, *optional*, default 20).
+
+**Returns:** `{ messages, total, page, limit, totalPages }`. Each message has `id`, `type`, `title`, `body`, `read`, `createdAt`, `relatedEntityId`, `relatedEntityType` and a `metadata` object that depends on the type.
+
+### `user_messages_unread_count_get` · `mcp:read`
+
+The caller's number of unread inbox messages.
+
+**Inputs:** none.
+
+**Returns:** `{ count }`.
+
+### `user_messages_mark_read` · `mcp:write`
+
+Mark one of the caller's own inbox messages as read.
+
+**Inputs:** `messageId`, from `user_messages_list`.
+
+**Returns:** the message, as `user_messages_list` shows it, with `read: true`.
