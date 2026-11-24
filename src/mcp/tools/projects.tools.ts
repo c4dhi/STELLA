@@ -64,6 +64,63 @@ export class ProjectsTools implements McpToolProvider {
     );
   }
 
+  /**
+   * The public agent config without its secrets: envVars' names only, never
+   * their values, and plan/pipelineConfig collapsed to whether one is set —
+   * the same "no raw config or env var values over MCP" rule projects_public_update's
+   * input already follows, applied to what projects_get hands back (#200 review).
+   */
+  private publicAgentConfigSummary(raw: unknown) {
+    if (!raw || typeof raw !== 'object') return null;
+    const config = raw as Record<string, unknown>;
+    return {
+      name: config.name,
+      icon: config.icon,
+      agentConfigurationId: config.agentConfigurationId,
+      personaId: config.personaId,
+      envVarTemplateId: config.envVarTemplateId,
+      connectorBindings: config.connectorBindings,
+      hasPlan: config.plan !== undefined,
+      hasPipelineConfig: config.pipelineConfig !== undefined,
+      envVarKeys:
+        config.envVars && typeof config.envVars === 'object'
+          ? Object.keys(config.envVars)
+          : [],
+    };
+  }
+
+  /** A project as projects_get shows it; creates and updates return this too. */
+  private async detail(projectId: string) {
+    const project = await this.projects.findOne(projectId);
+    return {
+      id: project.id,
+      name: project.name,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      agentInactivityTimeoutMinutes: project.agentInactivityTimeoutMinutes,
+      closeSessionWhenEmpty: project.closeSessionWhenEmpty,
+      isPublic: project.isPublic,
+      publicToken: project.publicToken,
+      publicAgentTypeId: project.publicAgentTypeId,
+      publicAgentConfig: this.publicAgentConfigSummary(
+        project.publicAgentConfig,
+      ),
+      publicVisualizerType: project.publicVisualizerType,
+      publicVisualizerLocked: project.publicVisualizerLocked,
+      publicMaxSessionDurationSeconds: project.publicMaxSessionDurationSeconds,
+      publicExpiresAt: project.publicExpiresAt,
+      publicEnabled: project.publicEnabled,
+      sessions: project.sessions.map((session) => ({
+        id: session.id,
+        name: session.name,
+        status: session.status,
+        createdAt: session.createdAt,
+        agentCount: session._count.agents,
+        participantCount: session._count.participants,
+      })),
+    };
+  }
+
   tools() {
     return [
       defineTool({
@@ -103,7 +160,7 @@ export class ProjectsTools implements McpToolProvider {
         annotations: READ_ONLY,
         handler: async ({ projectId }, { auth }) => {
           this.access.assertProjectMember(auth.user, projectId);
-          return this.projects.findOne(projectId);
+          return this.detail(projectId);
         },
       }),
       defineTool({
@@ -146,11 +203,13 @@ export class ProjectsTools implements McpToolProvider {
             ),
         },
         annotations: CREATES,
-        handler: async (args, ctx) =>
-          this.projects.create(
+        handler: async (args, ctx) => {
+          const project = await this.projects.create(
             await ctx.validate(CreateProjectDto, args),
             ctx.auth.user.userId,
-          ),
+          );
+          return this.detail(project.id);
+        },
       }),
       defineTool({
         name: 'projects_update',
@@ -172,10 +231,11 @@ export class ProjectsTools implements McpToolProvider {
         annotations: UPDATES,
         handler: async ({ projectId, ...fields }, ctx) => {
           this.access.assertProjectMember(ctx.auth.user, projectId);
-          return this.projects.update(
+          await this.projects.update(
             projectId,
             await ctx.validate(UpdateProjectDto, fields),
           );
+          return this.detail(projectId);
         },
       }),
       defineTool({
@@ -246,14 +306,29 @@ export class ProjectsTools implements McpToolProvider {
           ctx,
         ) => {
           this.access.assertProjectMember(ctx.auth.user, projectId);
-          const agentConfigGiven = [
-            name,
-            icon,
-            agentConfigurationId,
-            personaId,
-            envVarTemplateId,
-            connectorBindings,
-          ].some((v) => v !== undefined);
+          const suppliedAgentConfig = Object.fromEntries(
+            Object.entries({
+              name,
+              icon,
+              agentConfigurationId,
+              personaId,
+              envVarTemplateId,
+              connectorBindings,
+            }).filter(([, value]) => value !== undefined),
+          );
+          // MCP can only ever send this subset of PublicAgentConfigDto's fields
+          // (plan, pipelineConfig and raw envVars never come in over MCP), but
+          // updatePublicConfig replaces the stored agentConfig whole. Merge onto
+          // what's already stored so a bare rename doesn't wipe the plan, pipeline
+          // overrides or typed env vars the web UI set (#200 review).
+          let agentConfig: Record<string, unknown> | undefined;
+          if (Object.keys(suppliedAgentConfig).length > 0) {
+            const current = await this.projects.findOne(projectId);
+            const existing =
+              (current.publicAgentConfig as Record<string, unknown> | null) ??
+              {};
+            agentConfig = { ...existing, ...suppliedAgentConfig };
+          }
           const dto = await ctx.validate(UpdatePublicConfigDto, {
             isPublic,
             agentTypeId,
@@ -261,24 +336,14 @@ export class ProjectsTools implements McpToolProvider {
             visualizerLocked,
             maxSessionDurationSeconds,
             enabled,
-            ...(agentConfigGiven
-              ? {
-                  agentConfig: {
-                    name,
-                    icon,
-                    agentConfigurationId,
-                    personaId,
-                    envVarTemplateId,
-                    connectorBindings,
-                  },
-                }
-              : {}),
+            ...(agentConfig !== undefined ? { agentConfig } : {}),
           });
-          return this.projects.updatePublicConfig(
+          await this.projects.updatePublicConfig(
             projectId,
             dto,
             ctx.auth.user.userId,
           );
+          return this.detail(projectId);
         },
       }),
       defineTool({

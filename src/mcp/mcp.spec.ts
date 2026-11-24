@@ -183,8 +183,30 @@ function setup() {
       name: 'Testing',
       createdAt: new Date('2026-10-01T00:00:00Z'),
       updatedAt: new Date('2026-10-01T00:00:00Z'),
+      agentInactivityTimeoutMinutes: 5,
+      closeSessionWhenEmpty: false,
       isPublic: true,
       publicToken: 'public-join-secret',
+      publicAgentTypeId: 'at1',
+      // Secrets the web UI can set but MCP must never read back (#200 review).
+      publicAgentConfig: {
+        name: 'Public agent',
+        icon: '🌍',
+        plan: { states: [{ id: 'whole-plan-content' }] },
+        pipelineConfig: { nodes: { prompt: 'whole-pipeline-override' } },
+        agentConfigurationId: 'a1e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a44',
+        personaId: 'b2e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a55',
+        envVarTemplateId: 'e1e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a66',
+        envVars: { OPENAI_API_KEY: 'sk-super-secret' },
+        connectorBindings: [
+          { connectorId: 'c1e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a77', slot: 'elias' },
+        ],
+      },
+      publicVisualizerType: 'sphere',
+      publicVisualizerLocked: false,
+      publicMaxSessionDurationSeconds: null,
+      publicExpiresAt: null,
+      publicEnabled: true,
       sessions: [],
     })),
     getStats: jest.fn(async () => ({
@@ -1577,6 +1599,25 @@ describe('MCP project tools', () => {
     expect(bareDto).toBeInstanceOf(UpdatePublicConfigDto);
     expect(bareDto.agentConfig).toBeUndefined();
 
+    // No agentConfig stored yet for this one call: name is required the first time.
+    projects.findOne.mockResolvedValueOnce({
+      id: 'p1',
+      name: 'Testing',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      updatedAt: new Date('2026-10-01T00:00:00Z'),
+      agentInactivityTimeoutMinutes: null,
+      closeSessionWhenEmpty: false,
+      isPublic: false,
+      publicToken: 'public-join-secret',
+      publicAgentTypeId: null,
+      publicAgentConfig: null,
+      publicVisualizerType: null,
+      publicVisualizerLocked: false,
+      publicMaxSessionDurationSeconds: null,
+      publicExpiresAt: null,
+      publicEnabled: true,
+      sessions: [],
+    });
     const envVarTemplateId = '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11';
     const connectorId = '9c1e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a22';
     const missingName: any = await factory.run(
@@ -1609,9 +1650,55 @@ describe('MCP project tools', () => {
       envVarTemplateId,
       connectorBindings: [{ connectorId, slot: 'elias' }],
     });
-    // Raw plan/pipelineConfig/envVars never come in over MCP, same as agents_deploy.
-    expect((dto.agentConfig as any).plan).toBeUndefined();
-    expect((dto.agentConfig as any).envVars).toBeUndefined();
+  });
+
+  it("merges agentConfig onto what's already stored, so a bare rename doesn't wipe the plan, pipeline overrides or env vars", async () => {
+    const { factory, projects, tool } = setup();
+    // The default findOne mock's p1 already has plan/pipelineConfig/envVars set,
+    // as the web UI's public wizard would leave them (#200 review).
+    const renamed: any = await factory.run(
+      tool('projects_public_update'),
+      { projectId: 'p1', isPublic: true, name: 'Renamed public agent' },
+      READ_WRITE,
+    );
+    expect(renamed.isError).toBeFalsy();
+    const [, dto] = projects.updatePublicConfig.mock.calls[0] as any[];
+    expect(dto.agentConfig).toMatchObject({
+      name: 'Renamed public agent',
+      // Carried over from storage: MCP never sent these, but they must survive.
+      plan: { states: [{ id: 'whole-plan-content' }] },
+      pipelineConfig: { nodes: { prompt: 'whole-pipeline-override' } },
+      envVars: { OPENAI_API_KEY: 'sk-super-secret' },
+      agentConfigurationId: 'a1e7b8e6-6c1a-4e4f-9d37-0e6f3c1b2a44',
+    });
+  });
+
+  it("never returns a public agent's raw plan, pipeline overrides or env var values, only names and whether they're set", async () => {
+    const { factory, tool } = setup();
+    for (const [name, args] of [
+      ['projects_get', { projectId: 'p1' }],
+      ['projects_create', { name: 'New project' }],
+      ['projects_update', { projectId: 'p1', name: 'Renamed' }],
+      [
+        'projects_public_update',
+        { projectId: 'p1', isPublic: true, name: 'Renamed public agent' },
+      ],
+    ] as const) {
+      const result: any = await factory.run(tool(name), args, READ_WRITE);
+      expect(result.isError).toBeFalsy();
+      const text = result.content[0].text;
+      expect(text).not.toContain('sk-super-secret');
+      expect(text).not.toContain('whole-plan-content');
+      expect(text).not.toContain('whole-pipeline-override');
+      expect(result.structuredContent.publicAgentConfig).toMatchObject({
+        hasPlan: true,
+        hasPipelineConfig: true,
+        envVarKeys: ['OPENAI_API_KEY'],
+      });
+      expect(
+        Object.keys(result.structuredContent.publicAgentConfig),
+      ).not.toContain('envVars');
+    }
   });
 
   it('lists collaborators, invites one through the REST DTO, and removes one', async () => {
