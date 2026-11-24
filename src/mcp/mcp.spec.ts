@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import {
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -16,6 +17,7 @@ import { CatalogTools } from './tools/catalog.tools.js';
 import { PersonasTools } from './tools/personas.tools.js';
 import { PlanTemplatesTools } from './tools/plan-templates.tools.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
+import { ProjectsTools } from './tools/projects.tools.js';
 import { SessionsTools } from './tools/sessions.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
 import { PlatformSettingsTools } from './tools/platform-settings.tools.js';
@@ -28,6 +30,10 @@ import {
 import { CreatePersonaDto } from '../personas/dto/create-persona.dto.js';
 import { CreateAgentDto } from '../agents/dto/create-agent.dto.js';
 import { CreateSessionDto } from '../sessions/dto/create-session.dto.js';
+import { CreateProjectDto } from '../projects/dto/create-project.dto.js';
+import { UpdateProjectDto } from '../projects/dto/update-project.dto.js';
+import { UpdatePublicConfigDto } from '../projects/dto/update-public-config.dto.js';
+import { InviteCollaboratorDto } from '../project-invitations/dto/project-invitation.dto.js';
 
 const USER = {
   userId: 'u1',
@@ -172,6 +178,87 @@ function setup() {
         updatedAt: new Date('2026-10-01T00:00:00Z'),
       },
     ]),
+    findOne: jest.fn(async (id: string) => ({
+      id,
+      name: 'Testing',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      updatedAt: new Date('2026-10-01T00:00:00Z'),
+      isPublic: true,
+      publicToken: 'public-join-secret',
+      sessions: [],
+    })),
+    getStats: jest.fn(async () => ({
+      totalSessions: 2,
+      activeSessions: 1,
+      totalAgents: 1,
+      activeAgents: 0,
+      totalMessages: 10,
+      totalParticipants: 3,
+    })),
+    create: jest.fn(async (dto: any, ownerId: string) => ({
+      id: 'p2',
+      ...dto,
+      memberships: [{ userId: ownerId, role: 'OWNER' }],
+    })),
+    update: jest.fn(async (id: string, dto: any) => ({
+      id,
+      name: dto.name ?? 'Testing',
+    })),
+    updatePublicConfig: jest.fn(async (id: string, dto: any, callerId: string) => ({
+      id,
+      isPublic: dto.isPublic,
+      publicAgentConfig: dto.agentConfig ?? null,
+      callerId,
+    })),
+    getPublicLink: jest.fn(async (id: string, baseUrl: string) => ({
+      publicLink: `${baseUrl}/p/public-join-secret`,
+      isEnabled: true,
+    })),
+  };
+  const projectInvitations = {
+    getCollaborators: jest.fn(async (projectId: string) => {
+      if (projectId === 'p2')
+        throw new ForbiddenException('You do not have access to this project');
+      return {
+        collaborators: [
+          {
+            userId: 'u1',
+            email: 'u@x.test',
+            name: 'U',
+            role: 'OWNER' as const,
+            joinedAt: new Date('2026-10-01T00:00:00Z'),
+          },
+        ],
+        pendingInvitations: [],
+      };
+    }),
+    inviteCollaborator: jest.fn(async (projectId: string, inviterId: string, dto: any) => {
+      if (projectId === 'p3')
+        throw new ForbiddenException('Only the project owner can perform this action');
+      return {
+        id: 'inv1',
+        projectId,
+        projectName: 'Testing',
+        inviterId,
+        inviterName: 'U',
+        inviterEmail: 'u@x.test',
+        inviteeId: 'u2',
+        inviteeName: 'Collaborator',
+        inviteeEmail: dto.email,
+        status: 'PENDING',
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+        respondedAt: null,
+      };
+    }),
+    removeCollaborator: jest.fn(async (projectId: string) => {
+      if (projectId === 'p3')
+        throw new ForbiddenException('Only the project owner can perform this action');
+    }),
+  };
+  const config = {
+    get: jest.fn((key: string) =>
+      key === 'PUBLIC_FRONTEND_URL' ? 'https://stella.test' : undefined,
+    ),
   };
   const sessions = {
     findAll: jest.fn(async () => ({ data: [], total: 0, skip: 0, take: 20 })),
@@ -318,8 +405,13 @@ function setup() {
     new PersonasTools(personas as any),
     new PlanTemplatesTools(plans as any),
     new AgentConfigurationsTools(configurations as any),
-    new SessionsTools(
+    new ProjectsTools(
       projects as any,
+      projectInvitations as any,
+      access,
+      config as any,
+    ),
+    new SessionsTools(
       sessions as any,
       { getFullState: jest.fn(async () => null) } as any,
       invitations as any,
@@ -359,6 +451,8 @@ function setup() {
     personas,
     plans,
     configurations,
+    projects,
+    projectInvitations,
     sessions,
     agents,
     invitations,
@@ -915,15 +1009,22 @@ describe('One shape for every tool', () => {
       'connectors_update',
       'personas_update',
       'plan_templates_update',
+      'projects_public_update',
+      'projects_update',
       'sessions_update',
     ]);
     for (const t of updates) {
       const keys = Object.keys(t.inputSchema.properties ?? {});
+      // projects_public_update is a public-setup write, not a plain field
+      // update: like agents_deploy, it carries several reference ids
+      // (agent type, configuration, persona, env var template) besides the
+      // project id itself.
+      const expectedIds = t.name === 'projects_public_update' ? 5 : 1;
       expect({
         tool: t.name,
         changes: keys.includes('changes'),
         ids: keys.filter((k) => k.endsWith('Id')).length,
-      }).toEqual({ tool: t.name, changes: false, ids: 1 });
+      }).toEqual({ tool: t.name, changes: false, ids: expectedIds });
     }
   });
 
@@ -1364,5 +1465,213 @@ describe('MCP connector tools', () => {
         slot: 'elias',
       }),
     ]);
+  });
+});
+
+describe('MCP project tools', () => {
+  it('lists read tools to a read-only token, write tools only to read/write, and offers no delete', () => {
+    const { factory } = setup();
+    const read = factory.toolNamesFor(READ);
+    expect(read).toEqual(
+      expect.arrayContaining([
+        'projects_list',
+        'projects_get',
+        'projects_stats',
+        'projects_public_link_get',
+        'project_collaborators_list',
+      ]),
+    );
+    for (const write of [
+      'projects_create',
+      'projects_update',
+      'projects_public_update',
+      'project_collaborators_invite',
+      'project_collaborators_remove',
+    ]) {
+      expect(read).not.toContain(write);
+      expect(factory.toolNamesFor(READ_WRITE)).toContain(write);
+    }
+    expect(
+      factory
+        .toolNamesFor(READ_WRITE)
+        .some((n) => n.startsWith('project') && n.includes('delete')),
+    ).toBe(false);
+  });
+
+  it('only shows a project the user is a member of', async () => {
+    const { factory, projects, tool } = setup();
+    for (const name of [
+      'projects_get',
+      'projects_stats',
+      'projects_public_link_get',
+    ]) {
+      const result: any = await factory.run(
+        tool(name),
+        { projectId: 'p2' },
+        READ,
+      );
+      expect(parse(result).error.status).toBe(404);
+    }
+    expect(projects.findOne).not.toHaveBeenCalled();
+    expect(projects.getStats).not.toHaveBeenCalled();
+    expect(projects.getPublicLink).not.toHaveBeenCalled();
+
+    const update: any = await factory.run(
+      tool('projects_update'),
+      { projectId: 'p2', name: 'New name' },
+      READ_WRITE,
+    );
+    expect(parse(update).error.status).toBe(404);
+    expect(projects.update).not.toHaveBeenCalled();
+  });
+
+  it('creates and updates a project through the REST DTOs', async () => {
+    const { factory, projects, tool } = setup();
+    const created: any = await factory.run(
+      tool('projects_create'),
+      { name: 'New project' },
+      READ_WRITE,
+    );
+    expect(created.isError).toBeFalsy();
+    const [dto, ownerId] = projects.create.mock.calls[0] as any[];
+    expect(dto).toBeInstanceOf(CreateProjectDto);
+    expect(ownerId).toBe('u1');
+
+    const updated: any = await factory.run(
+      tool('projects_update'),
+      { projectId: 'p1', name: 'Renamed' },
+      READ_WRITE,
+    );
+    expect(updated.isError).toBeFalsy();
+    const [id, updateDto] = projects.update.mock.calls[0] as any[];
+    expect(id).toBe('p1');
+    expect(updateDto).toBeInstanceOf(UpdateProjectDto);
+    expect(updateDto.name).toBe('Renamed');
+  });
+
+  it('builds the public link from the configured frontend URL', async () => {
+    const { factory, projects, tool } = setup();
+    const result: any = await factory.run(
+      tool('projects_public_link_get'),
+      { projectId: 'p1' },
+      READ,
+    );
+    expect(projects.getPublicLink).toHaveBeenCalledWith(
+      'p1',
+      'https://stella.test',
+    );
+    expect(result.structuredContent.publicLink).toBe(
+      'https://stella.test/p/public-join-secret',
+    );
+  });
+
+  it('only sends agentConfig when one of its fields is given, and validates it as the REST DTO would', async () => {
+    const { factory, projects, tool } = setup();
+    const bareToggle: any = await factory.run(
+      tool('projects_public_update'),
+      { projectId: 'p1', isPublic: true },
+      READ_WRITE,
+    );
+    expect(bareToggle.isError).toBeFalsy();
+    const [, bareDto] = projects.updatePublicConfig.mock.calls[0] as any[];
+    expect(bareDto).toBeInstanceOf(UpdatePublicConfigDto);
+    expect(bareDto.agentConfig).toBeUndefined();
+
+    const envVarTemplateId = '7b0e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a11';
+    const connectorId = '9c1e7b8e-6c1a-4e4f-9d37-0e6f3c1b2a22';
+    const missingName: any = await factory.run(
+      tool('projects_public_update'),
+      { projectId: 'p1', isPublic: true, envVarTemplateId },
+      READ_WRITE,
+    );
+    expect(parse(missingName).error.status).toBe(400);
+    expect(parse(missingName).error.message).toContain('name');
+
+    const withConfig: any = await factory.run(
+      tool('projects_public_update'),
+      {
+        projectId: 'p1',
+        isPublic: true,
+        name: 'Public agent',
+        envVarTemplateId,
+        connectorBindings: [{ connectorId, slot: 'elias' }],
+      },
+      READ_WRITE,
+    );
+    expect(withConfig.isError).toBeFalsy();
+    const [projectId, dto, callerId] = projects.updatePublicConfig.mock
+      .calls[1] as any[];
+    expect(projectId).toBe('p1');
+    expect(callerId).toBe('u1');
+    expect(dto).toBeInstanceOf(UpdatePublicConfigDto);
+    expect(dto.agentConfig).toMatchObject({
+      name: 'Public agent',
+      envVarTemplateId,
+      connectorBindings: [{ connectorId, slot: 'elias' }],
+    });
+    // Raw plan/pipelineConfig/envVars never come in over MCP, same as agents_deploy.
+    expect((dto.agentConfig as any).plan).toBeUndefined();
+    expect((dto.agentConfig as any).envVars).toBeUndefined();
+  });
+
+  it('lists collaborators, invites one through the REST DTO, and removes one', async () => {
+    const { factory, projectInvitations, tool } = setup();
+    const list: any = await factory.run(
+      tool('project_collaborators_list'),
+      { projectId: 'p1' },
+      READ,
+    );
+    expect(list.structuredContent.collaborators[0]).toMatchObject({
+      userId: 'u1',
+      role: 'OWNER',
+    });
+
+    const invited: any = await factory.run(
+      tool('project_collaborators_invite'),
+      { projectId: 'p1', email: 'new@x.test' },
+      READ_WRITE,
+    );
+    expect(invited.isError).toBeFalsy();
+    const [, , inviteDto] = projectInvitations.inviteCollaborator.mock
+      .calls[0] as any[];
+    expect(inviteDto).toBeInstanceOf(InviteCollaboratorDto);
+    expect(inviteDto.email).toBe('new@x.test');
+
+    const removed: any = await factory.run(
+      tool('project_collaborators_remove'),
+      { projectId: 'p1', userId: 'u2' },
+      READ_WRITE,
+    );
+    expect(removed.isError).toBeFalsy();
+    expect(projectInvitations.removeCollaborator).toHaveBeenCalledWith(
+      'p1',
+      'u1',
+      'u2',
+    );
+    expect(removed.structuredContent.collaborators).toBeDefined();
+  });
+
+  it('refuses collaborator reads and writes to anyone but the project owner', async () => {
+    const { factory, tool } = setup();
+    const list: any = await factory.run(
+      tool('project_collaborators_list'),
+      { projectId: 'p2' },
+      READ,
+    );
+    expect(parse(list).error.status).toBe(403);
+
+    const invite: any = await factory.run(
+      tool('project_collaborators_invite'),
+      { projectId: 'p3', email: 'new@x.test' },
+      READ_WRITE,
+    );
+    expect(parse(invite).error.status).toBe(403);
+
+    const remove: any = await factory.run(
+      tool('project_collaborators_remove'),
+      { projectId: 'p3', userId: 'u2' },
+      READ_WRITE,
+    );
+    expect(parse(remove).error.status).toBe(403);
   });
 });
