@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AccessTokensModule } from '../access-tokens/access-tokens.module.js';
+import { AdminModule } from '../admin/admin.module.js';
 import { AgentUploadModule } from '../agent-upload/agent-upload.module.js';
 import { AgentConfigurationsModule } from '../agent-configurations/agent-configurations.module.js';
 import { AgentImageModule } from '../agent-image/agent-image.module.js';
@@ -25,6 +26,7 @@ import { McpAuditService } from './mcp-audit.service.js';
 import { McpServerFactory } from './mcp-server.factory.js';
 import { McpController } from './mcp.controller.js';
 import { MCP_TOOL_PROVIDERS } from './mcp.types.js';
+import { AdminTools } from './tools/admin.tools.js';
 import { AgentConfigurationsTools } from './tools/agent-configurations.tools.js';
 import { AgentReviewsTools } from './tools/agent-reviews.tools.js';
 import { AgentsTools } from './tools/agents.tools.js';
@@ -54,6 +56,7 @@ const TOOL_PROVIDERS = [
   ConnectorsTools,
   AgentUploadsTools,
   UserMessagesTools,
+  AdminTools,
 ];
 
 /** Remote MCP server for AI clients (#772). Holds no business logic of its own. */
@@ -78,6 +81,7 @@ const TOOL_PROVIDERS = [
     AgentUploadModule,
     MetricsModule,
     UserMessagesModule,
+    AdminModule,
   ],
   controllers: [McpController],
   providers: [

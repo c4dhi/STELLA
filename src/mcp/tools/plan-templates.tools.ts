@@ -8,6 +8,7 @@ import { UpdatePlanTemplateDto } from '../../plan-templates/dto/update-plan-temp
 import { GeneratePlanTemplateDto } from '../../plan-templates/dto/generate-plan-template.dto.js';
 import {
   CREATES,
+  DELETES,
   McpToolProvider,
   READ_ONLY,
   UPDATES,
@@ -149,6 +150,20 @@ export class PlanTemplatesTools implements McpToolProvider {
           );
           return this.full(planId, ctx.auth.user.userId);
         },
+      }),
+      defineTool({
+        name: 'plan_templates_delete',
+        title: 'Delete a plan template',
+        description:
+          'Delete a plan template, as a system admin. The underlying ownership check has no admin override, ' +
+          "so today this only reaches the calling admin's own plan templates, not every user's.",
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { planId },
+        annotations: DELETES,
+        handler: async ({ planId }, ctx) => ({
+          ...(await this.plans.remove(planId, ctx.auth.user.userId)),
+        }),
       }),
     ];
   }

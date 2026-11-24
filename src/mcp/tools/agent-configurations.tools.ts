@@ -6,6 +6,7 @@ import { CreateAgentConfigurationDto } from '../../agent-configurations/dto/crea
 import { UpdateAgentConfigurationDto } from '../../agent-configurations/dto/update-agent-configuration.dto.js';
 import {
   CREATES,
+  DELETES,
   McpToolProvider,
   READ_ONLY,
   UPDATES,
@@ -155,6 +156,23 @@ export class AgentConfigurationsTools implements McpToolProvider {
           );
           return this.full(agentConfigurationId, ctx.auth.user.userId);
         },
+      }),
+      defineTool({
+        name: 'agent_configurations_delete',
+        title: 'Delete an agent configuration',
+        description:
+          'Delete an agent configuration, as a system admin. The underlying ownership check has no admin ' +
+          "override, so today this only reaches the calling admin's own configurations, not every user's.",
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { agentConfigurationId },
+        annotations: DELETES,
+        handler: async ({ agentConfigurationId }, ctx) => ({
+          ...(await this.configurations.remove(
+            agentConfigurationId,
+            ctx.auth.user.userId,
+          )),
+        }),
       }),
     ];
   }

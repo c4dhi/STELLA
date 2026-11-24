@@ -11,6 +11,7 @@ import { CreateInvitationDto } from '../../invitations/dto/create-invitation.dto
 import { StateMachineService } from '../../state-machine/state-machine.service.js';
 import {
   CREATES,
+  DELETES,
   ENDS,
   McpToolProvider,
   READ_ONLY,
@@ -375,6 +376,21 @@ export class SessionsTools implements McpToolProvider {
             })),
           };
         },
+      }),
+      defineTool({
+        name: 'sessions_delete',
+        title: 'Delete a session',
+        description:
+          'Delete any session, as a system admin. Stops its agents first, then removes it and everything in ' +
+          'it: the transcript, participants and plan state. Different from sessions_close, which ends a ' +
+          'session but keeps its transcript readable.',
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { sessionId },
+        annotations: DELETES,
+        handler: async ({ sessionId }) => ({
+          ...(await this.sessions.delete(sessionId)),
+        }),
       }),
     ];
   }

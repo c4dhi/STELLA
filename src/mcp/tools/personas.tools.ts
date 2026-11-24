@@ -6,6 +6,7 @@ import { CreatePersonaDto } from '../../personas/dto/create-persona.dto.js';
 import { UpdatePersonaDto } from '../../personas/dto/update-persona.dto.js';
 import {
   CREATES,
+  DELETES,
   McpToolProvider,
   READ_ONLY,
   UPDATES,
@@ -142,6 +143,21 @@ export class PersonasTools implements McpToolProvider {
           );
           return this.full(personaId, ctx.auth.user.userId);
         },
+      }),
+      defineTool({
+        name: 'personas_delete',
+        title: 'Delete a persona',
+        description:
+          'Delete a persona, as a system admin. System defaults cannot be deleted. The underlying ownership ' +
+          "check has no admin override, so today this only reaches the calling admin's own personas, not " +
+          "every user's.",
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { personaId },
+        annotations: DELETES,
+        handler: async ({ personaId }, ctx) => ({
+          ...(await this.personas.remove(personaId, ctx.auth.user.userId)),
+        }),
       }),
     ];
   }

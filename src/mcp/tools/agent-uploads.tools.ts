@@ -3,7 +3,15 @@ import AdmZip from 'adm-zip';
 import { z } from 'zod';
 import { AgentUploadService } from '../../agent-upload/agent-upload.service.js';
 import { UpdateAgentSharesDto } from '../../agent-upload/dto/update-agent-shares.dto.js';
-import { CREATES, McpToolProvider, READ_ONLY, UPDATES, defineTool, idArg } from '../mcp.types.js';
+import {
+  CREATES,
+  DELETES,
+  McpToolProvider,
+  READ_ONLY,
+  UPDATES,
+  defineTool,
+  idArg,
+} from '../mcp.types.js';
 
 // Mirrors MulterModule's own limit on the web upload (agent-upload.module.ts).
 const MAX_PACKAGE_BYTES = 50 * 1024 * 1024;
@@ -12,10 +20,12 @@ const agentTypeId = idArg('uploaded agent type', 'agent_uploads_list');
 
 /**
  * Uploaded (custom, non-built-in) agent types: the REST surface at
- * POST/GET /agent-types/* (agent-upload.controller.ts), minus delete (#202) and
- * the build-logs SSE stream, which has no one-shot MCP shape. Calls the same
+ * POST/GET /agent-types/* (agent-upload.controller.ts), minus the build-logs
+ * SSE stream, which has no one-shot MCP shape. Calls the same
  * AgentUploadService the controller calls, so neither surface duplicates the
- * upload/build/sharing logic.
+ * upload/build/sharing/delete logic. agent_uploads_delete is system-admin
+ * only (#202); AgentUploadService.deleteAgent already lets an admin delete
+ * anyone's upload, same as the REST endpoint always has.
  */
 @Injectable()
 export class AgentUploadsTools implements McpToolProvider {
@@ -36,12 +46,19 @@ export class AgentUploadsTools implements McpToolProvider {
           files: z
             .array(
               z.object({
-                path: z.string().min(1).describe('Path inside the package, e.g. "agent.yaml" or "src/main.py".'),
-                content: z.string().describe('The file\'s text content.'),
+                path: z
+                  .string()
+                  .min(1)
+                  .describe(
+                    'Path inside the package, e.g. "agent.yaml" or "src/main.py".',
+                  ),
+                content: z.string().describe("The file's text content."),
               }),
             )
             .min(1)
-            .describe('Must include agent.yaml. Text files only - this tool cannot carry binary assets.'),
+            .describe(
+              'Must include agent.yaml. Text files only - this tool cannot carry binary assets.',
+            ),
         },
         annotations: CREATES,
         handler: async (args, { auth }) => {
@@ -61,7 +78,8 @@ export class AgentUploadsTools implements McpToolProvider {
       defineTool({
         name: 'agent_uploads_list',
         title: 'List my uploaded agents',
-        description: "The caller's own custom (non-built-in) agent uploads, with their build and sharing state.",
+        description:
+          "The caller's own custom (non-built-in) agent uploads, with their build and sharing state.",
         scope: 'mcp:read',
         input: {},
         annotations: READ_ONLY,
@@ -72,12 +90,17 @@ export class AgentUploadsTools implements McpToolProvider {
       defineTool({
         name: 'agent_uploads_build',
         title: 'Rebuild an uploaded agent',
-        description: "Start a build of the caller's uploaded agent from its stored package.",
+        description:
+          "Start a build of the caller's uploaded agent from its stored package.",
         scope: 'mcp:write',
         input: { agentTypeId },
         annotations: CREATES,
         handler: async ({ agentTypeId }, { auth }) =>
-          this.agentUploads.triggerBuild(agentTypeId, auth.user.userId, auth.user.isSystemAdmin),
+          this.agentUploads.triggerBuild(
+            agentTypeId,
+            auth.user.userId,
+            auth.user.isSystemAdmin,
+          ),
       }),
       defineTool({
         name: 'agent_uploads_build_status',
@@ -89,7 +112,11 @@ export class AgentUploadsTools implements McpToolProvider {
         input: { agentTypeId },
         annotations: READ_ONLY,
         handler: async ({ agentTypeId }, { auth }) => ({
-          build: await this.agentUploads.getBuildStatus(agentTypeId, auth.user.userId, auth.user.isSystemAdmin),
+          build: await this.agentUploads.getBuildStatus(
+            agentTypeId,
+            auth.user.userId,
+            auth.user.isSystemAdmin,
+          ),
         }),
       }),
       defineTool({
@@ -100,18 +127,23 @@ export class AgentUploadsTools implements McpToolProvider {
         input: { agentTypeId },
         annotations: READ_ONLY,
         handler: async ({ agentTypeId }, { auth }) => ({
-          items: await this.agentUploads.getBuildHistory(agentTypeId, auth.user.userId, auth.user.isSystemAdmin),
+          items: await this.agentUploads.getBuildHistory(
+            agentTypeId,
+            auth.user.userId,
+            auth.user.isSystemAdmin,
+          ),
         }),
       }),
       defineTool({
         name: 'agent_uploads_shares_get',
-        title: 'Get an uploaded agent\'s shares',
+        title: "Get an uploaded agent's shares",
         description:
-          "The projects this custom agent is shared with, and the projects its owner could share it with.",
+          'The projects this custom agent is shared with, and the projects its owner could share it with.',
         scope: 'mcp:read',
         input: { agentTypeId },
         annotations: READ_ONLY,
-        handler: async ({ agentTypeId }, { auth }) => this.agentUploads.getShares(agentTypeId, auth.user.userId),
+        handler: async ({ agentTypeId }, { auth }) =>
+          this.agentUploads.getShares(agentTypeId, auth.user.userId),
       }),
       defineTool({
         name: 'agent_uploads_shares_update',
@@ -123,13 +155,38 @@ export class AgentUploadsTools implements McpToolProvider {
         scope: 'mcp:write',
         input: {
           agentTypeId,
-          projectIds: z.array(z.string()).max(200).describe('Replaces the whole share list.'),
+          projectIds: z
+            .array(z.string())
+            .max(200)
+            .describe('Replaces the whole share list.'),
         },
         annotations: UPDATES,
         handler: async ({ agentTypeId, projectIds }, ctx) => {
           const dto = await ctx.validate(UpdateAgentSharesDto, { projectIds });
-          return this.agentUploads.updateShares(agentTypeId, ctx.auth.user.userId, dto.projectIds);
+          return this.agentUploads.updateShares(
+            agentTypeId,
+            ctx.auth.user.userId,
+            dto.projectIds,
+          );
         },
+      }),
+      defineTool({
+        name: 'agent_uploads_delete',
+        title: 'Delete an uploaded agent',
+        description:
+          'Delete any uploaded agent type, as a system admin. Stops its running agents first, and removes ' +
+          'its env var templates and agent configurations with it. Refused while a public project uses it or ' +
+          "another user's agent of it still runs.",
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { agentTypeId },
+        annotations: DELETES,
+        handler: async ({ agentTypeId }, { auth }) =>
+          this.agentUploads.deleteAgent(
+            agentTypeId,
+            auth.user.userId,
+            auth.user.isSystemAdmin,
+          ),
       }),
     ];
   }

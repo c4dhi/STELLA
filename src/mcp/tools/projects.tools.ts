@@ -11,6 +11,7 @@ import { UpdatePublicConfigDto } from '../../projects/dto/update-public-config.d
 import { InviteCollaboratorDto } from '../../project-invitations/dto/project-invitation.dto.js';
 import {
   CREATES,
+  DELETES,
   ENDS,
   McpToolProvider,
   READ_ONLY,
@@ -434,6 +435,20 @@ export class ProjectsTools implements McpToolProvider {
             )),
           };
         },
+      }),
+      defineTool({
+        name: 'projects_delete',
+        title: 'Delete a project',
+        description:
+          'Delete any project, as a system admin — any member, not just the owner. Stops every running ' +
+          'agent in it first, then removes it and everything under it: sessions, invitations, collaborators.',
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { projectId },
+        annotations: DELETES,
+        handler: async ({ projectId }) => ({
+          ...(await this.projects.remove(projectId)),
+        }),
       }),
     ];
   }
