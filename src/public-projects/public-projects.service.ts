@@ -16,6 +16,7 @@ import {
   StartJoinPublicProjectResponseDto,
   JoinProgressDto,
 } from './dto/public-project-info.dto.js';
+import { publicInvitationOptions } from './public-invitation-options.js';
 
 // In-memory progress state
 interface ProgressState {
@@ -266,8 +267,7 @@ export class PublicProjectsService {
 
     // 5. Create invitation using existing service
     const { invitation } = await this.invitationsService.create(session.id, {
-      visualizerType: project.publicVisualizerType || undefined,
-      visualizerLocked: project.publicVisualizerLocked,
+      ...publicInvitationOptions(project),
       maxSessionDurationSeconds: project.publicMaxSessionDurationSeconds ?? undefined,
       // Auto-generated name
     });
@@ -413,10 +413,10 @@ export class PublicProjectsService {
 
         // Step 4: Create invitation
         this.updateProgress(sessionId, 4, 'in_progress', 'Creating session...');
-        const { invitation } = await this.invitationsService.create(sessionId, {
-          visualizerType: project.publicVisualizerType || undefined,
-          visualizerLocked: project.publicVisualizerLocked,
-        });
+        const { invitation } = await this.invitationsService.create(
+          sessionId,
+          publicInvitationOptions(project),
+        );
 
         // Step 5: Done - agent will spawn when user joins
         this.updateProgress(sessionId, 5, 'complete', 'Ready!', {
@@ -471,10 +471,10 @@ export class PublicProjectsService {
           'Creating session...',
           { agentId: agent.id },
         );
-        const { invitation } = await this.invitationsService.create(sessionId, {
-          visualizerType: project.publicVisualizerType || undefined,
-          visualizerLocked: project.publicVisualizerLocked,
-        });
+        const { invitation } = await this.invitationsService.create(
+          sessionId,
+          publicInvitationOptions(project),
+        );
 
         // Step 5: Done
         this.updateProgress(sessionId, 5, 'complete', 'Ready!', {

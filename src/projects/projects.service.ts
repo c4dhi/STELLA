@@ -341,6 +341,9 @@ export class ProjectsService {
       if (dto.maxSessionDurationSeconds !== undefined) {
         updateData.publicMaxSessionDurationSeconds = dto.maxSessionDurationSeconds;
       }
+      if (dto.welcomeMessage !== undefined) {
+        updateData.publicWelcomeMessage = dto.welcomeMessage?.trim() || null;
+      }
       await this.checkPublicBindings(project, dto, callerId);
       await this.checkPublicPlans(project, dto);
     } else {

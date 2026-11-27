@@ -115,6 +115,7 @@ export class ProjectsTools implements McpToolProvider {
       publicVisualizerType: project.publicVisualizerType,
       publicVisualizerLocked: project.publicVisualizerLocked,
       publicMaxSessionDurationSeconds: project.publicMaxSessionDurationSeconds,
+      publicWelcomeMessage: project.publicWelcomeMessage,
       publicExpiresAt: project.publicExpiresAt,
       publicEnabled: project.publicEnabled,
       sessions: project.sessions.map((session) => ({
@@ -314,6 +315,14 @@ export class ProjectsTools implements McpToolProvider {
             .max(7200)
             .nullable()
             .optional(),
+          welcomeMessage: z
+            .string()
+            .max(500)
+            .nullable()
+            .optional()
+            .describe(
+              'Text every participant sees on screen before their session starts (the agent does not say it); null or empty removes it',
+            ),
           enabled: z
             .boolean()
             .optional()
@@ -338,6 +347,7 @@ export class ProjectsTools implements McpToolProvider {
             visualizerType,
             visualizerLocked,
             maxSessionDurationSeconds,
+            welcomeMessage,
             enabled,
           },
           ctx,
@@ -381,6 +391,7 @@ export class ProjectsTools implements McpToolProvider {
             visualizerType,
             visualizerLocked,
             maxSessionDurationSeconds,
+            welcomeMessage,
             enabled,
             ...(agentConfig !== undefined ? { agentConfig } : {}),
           });

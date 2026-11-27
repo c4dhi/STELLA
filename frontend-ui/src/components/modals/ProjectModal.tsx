@@ -40,6 +40,7 @@ import {
   DEFAULT_EXPIRATION_OPTIONS,
   SessionDurationSelectionStep,
 } from '../shared'
+import WelcomeMessageStep from '../shared/WelcomeMessageStep'
 import { WIZARD_MODAL_SIZE, WIZARD_OVERLAY_ALIGN } from '../shared/wizardLayout'
 import { choiceCardClass } from '../shared/wizardChoice'
 import DeployAgentSettings, { EnvTemplatePicker, useDeploySettings } from '../shared/AgentSettings/DeployAgentSettings'
@@ -53,7 +54,7 @@ interface ProjectModalProps {
   onProjectUpdated?: (project: Project) => void
 }
 
-type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'voice' | 'plan' | 'connectors' | 'envtemplate' | 'envvars' | 'visualizer' | 'duration' | 'expiration' | 'complete'
+type Step = 'basic' | 'agent' | 'configure' | 'configuration' | 'persona' | 'mode' | 'activities' | 'voice' | 'plan' | 'connectors' | 'envtemplate' | 'envvars' | 'visualizer' | 'duration' | 'message' | 'expiration' | 'complete'
 type ProjectType = 'private' | 'public'
 
 // Predefined timeout options for auto-stop
@@ -80,6 +81,7 @@ const STEPS_CONFIG: { id: Step; number: number; label: string }[] = [
   { id: 'envvars', number: 7, label: 'Agent Settings' },
   { id: 'visualizer', number: 8, label: 'Visualizer' },
   { id: 'duration', number: 9, label: 'Session Duration' },
+  { id: 'message', number: 10, label: 'Welcome Message' },
   { id: 'expiration', number: 10, label: 'Expiration' },
 ]
 
@@ -154,6 +156,7 @@ export default function ProjectModal({
 
   // Max session duration (seconds); null = no limit (default)
   const [maxSessionDurationSeconds, setMaxSessionDurationSeconds] = useState<number | null>(null)
+  const [welcomeMessage, setWelcomeMessage] = useState('')
 
   // Submission
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -227,7 +230,7 @@ export default function ProjectModal({
       voice: supportsVoiceSelection,
     }),
     ...settingsSteps(isLoadingEnvVars, envVarTemplates.length),
-    'visualizer', 'duration', 'expiration',
+    'visualizer', 'duration', 'message', 'expiration',
   ], [needs, runMode, selectedAgentType?.pipelineSchema, supportsVoiceSelection, isLoadingEnvVars, envVarTemplates.length])
 
   // Start From drops out of the steps when the templates finish loading and
@@ -344,6 +347,7 @@ export default function ProjectModal({
         setVisualizerLocked(false)
         setExpiresInHours(undefined)
         setMaxSessionDurationSeconds(null)
+        setWelcomeMessage('')
       }
     }
   }, [isOpen, project])
@@ -448,6 +452,9 @@ export default function ProjectModal({
       case 'visualizer':
         return true
       case 'duration':
+        return true
+      case 'message':
+        // Optional; the textarea already caps it at the DTO's 500.
         return true
       case 'expiration':
         return true
@@ -557,6 +564,7 @@ export default function ProjectModal({
               : undefined,
             enabled: true,
             maxSessionDurationSeconds,
+            welcomeMessage: welcomeMessage.trim() || undefined,
           }
 
           await apiClient.updateProjectPublicConfig(newProject.id, publicConfig)
@@ -607,6 +615,7 @@ export default function ProjectModal({
       case 'envvars': return 'Agent Settings'
       case 'visualizer': return 'Choose Visualizer'
       case 'duration': return 'Session Duration'
+      case 'message': return 'Welcome Message'
       case 'expiration': return 'Set Expiration'
       case 'complete': return 'Project Created'
       default: return ''
@@ -628,6 +637,7 @@ export default function ProjectModal({
       case 'envvars': return `Settings ${selectedAgentType?.name || 'the agent'} declares, plus any custom variables`
       case 'visualizer': return 'Set a default visualizer for participants'
       case 'duration': return 'Optionally cap how long each session runs after the agent starts speaking'
+      case 'message': return 'Optionally show every participant a message before their session starts'
       case 'expiration': return 'Set how long the public link remains valid'
       case 'complete': return 'Share this link with participants'
       default: return ''
@@ -1281,6 +1291,20 @@ export default function ProjectModal({
                     maxSessionDurationSeconds={maxSessionDurationSeconds}
                     onMaxSessionDurationSecondsChange={setMaxSessionDurationSeconds}
                   />
+                </motion.div>
+              )}
+
+              {/* Welcome Message Step */}
+              {step === 'message' && (
+                <motion.div
+                  key="message"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-6"
+                >
+                  <WelcomeMessageStep value={welcomeMessage} onChange={setWelcomeMessage} />
                 </motion.div>
               )}
 

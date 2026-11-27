@@ -122,4 +122,11 @@ export class UpdatePublicConfigDto {
   @Min(60)
   @Max(7200)
   maxSessionDurationSeconds?: number | null;
+
+  // Shown on screen to every participant before the session (#213). Same
+  // limit as an invitation's customMessage; null or empty clears it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  welcomeMessage?: string | null;
 }

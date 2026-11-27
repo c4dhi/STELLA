@@ -74,6 +74,8 @@ model Project {
   publicAgentConfig      Json?      // { name, icon, plan | mode: 'companion' + availablePlanIds, envVarTemplateId, … }
   publicVisualizerType   String?
   publicVisualizerLocked Boolean    @default(false)
+  publicMaxSessionDurationSeconds Int?  // cap per session; null = no limit
+  publicWelcomeMessage   String?    // shown to each link participant before the session; max 500
   publicExpiresAt        DateTime?
   publicEnabled          Boolean    @default(true)
 

@@ -2229,6 +2229,35 @@ describe('MCP project tools', () => {
     );
   });
 
+  it('sets and clears the public welcome message, validated as the REST DTO would (#213)', async () => {
+    const { factory, projects, tool } = setup();
+    const set: any = await factory.run(
+      tool('projects_public_update'),
+      { projectId: 'p1', isPublic: true, welcomeMessage: 'Thank you for taking part.' },
+      READ_WRITE,
+    );
+    expect(set.isError).toBeFalsy();
+    const [, setDto] = projects.updatePublicConfig.mock.calls[0] as any[];
+    expect(setDto.welcomeMessage).toBe('Thank you for taking part.');
+    expect(setDto.agentConfig).toBeUndefined();
+
+    await factory.run(
+      tool('projects_public_update'),
+      { projectId: 'p1', isPublic: true, welcomeMessage: null },
+      READ_WRITE,
+    );
+    const [, clearDto] = projects.updatePublicConfig.mock.calls[1] as any[];
+    expect(clearDto.welcomeMessage).toBeNull();
+
+    const tooLong: any = await factory.run(
+      tool('projects_public_update'),
+      { projectId: 'p1', isPublic: true, welcomeMessage: 'x'.repeat(501) },
+      READ_WRITE,
+    );
+    expect(tooLong.isError).toBe(true);
+    expect(projects.updatePublicConfig).toHaveBeenCalledTimes(2);
+  });
+
   it('only sends agentConfig when one of its fields is given, and validates it as the REST DTO would', async () => {
     const { factory, projects, tool } = setup();
     const bareToggle: any = await factory.run(

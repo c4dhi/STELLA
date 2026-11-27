@@ -354,7 +354,7 @@ export default function ParticipantJoinPage() {
         <OrganizerMessageModal
           key="message"
           message={invitation.customMessage!}
-          participantName={invitation.participantName}
+          participantName={invitation.fromPublicLink ? undefined : invitation.participantName}
           onContinue={handleMessageAcknowledged}
         />
       )}
