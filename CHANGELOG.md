@@ -37,7 +37,7 @@ SDK 0.12.0.
 - A public project's link now shows a QR code above it, in the "Public Project Created!" step and in the public link dialog (#204)
 - In the participant's chat, messages one person sends back to back (within two minutes, with no reply in between) are grouped as in other chat apps: the avatar shows once and the time only under the last one (#1058)
 - Public projects can show participants a welcome message. Set it in public setup or later in the public link dialog; every participant who joins through the link reads it on screen before the session (the agent doesn't say it). MCP clients set it with `projects_public_update` (`welcomeMessage`) (#1046)
-- **Groundwork for verdict rules in the configuration.** An agent's `agent.yaml` can now say which reactions and rule fields each pipeline step acts on, and STELLA refuses an expert file or saved configuration that uses one it doesn't. A saved configuration overrides an expert's verdicts field by field, so one saved earlier keeps any new field's default. An expert marked `safety: true` can only be turned off with a confirmed, recorded step. The built-in agents switch to these rules in follow-up changes, so nothing changes for them yet (#1060)
+- **Groundwork for verdict rules in the configuration.** An agent's `agent.yaml` can now say which reactions and rule fields each pipeline step acts on, and STELLA refuses an expert file or saved configuration that uses one it doesn't. A saved configuration overrides an expert's verdicts field by field, so one saved earlier keeps any new field's default. An expert marked `safety: true` can only be turned off with a confirmed, recorded step. STELLA V2 and Jev use these rules from this release on, see Changed (#1060)
 
 ### Fixed
 
