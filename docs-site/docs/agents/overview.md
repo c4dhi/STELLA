@@ -14,7 +14,6 @@ STELLA supports multiple agent types, each designed for different use cases. All
 | **stella-v2** | Streamlined 5-stage pipeline with deterministic arbitration and configurable pipeline | Configurable deployments, lower latency, predictable behavior |
 | **[stella-jev-agent](./stella-jev.md)** | stella-v2 without the bridge: one Jev call decides the experts and barge-in, and asks back when what was heard isn't believable. Sends conversation text to TypeSafe | Research use. Needs `TYPESAFE_API_KEY` |
 | **stella-light-agent** | ⚠️ **Deprecated** — superseded by stella-v2 | Nothing new. Use stella-v2 with a lean expert configuration |
-| **[ELIAS-Interviewer](./elias-interviewer.md)** | Uploaded, not built in: runs an ELIAS interview guide word for word and writes each turn to ELIAS through a connector | ELIAS interviews. Upload it in Settings → Agent Library |
 
 STELLA V2, STELLA Jev and STELLA Light are built in. Any other agent is uploaded with its own `agent.yaml` (see [Agent manifest](../agent-sdk/agent-manifest.md) and [Agent validation](../deployment/agent-validation.md)). The older `stella-agent` and `echo-agent` are archived (`archive/agents/`) and can't be deployed.
 

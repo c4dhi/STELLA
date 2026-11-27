@@ -31,7 +31,7 @@ Connectors aren't part of `AGENT_CONFIG`; list them with `await self.connectors.
 ```python
 async def on_session_start(self, session_id, config):
     await super().on_session_start(session_id, config)   # parses self.session
-    project = os.environ["ELIAS_PROJECT_ID"]          # declared under env.required
+    project = os.environ["EXAMPLE_PROJECT_ID"]        # declared under env.required
     greeting_name = self.persona.name if self.persona else "there"
 ```
 
@@ -118,7 +118,7 @@ When the time cap runs out or the organiser ends the session, the SDK asks the a
 | `wrap_up` | The SDK calls `on_session_ending(session_id, reason, deadline_ms)` while the room is still live. What it yields is spoken; if it yields nothing, the farewell is spoken instead |
 | `silent` | The session just closes |
 
-By default `session_end_mode()` reads the `SESSION_END_MODE` env var. An agent with work to do at a real session end overrides it and returns `wrap_up`; otherwise its `on_session_ending` never runs. ELIAS-Interviewer does this to close the ELIAS interview. Stella Light overrides it to read its Configurator's `interrupt_handler` node instead.
+By default `session_end_mode()` reads the `SESSION_END_MODE` env var. An agent with work to do at a real session end overrides it and returns `wrap_up`; otherwise its `on_session_ending` never runs. Stella Light overrides it to read its Configurator's `interrupt_handler` node instead.
 
 `on_session_end` runs on every teardown, including an auto-pause, so it is the place to flush, not to finish.
 

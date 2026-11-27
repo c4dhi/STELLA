@@ -24,12 +24,12 @@ The schema is generated from STELLA's own validator (`npm run manifest:schema`),
 version: "2.0"
 
 metadata:
-  name: "ELIAS Interviewer"
-  slug: "elias-interviewer"          # lowercase, digits, hyphens; unique
+  name: "Example Interviewer"
+  slug: "example-interviewer"        # lowercase, digits, hyphens; unique
   version: "0.1.0"                   # semantic version of the agent
-  description: "Runs an ELIAS interview guide word for word"
+  description: "Runs an interview guide word for word"
   icon: "🎙️"
-  tags: [interview, elias]
+  tags: [interview]
 
 capabilities: [voice, text]          # voice, text, progress, plans, experts, companion
 
@@ -46,7 +46,7 @@ features:
 env:
   required:                          # deploy is refused without these
     - OPENAI_API_KEY
-    - ELIAS_PROJECT_ID
+    - EXAMPLE_PROJECT_ID
   optional:                          # offered at deploy
     - name: STELLA_LANGUAGE
       description: "Pin the conversation to one language (e.g. 'de')"
@@ -55,10 +55,10 @@ env:
       group: "Conversation"          # the tab it appears in
 
 connectors:                          # outside MCP servers the agent needs
-  - slot: elias
+  - slot: notes
     kind: mcp
     required: true
-    label: "ELIAS"
+    label: "Notes"
     requiredTools: [get_interview_guide, save_answer]
 
 image:
