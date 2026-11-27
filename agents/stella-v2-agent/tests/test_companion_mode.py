@@ -774,6 +774,23 @@ async def test_a_restart_mid_activity_finds_the_tag_the_real_decision_function_w
 
 
 @pytest.mark.asyncio
+async def test_a_restart_mid_activity_reads_past_a_barge_in_note():
+    # Live run, 24 Nov: a barge-in persists `decision: "commit"` (a string).
+    # The lookup must skip it and still find the Started tag before it.
+    label = decision("s1", Transition(Change.STARTED, activity=ACTIVITIES[0])).metadata["decision"]["label"]
+    barge_in = ChatMessage(
+        id="b1", timestamp="2026-10-16T01:05:00Z",
+        envelope={"type": "debug", "data": {"content": "barge-in", "metadata": {"channel": "text", "decision": "commit"}}},
+        role="system", content="barge-in", message_type="debug",
+    )
+    agent = _agent()
+    agent._history_client = object()
+    agent.get_chat_history = AsyncMock(return_value=[_decision_message("2026-10-16T01:00:00Z", label), barge_in])
+    await agent._rehydrate_active_activity({"plan_id": "memory"})
+    assert agent.companion.started_at == datetime(2026, 10, 16, 1, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
 async def test_a_restart_mid_activity_falls_back_when_no_tag_survives():
     # Pruned history, or a session old enough to predate the tag: unscoped
     # history, exactly as before this was recoverable at all.

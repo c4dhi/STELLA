@@ -128,6 +128,7 @@ export interface ProjectWithSessions extends Project {
   isPublic?: boolean
   publicToken?: string
   publicEnabled?: boolean
+  publicWelcomeMessage?: string | null
   ownerId?: string
   isOwner?: boolean
 }
@@ -577,6 +578,8 @@ export interface CreateInvitationResponse {
 export interface InvitationDetails {
   participantName: string
   customMessage?: string | null
+  // True for a public-link participant, whose name is generated (#213).
+  fromPublicLink?: boolean
   visualizerType?: string | null
   visualizerLocked: boolean
   maxSessionDurationSeconds?: number | null
@@ -1161,6 +1164,9 @@ export interface PublicAgentConfig {
   envVars?: Record<string, string>
   /** Connectors every public session's agent may call; the owner's own. */
   connectorBindings?: { connectorId: string; slot?: string }[]
+  /** Absent = follow `plan`. 'companion' offers `availablePlanIds` as activities (#207). */
+  mode?: 'plan' | 'companion'
+  availablePlanIds?: string[]
 }
 
 /**
@@ -1176,6 +1182,8 @@ export interface UpdatePublicConfigDto {
   enabled?: boolean
   // Max session duration in seconds. null = no limit (default). Max 7200 (2h).
   maxSessionDurationSeconds?: number | null
+  // Shown on screen to every participant before their session. null clears it.
+  welcomeMessage?: string | null
 }
 
 /**
@@ -1247,6 +1255,7 @@ export interface ProjectWithPublicConfig extends Project {
   publicVisualizerType?: string
   publicVisualizerLocked: boolean
   publicMaxSessionDurationSeconds?: number | null
+  publicWelcomeMessage?: string | null
   publicExpiresAt?: string
   publicEnabled: boolean
 }

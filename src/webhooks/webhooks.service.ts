@@ -589,6 +589,11 @@ export class WebhooksService {
             envVarTemplateId: config.envVarTemplateId,
             envVars: manualEnvVars,
             connectorBindings: Array.isArray(config.connectorBindings) ? config.connectorBindings : undefined,
+            // Only a public project's first spawn sets these (#207); a paused
+            // agent's saved config already carries mode and its activities.
+            ...(config.mode === 'companion'
+              ? { mode: 'companion' as const, availablePlanIds: Array.isArray(config.availablePlanIds) ? config.availablePlanIds : [] }
+              : {}),
           },
           projectMembership.userId,
         );

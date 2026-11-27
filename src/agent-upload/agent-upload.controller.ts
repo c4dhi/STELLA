@@ -1,4 +1,3 @@
-import { builtSdkProblem } from '../agent-package/sdk-support.js'
 import {
   Controller,
   Post,
@@ -9,28 +8,18 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
-  NotFoundException,
-  ForbiddenException,
   UnauthorizedException,
   Sse,
   Logger,
   Req,
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
-import { Observable, interval, map, concatMap, from, takeWhile, concat, of } from 'rxjs'
+import { Observable, interval, concatMap, from, takeWhile, concat, of } from 'rxjs'
 import { Request } from 'express'
-import { AgentPackageService } from '../agent-package/agent-package.service.js'
-import { AgentBuildService, BuildStatus, resolveDockerfilePath } from '../agent-build/agent-build.service.js'
-import { StorageService } from '../storage/storage.service.js'
-import { PrismaService } from '../prisma/prisma.service.js'
-import { AgentValidationStatus } from '@prisma/client'
-import { DEFAULT_DOCKERFILE } from '../agent-package/manifest-defaults.js'
-import { manifestToAgentTypeData } from '../agent-package/manifest-mapper.js'
 
 import type { AuthUser } from '../auth/auth-user.loader.js'
-import { requirementsForListing } from '../agents/agent-requirements.js'
-import { AgentsService } from '../agents/agents.service.js'
 import { UpdateAgentSharesDto } from './dto/update-agent-shares.dto.js'
+import { AgentUploadService } from './agent-upload.service.js'
 
 interface AuthenticatedRequest extends Request {
   user?: AuthUser
@@ -43,43 +32,11 @@ export function requireUserId(req: AuthenticatedRequest): string {
   return userId
 }
 
-/**
- * Only the uploader (or a system admin) may build or delete an upload. An upload
- * without an owner (stored before the owner was recorded) is admin-only.
- */
-export function assertOwnsAgent(agentType: { userId: string | null }, req: AuthenticatedRequest): void {
-  const userId = requireUserId(req)
-  if (req.user?.isSystemAdmin) return
-  if (agentType.userId !== userId) throw new ForbiddenException('You do not own this agent')
-}
-
-/**
- * Who may see an agent's builds (log, status, history): whoever sees the agent
- * in their library. That is its owner, a member of a project it is shared
- * with, or a system admin. A built-in has no owner, so only admins.
- */
-export function canSeeAgentBuilds(
-  agentType: { isBuiltIn: boolean; userId: string | null },
-  who: { userId: string; isSystemAdmin?: boolean; memberOf: string[]; sharedWith: string[] },
-): boolean {
-  if (who.isSystemAdmin) return true
-  if (agentType.isBuiltIn || !agentType.userId) return false
-  if (agentType.userId === who.userId) return true
-  const shared = new Set(who.sharedWith)
-  return who.memberOf.some((projectId) => shared.has(projectId))
-}
-
 @Controller('agent-types')
 export class AgentUploadController {
   private readonly logger = new Logger(AgentUploadController.name)
 
-  constructor(
-    private agentPackageService: AgentPackageService,
-    private agentBuildService: AgentBuildService,
-    private storageService: StorageService,
-    private prisma: PrismaService,
-    private agentsService: AgentsService,
-  ) {}
+  constructor(private agentUploadService: AgentUploadService) {}
 
   /**
    * Upload a custom agent package (zip file).
@@ -108,116 +65,7 @@ export class AgentUploadController {
 
     this.logger.log(`Received upload: ${file.originalname} (${file.size} bytes)`)
 
-    // Validate package contents
-    const validation = await this.agentPackageService.validatePackage(file.buffer)
-
-    if (!validation.valid) {
-      throw new BadRequestException({
-        message: 'Package validation failed',
-        errors: validation.errors,
-        warnings: validation.warnings,
-      })
-    }
-
-    const manifest = validation.manifest!
-
-    // An upload deploys the image STELLA builds from its Dockerfile, never one the
-    // manifest points at: a prebuilt image would skip the build (and its base-image
-    // check) and count as "built" straight away.
-    if (manifest.image.imageUrl) {
-      throw new BadRequestException(
-        'image.imageUrl is not allowed in an uploaded agent; remove it and STELLA builds the image from your Dockerfile',
-      )
-    }
-
-    // Refuse a Dockerfile path the build would refuse, so the uploader hears it now.
-    try {
-      resolveDockerfilePath('/package', manifest.image.dockerfile ?? DEFAULT_DOCKERFILE)
-    } catch (err) {
-      throw new BadRequestException((err as Error).message)
-    }
-
-    // The slug names an agent across STELLA. Uploading it again with a new
-    // version replaces the uploader's own agent in place (same id, so its
-    // templates, configurations and public projects keep pointing at it). An
-    // agent of another user, or a built-in one, is never replaced.
-    const existing = await this.prisma.agentType.findUnique({
-      where: { slug: manifest.metadata.slug },
-    })
-    if (existing && (existing.isBuiltIn || existing.userId !== userId)) {
-      throw new BadRequestException(
-        `Another agent already uses the slug "${manifest.metadata.slug}"; pick another metadata.slug`,
-      )
-    }
-    if (existing && existing.version === manifest.metadata.version) {
-      throw new BadRequestException(
-        `You already uploaded ${existing.name} ${existing.version}; raise metadata.version to replace it`,
-      )
-    }
-
-    // Store the package
-    const storageInfo = await this.agentPackageService.storePackage(
-      file.buffer,
-      file.originalname,
-    )
-
-    // Same mapping as built-in agents (the seed): manifest → AgentType columns,
-    // including the default experts from config/experts/*.json.
-    const expertDefaults = this.agentPackageService.readExpertDefaults(
-      file.buffer,
-      manifest.capabilities,
-      manifest.pipelineSchema as Record<string, unknown> | undefined,
-    )
-    const data = {
-      ...manifestToAgentTypeData(manifest, expertDefaults),
-      isBuiltIn: false,
-      userId,
-      packagePath: storageInfo.path,
-      packageSize: storageInfo.size,
-      packageHash: storageInfo.hash,
-      // Set only by a successful build (AgentBuildService), with sdkVersion.
-      imageUrl: null,
-      sdkVersion: null,
-      // New code: built and reviewed again before anyone else can deploy it.
-      validationStatus: AgentValidationStatus.PENDING,
-      validationNotes: null,
-      validatedAt: null,
-      validatedBy: null,
-    }
-    const agentType = existing
-      ? await this.prisma.agentType.update({ where: { id: existing.id }, data })
-      : await this.prisma.agentType.create({ data })
-
-    // Agents already running keep their image (it is tagged with the old
-    // version); only the old package goes.
-    if (existing?.packagePath && existing.packagePath !== storageInfo.path) {
-      await this.storageService.delete(existing.packagePath)
-    }
-
-    this.logger.log(
-      existing
-        ? `Replaced agent type ${agentType.slug} ${existing.version} with ${agentType.version} (${agentType.id})`
-        : `Created agent type: ${agentType.slug} (${agentType.id})`,
-    )
-
-    // The upload itself succeeded regardless of this; a kickoff failure is
-    // logged, not surfaced as an upload error, and the uploader can still
-    // press Rebuild.
-    try {
-      await this.agentBuildService.startBuild(agentType.id, userId)
-    } catch (err) {
-      this.logger.error(`Failed to start build for ${agentType.slug} (${agentType.id}): ${(err as Error).message}`)
-    }
-
-    return {
-      id: agentType.id,
-      slug: agentType.slug,
-      name: agentType.name,
-      version: agentType.version,
-      validationStatus: agentType.validationStatus,
-      replacedVersion: existing?.version ?? null,
-      warnings: validation.warnings,
-    }
+    return this.agentUploadService.createFromPackage(file.buffer, userId)
   }
 
   /**
@@ -226,53 +74,7 @@ export class AgentUploadController {
    */
   @Get('my-agents')
   async getMyAgents(@Req() req: AuthenticatedRequest) {
-    const userId = requireUserId(req)
-
-    const agents = await this.prisma.agentType.findMany({
-      where: { isBuiltIn: false, userId },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        buildLogs: {
-          orderBy: { startedAt: 'desc' },
-          take: 1,
-        },
-        projectShares: { select: { projectId: true } },
-      },
-    })
-
-    return agents.map((agent) => ({
-      id: agent.id,
-      slug: agent.slug,
-      name: agent.name,
-      description: agent.description,
-      icon: agent.icon,
-      version: agent.version,
-      validationStatus: agent.validationStatus,
-      // What the reviewing admin wrote: the approval notes or the rejection reason.
-      validationNotes: agent.validationNotes,
-      validatedAt: agent.validatedAt,
-      capabilities: agent.capabilities,
-      defaultConfig: agent.defaultConfig,
-      configSchema: agent.configSchema,
-      pipelineSchema: agent.pipelineSchema,
-      // What deploying it needs, as GET /agent-types gives it, so a deploy
-      // dialog can ask for its settings and connectors from this list too.
-      requirements: requirementsForListing(agent).requirements,
-      createdAt: agent.createdAt,
-      built: !!agent.imageUrl,
-      sdkVersion: agent.sdkVersion,
-      // The projects whose members may deploy it.
-      sharedProjectIds: agent.projectShares.map((share) => share.projectId),
-      // Set when the last build can't deploy on this STELLA: "Needs SDK update".
-      sdkProblem: agent.imageUrl ? builtSdkProblem(agent.sdkVersion) : null,
-      lastBuild: agent.buildLogs[0]
-        ? {
-            status: agent.buildLogs[0].status,
-            startedAt: agent.buildLogs[0].startedAt,
-            completedAt: agent.buildLogs[0].completedAt,
-          }
-        : null,
-    }))
+    return this.agentUploadService.getMyAgents(requireUserId(req))
   }
 
   /**
@@ -281,31 +83,7 @@ export class AgentUploadController {
    */
   @Post(':id/build')
   async triggerBuild(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    const agentType = await this.prisma.agentType.findUnique({
-      where: { id },
-    })
-
-    if (!agentType) {
-      throw new NotFoundException('Agent type not found')
-    }
-
-    if (agentType.isBuiltIn) {
-      throw new BadRequestException('Cannot rebuild built-in agents')
-    }
-
-    if (!agentType.packagePath) {
-      throw new BadRequestException('Agent has no uploaded package')
-    }
-
-    assertOwnsAgent(agentType, req)
-
-    // Start build
-    const result = await this.agentBuildService.startBuild(id, requireUserId(req))
-
-    return {
-      buildLogId: result.buildLogId,
-      message: 'Build started',
-    }
+    return this.agentUploadService.triggerBuild(id, requireUserId(req), req.user?.isSystemAdmin)
   }
 
   /**
@@ -316,31 +94,8 @@ export class AgentUploadController {
    * GET /agent-types/:id/build-status
    */
   @Get(':id/build-status')
-  async getBuildStatus(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<BuildStatus | null> {
-    await this.visibleBuilds(id, req)
-    return this.latestBuildStatus(id)
-  }
-
-  /** Looks up the latest build log for an agent type and its output (#961),
-   *  with no access check of its own — callers reachable without one (the
-   *  SSE stream below) must not be newly gated by adding output here. */
-  private async latestBuildStatus(id: string): Promise<BuildStatus | null> {
-    const latestBuild = await this.prisma.agentBuildLog.findFirst({
-      where: { agentTypeId: id },
-      orderBy: { startedAt: 'desc' },
-    })
-
-    if (!latestBuild) {
-      return null
-    }
-
-    const status = await this.agentBuildService.getBuildStatus(latestBuild.id)
-    if (!status) {
-      return null
-    }
-
-    const buildOutput = await this.agentBuildService.getBuildOutput(latestBuild.id)
-    return { ...status, buildOutput: buildOutput ?? undefined }
+  async getBuildStatus(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
+    return this.agentUploadService.getBuildStatus(id, requireUserId(req), req.user?.isSystemAdmin)
   }
 
   /**
@@ -349,8 +104,7 @@ export class AgentUploadController {
    */
   @Get(':id/build-history')
   async getBuildHistory(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    await this.visibleBuilds(id, req)
-    return this.agentBuildService.getBuildHistory(id)
+    return this.agentUploadService.getBuildHistory(id, requireUserId(req), req.user?.isSystemAdmin)
   }
 
   /**
@@ -360,7 +114,7 @@ export class AgentUploadController {
   @Sse(':id/build-logs')
   async streamBuildLogs(@Param('id') id: string, @Req() req: AuthenticatedRequest): Promise<Observable<MessageEvent>> {
     // Checked before the stream opens: a refusal is an ordinary 403/404.
-    await this.visibleBuilds(id, req)
+    await this.agentUploadService.assertCanSeeBuilds(id, requireUserId(req), req.user?.isSystemAdmin)
     // Poll for build status every 2 seconds
     return concat(
       // Send initial status
@@ -386,12 +140,12 @@ export class AgentUploadController {
   }
 
   private async buildLogEvent(id: string): Promise<MessageEvent> {
-    const status = await this.latestBuildStatus(id)
+    const status = await this.agentUploadService.latestBuildStatus(id)
     if (!status) {
       return { type: 'status', data: 'no_build' } as MessageEvent
     }
 
-    const output = await this.agentBuildService.getBuildOutput(status.id)
+    const output = await this.agentUploadService.getBuildOutput(status.id)
 
     return {
       type: 'build',
@@ -411,19 +165,7 @@ export class AgentUploadController {
    */
   @Get(':id/shares')
   async getShares(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    const agentType = await this.ownUpload(id, req)
-    const [shares, memberships] = await Promise.all([
-      this.prisma.agentTypeProjectShare.findMany({ where: { agentTypeId: id }, select: { projectId: true } }),
-      this.prisma.projectMembership.findMany({
-        where: { userId: agentType.userId! },
-        select: { project: { select: { id: true, name: true } } },
-        orderBy: { project: { name: 'asc' } },
-      }),
-    ])
-    return {
-      projectIds: shares.map((s) => s.projectId),
-      projects: memberships.map((m) => m.project),
-    }
+    return this.agentUploadService.getShares(id, requireUserId(req))
   }
 
   /**
@@ -434,58 +176,7 @@ export class AgentUploadController {
    */
   @Put(':id/shares')
   async updateShares(@Param('id') id: string, @Body() dto: UpdateAgentSharesDto, @Req() req: AuthenticatedRequest) {
-    const agentType = await this.ownUpload(id, req)
-    const projectIds = [...new Set(dto.projectIds)]
-    const memberOf = await this.prisma.projectMembership.findMany({
-      where: { userId: agentType.userId!, projectId: { in: projectIds } },
-      select: { projectId: true },
-    })
-    if (memberOf.length !== projectIds.length) {
-      throw new ForbiddenException('You can only share an agent with projects you are a member of')
-    }
-    await this.prisma.$transaction([
-      this.prisma.agentTypeProjectShare.deleteMany({ where: { agentTypeId: id, projectId: { notIn: projectIds } } }),
-      ...projectIds.map((projectId) =>
-        this.prisma.agentTypeProjectShare.upsert({
-          where: { agentTypeId_projectId: { agentTypeId: id, projectId } },
-          create: { agentTypeId: id, projectId },
-          update: {},
-        }),
-      ),
-    ])
-    this.logger.log(`Agent type ${agentType.slug} shared with ${projectIds.length} project(s)`)
-    return { projectIds }
-  }
-
-  /** 404 for an unknown agent, 403 unless the caller may see its builds (`canSeeAgentBuilds`). */
-  private async visibleBuilds(id: string, req: AuthenticatedRequest): Promise<void> {
-    const userId = requireUserId(req)
-    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
-    if (!agentType) throw new NotFoundException('Agent type not found')
-    const [memberships, shares] = req.user?.isSystemAdmin || agentType.userId === userId
-      ? [[], []]
-      : await Promise.all([
-          this.prisma.projectMembership.findMany({ where: { userId }, select: { projectId: true } }),
-          this.prisma.agentTypeProjectShare.findMany({ where: { agentTypeId: id }, select: { projectId: true } }),
-        ])
-    const allowed = canSeeAgentBuilds(agentType, {
-      userId,
-      isSystemAdmin: req.user?.isSystemAdmin,
-      memberOf: memberships.map((m) => m.projectId),
-      sharedWith: shares.map((s) => s.projectId),
-    })
-    if (!allowed) throw new ForbiddenException('You cannot see this agent\'s builds')
-  }
-
-  /** The caller's own upload: sharing is the owner's alone, not an admin's. */
-  private async ownUpload(id: string, req: AuthenticatedRequest) {
-    const userId = requireUserId(req)
-    const agentType = await this.prisma.agentType.findUnique({ where: { id } })
-    if (!agentType) throw new NotFoundException('Agent type not found')
-    if (agentType.isBuiltIn || agentType.userId !== userId) {
-      throw new ForbiddenException('Only its owner can share this agent')
-    }
-    return agentType
+    return this.agentUploadService.updateShares(id, requireUserId(req), dto.projectIds)
   }
 
   /**
@@ -496,62 +187,8 @@ export class AgentUploadController {
    */
   @Post(':id/delete')
   async deleteAgent(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    const agentType = await this.prisma.agentType.findUnique({
-      where: { id },
-    })
-
-    if (!agentType) {
-      throw new NotFoundException('Agent type not found')
-    }
-
-    if (agentType.isBuiltIn) {
-      throw new BadRequestException('Cannot delete built-in agents')
-    }
-
-    assertOwnsAgent(agentType, req)
-
-    // A public project would lose its agent: refuse, and say where to change it.
-    const publicProjects = await this.prisma.project.count({ where: { publicAgentTypeId: id } })
-    if (publicProjects > 0) {
-      throw new BadRequestException(
-        `${publicProjects} public project${publicProjects === 1 ? ' uses' : 's use'} ${agentType.name}. Pick another agent there, then delete it`,
-      )
-    }
-
-    // Agents of this type that still run: a row whose pod is gone is only
-    // cleaned up; the owner's own live agents are stopped; another user's live
-    // agent blocks the delete (it is their session).
-    const { live, stale } = await this.agentsService.runningAgentsOfType(id)
-    const ownerId = agentType.userId
-    const others = live.filter((a) => !ownerId || a.deployedByUserId !== ownerId)
-    if (others.length > 0) {
-      throw new BadRequestException(
-        `${agentType.name} still runs in ${others.length} session${others.length === 1 ? '' : 's'} of other users. It can be deleted once ${others.length === 1 ? 'that agent stops' : 'those agents stop'}`,
-      )
-    }
-    const toStop = [...stale, ...live.map((a) => a.id)]
-    for (const agentId of toStop) {
-      await this.agentsService.stopAgent(agentId)
-    }
-
-    // Env-var templates and configurations are scoped to this one type, so
-    // they go with it. Stopped agents keep their record (and transcript) and
-    // only lose the link; build logs cascade.
-    await this.prisma.$transaction([
-      this.prisma.envVarTemplate.deleteMany({ where: { agentTypeId: id } }),
-      this.prisma.agentConfiguration.deleteMany({ where: { agentTypeId: id } }),
-      this.prisma.agentInstance.updateMany({ where: { agentTypeId: id }, data: { agentTypeId: null } }),
-      this.prisma.agentType.delete({ where: { id } }),
-    ])
-
-    // The package last: if the row could not be deleted, it is still there.
-    if (agentType.packagePath) {
-      await this.storageService.delete(agentType.packagePath)
-    }
-
-    this.logger.log(`Deleted agent type: ${agentType.slug}`)
-
-    return { success: true, stoppedAgents: live.length }
+    const userId = requireUserId(req)
+    return this.agentUploadService.deleteAgent(id, userId, req.user?.isSystemAdmin)
   }
 }
 

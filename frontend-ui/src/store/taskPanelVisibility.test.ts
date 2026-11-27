@@ -135,3 +135,45 @@ describe('the task panel store actions', () => {
     expect(useStore.getState().taskPanelPinnedOpen).toBe(false)
   })
 })
+
+// #199: on reload/resume the page rebuilds the task state from the session's
+// history. That used to open the panel whenever any task list was in the
+// history, even an ended one, and the agent's first update then closed it
+// again: the panel flashed when the user came back.
+describe('the task panel after the history loads (#199)', () => {
+  function historyUpdate(todoList: TodoList, timestamp: number) {
+    return { timestamp, messageId: `m${timestamp}`, agentId: 'a1', agentName: 'Agent 1', todoList }
+  }
+
+  beforeEach(() => {
+    useStore.getState().clearTasks()
+    useStore.getState().clearTaskTimeline()
+  })
+
+  it('stays closed when the last activity in the history had ended', () => {
+    useStore.setState({
+      taskUpdateHistory: [historyUpdate(companionList('Gedächtnis-Quiz'), 1), historyUpdate(companionList(null), 2)],
+    })
+    useStore.getState().applyLatestTaskState()
+    expect(useStore.getState().showTaskPanel).toBe(false)
+  })
+
+  it('stays closed for a companion that never started an activity', () => {
+    useStore.setState({ taskUpdateHistory: [historyUpdate(companionList(null), 1)] })
+    useStore.getState().applyLatestTaskState()
+    expect(useStore.getState().showTaskPanel).toBe(false)
+  })
+
+  it('opens when an activity is still running', () => {
+    useStore.setState({ taskUpdateHistory: [historyUpdate(companionList('Gedächtnis-Quiz'), 1)] })
+    useStore.getState().applyLatestTaskState()
+    expect(useStore.getState().showTaskPanel).toBe(true)
+  })
+
+  it('stays open when the user had pinned it', () => {
+    useStore.setState({ taskUpdateHistory: [historyUpdate(planList(0), 1)] })
+    useStore.getState().setShowTaskPanel(true)
+    useStore.getState().applyLatestTaskState()
+    expect(useStore.getState().showTaskPanel).toBe(true)
+  })
+})

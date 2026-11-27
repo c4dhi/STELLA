@@ -1,5 +1,9 @@
 const SECRET_KEY =
   /pass(word)?|secret|token|api[-_]?key|authorization|credential/i;
+// Holds arbitrary secret values keyed by variable name (env var template
+// create/update), so a key like DATABASE_URL wouldn't itself match SECRET_KEY
+// above even though its value is one. Redacted whole, not key by key.
+const SECRET_BLOB_KEY = /^variables$/i;
 const MAX_STRING = 200;
 const MAX_ARRAY = 20;
 const MAX_DEPTH = 4;
@@ -23,7 +27,10 @@ function summarize(value: unknown, depth: number): unknown {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([k, v]) => [
       k,
-      SECRET_KEY.test(k) ? '[redacted]' : summarize(v, depth + 1),
+      SECRET_KEY.test(k) ||
+      (SECRET_BLOB_KEY.test(k) && v !== null && typeof v === 'object')
+        ? '[redacted]'
+        : summarize(v, depth + 1),
     ]),
   );
 }

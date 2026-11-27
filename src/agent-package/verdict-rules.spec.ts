@@ -71,6 +71,11 @@ describe('checkVerdictRules', () => {
     ])
   })
 
+  it('a node that declares reactions acts on the reaction field without listing it', () => {
+    const support = verdictRuleSupport(pipeline({ reactions: ['ask_followup'], fields: [] }))
+    expect(checkVerdictRules('probing', { unclear: { reaction: 'ask_followup' } }, support)).toEqual([])
+  })
+
   it('refuses bad values', () => {
     const all = verdictRuleSupport(pipeline({ reactions: [...VERDICT_REACTIONS], fields: [...VERDICT_RULE_FIELDS] }))
     const problems = checkVerdictRules(
@@ -152,6 +157,22 @@ describe('saved configurations', () => {
   it('refuses safety_off without a proper record', () => {
     const config = { nodes: { expert_pool: { experts: { medical: { enabled: false, safety_off: { confirmed: true } } } } } }
     expect(() => validateConfigurationAgainstSchema(config, schema)).toThrow(/safety_off needs who/)
+  })
+
+  it('refuses safety and never_step_down, which belong to the expert file', () => {
+    // A saved `safety: false` would otherwise switch the floor off without a safety_off record.
+    const config = (entry: Record<string, unknown>) => ({ nodes: { expert_pool: { experts: { medical: entry } } } })
+    expect(() => validateConfigurationAgainstSchema(config({ safety: false }), schema)).toThrow(
+      /"safety" is set in the expert's file, not in a configuration/,
+    )
+    expect(() => validateConfigurationAgainstSchema(config({ never_step_down: [] }), schema)).toThrow(/"never_step_down"/)
+  })
+
+  it('checks a standalone verdict_directives setting too', () => {
+    const withSetting = pipeline({ reactions: ['ask_followup'], fields: ['reaction'] })
+    ;(withSetting.nodes[1].slots as unknown[]).push({ id: 'verdicts', label: 'Verdicts', type: 'verdict_directives' })
+    const config = { nodes: { arbitration: { verdicts: { unclear: { reaction: 'redirect' } } } } }
+    expect(() => validateConfigurationAgainstSchema(config, withSetting)).toThrow(/does not support the reaction "redirect"/)
   })
 
   it('checkExpertListValue ignores entries that are not experts', () => {

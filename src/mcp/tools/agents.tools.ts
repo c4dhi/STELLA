@@ -4,7 +4,6 @@ import { AgentImageService } from '../../agent-image/agent-image.service.js';
 import { AgentsService } from '../../agents/agents.service.js';
 import { CreateAgentDto } from '../../agents/dto/create-agent.dto.js';
 import { ResourceAccessService } from '../../auth/resource-access.service.js';
-import { EnvVarTemplatesService } from '../../env-var-templates/env-var-templates.service.js';
 import {
   CREATES,
   ENDS,
@@ -15,6 +14,17 @@ import {
 } from '../mcp.types.js';
 
 const agentId = idArg('agent', 'sessions_get (agents)');
+const projectId = idArg('project', 'projects_list');
+const sessionId = idArg('session', 'sessions_list');
+const agentTypeId = idArg('agent type', 'agent_types_list');
+const dateRangeFields = {
+  from: z
+    .string()
+    .datetime()
+    .optional()
+    .describe('ISO date; defaults to 30 days ago'),
+  to: z.string().datetime().optional().describe('ISO date; defaults to now'),
+};
 
 /**
  * What a client needs to follow an agent. Leaves out the deployment snapshot
@@ -43,7 +53,6 @@ export function agentSummary(agent: Record<string, any>) {
 export class AgentsTools implements McpToolProvider {
   constructor(
     private readonly agents: AgentsService,
-    private readonly envVarTemplates: EnvVarTemplatesService,
     private readonly agentImages: AgentImageService,
     private readonly access: ResourceAccessService,
   ) {}
@@ -61,34 +70,6 @@ export class AgentsTools implements McpToolProvider {
 
   tools() {
     return [
-      defineTool({
-        name: 'env_var_templates_list',
-        title: 'List env var templates',
-        description:
-          "The user's env var templates (API keys for agents), with variable names only, never values. " +
-          "Pass one as envVarTemplateId to agents_deploy when the agent type's required env vars need it; " +
-          'a template only fits agents of its agentTypeId. invalid names the settings whose stored value does ' +
-          'not fit their type or range (agents_deploy refuses those until they are fixed in the app); ' +
-          'needsCheck is true for a template not saved since settings became typed.',
-        scope: 'mcp:read',
-        input: {},
-        annotations: READ_ONLY,
-        handler: async (_args, { auth }) => ({
-          items: (
-            await this.envVarTemplates.findAllByUser(auth.user.userId)
-          ).map(
-            ({ id, name, description, variableKeys, agentTypeId, invalid, needsCheck }) => ({
-              id,
-              name,
-              description,
-              variableKeys,
-              agentTypeId,
-              invalid,
-              needsCheck,
-            }),
-          ),
-        }),
-      }),
       defineTool({
         name: 'agents_deploy',
         title: 'Deploy an agent into a session',
@@ -129,24 +110,26 @@ export class AgentsTools implements McpToolProvider {
           ).optional(),
           connectorBindings: z
             .array(
-              z.object({
-                connectorId: idArg(
-                  'connector',
-                  'connectors_list with this projectId',
-                ),
-                slot: z
-                  .string()
-                  .optional()
-                  .describe(
-                    "A connector slot the agent type declares in agent.yaml (connectors)",
+              z
+                .object({
+                  connectorId: idArg(
+                    'connector',
+                    'connectors_list with this projectId',
                   ),
-                handle: z
-                  .string()
-                  .optional()
-                  .describe(
-                    'Name the agent uses; defaults to the slot, then the connector handle',
-                  ),
-              }),
+                  slot: z
+                    .string()
+                    .optional()
+                    .describe(
+                      'A connector slot the agent type declares in agent.yaml (connectors)',
+                    ),
+                  handle: z
+                    .string()
+                    .optional()
+                    .describe(
+                      'Name the agent uses; defaults to the slot, then the connector handle',
+                    ),
+                })
+                .strict(),
             )
             .max(20)
             .optional()
@@ -231,6 +214,42 @@ export class AgentsTools implements McpToolProvider {
           await this.access.assertAgentAccess(auth.user, agentId);
           await this.agents.remove(agentId);
           return agentSummary(await this.agents.findOne(agentId));
+        },
+      }),
+      defineTool({
+        name: 'agent_metrics_get',
+        title: 'Get agent type metrics',
+        description:
+          'Per-stage latency stats (mean/p50/p95/min/max) for every session of one agent type in a project over ' +
+          'a date range, with outlier sessions (any stage over 2x the global p50) and a summary across stages.',
+        scope: 'mcp:read',
+        input: { projectId, agentTypeId, ...dateRangeFields },
+        annotations: READ_ONLY,
+        handler: async ({ projectId, agentTypeId, from, to }, { auth }) => {
+          this.access.assertProjectMember(auth.user, projectId);
+          const slug = await this.agentTypeSlug(agentTypeId);
+          return {
+            ...(await this.agents.getAgentMetrics(
+              projectId,
+              slug,
+              from ? new Date(from) : undefined,
+              to ? new Date(to) : undefined,
+            )),
+          };
+        },
+      }),
+      defineTool({
+        name: 'session_analytics_get',
+        title: "Get a session's latency analytics",
+        description:
+          "Per-stage latency for one session's turns, with a summary across stages. Different from " +
+          'session_state_get (plan progress) and session_transcript_get (the messages themselves).',
+        scope: 'mcp:read',
+        input: { sessionId },
+        annotations: READ_ONLY,
+        handler: async ({ sessionId }, { auth }) => {
+          await this.access.assertSessionAccess(auth.user, sessionId);
+          return { ...(await this.agents.getSessionAnalytics(sessionId)) };
         },
       }),
     ];

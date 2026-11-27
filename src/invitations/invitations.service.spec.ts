@@ -105,3 +105,30 @@ describe('InvitationsService.create — max-duration cap propagation (#198)', ()
     expect(eventEmitter.emit).not.toHaveBeenCalled();
   });
 });
+
+describe('InvitationsService.getByToken — public-link participants (#213)', () => {
+  function withInvitation(isPublic: boolean) {
+    const { service, prisma } = setup({ id: 's1', status: 'ACTIVE' });
+    prisma.invitation.findUnique = jest.fn(async () => ({
+      token: 'tok',
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 3_600_000),
+      participantName: 'user-12345',
+      customMessage: 'Welcome',
+      participant: null,
+      session: { id: 's1', name: 'S', status: 'ACTIVE', project: { isPublic } },
+    }));
+    return service;
+  }
+
+  it('says when the invitation came from a public link, whose participant name is generated', async () => {
+    await expect(withInvitation(true).getByToken('tok')).resolves.toMatchObject({
+      customMessage: 'Welcome',
+      fromPublicLink: true,
+    });
+  });
+
+  it('says so too when it is a personal invitation', async () => {
+    await expect(withInvitation(false).getByToken('tok')).resolves.toMatchObject({ fromPublicLink: false });
+  });
+});

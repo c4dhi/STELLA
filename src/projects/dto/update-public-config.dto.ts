@@ -12,9 +12,12 @@ import {
   MaxLength,
   IsArray,
   ArrayMaxSize,
+  IsIn,
+  Validate,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ConnectorBindingDto } from '../../agents/dto/create-agent.dto.js';
+import { AvailablePlanIdsNeedsCompanionMode } from './available-plan-ids.validator.js';
 
 /**
  * Agent configuration for public projects
@@ -66,6 +69,18 @@ export class PublicAgentConfigDto {
   @ValidateNested({ each: true })
   @Type(() => ConnectorBindingDto)
   connectorBindings?: ConnectorBindingDto[];
+
+  /** Absent = follow `plan`; 'companion' offers `availablePlanIds` as activities (#207). */
+  @IsOptional()
+  @IsIn(['plan', 'companion'])
+  mode?: 'plan' | 'companion';
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @IsUUID('4', { each: true })
+  @Validate(AvailablePlanIdsNeedsCompanionMode)
+  availablePlanIds?: string[];
 }
 
 /**
@@ -107,4 +122,11 @@ export class UpdatePublicConfigDto {
   @Min(60)
   @Max(7200)
   maxSessionDurationSeconds?: number | null;
+
+  // Shown on screen to every participant before the session (#213). Same
+  // limit as an invitation's customMessage; null or empty clears it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  welcomeMessage?: string | null;
 }

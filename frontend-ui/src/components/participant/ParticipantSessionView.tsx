@@ -13,7 +13,7 @@ import {
   HelpCircle,
   Clock,
 } from 'lucide-react'
-import { Room, RoomEvent, Track, RemoteTrack, RemoteTrackPublication, RemoteParticipant, LocalTrackPublication } from 'livekit-client'
+import { Room, RoomEvent, Track, RemoteTrack, RemoteTrackPublication, RemoteParticipant, LocalTrackPublication, DisconnectReason } from 'livekit-client'
 import TranscriptOverlay from '../face/TranscriptOverlay'
 import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
@@ -27,6 +27,7 @@ import SupportModal from './SupportModal'
 import SessionCompletedOverlay from './SessionCompletedOverlay'
 import { COMPLETION_SCREEN_CAP_MS, completionReadingTimeMs } from '../../lib/completionScreen'
 import SessionTimeoutOverlay from './SessionTimeoutOverlay'
+import ConversationEndedOverlay from './ConversationEndedOverlay'
 import { TEXT_FACE, VisualizerType, isTextFace } from '../face/types'
 import PermissionsModal from './PermissionsModal'
 import { checkMicrophonePermission } from '../../lib/mediaDevices'
@@ -127,6 +128,10 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   const [room, setRoom] = useState<Room | null>(null)
   const [isConnecting, setIsConnecting] = useState(true)
   const [connectionError, setConnectionError] = useState<string | null>(null)
+  // Set when the conversation ended from the other side (project deleted,
+  // session closed) rather than a real connection failure - its own screen,
+  // not the generic "Connection Error" one (#1047).
+  const [conversationEnded, setConversationEnded] = useState(false)
 
   // Audio state
   const [isMuted, setIsMuted] = useState(true)
@@ -144,7 +149,10 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   // typing, the voice carries on. The agent is told on each switch.
   const textFace = isTextFace(currentVisualizer)
   const interactionMode: InteractionMode = textFace ? 'text' : 'voice'
-  const interactionModeRef = useRef<InteractionMode>('voice')
+  // Starts at the real initial mode (the face the invitation opens on), not a
+  // hardcoded 'voice': an agent can equally start in text (#205), and this
+  // ref is what tells a newly-seen agent which one is actually on.
+  const interactionModeRef = useRef<InteractionMode>(interactionMode)
 
   // The client channel to the agent (events out, replies in).
   const roomRef = useRef<Room | null>(null)
@@ -305,6 +313,15 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
           sessionData.connectionInfo.token
         )
 
+        // An agent deployed before this invitation was created (#205) can
+        // already be in the room by the time we connect, so ParticipantConnected
+        // never fires for it. Tell any agent already here the room's mode too.
+        for (const participant of newRoom.remoteParticipants.values()) {
+          if (participant.identity.startsWith('agent-')) {
+            setTimeout(() => void announceInteractionMode(clientChannel, interactionModeRef.current), 1000)
+          }
+        }
+
         setRoom(newRoom)
         setIsConnecting(false)
       } catch (error: any) {
@@ -337,8 +354,18 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     const sendHeartbeat = async () => {
       try {
         await apiClient.participantHeartbeat(sessionData.authToken)
-      } catch (error) {
+      } catch (error: any) {
         console.error('Heartbeat failed:', error)
+        if (error?.statusCode === 404 || error?.statusCode === 401) {
+          // Session/participant is gone (e.g. project deleted mid-call: the
+          // participant row is cascade-deleted, so the JWT guard itself
+          // rejects the token with 401 "Participant not found" before this
+          // request ever reaches a 404) - stop retrying. This is a deliberate
+          // end, not a connection failure, so it gets the same screen as the
+          // LiveKit ROOM_DELETED path below, not "Connection Error".
+          setConversationEnded(true)
+          clearInterval(intervalId)
+        }
       }
     }
 
@@ -886,7 +913,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   )
 
   // Handle room disconnection
-  const handleDisconnected = useCallback(() => {
+  const handleDisconnected = useCallback((reason?: DisconnectReason) => {
     cleanupAudio()
     if (sessionCompletedRef.current || sessionTimedOut) {
       return
@@ -899,15 +926,25 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
       setSessionTimedOut(true)
       return
     }
+    // The organiser deleted the project mid-call (#214, #1047): LiveKit tears
+    // down the room server-side, which disconnects us with ROOM_DELETED. That's
+    // not a connection failure, so say what actually happened instead of the
+    // generic error.
+    if (reason === DisconnectReason.ROOM_DELETED) {
+      setConversationEnded(true)
+      return
+    }
     setConnectionError('Disconnected from session')
   }, [sessionTimedOut])
 
   // Handle participant joined (for real-time notifications)
   const handleParticipantConnected = useCallback((participant: RemoteParticipant) => {
-    // An agent that joins (or restarts) while the text interface is open starts
-    // in voice: tell it, once it has had a moment to start listening.
-    if (participant.identity.startsWith('agent-') && interactionModeRef.current === 'text') {
-      setTimeout(() => void announceInteractionMode(clientChannel, 'text'), 1000)
+    // An agent that joins (or restarts) always starts in voice unless a
+    // text-locked invitation told it otherwise at spawn (#205): tell it the
+    // room's actual mode either way, once it has had a moment to start
+    // listening, so a participant who never switches faces still corrects it.
+    if (participant.identity.startsWith('agent-')) {
+      setTimeout(() => void announceInteractionMode(clientChannel, interactionModeRef.current), 1000)
     }
     // Skip agents and the message recorder
     if (participant.identity.startsWith('agent-') || participant.identity === 'message-recorder') {
@@ -1432,6 +1469,12 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         </div>
       </motion.div>
     )
+  }
+
+  // The conversation ended from the other side - its own screen, readable on
+  // every visualiser, not the generic connection-failure one below.
+  if (conversationEnded) {
+    return <ConversationEndedOverlay isVisible />
   }
 
   // Error state

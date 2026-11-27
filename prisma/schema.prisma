@@ -82,6 +82,7 @@ model Project {
   publicVisualizerType            String?
   publicVisualizerLocked          Boolean    @default(false)
   publicMaxSessionDurationSeconds Int? // null = no limit (default). Max 7200 (2h).
+  publicWelcomeMessage            String? @db.Text // Shown to every public-link participant before the session (#213). Max 500.
   publicExpiresAt                 DateTime?
   publicEnabled                   Boolean    @default(true)
 

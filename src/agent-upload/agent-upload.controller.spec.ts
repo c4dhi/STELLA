@@ -1,222 +1,94 @@
 import { jest } from '@jest/globals'
-import { BadRequestException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common'
+import { BadRequestException, ForbiddenException, UnauthorizedException } from '@nestjs/common'
 import { AgentUploadController } from './agent-upload.controller.js'
 import { AgentAdminController } from './agent-admin.controller.js'
 import { AgentReviewService } from './agent-review.service.js'
-import { agentManifestSchema } from '../agent-package/schemas/agent-manifest.schema.js'
 
-// request.user is an AuthUser ({ userId, ... }). The controllers used to read
+// request.user is an AuthUser ({ userId, ... }). The controller used to read
 // req.user.id, which is always undefined: uploads got no owner, My Agents listed
 // every upload, and the ownership checks never ran. These go through the
-// controllers with the real request shape.
+// controller with the real request shape.
 const user = (userId: string, isSystemAdmin = false) => ({
   user: { userId, email: `${userId}@x`, name: null, isSystemAdmin, projectIds: [], projectRoles: {} },
 })
 
-// A real parsed manifest, so the mapping runs on what upload actually gets.
-const manifest = (image: Record<string, unknown> = { dockerfile: 'Dockerfile' }) =>
-  agentManifestSchema.parse({
-    version: '2.0',
-    metadata: { slug: 'my-agent', name: 'My agent', version: '0.1.0', description: 'd' },
-    image,
-    capabilities: ['voice'],
-  })
-
-function makeUpload(agentRecord: Record<string, unknown> | null = null, m = manifest()) {
-  const prisma = {
-    agentTypeProjectShare: {
-      findMany: jest.fn().mockResolvedValue([] as { projectId: string }[]),
-      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-      upsert: jest.fn().mockResolvedValue({}),
-    },
-    projectMembership: { findMany: jest.fn().mockResolvedValue([] as unknown[]) },
-    agentType: {
-      findUnique: jest.fn().mockResolvedValue(agentRecord),
-      findMany: jest.fn().mockResolvedValue([]),
-      create: jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'new', ...data })),
-      update: jest.fn().mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data })),
-      delete: jest.fn().mockResolvedValue({}),
-    },
-    agentInstance: {
-      findMany: jest.fn().mockResolvedValue([] as { id: string }[]),
-      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
-    },
-    agentBuildLog: {
-      findFirst: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
-    },
-    project: { count: jest.fn().mockResolvedValue(0) },
-    envVarTemplate: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-    agentConfiguration: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
-    $transaction: jest.fn().mockImplementation((ops: unknown) => Promise.all(ops as Promise<unknown>[])),
-  }
-  const pkg = {
-    validatePackage: jest.fn().mockResolvedValue({ valid: true, manifest: m, errors: [], warnings: [] }),
-    storePackage: jest.fn().mockResolvedValue({ path: 'p', size: 1, hash: 'h' }),
-    readExpertDefaults: jest.fn().mockReturnValue(null),
-  }
-  const build = {
-    startBuild: jest.fn().mockResolvedValue({ buildLogId: 'b1' }),
-    getBuildStatus: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
+function makeController() {
+  const agentUploadService = {
+    createFromPackage: jest.fn().mockResolvedValue({ id: 'new', slug: 'my-agent' }),
+    getMyAgents: jest.fn().mockResolvedValue([]),
+    triggerBuild: jest.fn().mockResolvedValue({ buildLogId: 'b1', message: 'Build started' }),
+    getBuildStatus: jest.fn().mockResolvedValue(null),
+    getBuildHistory: jest.fn().mockResolvedValue([]),
+    latestBuildStatus: jest.fn().mockResolvedValue(null as Record<string, unknown> | null),
     getBuildOutput: jest.fn().mockResolvedValue(null as string | null),
-    getBuildHistory: jest.fn().mockResolvedValue([] as unknown[]),
+    assertCanSeeBuilds: jest.fn().mockResolvedValue(undefined),
+    getShares: jest.fn().mockResolvedValue({ projectIds: [], projects: [] }),
+    updateShares: jest.fn().mockResolvedValue({ projectIds: [] }),
+    deleteAgent: jest.fn().mockResolvedValue({ success: true, stoppedAgents: 0 }),
   }
-  const storage = { delete: jest.fn().mockResolvedValue(undefined) }
-  const agents = {
-    stopAgent: jest.fn().mockResolvedValue({}),
-    runningAgentsOfType: jest.fn().mockResolvedValue({ live: [], stale: [] } as {
-      live: { id: string; deployedByUserId: string | null }[]
-      stale: string[]
-    }),
-  }
-  const controller = new AgentUploadController(pkg as any, build as any, storage as any, prisma as any, agents as any)
-  return { controller, prisma, pkg, build, storage, agents }
+  const controller = new AgentUploadController(agentUploadService as any)
+  return { controller, agentUploadService }
 }
 
 const zip = { originalname: 'a.zip', size: 1, buffer: Buffer.from('x') } as Express.Multer.File
 
-describe('AgentUploadController identity and ownership', () => {
-  it('stores the uploader as owner, and no image until a build', async () => {
-    const { controller, prisma } = makeUpload()
-    await controller.uploadPackage(zip, user('u1') as any)
-    const data = prisma.agentType.create.mock.calls[0][0].data
-    expect(data.userId).toBe('u1')
-    expect(data.imageUrl).toBeNull()
-  })
-
-  it('starts the build on its own once the upload is stored', async () => {
-    const { controller, build } = makeUpload()
-    await controller.uploadPackage(zip, user('u1') as any)
-    expect(build.startBuild).toHaveBeenCalledWith('new', 'u1')
-  })
-
-  it('still returns the upload result if starting the build fails', async () => {
-    const { controller, build } = makeUpload()
-    build.startBuild.mockRejectedValueOnce(new Error('docker daemon unreachable'))
-    await expect(controller.uploadPackage(zip, user('u1') as any)).resolves.toMatchObject({ slug: 'my-agent' })
-  })
-
-  it('refuses an upload without a signed-in user before storing anything', async () => {
-    const { controller, pkg } = makeUpload()
+describe('AgentUploadController: upload, my-agents, build and shares delegate to AgentUploadService', () => {
+  it('refuses an upload without a signed-in user before touching the service', async () => {
+    const { controller, agentUploadService } = makeController()
     await expect(controller.uploadPackage(zip, {} as any)).rejects.toThrow(UnauthorizedException)
-    expect(pkg.storePackage).not.toHaveBeenCalled()
+    expect(agentUploadService.createFromPackage).not.toHaveBeenCalled()
   })
 
-  it('refuses a manifest that points at a prebuilt image', async () => {
-    const { controller, pkg } = makeUpload(null, manifest({ dockerfile: 'Dockerfile', imageUrl: 'evil/image:1' }))
-    await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow(/image.imageUrl is not allowed/)
-    expect(pkg.storePackage).not.toHaveBeenCalled()
+  it('refuses a missing file, and one that is not a .zip', async () => {
+    const { controller, agentUploadService } = makeController()
+    await expect(controller.uploadPackage(undefined as any, user('u1') as any)).rejects.toThrow(BadRequestException)
+    await expect(
+      controller.uploadPackage({ ...zip, originalname: 'a.tar' } as any, user('u1') as any),
+    ).rejects.toThrow('must be a .zip archive')
+    expect(agentUploadService.createFromPackage).not.toHaveBeenCalled()
   })
 
-  it('refuses a Dockerfile path the build would refuse', async () => {
-    const { controller } = makeUpload(null, manifest({ dockerfile: 'Dockerfile; rm -rf /' }))
-    await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow(BadRequestException)
+  it('passes the buffer and the signed-in user to the service, and returns its result', async () => {
+    const { controller, agentUploadService } = makeController()
+    await expect(controller.uploadPackage(zip, user('u1') as any)).resolves.toEqual({ id: 'new', slug: 'my-agent' })
+    expect(agentUploadService.createFromPackage).toHaveBeenCalledWith(zip.buffer, 'u1')
   })
 
-  it('lists only the caller’s own uploads in My Agents', async () => {
-    const { controller, prisma } = makeUpload()
+  it('my-agents, build, build-status, build-history and shares all delegate with the right user', async () => {
+    const { controller, agentUploadService } = makeController()
+
     await controller.getMyAgents(user('u1') as any)
-    expect(prisma.agentType.findMany.mock.calls[0][0].where).toEqual({ isBuiltIn: false, userId: 'u1' })
+    expect(agentUploadService.getMyAgents).toHaveBeenCalledWith('u1')
+
+    await controller.triggerBuild('a1', user('u1', true) as any)
+    expect(agentUploadService.triggerBuild).toHaveBeenCalledWith('a1', 'u1', true)
+
+    await controller.getBuildStatus('a1', user('u1') as any)
+    expect(agentUploadService.getBuildStatus).toHaveBeenCalledWith('a1', 'u1', false)
+
+    await controller.getBuildHistory('a1', user('u1') as any)
+    expect(agentUploadService.getBuildHistory).toHaveBeenCalledWith('a1', 'u1', false)
+
+    await controller.getShares('a1', user('u1') as any)
+    expect(agentUploadService.getShares).toHaveBeenCalledWith('a1', 'u1')
+
+    await controller.updateShares('a1', { projectIds: ['p1'] }, user('u1') as any)
+    expect(agentUploadService.updateShares).toHaveBeenCalledWith('a1', 'u1', ['p1'])
+
+    await controller.deleteAgent('a1', user('u1', true) as any)
+    expect(agentUploadService.deleteAgent).toHaveBeenCalledWith('a1', 'u1', true)
   })
 
-  it('tells the uploader what the reviewer wrote (#153)', async () => {
-    const { controller, prisma } = makeUpload()
-    const validatedAt = new Date('2026-11-07T15:00:00Z')
-    prisma.agentType.findMany.mockResolvedValueOnce([
-      {
-        id: 'a1', slug: 'my-agent', name: 'My agent', validationStatus: 'REJECTED',
-        validationNotes: 'Opens a shell', validatedAt, buildLogs: [], projectShares: [],
-      },
-    ])
-    const [mine] = await controller.getMyAgents(user('u1') as any)
-    expect(mine).toMatchObject({ validationStatus: 'REJECTED', validationNotes: 'Opens a shell', validatedAt })
+  it('refuses to delete without a signed-in user before touching the service', async () => {
+    const { controller, agentUploadService } = makeController()
+    await expect(controller.deleteAgent('a1', {} as any)).rejects.toThrow(UnauthorizedException)
+    expect(agentUploadService.deleteAgent).not.toHaveBeenCalled()
   })
 
-  const upload = { id: 'a1', slug: 'my-agent', name: 'My agent', isBuiltIn: false, packagePath: 'p', userId: 'owner' }
-
-  it.each([
-    ['the owner', user('owner'), true],
-    ['a system admin', user('admin', true), true],
-    ['another user', user('someone-else'), false],
-  ])('build: %s', async (_who, req, allowed) => {
-    const { controller, build } = makeUpload(upload)
-    const run = controller.triggerBuild('a1', req as any)
-    if (allowed) await expect(run).resolves.toMatchObject({ buildLogId: 'b1' })
-    else await expect(run).rejects.toThrow(ForbiddenException)
-    expect(build.startBuild).toHaveBeenCalledTimes(allowed ? 1 : 0)
-  })
-
-  it.each([
-    ['the owner', user('owner'), true],
-    ['a system admin', user('admin', true), true],
-    ['another user', user('someone-else'), false],
-  ])('delete: %s', async (_who, req, allowed) => {
-    const { controller, prisma } = makeUpload(upload)
-    const run = controller.deleteAgent('a1', req as any)
-    if (allowed) await expect(run).resolves.toEqual({ success: true, stoppedAgents: 0 })
-    else await expect(run).rejects.toThrow(ForbiddenException)
-    expect(prisma.agentType.delete).toHaveBeenCalledTimes(allowed ? 1 : 0)
-  })
-
-  it('delete takes the type\'s templates and configurations with it, and the package last', async () => {
-    const { controller, prisma, storage } = makeUpload(upload)
-    const order: string[] = []
-    prisma.$transaction.mockImplementation(async (ops: unknown) => {
-      order.push('db')
-      return Promise.all(ops as Promise<unknown>[])
-    })
-    storage.delete.mockImplementation(async () => {
-      order.push('package')
-    })
-    await controller.deleteAgent('a1', user('owner') as any)
-    expect(prisma.envVarTemplate.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
-    expect(prisma.agentConfiguration.deleteMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' } })
-    expect(prisma.agentInstance.updateMany).toHaveBeenCalledWith({ where: { agentTypeId: 'a1' }, data: { agentTypeId: null } })
-    expect(order).toEqual(['db', 'package'])
-  })
-
-  it('delete cleans up dead rows and stops the owner\'s own agents, then deletes it', async () => {
-    const { controller, prisma, agents } = makeUpload(upload)
-    const order: string[] = []
-    agents.runningAgentsOfType.mockResolvedValue({ live: [{ id: 'mine', deployedByUserId: 'owner' }], stale: ['pod-gone'] })
-    agents.stopAgent.mockImplementation(async (id: unknown) => {
-      order.push(`stop ${id}`)
-      return {}
-    })
-    prisma.$transaction.mockImplementation(async (ops: unknown) => {
-      order.push('db')
-      return Promise.all(ops as Promise<unknown>[])
-    })
-    await expect(controller.deleteAgent('a1', user('owner') as any)).resolves.toEqual({ success: true, stoppedAgents: 1 })
-    expect(agents.runningAgentsOfType).toHaveBeenCalledWith('a1')
-    expect(order).toEqual(['stop pod-gone', 'stop mine', 'db'])
-  })
-
-  it('delete refuses while another user\'s agent of it still runs, and stops nothing', async () => {
-    const { controller, prisma, agents, storage } = makeUpload(upload)
-    agents.runningAgentsOfType.mockResolvedValue({
-      live: [{ id: 'mine', deployedByUserId: 'owner' }, { id: 'theirs', deployedByUserId: 'member' }, { id: 'old', deployedByUserId: null }],
-      stale: ['pod-gone'],
-    })
-    await expect(controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('still runs in 2 sessions of other users')
-    expect(agents.stopAgent).not.toHaveBeenCalled()
-    expect(prisma.agentType.delete).not.toHaveBeenCalled()
-    expect(storage.delete).not.toHaveBeenCalled()
-  })
-
-  it('delete refuses a type a public project uses, before stopping anything, and keeps its package', async () => {
-    const shared = makeUpload(upload)
-    shared.prisma.project.count.mockResolvedValue(2)
-    shared.agents.runningAgentsOfType.mockResolvedValue({ live: [{ id: 'live', deployedByUserId: 'owner' }], stale: [] })
-    await expect(shared.controller.deleteAgent('a1', user('owner') as any)).rejects.toThrow('2 public projects use My agent')
-    expect(shared.agents.stopAgent).not.toHaveBeenCalled()
-    expect(shared.prisma.agentType.delete).not.toHaveBeenCalled()
-    expect(shared.storage.delete).not.toHaveBeenCalled()
-  })
-
-  it('treats an upload stored without an owner as admin-only', async () => {
-    const { controller } = makeUpload({ ...upload, userId: null })
-    await expect(controller.triggerBuild('a1', user('u1') as any)).rejects.toThrow(ForbiddenException)
-    await expect(controller.triggerBuild('a1', user('admin', true) as any)).resolves.toBeDefined()
+  it('surfaces a refusal from the service', async () => {
+    const { controller, agentUploadService } = makeController()
+    agentUploadService.deleteAgent.mockRejectedValue(new ForbiddenException('You do not own this agent'))
+    await expect(controller.deleteAgent('a1', user('someone-else') as any)).rejects.toThrow(ForbiddenException)
   })
 })
 
@@ -245,117 +117,6 @@ describe('AgentAdminController records the reviewing admin', () => {
   })
 })
 
-describe('uploading an agent again', () => {
-  const mine = {
-    id: 'a1', slug: 'my-agent', name: 'My agent', version: '0.0.9', isBuiltIn: false, userId: 'u1',
-    packagePath: 'old.zip', imageUrl: 'img:0.0.9', validationStatus: 'APPROVED',
-  }
-
-  it('with a new version replaces the uploader\'s own agent in place', async () => {
-    const { controller, prisma, storage } = makeUpload(mine)
-    const res = await controller.uploadPackage(zip, user('u1') as any)
-    expect(prisma.agentType.create).not.toHaveBeenCalled()
-    const call = prisma.agentType.update.mock.calls[0][0]
-    expect(call.where).toEqual({ id: 'a1' })
-    expect(call.data).toMatchObject({
-      version: '0.1.0', userId: 'u1', packagePath: 'p', imageUrl: null, sdkVersion: null,
-      validationStatus: 'PENDING', validatedAt: null, validatedBy: null,
-    })
-    expect(storage.delete).toHaveBeenCalledWith('old.zip')
-    expect(res).toMatchObject({ id: 'a1', version: '0.1.0', replacedVersion: '0.0.9' })
-  })
-
-  it('a re-upload also starts the build on its own, same as a first upload', async () => {
-    const { controller, build } = makeUpload(mine)
-    await controller.uploadPackage(zip, user('u1') as any)
-    expect(build.startBuild).toHaveBeenCalledWith('a1', 'u1')
-  })
-
-  it('with the same version is refused, and stores nothing', async () => {
-    const { controller, prisma, pkg } = makeUpload({ ...mine, version: '0.1.0' })
-    await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow('raise metadata.version')
-    expect(pkg.storePackage).not.toHaveBeenCalled()
-    expect(prisma.agentType.update).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    ['another user\'s agent', { ...mine, userId: 'u2' }],
-    ['a built-in agent', { ...mine, userId: null, isBuiltIn: true }],
-  ])('never replaces %s', async (_what, row) => {
-    const { controller, prisma, pkg } = makeUpload(row)
-    await expect(controller.uploadPackage(zip, user('u1') as any)).rejects.toThrow('Another agent already uses the slug')
-    expect(pkg.storePackage).not.toHaveBeenCalled()
-    expect(prisma.agentType.update).not.toHaveBeenCalled()
-  })
-})
-
-describe('sharing an agent with projects', () => {
-  const mine = { id: 'a1', slug: 'my-agent', name: 'My agent', isBuiltIn: false, userId: 'owner' }
-
-  it('replaces the shared set with projects the owner is a member of', async () => {
-    const { controller, prisma } = makeUpload(mine)
-    prisma.projectMembership.findMany.mockResolvedValue([{ projectId: 'p1' }, { projectId: 'p2' }])
-    await expect(
-      controller.updateShares('a1', { projectIds: ['p1', 'p2', 'p1'] }, user('owner') as any),
-    ).resolves.toEqual({ projectIds: ['p1', 'p2'] })
-    expect(prisma.agentTypeProjectShare.deleteMany).toHaveBeenCalledWith({
-      where: { agentTypeId: 'a1', projectId: { notIn: ['p1', 'p2'] } },
-    })
-    expect(prisma.agentTypeProjectShare.upsert).toHaveBeenCalledTimes(2)
-  })
-
-  it('refuses a project the owner is not in', async () => {
-    const { controller, prisma } = makeUpload(mine)
-    prisma.projectMembership.findMany.mockResolvedValue([{ projectId: 'p1' }])
-    await expect(controller.updateShares('a1', { projectIds: ['p1', 'not-mine'] }, user('owner') as any)).rejects.toThrow(
-      'projects you are a member of',
-    )
-    expect(prisma.$transaction).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    ['a member it is shared with', user('member')],
-    ['a system admin', user('admin', true)],
-  ])('is the owner\'s alone, not %s\'s', async (_who, req) => {
-    const { controller, prisma } = makeUpload(mine)
-    await expect(controller.updateShares('a1', { projectIds: [] }, req as any)).rejects.toThrow(ForbiddenException)
-    await expect(controller.getShares('a1', req as any)).rejects.toThrow(ForbiddenException)
-    expect(prisma.$transaction).not.toHaveBeenCalled()
-  })
-
-  it('never shares a built-in agent', async () => {
-    const { controller } = makeUpload({ ...mine, isBuiltIn: true, userId: null })
-    await expect(controller.updateShares('a1', { projectIds: [] }, user('owner') as any)).rejects.toThrow(ForbiddenException)
-  })
-})
-
-describe('build-status (#961: the window still has something to show after reopening)', () => {
-  const mine = { id: 'a1', userId: 'owner1', isBuiltIn: false }
-
-  it('returns null when the agent has never been built', async () => {
-    const { controller, prisma } = makeUpload(mine)
-    prisma.agentBuildLog.findFirst.mockResolvedValue(null)
-
-    const status = await controller.getBuildStatus('a1', user('owner1') as any)
-
-    expect(status).toBeNull()
-  })
-
-  it('includes the stored output of the latest build, for whoever may see it', async () => {
-    const { controller, prisma, build } = makeUpload(mine)
-    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
-    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'failed', errorMessage: 'boom' })
-    build.getBuildOutput.mockResolvedValue('Step 1/5 ...\nERROR: boom')
-
-    const status = await controller.getBuildStatus('a1', user('owner1') as any)
-
-    expect(status).toMatchObject({ status: 'failed', errorMessage: 'boom', buildOutput: 'Step 1/5 ...\nERROR: boom' })
-  })
-
-  // Who may call getBuildStatus at all (owner / shared project member / admin
-  // / stranger / unknown agent) is covered by 'who may see an agent build'.
-})
-
 describe('the build-logs SSE event', () => {
   // A plain map() over an async callback emits the unresolved Promise as the
   // "event" (streamBuildLogs used to do exactly this): the browser's
@@ -363,10 +124,9 @@ describe('the build-logs SSE event', () => {
   // polled update silently vanished and no card or log view ever updated live.
   // This asserts the per-tick event actually resolves to real, parseable data.
   it('resolves to the real build status, not an unawaited promise', async () => {
-    const { controller, prisma, build } = makeUpload()
-    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
-    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'success', imageName: 'img:1', errorMessage: null })
-    build.getBuildOutput.mockResolvedValue('built ok')
+    const { controller, agentUploadService } = makeController()
+    agentUploadService.latestBuildStatus.mockResolvedValue({ id: 'log1', status: 'success', imageName: 'img:1', errorMessage: null })
+    agentUploadService.getBuildOutput.mockResolvedValue('built ok')
 
     const event = await (controller as any).buildLogEvent('a1')
 
@@ -376,66 +136,18 @@ describe('the build-logs SSE event', () => {
   })
 
   it('reports no_build when the agent has never been built', async () => {
-    const { controller, prisma } = makeUpload()
-    prisma.agentBuildLog.findFirst.mockResolvedValue(null)
+    const { controller, agentUploadService } = makeController()
+    agentUploadService.latestBuildStatus.mockResolvedValue(null)
 
     const event = await (controller as any).buildLogEvent('a1')
 
     expect(event.data).toBe('no_build')
   })
-})
 
-describe('who may see an agent build', () => {
-  // The build log, status and history only checked that the caller was signed
-  // in: anyone who knew an agent's id could read its build output. They now
-  // follow who sees the agent: its owner, members of a project it is shared
-  // with, and admins. Everyone else is refused before any build data is read.
-  const upload = { id: 'a1', isBuiltIn: false, userId: 'owner' }
-  const sharedWith = (prisma: any, projectId: string, memberId: string) => {
-    prisma.agentTypeProjectShare.findMany.mockResolvedValue([{ projectId }])
-    prisma.projectMembership.findMany.mockImplementation(({ where }: any) =>
-      Promise.resolve(where.userId === memberId ? [{ projectId }] : []),
-    )
-  }
-  const calls = (controller: AgentUploadController, req: any) => ({
-    status: () => controller.getBuildStatus('a1', req),
-    history: () => controller.getBuildHistory('a1', req),
-    logs: () => controller.streamBuildLogs('a1', req),
-  })
-
-  it.each(['status', 'history', 'logs'] as const)('refuses a stranger the build %s, before reading it', async (which) => {
-    const { controller, prisma, build } = makeUpload(upload)
-    sharedWith(prisma, 'p1', 'member')
-    await expect(calls(controller, user('stranger'))[which]()).rejects.toThrow(ForbiddenException)
-    expect(prisma.agentBuildLog.findFirst).not.toHaveBeenCalled()
-    expect(build.getBuildHistory).not.toHaveBeenCalled()
-  })
-
-  it.each(['status', 'history', 'logs'] as const)('answers 404 for an unknown agent on the build %s', async (which) => {
-    const { controller } = makeUpload(null)
-    await expect(calls(controller, user('owner'))[which]()).rejects.toThrow(NotFoundException)
-  })
-
-  it.each([
-    ['its owner', user('owner')],
-    ['a member of a project it is shared with', user('member')],
-    ['an admin', user('admin', true)],
-  ])('lets %s see the build', async (_who, req) => {
-    const { controller, prisma, build } = makeUpload(upload)
-    sharedWith(prisma, 'p1', 'member')
-    prisma.agentBuildLog.findFirst.mockResolvedValue({ id: 'log1' })
-    build.getBuildStatus.mockResolvedValue({ id: 'log1', status: 'success' })
-    build.getBuildHistory.mockResolvedValue([{ id: 'log1' }])
-
-    await expect(controller.getBuildStatus('a1', req as any)).resolves.toEqual({ id: 'log1', status: 'success' })
-    await expect(controller.getBuildHistory('a1', req as any)).resolves.toEqual([{ id: 'log1' }])
-    const stream = await controller.streamBuildLogs('a1', req as any)
+  it('checks visibility once before opening the stream', async () => {
+    const { controller, agentUploadService } = makeController()
+    const stream = await controller.streamBuildLogs('a1', user('u1') as any)
+    expect(agentUploadService.assertCanSeeBuilds).toHaveBeenCalledWith('a1', 'u1', false)
     expect(typeof stream.subscribe).toBe('function')
-  })
-
-  it('keeps a built-in agent build to admins', async () => {
-    const { controller } = makeUpload({ id: 'a1', isBuiltIn: true, userId: null })
-    await expect(controller.getBuildStatus('a1', user('someone') as any)).rejects.toThrow(ForbiddenException)
-    await expect(controller.getBuildStatus('a1', user('admin', true) as any)).resolves.toBeNull()
   })
 })

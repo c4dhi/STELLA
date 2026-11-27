@@ -69,6 +69,7 @@ nodes:
 | `icon` | string | No | Emoji icon for the node |
 | `position` | object | Yes | `{ row: number, col: number }` — layout position in the pipeline visualization |
 | `slots` | array | Yes | List of configurable parameters (see [Slots](#slots)) |
+| `verdict_rules` | object | No | `{ reactions: [...], fields: [...] }`: the verdict reactions and rule fields this step acts on. An expert file or saved configuration that uses one no node declares is refused. See [Verdict rules](../../agent-sdk/agent-manifest.md#verdict-rules). |
 
 ## Slots
 
@@ -207,7 +208,7 @@ The action is one of:
 | `override` | Speak only the template; the response LLM is bypassed (post-processing still runs). |
 | `short_circuit` | Speak only the template and end the turn — nothing downstream runs. |
 
-Verdict directives are stored per expert (under `nodes.expert_pool.experts[name].verdict_directives`), so no top-level slot is required for built-in experts — the Expert Module renders this editor for every expert. The output **interface** (`{verdict, confidence, recommendation}`) is fixed; only the verdict **labels/explanations/actions** are configurable.
+Verdict directives are stored per expert (under `nodes.expert_pool.experts[name].verdict_directives`), so no top-level slot is required for built-in experts — the Expert Module renders this editor for every expert. The output **interface** (`{verdict, confidence, recommendation}`) is fixed. Each verdict carries its label, explanation and action, plus the [verdict rules](../../agent-sdk/agent-manifest.md#verdict-rules) the agent declares: `flag`, `tone`, `must_avoid`, `reaction`, `min_confidence`/`below`, `overrides`. A saved configuration changes them verdict by verdict, field by field.
 
 ## Edges
 

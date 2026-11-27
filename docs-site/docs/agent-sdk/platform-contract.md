@@ -31,7 +31,7 @@ Connectors aren't part of `AGENT_CONFIG`; list them with `await self.connectors.
 ```python
 async def on_session_start(self, session_id, config):
     await super().on_session_start(session_id, config)   # parses self.session
-    project = os.environ["ELIAS_PROJECT_ID"]          # declared under env.required
+    project = os.environ["EXAMPLE_PROJECT_ID"]        # declared under env.required
     greeting_name = self.persona.name if self.persona else "there"
 ```
 
@@ -97,12 +97,14 @@ The SDK connects the channel itself, so an agent with its own `run_audio_loop` g
 
 ### Voice or text: `stella.interaction_mode`
 
-The participant picks a face in the face gallery. The Text face is the text interface; every other face is voice (their chat drawer is only a fallback for typing next to speech). On each switch, and when an agent joins while the Text face shows, the screen sends `stella.interaction_mode` with `{"mode": "voice" | "text"}`, and the SDK handles it for every agent. Organisers set it per invitation; see [Text sessions](../guides/text-sessions.md).
+The participant picks a face in the face gallery. The Text face is the text interface; every other face is voice (their chat drawer is only a fallback for typing next to speech). On each switch, and whenever an agent is already in the room or joins afterward, the screen sends `stella.interaction_mode` with `{"mode": "voice" | "text"}` — the room's real current mode, not only "text" — and the SDK handles it for every agent. The mode is one value for the whole agent, not one per participant, so only a participant's own screen sends it: an organiser testing a session (`SessionView.tsx`, `PeerTransport.ts`) does not, on purpose, so looking at a running text-only session can never switch it to voice for the participant. Organisers set it per invitation; see [Text sessions](../guides/text-sessions.md).
 
 - **text:** replies are published as text only. Nothing is synthesised, nothing waits for playback, and anything still playing stops. Speech from the microphone is not a turn (the screen also turns the microphone off); typed messages are.
 - **voice:** the agent speaks and listens again. The text-to-speech and speech-to-text connections stay open the whole time, so the switch takes effect on the next line.
 
 No agent code is needed: `speak()`, `speak_line()` and the sentence queue all follow the mode. `self.audio.interaction_mode` tells an agent which one is on.
+
+A deployment into a session whose invitation is locked to the Text face also sets the mode at spawn, before anything else runs: `AGENT_CONFIG` carries `interaction_mode: "text"` (a user setting, not a platform key — it isn't in `PLATFORM_CONFIG_KEYS`, since STELLA computes it from the session, not from what a deployer chooses), and the SDK applies it the moment the pipeline exists, ahead of the screen's own `stella.interaction_mode` for that same join (#1016). The agent still starts in voice, as always, for any other deployment, and the switch above is still what moves it for the rest of the session.
 
 ### Whether the agent speaks: `stella.speech`
 
@@ -118,7 +120,7 @@ When the time cap runs out or the organiser ends the session, the SDK asks the a
 | `wrap_up` | The SDK calls `on_session_ending(session_id, reason, deadline_ms)` while the room is still live. What it yields is spoken; if it yields nothing, the farewell is spoken instead |
 | `silent` | The session just closes |
 
-By default `session_end_mode()` reads the `SESSION_END_MODE` env var. An agent with work to do at a real session end overrides it and returns `wrap_up`; otherwise its `on_session_ending` never runs. ELIAS-Interviewer does this to close the ELIAS interview. Stella Light overrides it to read its Configurator's `interrupt_handler` node instead.
+By default `session_end_mode()` reads the `SESSION_END_MODE` env var. An agent with work to do at a real session end overrides it and returns `wrap_up`; otherwise its `on_session_ending` never runs. Stella Light overrides it to read its Configurator's `interrupt_handler` node instead.
 
 `on_session_end` runs on every teardown, including an auto-pause, so it is the place to flush, not to finish.
 

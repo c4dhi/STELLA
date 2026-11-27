@@ -24,12 +24,12 @@ The schema is generated from STELLA's own validator (`npm run manifest:schema`),
 version: "2.0"
 
 metadata:
-  name: "ELIAS Interviewer"
-  slug: "elias-interviewer"          # lowercase, digits, hyphens; unique
+  name: "Example Interviewer"
+  slug: "example-interviewer"        # lowercase, digits, hyphens; unique
   version: "0.1.0"                   # semantic version of the agent
-  description: "Runs an ELIAS interview guide word for word"
+  description: "Runs an interview guide word for word"
   icon: "🎙️"
-  tags: [interview, elias]
+  tags: [interview]
 
 capabilities: [voice, text]          # voice, text, progress, plans, experts, companion
 
@@ -46,7 +46,7 @@ features:
 env:
   required:                          # deploy is refused without these
     - OPENAI_API_KEY
-    - ELIAS_PROJECT_ID
+    - EXAMPLE_PROJECT_ID
   optional:                          # offered at deploy
     - name: STELLA_LANGUAGE
       description: "Pin the conversation to one language (e.g. 'de')"
@@ -55,10 +55,10 @@ env:
       group: "Conversation"          # the tab it appears in
 
 connectors:                          # outside MCP servers the agent needs
-  - slot: elias
+  - slot: notes
     kind: mcp
     required: true
-    label: "ELIAS"
+    label: "Notes"
     requiredTools: [get_interview_guide, save_answer]
 
 image:
@@ -168,7 +168,9 @@ STELLA owns the list of reactions and fields. A pipeline node says which ones it
 
 An expert file or a saved configuration that uses a reaction or field no node declares is refused. A saved configuration overrides a verdict field by field, so one saved before a field existed still gets that field's default.
 
-**Safety experts.** `"safety": true` in an expert's file makes it a safety expert. It runs unless the configuration records that it was turned off: `safety_off: {confirmed: true, by, at}` on that expert. `enabled: false` alone doesn't turn it off, and neither does a prompt placeholder the session can't fill. Its `never_step_down` verdicts (default `["critical"]`) keep their level whatever `min_confidence` says. The SDK's `stella_agent_sdk.experts.verdict_rules` has the helpers: `merge_verdict_directives`, `settle_verdict`, `expert_enabled`, `may_drop_for` and `check_verdict_rules`.
+**Safety experts.** `"safety": true` in an expert's file makes it a safety expert. It runs unless the configuration records that it was turned off: `safety_off: {confirmed: true, by, at}` on that expert. `enabled: false` alone doesn't turn it off, and neither does a prompt placeholder the session can't fill. Its `never_step_down` verdicts (default `["critical"]`) keep their level whatever `min_confidence` says. The SDK's `stella_agent_sdk.experts.verdict_rules` has the helpers: `merge_verdict_directives`, `settle_verdict`, `expert_enabled`, `may_drop_for` and `check_verdict_rules`. STELLA checks the declaration and the record, but the agent is what keeps the floor: it has to use these helpers when it loads its experts and settles their verdicts. The built-in agents adopt them in follow-up changes (V2, then Jev). `safety` and `never_step_down` belong to the expert's file, and a saved configuration that sets them is refused.
+
+**Gates** ("skip expert A when expert B says X, at least this sure") exist only in the SDK for now (`Gate.parse`, `gated_experts`): no manifest declaration or configuration setting reads them yet.
 
 ### The client channel
 
