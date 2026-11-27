@@ -12,6 +12,8 @@ import {
   PLAN_MODES,
   RESOURCE_DEFAULTS,
   SLUG_REGEX,
+  VERDICT_REACTIONS,
+  VERDICT_RULE_FIELDS,
   VERSION_REGEX,
   parseCpuMillicores,
   parseMemoryBytes,
@@ -342,6 +344,16 @@ const pipelineNodeSchema = z
     icon: z.string().optional(),
     position: z.object({ row: z.number(), col: z.number() }),
     slots: z.array(pipelineSlotSchema),
+    // Which verdict rules this step acts on (#221): the reactions it carries out
+    // and the rule fields it reads. A saved configuration or an expert file that
+    // uses one no node declares is refused.
+    verdict_rules: z
+      .object({
+        reactions: z.array(z.enum(VERDICT_REACTIONS)).default([]),
+        fields: z.array(z.enum(VERDICT_RULE_FIELDS)).default([]),
+      })
+      .strict()
+      .optional(),
   })
   .passthrough()
 

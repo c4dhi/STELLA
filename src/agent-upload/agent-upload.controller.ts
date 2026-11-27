@@ -163,7 +163,11 @@ export class AgentUploadController {
 
     // Same mapping as built-in agents (the seed): manifest → AgentType columns,
     // including the default experts from config/experts/*.json.
-    const expertDefaults = this.agentPackageService.readExpertDefaults(file.buffer, manifest.capabilities)
+    const expertDefaults = this.agentPackageService.readExpertDefaults(
+      file.buffer,
+      manifest.capabilities,
+      manifest.pipelineSchema as Record<string, unknown> | undefined,
+    )
     const data = {
       ...manifestToAgentTypeData(manifest, expertDefaults),
       isBuiltIn: false,

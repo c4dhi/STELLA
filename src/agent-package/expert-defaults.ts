@@ -1,4 +1,5 @@
 import { STRUCTURAL_EXPERT_CAPABILITY, VERDICT_ACTIONS } from './manifest-defaults.js'
+import { checkExpertSafety, checkVerdictRules, verdictRuleSupport } from './verdict-rules.js'
 
 /** One config/experts/<name>.json file of an agent package. */
 export interface ExpertFile {
@@ -23,13 +24,17 @@ export function isExpertFilePath(path: string): boolean {
  *
  * Throws on a broken file (invalid JSON, no name, duplicate name, unknown verdict
  * action) so a mistake fails the seed or the upload instead of reaching runtime,
- * where an unknown action would be silently coerced to "inform".
+ * where an unknown action would be silently coerced to "inform". Also throws on
+ * a verdict rule the agent's pipeline doesn't declare it acts on, or a malformed
+ * safety declaration (#221).
  */
 export function selectExpertDefaults(
   files: ExpertFile[],
   capabilities: readonly string[],
+  pipelineSchema?: Record<string, unknown> | null,
 ): Record<string, unknown>[] | null {
   const caps = new Set(capabilities)
+  const support = verdictRuleSupport(pipelineSchema)
   const experts: Record<string, unknown>[] = []
   const seen = new Set<string>()
 
@@ -53,6 +58,8 @@ export function selectExpertDefaults(
     }
     seen.add(name)
     assertVerdictActions(expert, file.path)
+    const problems = [...checkVerdictRules(name, expert.verdict_directives, support), ...checkExpertSafety(expert)]
+    if (problems.length > 0) throw new Error(`Expert config ${file.path}: ${problems.join('; ')}`)
 
     if (caps.has(STRUCTURAL_EXPERT_CAPABILITY[name] ?? 'experts')) experts.push(expert)
   }

@@ -142,6 +142,34 @@ settings.get("expert_pool.safety_threshold")      # its value, else the default
 
 An agent publishes default experts from `config/experts/*.json`, one expert per file. Each expert needs the matching capability. `task_extraction` needs `plans` and `companion_router` needs `companion`. Every other expert needs `experts`. A broken file stops the upload or the seed: invalid JSON, a missing or duplicate `name`, or an unknown verdict action (`inform`, `prepend`, `override`, `short_circuit`).
 
+#### Verdict rules
+
+What a verdict leads to is configuration, not code. Each verdict in an expert's `verdict_directives` can carry these rule fields next to its `action`, `template` and `description`:
+
+| Field | Meaning |
+|---|---|
+| `flag` | The verdict counts as a warning. |
+| `tone` | The tone the reply should take. |
+| `must_avoid` | Lines the reply must not cross (a list). |
+| `reaction` | What the agent does next: `none`, `ask_followup`, `redirect`, `ask_about_pending`, `ask_back` or `repeat_request`. |
+| `reaction_field` | The field of the expert's output that holds the text for the reaction. |
+| `min_confidence`, `below` | How sure the agent must be of this verdict, from 0 to 1, and the verdict it steps down to when it isn't. |
+| `overrides` | Experts whose verdict this one wins over in a conflict (a list). |
+
+STELLA owns the list of reactions and fields. A pipeline node says which ones it acts on:
+
+```yaml
+- id: arbitration
+  # ...
+  verdict_rules:
+    reactions: [ask_followup, redirect, repeat_request]
+    fields: [flag, tone, must_avoid, reaction, reaction_field, overrides]
+```
+
+An expert file or a saved configuration that uses a reaction or field no node declares is refused. A saved configuration overrides a verdict field by field, so one saved before a field existed still gets that field's default.
+
+**Safety experts.** `"safety": true` in an expert's file makes it a safety expert. It runs unless the configuration records that it was turned off: `safety_off: {confirmed: true, by, at}` on that expert. `enabled: false` alone doesn't turn it off, and neither does a prompt placeholder the session can't fill. Its `never_step_down` verdicts (default `["critical"]`) keep their level whatever `min_confidence` says. The SDK's `stella_agent_sdk.experts.verdict_rules` has the helpers: `merge_verdict_directives`, `settle_verdict`, `expert_enabled`, `may_drop_for` and `check_verdict_rules`.
+
 ### The client channel
 
 ```yaml

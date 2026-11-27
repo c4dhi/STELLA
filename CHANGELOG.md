@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Groundwork for verdict rules in the configuration.** An agent's `agent.yaml` can now say which reactions and rule fields each pipeline step acts on, and STELLA refuses an expert file or saved configuration that uses one it doesn't. A saved configuration overrides an expert's verdicts field by field, so one saved earlier keeps any new field's default. An expert marked `safety: true` can only be turned off with a confirmed, recorded step. The built-in agents switch to these rules in follow-up changes, so nothing changes for them yet (#1060)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
