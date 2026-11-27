@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Public projects can show participants a welcome message. Set it in public setup or later in the public link dialog; every participant who joins through the link reads it on screen before the session (the agent doesn't say it) (#1046)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly

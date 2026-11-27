@@ -37,10 +37,12 @@ export default function PublicLinkModal({
   const [savedMessage, setSavedMessage] = useState(welcomeMessage ?? '')
   const [messageDraft, setMessageDraft] = useState(welcomeMessage ?? '')
   const [isSavingMessage, setIsSavingMessage] = useState(false)
+  const [messageError, setMessageError] = useState<string | null>(null)
   const messageChanged = messageDraft.trim() !== savedMessage.trim()
 
   const handleSaveMessage = async () => {
     setIsSavingMessage(true)
+    setMessageError(null)
     try {
       const next = messageDraft.trim() || null
       await apiClient.updateProjectPublicConfig(projectId, {
@@ -52,6 +54,7 @@ export default function PublicLinkModal({
       onWelcomeMessageChange?.(next)
     } catch (err) {
       console.error('Failed to save welcome message:', err)
+      setMessageError('Could not save the message. Please try again.')
     } finally {
       setIsSavingMessage(false)
     }
@@ -262,7 +265,9 @@ export default function PublicLinkModal({
                   `}
                 />
                 <div className={`mt-1 flex items-center justify-between text-xs font-light ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
-                  <span>Applies to participants who join from now on.</span>
+                  {messageError
+                    ? <span role="alert" className={isDark ? 'text-red-400' : 'text-red-600'}>{messageError}</span>
+                    : <span>Applies to participants who join from now on.</span>}
                   <div className="flex items-center gap-3">
                     <span>{messageDraft.length}/{WELCOME_MESSAGE_MAX_LENGTH}</span>
                     {messageChanged && (
