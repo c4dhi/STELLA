@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The GPU STT and TTS images no longer install Python from the deadsnakes PPA, which answered 503 on about half its downloads and failed the 2.1.0 production deploy three times. Python 3.11 is now built from python.org's own source tarball instead (#1010)
 - **The hardware-fit traffic light now shows one numbered box per session count, instead of an unlabelled strip.** Each box is coloured by its own reading, with a "Sessions at once" label and hover text naming the reading and whether it comes from the load test (#1053)
 - **Public-link sessions now keep the project's maximum length.** The non-blocking public join (the one the page actually uses) created its invitation without the project's session-duration cap, so a public-link participant's session ran with no time limit (#1054)
+- **A text message typed while speech is still loading is no longer lost.** While the agent waits for STT/TTS at start (up to `STELLA_SPEECH_WAIT_SECONDS`), nothing was listening for a participant's typed chat message, so anything sent during "Getting ready to listen…" vanished with no trace. It is now kept and answered, in order, once the agent is ready (#999)
 
 ### Changed
 
