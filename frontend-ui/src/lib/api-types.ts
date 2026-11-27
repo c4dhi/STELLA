@@ -1738,7 +1738,7 @@ export interface ExpertDefault {
 export interface ConfigurableSlot {
   id: string
   label: string
-  type: 'text' | 'number' | 'select' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives'
+  type: 'text' | 'number' | 'select' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives' | 'gate_list'
   description?: string
   default?: unknown
   options?: string[]  // for select type
@@ -1784,7 +1784,7 @@ export interface PipelineThreshold {
  */
 export interface ConfigSetting {
   key: string
-  type: 'string' | 'text' | 'boolean' | 'integer' | 'number' | 'enum' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives'
+  type: 'string' | 'text' | 'boolean' | 'integer' | 'number' | 'enum' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives' | 'gate_list'
   label?: string
   description?: string
   default?: unknown
