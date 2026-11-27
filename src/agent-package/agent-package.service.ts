@@ -227,7 +227,11 @@ export class AgentPackageService {
    * from its config/experts/*.json. Same rules as built-in agents: see
    * selectExpertDefaults. Tolerant of a top-level package folder.
    */
-  readExpertDefaults(zipBuffer: Buffer, capabilities: readonly string[]): Record<string, unknown>[] | null {
+  readExpertDefaults(
+    zipBuffer: Buffer,
+    capabilities: readonly string[],
+    pipelineSchema?: Record<string, unknown> | null,
+  ): Record<string, unknown>[] | null {
     let zip: AdmZip
     try {
       zip = new AdmZip(zipBuffer)
@@ -238,7 +242,7 @@ export class AgentPackageService {
       .getEntries()
       .filter((entry) => !entry.isDirectory && isExpertFilePath(entry.entryName))
       .map((entry) => ({ path: entry.entryName, content: entry.getData().toString('utf-8') }))
-    return selectExpertDefaults(files, capabilities)
+    return selectExpertDefaults(files, capabilities, pipelineSchema)
   }
 
   /**

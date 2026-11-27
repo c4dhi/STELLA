@@ -651,6 +651,44 @@
                   ],
                   "additionalProperties": {}
                 }
+              },
+              "verdict_rules": {
+                "type": "object",
+                "properties": {
+                  "reactions": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "ask_followup",
+                        "redirect",
+                        "ask_about_pending",
+                        "ask_back",
+                        "repeat_request"
+                      ]
+                    }
+                  },
+                  "fields": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "flag",
+                        "tone",
+                        "must_avoid",
+                        "reaction",
+                        "reaction_field",
+                        "min_confidence",
+                        "below",
+                        "overrides"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [

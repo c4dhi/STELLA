@@ -55,7 +55,11 @@ export function loadAgentDirectory(directoryPath: string): LoadedAgentDirectory 
     directoryPath,
     manifest,
     warnings: parsed.warnings,
-    expertDefaults: selectExpertDefaults(readExpertFiles(directoryPath), manifest.capabilities),
+    expertDefaults: selectExpertDefaults(
+      readExpertFiles(directoryPath),
+      manifest.capabilities,
+      manifest.pipelineSchema as Record<string, unknown> | undefined,
+    ),
   }
 }
 

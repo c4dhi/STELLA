@@ -4,6 +4,7 @@ import {
   configSettingsOf,
   type ConfigSetting,
 } from '../agent-package/config-settings.js';
+import { checkExpertListValue, checkVerdictRules, verdictRuleSupport } from '../agent-package/verdict-rules.js';
 
 /**
  * Pure compatibility helpers for AgentConfiguration overrides against an
@@ -65,6 +66,14 @@ export function validateConfigurationAgainstSchema(
         }
         const problem = checkConfigSettingValue(setting, value);
         if (problem) throw new Error(`Setting ${key} ${problem}`);
+        if (setting.type === 'expert_list') {
+          // Verdict rules and safety_off records inside the experts (#221).
+          const [first] = checkExpertListValue(value, verdictRuleSupport(pipelineSchema));
+          if (first) throw new Error(`Setting ${key}: ${first}`);
+        } else if (setting.type === 'verdict_directives') {
+          const [first] = checkVerdictRules(key, value, verdictRuleSupport(pipelineSchema));
+          if (first) throw new Error(`Setting ${key}: ${first}`);
+        }
       }
     }
   }

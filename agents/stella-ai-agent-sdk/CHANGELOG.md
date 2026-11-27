@@ -14,6 +14,7 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`AGENT_CONFIG` carries `interaction_mode`** when the deployment is into a session locked to the Text face (#1016). `run_agent_from_env` applies it to the `AudioPipeline` right after constructing it, before anything else runs, so a reply can't reach the TTS speech worker during the window before the screen's own `stella.interaction_mode` announcement would otherwise arrive. It's a plain `AGENT_CONFIG` key, not a platform key (not in `PLATFORM_KEYS`): STELLA computes it from the session, not from what a deployer chooses.
+- **Verdict rules** (#221). `stella_agent_sdk.experts.verdict_rules` holds what a verdict leads to as configuration: the platform's list of reactions (`REACTIONS`) and rule fields (`RULE_FIELDS`), `merge_verdict_directives` (a saved configuration overrides a verdict field by field), `check_verdict_rules` against what the agent declares, `settle_verdict` (step a verdict down while the agent isn't sure enough), the safety floor (`expert_enabled`, `may_drop_for`, `never_step_down`: a `"safety": true` expert runs unless the configuration recorded `safety_off`) and `Gate`/`gated_experts`. Nothing in it knows an expert by name.
 
 ### Fixed
 
