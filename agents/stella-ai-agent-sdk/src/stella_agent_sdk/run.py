@@ -434,16 +434,19 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             agent_id=agent_id,
         )
 
-        # AudioPipeline's own __init__ just took over room_manager's single
-        # data-received slot, so this is the only gap (#193): hand it
-        # whatever arrived while it didn't exist yet, oldest first.
-        _replay_early_data_messages(early_data_messages, audio_pipeline)
-
         # 6. Inject audio pipeline and agent identity into agent
         agent._audio_pipeline = audio_pipeline
         # Screen events reach the agent from the start, also for an agent that
         # runs its own run_audio_loop (the SDK handles stella.* events itself).
         audio_pipeline.on_client_event(agent._dispatch_client_event)
+
+        # AudioPipeline's own __init__ just took over room_manager's single
+        # data-received slot, so this is the only gap (#193): hand it
+        # whatever arrived while it didn't exist yet, oldest first. Done only
+        # now, after on_client_event is wired above - a buffered client_event
+        # replayed any earlier would reach no handler and be dropped.
+        _replay_early_data_messages(early_data_messages, audio_pipeline)
+
         agent._session_id = session_id
         agent._agent_name = agent_name
         agent._agent_id = agent_id

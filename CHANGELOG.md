@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A text message typed while speech is still loading is no longer lost.** While the agent waits for STT/TTS at start (up to `STELLA_SPEECH_WAIT_SECONDS`), nothing was listening for a participant's typed chat message, so anything sent during "Getting ready to listen…" vanished with no trace. It is now kept and answered, in order, once the agent is ready (#999)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
