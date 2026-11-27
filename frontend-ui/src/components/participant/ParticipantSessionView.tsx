@@ -13,7 +13,7 @@ import {
   HelpCircle,
   Clock,
 } from 'lucide-react'
-import { Room, RoomEvent, Track, RemoteTrack, RemoteTrackPublication, RemoteParticipant, LocalTrackPublication } from 'livekit-client'
+import { Room, RoomEvent, Track, RemoteTrack, RemoteTrackPublication, RemoteParticipant, LocalTrackPublication, DisconnectReason } from 'livekit-client'
 import TranscriptOverlay from '../face/TranscriptOverlay'
 import TeleprompterOverlay from '../face/TeleprompterOverlay'
 import VisualizerGallery from '../face/VisualizerGallery'
@@ -339,8 +339,11 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
         await apiClient.participantHeartbeat(sessionData.authToken)
       } catch (error: any) {
         console.error('Heartbeat failed:', error)
-        if (error?.statusCode === 404) {
-          // Session/participant is gone (e.g. project deleted mid-call) - stop retrying.
+        if (error?.statusCode === 404 || error?.statusCode === 401) {
+          // Session/participant is gone (e.g. project deleted mid-call: the
+          // participant row is cascade-deleted, so the JWT guard itself
+          // rejects the token with 401 "Participant not found" before this
+          // request ever reaches a 404) - stop retrying.
           setConnectionError('This conversation has ended.')
           clearInterval(intervalId)
         }
@@ -891,7 +894,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
   )
 
   // Handle room disconnection
-  const handleDisconnected = useCallback(() => {
+  const handleDisconnected = useCallback((reason?: DisconnectReason) => {
     cleanupAudio()
     if (sessionCompletedRef.current || sessionTimedOut) {
       return
@@ -902,6 +905,14 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     // rather than surfacing a scary "Disconnected" error.
     if (sessionEndingRef.current) {
       setSessionTimedOut(true)
+      return
+    }
+    // The organiser deleted the project mid-call (#214, #1047): LiveKit tears
+    // down the room server-side, which disconnects us with ROOM_DELETED. That's
+    // not a connection failure, so say what actually happened instead of the
+    // generic error.
+    if (reason === DisconnectReason.ROOM_DELETED) {
+      setConnectionError('This conversation has ended.')
       return
     }
     setConnectionError('Disconnected from session')
