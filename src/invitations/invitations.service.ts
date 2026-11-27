@@ -263,6 +263,7 @@ export class InvitationsService {
             id: true,
             name: true,
             status: true,
+            project: { select: { isPublic: true } },
           },
         },
         participant: {
@@ -295,6 +296,11 @@ export class InvitationsService {
     return {
       participantName: invitation.participantName,
       customMessage: invitation.customMessage,
+      // A public-link participant's name is generated, so the join page
+      // doesn't greet them by it (#213). Taken from the project: a personal
+      // invite sent into a public project's session (rare) also loses its
+      // "Hi <name>", which is harmless.
+      fromPublicLink: invitation.session.project?.isPublic ?? false,
       visualizerType: invitation.visualizerType,
       visualizerLocked: invitation.visualizerLocked,
       maxSessionDurationSeconds: invitation.maxSessionDurationSeconds,

@@ -6,6 +6,7 @@ import { CreateAgentConfigurationDto } from '../../agent-configurations/dto/crea
 import { UpdateAgentConfigurationDto } from '../../agent-configurations/dto/update-agent-configuration.dto.js';
 import {
   CREATES,
+  DELETES,
   McpToolProvider,
   READ_ONLY,
   UPDATES,
@@ -118,6 +119,23 @@ export class AgentConfigurationsTools implements McpToolProvider {
         },
       }),
       defineTool({
+        name: 'agent_configurations_duplicate',
+        title: 'Duplicate an agent configuration',
+        description:
+          'Copy an agent configuration the user owns into a new one, named "<name> (Copy)", for the same ' +
+          'agent type. Edit the copy with agent_configurations_update; the original is untouched.',
+        scope: 'mcp:write',
+        input: { agentConfigurationId },
+        annotations: CREATES,
+        handler: async ({ agentConfigurationId }, ctx) => {
+          const copy = await this.configurations.duplicate(
+            agentConfigurationId,
+            ctx.auth.user.userId,
+          );
+          return this.full(copy.id, ctx.auth.user.userId);
+        },
+      }),
+      defineTool({
         name: 'agent_configurations_update',
         title: 'Update an agent configuration',
         description:
@@ -138,6 +156,23 @@ export class AgentConfigurationsTools implements McpToolProvider {
           );
           return this.full(agentConfigurationId, ctx.auth.user.userId);
         },
+      }),
+      defineTool({
+        name: 'agent_configurations_delete',
+        title: 'Delete an agent configuration',
+        description:
+          'Delete an agent configuration, as a system admin. The underlying ownership check has no admin ' +
+          "override, so today this only reaches the calling admin's own configurations, not every user's.",
+        scope: 'mcp:write',
+        systemAdminOnly: true,
+        input: { agentConfigurationId },
+        annotations: DELETES,
+        handler: async ({ agentConfigurationId }, ctx) => ({
+          ...(await this.configurations.remove(
+            agentConfigurationId,
+            ctx.auth.user.userId,
+          )),
+        }),
       }),
     ];
   }

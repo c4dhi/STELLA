@@ -11,6 +11,19 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`AGENT_CONFIG` carries `interaction_mode`** when the deployment is into a session locked to the Text face (#1016). `run_agent_from_env` applies it to the `AudioPipeline` right after constructing it, before anything else runs, so a reply can't reach the TTS speech worker during the window before the screen's own `stella.interaction_mode` announcement would otherwise arrive. It's a plain `AGENT_CONFIG` key, not a platform key (not in `PLATFORM_KEYS`): STELLA computes it from the session, not from what a deployer chooses.
+- **Verdict rules** (#221). `stella_agent_sdk.experts.verdict_rules` holds what a verdict leads to as configuration: the platform's list of reactions (`REACTIONS`) and rule fields (`RULE_FIELDS`), `merge_verdict_directives` (a saved configuration overrides a verdict field by field), `check_verdict_rules` against what the agent declares, `settle_verdict` (step a verdict down while the agent isn't sure enough), the safety floor (`expert_enabled`, `may_drop_for`, `never_step_down`: a `"safety": true` expert runs unless the configuration recorded `safety_off`) and `Gate`/`gated_experts`. Nothing in it knows an expert by name.
+
+### Fixed
+
+- **A message that arrives before any data handler is registered no longer vanishes without a trace** (#1016). `RoomManager`'s data callback is a single-slot registration, so a message delivered before `AudioPipeline` constructs (which only happens once STT/TTS have connected) had nowhere to go and was silently dropped. It now logs a warning naming the sender and the message size.
+- **`examples/openai_agent.py` and `BaseAgent.process`'s own streaming example now follow the SDK's accumulated-text contract** (#903). Both used to yield a raw per-token delta and close the stream with an empty final chunk — the exact anti-pattern `docs-site/docs/agent-sdk/streaming.md` warns against — which broke the published text and the spoken reply for anyone who copied them. `AgentOutput.text_chunk`'s docstring now says so directly.
+- **A welcome message (or any text) yielded from `on_ready()` is shown and spoken, not dropped.** `to_data_payload()` has always returned `None` for `TEXT_CHUNK`/`TEXT_FINAL` — the audio loop handles those itself — but the `on_ready` caller treated that `None` as "nothing to send" instead of publishing and speaking the text itself.
+- **`on_interrupt()`'s docstring, and the `__init__.py`/`run_agent_from_env` docstring examples, no longer describe behaviour the SDK doesn't have.** `on_interrupt()` is abstract but the default `run_audio_loop()` never calls it (wiring it into barge-in is #140); the two entry-point docstrings called a nonexistent `self.audio.audio_out()` instead of `publish_text()`/`speak()`.
+- **Text typed while speech services were still loading was lost with no trace** (#999). `run_agent_from_env` joins the room before waiting (up to `STELLA_SPEECH_WAIT_SECONDS`) for STT/TTS, but nothing was listening for data-channel messages until `AudioPipeline` existed afterwards. A message typed during that wait is now buffered with its real arrival time and handed to the agent as soon as it starts, answered in order — the timestamp is preserved, not reset to replay time, so an agent telling "before the first question" apart from an answer (e.g. the ELIAS interviewer, #219) still sees it correctly.
+
 ## [0.11.0] - 2026-11-23
 
 Ships with STELLA 2.1.0. New: capabilities from the session, `{{capabilities}}`, settings from `agent.yaml`, and the wait for speech services. Breaking: `BaseTool.guidance` is removed, and `STTClient.connect()`/`TTSClient.connect()` take `wait_seconds`.

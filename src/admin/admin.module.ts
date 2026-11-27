@@ -22,13 +22,14 @@ import { KubernetesModule } from '../kubernetes/kubernetes.module.js';
  * - User management (verification, admin status)
  */
 @Module({
-  imports: [
-    PrismaModule,
-    KubernetesModule,
-    ScheduleModule.forRoot(),
-  ],
+  imports: [PrismaModule, KubernetesModule, ScheduleModule.forRoot()],
   controllers: [AdminController],
-  providers: [AdminService, ServerMetricsService, UsageLoggingService, CapacityService],
-  exports: [AdminService],
+  providers: [
+    AdminService,
+    ServerMetricsService,
+    UsageLoggingService,
+    CapacityService,
+  ],
+  exports: [AdminService, CapacityService],
 })
 export class AdminModule {}

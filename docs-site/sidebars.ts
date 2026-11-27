@@ -84,7 +84,6 @@ const sidebars: SidebarsConfig = {
         },
         'agents/stella-jev',
         'agents/echo-agent',
-        'agents/elias-interviewer',
         // Deprecated — kept in the sidebar so existing links resolve and the
         // migration guidance stays findable, but last, after what to actually use.
         'agents/stella-light-agent',

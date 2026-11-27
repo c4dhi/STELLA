@@ -35,6 +35,7 @@ from stella_agent_sdk import AgentInput
 from stella_agent_sdk import AgentOutput
 from stella_agent_sdk import StatusSubtype, BargeInDecision
 from stella_agent_sdk.services import StateMachineClient
+from stella_agent_sdk.experts.verdict_rules import safety_switched_off
 from stella_agent_sdk.tools import ToolRegistry
 from stella_v2_agent.capabilities import parse_extras, with_extras
 from stella_v2_agent.companion_tools import create_companion_tools
@@ -63,7 +64,9 @@ from stella_v2_agent.companion import (
     ExitStep,
     commands_from,
     decision as companion_decision,
+    language_from_history,
     opening_from_history,
+    recorded_decision,
     started_label,
     woken_tag,
     exit_dialogue,
@@ -141,6 +144,13 @@ def _placeholders_beyond(version: str, prompt: str) -> List[str]:
     for other in available_versions():
         fillable.update(n for n in unfilled if not get_compiler(other).validate("{{" + n + "}}"))
     return [n for n in unfilled if n in fillable]
+
+
+def _held_on_for_safety(config: Any) -> bool:
+    """A safety expert the configuration hasn't recorded as switched off (#221)."""
+    return bool(getattr(config, "safety", False)) and not safety_switched_off(
+        {"safety_off": getattr(config, "safety_off", None)}
+    )
 
 
 def _at_least(version: Any, floor: str) -> bool:
@@ -1309,6 +1319,8 @@ class StellaV2Agent(BaseAgent):
                 continue
             if isinstance(override, dict) and "enabled" in override:
                 continue  # the configuration decided; apply_config has set it
+            if _held_on_for_safety(config):
+                continue
             config.enabled = shipped and _at_least(authored, config.enabled_from_compiler)
             if not config.enabled:
                 logger.info(
@@ -1319,7 +1331,15 @@ class StellaV2Agent(BaseAgent):
 
         for config in self.expert_registry.get_enabled():
             missing = _placeholders_beyond(self._compiler_version, config.system_prompt)
-            if missing:
+            if missing and _held_on_for_safety(config):
+                # A safety expert is never lost to its own prompt (#221): it runs
+                # with the placeholder left as written.
+                logger.warning(
+                    f"{config.name} is a safety expert: kept on although its prompt uses "
+                    f"{', '.join('{{' + m + '}}' for m in missing)}, which prompt compiler "
+                    f"{self._compiler_version} can't fill"
+                )
+            elif missing:
                 config.enabled = False
                 logger.info(
                     f"{config.name} expert off: its prompt uses "
@@ -1604,7 +1624,7 @@ class StellaV2Agent(BaseAgent):
                 break
             total_scanned += len(messages)
             for msg in reversed(messages):
-                decision = ((msg.envelope.get("data") or {}).get("metadata") or {}).get("decision") or {}
+                decision = recorded_decision(msg.envelope)
                 if decision.get("kind") == "activity_started" and decision.get("label") == label:
                     return parse_timestamp(msg.timestamp)
             if len(messages) < _ACTIVITY_START_PAGE_SIZE:
@@ -1758,7 +1778,19 @@ class StellaV2Agent(BaseAgent):
             return
         history = await self._fetch_conversation_history(limit=self._custom_history_limit)
         sm_context = await self._fetch_sm_context() if self.sm_client else {}
-        language = self.language_resolver.forced or getattr(self, "_session_language", None)
+        # A fresh pod (a wake after auto-pause) has resolved no language yet:
+        # apply the deployment/persona pin, then fall back to the transcript, so
+        # the opening is not written in English by default (#159).
+        self._apply_session_language_pin()
+        language = (
+            self.language_resolver.forced
+            or getattr(self, "_session_language", None)
+            or language_from_history(
+                history,
+                supported=tuple(self.language_resolver.supported),
+                bar=self.language_resolver.text_bar,
+            )
+        )
         sm_context["language"] = language
         sm_context["language_pinned"] = bool(self.language_resolver.forced)
         voice = (self._persona_config or {}).get("voice") or None

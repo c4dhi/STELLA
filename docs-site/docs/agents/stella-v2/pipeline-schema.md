@@ -69,6 +69,8 @@ nodes:
 | `icon` | string | No | Emoji icon for the node |
 | `position` | object | Yes | `{ row: number, col: number }` — layout position in the pipeline visualization |
 | `slots` | array | Yes | List of configurable parameters (see [Slots](#slots)) |
+| `verdict_rules` | object | No | `{ reactions: [...], fields: [...] }`: the verdict reactions and rule fields this step acts on. An expert file or saved configuration that uses one no node declares is refused. See [Verdict rules](../../agent-sdk/agent-manifest.md#verdict-rules). |
+| `path` | object | No | `{ kind: side \| parallel, input, output }`: how the Configurator draws a step that is not in the turn's chain. `side` puts it on its own row between its own two ends (barge-in: `input: "Typed interruption"`, `output: "Commit / Resume"`); `parallel` feeds it from the turn's input and into its output, with the two labels on those edges (a bridge phrase). Without it, the step is drawn where its edges put it. |
 
 ## Slots
 
@@ -80,7 +82,7 @@ Slots define the individual parameters that can be configured for each node.
 |-------|------|----------|-------------|
 | `id` | string | Yes | Unique within the node. Used as key in `config.nodes[nodeId][slotId]`. |
 | `label` | string | Yes | Human-readable name |
-| `type` | string | Yes | One of: `text`, `number`, `select`, `string_list`, `key_value`, `expert_list`, `verdict_directives` |
+| `type` | string | Yes | One of: `text`, `number`, `select`, `string_list`, `key_value`, `expert_list`, `verdict_directives`, `gate_list` |
 | `description` | string | No | Help text explaining what this parameter controls |
 | `default` | any | No | Default value used when no override is specified |
 
@@ -160,10 +162,8 @@ Key-value map. Used for mappings like expert → tone.
 - id: tone_map
   label: "Tone Map"
   type: key_value
-  description: "Expert name → tone when that expert flags something"
+  description: "Expert name → tone, overriding the tone set on that expert's verdicts"
   default:
-    medical: "cautious"
-    legal: "cautious"
     probing: "curious"
 ```
 
@@ -209,7 +209,7 @@ The action is one of:
 | `override` | Speak only the template; the response LLM is bypassed (post-processing still runs). |
 | `short_circuit` | Speak only the template and end the turn — nothing downstream runs. |
 
-Verdict directives are stored per expert (under `nodes.expert_pool.experts[name].verdict_directives`), so no top-level slot is required for built-in experts — the Expert Module renders this editor for every expert. The output **interface** (`{verdict, confidence, recommendation}`) is fixed; only the verdict **labels/explanations/actions** are configurable.
+Verdict directives are stored per expert (under `nodes.expert_pool.experts[name].verdict_directives`), so no top-level slot is required for built-in experts — the Expert Module renders this editor for every expert. The output **interface** (`{verdict, confidence, recommendation}`) is fixed. Each verdict carries its label, explanation and action, plus the [verdict rules](../../agent-sdk/agent-manifest.md#verdict-rules) the agent declares: `flag`, `tone`, `must_avoid`, `reaction`, `min_confidence`/`below`, `overrides`. A saved configuration changes them verdict by verdict, field by field.
 
 ## Edges
 

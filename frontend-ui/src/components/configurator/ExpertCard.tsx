@@ -11,7 +11,9 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { ExpertDefinition } from './useConfiguratorState'
-import { verdictDirectivesEqual } from './useConfiguratorState'
+import { verdictDirectivesEqual, verdictRulesEqual } from './useConfiguratorState'
+import { useVerdictRuleSupport } from './verdictRules'
+import { useAuthStore } from '../../store/authStore'
 import { PromptComposer, buildExpertBlocks } from './PromptComposer'
 import type { VerdictAction, VerdictDirective } from '../../lib/api-types'
 
@@ -119,7 +121,8 @@ function VerdictResponsesEditor({
     return (
       eff.action !== def.action ||
       eff.template !== def.template ||
-      (eff.description ?? '') !== (def.description ?? '')
+      (eff.description ?? '') !== (def.description ?? '') ||
+      !verdictRulesEqual(eff, def)
     )
   }
 
@@ -317,6 +320,15 @@ function VerdictResponsesEditor({
                   />
                 </div>
               )}
+
+              <VerdictRuleFields
+                verdict={verdict}
+                directive={directive}
+                fileDirective={expert.defaultVerdictDirectives?.[verdict]}
+                verdicts={verdicts}
+                onChange={(patch) => setDirective(verdict, patch)}
+                isDark={isDark}
+              />
             </div>
           )
         })}
@@ -352,6 +364,184 @@ function VerdictResponsesEditor({
   )
 }
 
+const REACTION_LABELS: Record<string, string> = {
+  ask_followup: 'Ask a follow-up',
+  redirect: 'Steer back to the task',
+  ask_about_pending: 'Ask about what is still missing',
+  ask_back: 'Ask back what they meant',
+  repeat_request: 'Ask them to repeat',
+}
+
+const list = (text: string) => text.split(',').map((t) => t.trim()).filter(Boolean)
+
+/**
+ * The verdict rules (#221) for one verdict: whether it counts as a warning and
+ * what follows it. Only the fields and reactions the agent declares are shown
+ * (#224), so a configuration never carries a rule its agent would refuse.
+ */
+function VerdictRuleFields({
+  verdict,
+  directive,
+  fileDirective,
+  verdicts,
+  onChange,
+  isDark,
+}: {
+  verdict: string
+  directive: VerdictDirective
+  /** The expert file's rule for this verdict: what a cleared field falls back to. */
+  fileDirective?: VerdictDirective
+  verdicts: string[]
+  onChange: (patch: Partial<VerdictDirective>) => void
+  isDark: boolean
+}) {
+  const support = useVerdictRuleSupport()
+  const has = (field: string) => support.fields.has(field)
+  if (support.fields.size === 0) return null
+  const label = `text-[10px] font-medium ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`
+  const input = `w-full px-2 py-1 rounded-md text-[12px] font-light focus:outline-none ${
+    isDark ? 'bg-zinc-800/80 border border-zinc-600/80 text-zinc-100' : 'bg-white border border-neutral-200 text-neutral-900'
+  }`
+  // undefined drops the field from the saved entry, so the file's value applies.
+  const text = (value: string) => (value.trim() ? value : undefined)
+  // A cleared field shows what it falls back to, so the merge is visible.
+  const fromFile = (value: string | string[] | undefined, otherwise: string) => {
+    const shown = Array.isArray(value) ? value.join(', ') : value
+    return shown ? `${shown} (expert file)` : otherwise
+  }
+  return (
+    <div className="grid grid-cols-2 gap-x-3 gap-y-2 mt-2" data-testid={`verdict-rules-${verdict}`}>
+      {has('flag') && (
+        <label className={`col-span-2 flex items-center gap-2 ${label}`}>
+          <input
+            type="checkbox"
+            checked={directive.flag === true}
+            onChange={(e) => onChange({ flag: e.target.checked })}
+          />
+          Counts as a warning
+        </label>
+      )}
+      {has('reaction') && (
+        <div>
+          <div className={label}>What follows</div>
+          <select
+            value={directive.reaction ?? 'none'}
+            // "Nothing" is saved as `none`, not left out: a saved rule merges
+            // onto the expert file field by field, so a missing reaction would
+            // fall back to the file's (e.g. Jev's ask_back) instead of turning it off.
+            onChange={(e) => onChange({ reaction: e.target.value })}
+            className={input}
+          >
+            <option value="none">Nothing</option>
+            {support.reactions.map((r) => (
+              <option key={r} value={r}>{REACTION_LABELS[r] ?? r}</option>
+            ))}
+          </select>
+        </div>
+      )}
+      {has('reaction_field') && directive.reaction && directive.reaction !== 'none' && (
+        <div>
+          <div className={label}>Reads from the expert's output</div>
+          <input className={input} value={directive.reaction_field ?? ''} placeholder={fromFile(fileDirective?.reaction_field, 'e.g. recommendation')}
+            onChange={(e) => onChange({ reaction_field: text(e.target.value) })} />
+        </div>
+      )}
+      {has('tone') && (
+        <div>
+          <div className={label}>Tone of the reply</div>
+          <input className={input} value={directive.tone ?? ''} placeholder={fromFile(fileDirective?.tone, 'e.g. cautious')}
+            onChange={(e) => onChange({ tone: text(e.target.value) })} />
+        </div>
+      )}
+      {has('min_confidence') && (
+        <div>
+          <div className={label}>How sure (0–1)</div>
+          <input type="number" min={0} max={1} step={0.05} className={input} value={directive.min_confidence ?? ''}
+            placeholder="stage default"
+            onChange={(e) => onChange({ min_confidence: e.target.value === '' ? undefined : Number(e.target.value) })} />
+        </div>
+      )}
+      {has('below') && (
+        <div>
+          <div className={label}>When not sure enough, becomes</div>
+          <select value={directive.below ?? ''} onChange={(e) => onChange({ below: e.target.value || undefined })} className={input}>
+            {/* Leaving `below` out falls back to the expert file's, so "Stays
+                as it is" is only offered when the file sets none (#224). */}
+            {!fileDirective?.below && <option value="">Stays as it is</option>}
+            {verdicts.filter((v) => v !== verdict).map((v) => (
+              <option key={v} value={v}>{v === fileDirective?.below ? `${v} (expert file)` : v}</option>
+            ))}
+          </select>
+          {fileDirective?.below && has('min_confidence') && (
+            <div className={`${label} mt-1 font-light`}>To keep the verdict, set How sure 0.</div>
+          )}
+        </div>
+      )}
+      {has('must_avoid') && (
+        <div className="col-span-2">
+          <div className={label}>The reply must not (comma-separated)</div>
+          <input className={input} value={(directive.must_avoid ?? []).join(', ')}
+            placeholder={fromFile(fileDirective?.must_avoid, '')}
+            onChange={(e) => onChange({ must_avoid: list(e.target.value).length ? list(e.target.value) : undefined })} />
+        </div>
+      )}
+      {has('overrides') && (
+        <div className="col-span-2">
+          <div className={label}>Takes priority over these experts (comma-separated)</div>
+          <input className={input} value={(directive.overrides ?? []).join(', ')}
+            placeholder={fromFile(fileDirective?.overrides, '')}
+            onChange={(e) => onChange({ overrides: list(e.target.value).length ? list(e.target.value) : undefined })} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Turning a safety expert off (#221, #224) is its own step: a warning, then a
+ * confirmation that records who turned it off and when. Without that record
+ * the agent keeps it on.
+ */
+function SafetyOffConfirm({
+  expert,
+  onConfirm,
+  onCancel,
+  isDark,
+}: {
+  expert: ExpertDefinition
+  onConfirm: () => void
+  onCancel: () => void
+  isDark: boolean
+}) {
+  return (
+    <div
+      role="alertdialog"
+      aria-label={`Turn off ${expert.name}`}
+      className={`mx-3 mb-3 p-3 rounded-lg border text-[12px] ${
+        isDark ? 'bg-red-500/10 border-red-500/30 text-red-200' : 'bg-red-50 border-red-200 text-red-800'
+      }`}
+    >
+      <p className="font-medium mb-1">Turn off the {expert.name} safety check?</p>
+      <p className="font-light mb-3">
+        It watches every turn for emergencies and answers them with a fixed safe reply. Without it, the agent
+        won't notice them. Your name and the time are saved with the configuration.
+      </p>
+      <div className="flex gap-2">
+        <button type="button" onClick={onConfirm}
+          className="px-3 py-1.5 rounded-md text-[12px] font-medium bg-red-600 text-white hover:bg-red-700">
+          Turn it off
+        </button>
+        <button type="button" onClick={onCancel}
+          className={`px-3 py-1.5 rounded-md text-[12px] font-medium ${
+            isDark ? 'bg-zinc-700 text-zinc-200 hover:bg-zinc-600' : 'bg-neutral-200 text-neutral-700 hover:bg-neutral-300'
+          }`}>
+          Keep it on
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ExpertCardInner({
   expert,
   index,
@@ -364,6 +554,8 @@ function ExpertCardInner({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: expert.name,
   })
+  const [confirmingOff, setConfirmingOff] = useState(false)
+  const user = useAuthStore((s) => s.user)
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -442,6 +634,16 @@ function ExpertCardInner({
                   custom
                 </span>
               )}
+              {expert.safety && (
+                <span
+                  title="A safety expert: it can only be turned off with a confirmation"
+                  className={`text-[9px] font-medium px-1.5 py-0.5 rounded-md ${
+                    isDark ? 'bg-red-500/20 text-red-300' : 'bg-red-100 text-red-700'
+                  }`}
+                >
+                  safety
+                </span>
+              )}
               {expert.alwaysTriggered && (
                 <span
                   className={`text-[9px] font-medium px-1.5 py-0.5 rounded-md ${
@@ -472,7 +674,7 @@ function ExpertCardInner({
             </button>
           ) : (
             <button
-              onClick={() => onUpdate({ enabled: false })}
+              onClick={() => (expert.safety ? setConfirmingOff(true) : onUpdate({ enabled: false }))}
               className={`p-1.5 rounded-lg transition-colors ${
                 isDark ? 'text-zinc-600 hover:text-red-400 hover:bg-zinc-700/50' : 'text-neutral-300 hover:text-red-500 hover:bg-neutral-100'
               }`}
@@ -493,6 +695,20 @@ function ExpertCardInner({
             <polyline points="9 18 15 12 9 6" />
           </svg>
         </div>
+
+        {confirmingOff && (
+          <SafetyOffConfirm
+            expert={expert}
+            isDark={isDark}
+            onCancel={() => setConfirmingOff(false)}
+            onConfirm={() => {
+              setConfirmingOff(false)
+              onUpdate({
+                safetyOff: { confirmed: true, by: user?.email || user?.name || 'unknown', at: new Date().toISOString() },
+              })
+            }}
+          />
+        )}
 
         {/* Expanded settings */}
         <AnimatePresence>

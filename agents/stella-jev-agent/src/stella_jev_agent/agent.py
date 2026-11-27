@@ -22,8 +22,7 @@ from stella_v2_agent.agent import StellaV2Agent
 from stella_jev_agent.ask_back import AskBack
 from stella_jev_agent.jev import JevClient
 from stella_jev_agent.next_step import END, context_after, context_within
-from stella_jev_agent.pool import COMMON, EXTRACTION, JevExpertPool
-from stella_jev_agent.questions import DOESNT_FIT, SLIGHT_DOUBT
+from stella_jev_agent.pool import EXTRACTION, JevExpertPool
 from stella_jev_agent.stages import JevBargeInEvaluator, JevResponseGenerator, NoBridge
 
 logger = logging.getLogger(__name__)
@@ -60,7 +59,6 @@ class StellaJevAgent(StellaV2Agent):
         )
         self.barge_in_evaluator = JevBargeInEvaluator(self.llm_service, self.jev)
         self._extraction_events: list = []
-        self.arbitration._flagging_verdicts[COMMON] = {SLIGHT_DOUBT, DOESNT_FIT}
 
     def _jev_pool(self) -> JevExpertPool:
         return JevExpertPool(

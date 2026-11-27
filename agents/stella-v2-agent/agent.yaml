@@ -262,19 +262,17 @@ pipelineSchema:
       description: "Deterministic priority-based conflict resolution — no LLM (~1ms)"
       icon: "⚖️"
       position: { row: 0, col: 2 }
+      # What each expert verdict leads to is set on the verdict in the expert's
+      # file (#222); this is what arbitration acts on.
+      verdict_rules:
+        reactions: [ask_followup, redirect, ask_about_pending]
+        fields: [flag, tone, must_avoid, reaction, reaction_field, overrides]
       slots:
         - id: tone_map
           label: "Tone Map"
           type: key_value
-          description: "Expert name → tone when that expert flags something"
-          default:
-            medical: "cautious"
-            legal: "cautious"
-            noise_detection: "neutral"
-            task_extraction: "friendly"
-            probing: "curious"
-            timekeeper: "encouraging"
-            capabilities: "friendly"
+          description: "Expert name → tone, overriding the tone set on that expert's verdicts"
+          default: {}
         - id: gate_failure_message
           label: "Gate Failure Message"
           type: text
@@ -406,6 +404,7 @@ pipelineSchema:
       description: "Ultra-short conversational bridge for early TTS synthesis (~100ms)"
       icon: "🌉"
       position: { row: 1, col: 1.5 }
+      path: { kind: parallel, input: "parallel", output: "bridge phrase" }
       slots:
         - id: system_prompt
           label: "System Prompt"
@@ -482,6 +481,7 @@ pipelineSchema:
       # Sits above the main pipeline, horizontally centered (cols 0-3 → 1.5).
       # Barge-in spans the whole turn rather than being a stage in the flow.
       position: { row: -1, col: 1.5 }
+      path: { kind: side, input: "Typed interruption", output: "Commit / Resume" }
       slots:
         - id: system_prompt
           label: "System Prompt"

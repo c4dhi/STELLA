@@ -12,8 +12,9 @@ Conventions used on this page:
 
 - An input marked *optional* can be left out. On an `…_update` tool, every field except the id is optional, and a field left out stays as it is.
 - Ids are strings. Each id's description, as the assistant sees it, says which tool lists them.
-- Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets `403` if it calls one by name.
+- Each heading names the scope the tool needs: `mcp:read` or `mcp:write`. A read-only connection doesn't see the `mcp:write` tools, and gets "tool not found" if it calls one by name — it was never registered for that connection.
 - On failure, every tool returns `{ "error": { "status", "message" } }` instead of the result shown here. `404` also means "not yours".
+- A call with an unknown field, at the top level or nested inside one (e.g. a `connectorBindings` entry), is refused with an "Invalid arguments" error rather than having that field quietly dropped.
 
 ## Account
 
@@ -71,6 +72,22 @@ Change a persona the user owns. System defaults can't be changed.
 
 **Returns:** the persona, as `personas_get` shows it.
 
+### `personas_duplicate` · `mcp:write`
+
+Copy a persona the user can see — their own, or a system default — into a new one they own, named "`<name>` (Copy)".
+
+**Inputs:** `personaId`.
+
+**Returns:** the new persona, as `personas_get` shows it.
+
+### `personas_delete` · `mcp:write` · system admins only
+
+Delete a persona. System defaults cannot be deleted. The underlying ownership check has no admin override, so this only reaches the calling admin's own personas, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `personaId`.
+
+**Returns:** `{ message }`.
+
 ## Plan templates
 
 What happens in a conversation: states, tasks, transitions and deliverables. See [Plan structure](../plan-structure/index.md).
@@ -112,6 +129,37 @@ Change a plan template the user owns.
 **Inputs:** `planId`, plus any fields of `plan_templates_create`. A new `content` replaces the whole plan.
 
 **Returns:** the plan template, as `plan_templates_get` shows it.
+
+### `plan_templates_duplicate` · `mcp:write`
+
+Copy a plan template the user owns into a new one, named "`<name>` (Copy)".
+
+**Inputs:** `planId`.
+
+**Returns:** the new plan template, as `plan_templates_get` shows it.
+
+### `plan_templates_delete` · `mcp:write` · system admins only
+
+Delete a plan template. The underlying ownership check has no admin override, so this only reaches the calling admin's own plan templates, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `planId`.
+
+**Returns:** `{ message }`.
+
+### `plan_templates_generate` · `mcp:write`
+
+Draft a plan from a plain-language description, using the plan generator. Nothing is saved — pass the returned `content` to `plan_templates_create` to keep it.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `prompt` | string, 1–5000 | What the plan should accomplish |
+| `context` | string, ≤ 500, *optional* | |
+
+**Returns:** `{ content, suggestedName, suggestedDescription }`.
+
+Answers `500` if the platform has no `OPENAI_PLAN_GENERATOR_API_KEY` configured — the generator is disabled, not refusing this particular request.
 
 ## Agent types and configurations
 
@@ -172,6 +220,94 @@ Change a configuration the user owns.
 
 **Returns:** the configuration, as `agent_configurations_get` shows it.
 
+### `agent_configurations_duplicate` · `mcp:write`
+
+Copy a configuration the user owns into a new one, named "`<name>` (Copy)", for the same agent type.
+
+**Inputs:** `agentConfigurationId`.
+
+**Returns:** the new configuration, as `agent_configurations_get` shows it.
+
+### `agent_configurations_delete` · `mcp:write` · system admins only
+
+Delete an agent configuration. The underlying ownership check has no admin override, so this only reaches the calling admin's own configurations, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `agentConfigurationId`.
+
+**Returns:** `{ message }`.
+
+## Uploaded agents
+
+A custom agent you upload, built and reviewed the same as one uploaded through the web app. Deleting one is admin-only and not available here.
+
+### `agent_uploads_create` · `mcp:write`
+
+Upload a custom agent package, packed here from its files instead of a `.zip` — same validation and the same 50MB size limit as the web upload. Starts a build and sets it pending review. Uploading an existing slug of your own with a higher `metadata.version` replaces it in place; another user's slug, or a built-in's, is refused.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `files` | array of `{ path, content }` | Must include `agent.yaml`. Text files only — this tool cannot carry binary assets |
+
+**Returns:** `{ id, slug, name, version, validationStatus, replacedVersion, warnings }`. `replacedVersion` is the version this upload replaced, or `null` for a new agent.
+
+### `agent_uploads_list` · `mcp:read`
+
+The caller's own uploads.
+
+**Inputs:** none.
+
+**Returns:** `{ items }`. Each item has `id`, `slug`, `name`, `description`, `icon`, `version`, `validationStatus`, `validationNotes`, `validatedAt`, `capabilities`, `defaultConfig`, `configSchema`, `pipelineSchema`, `requirements`, `createdAt`, `built`, `sdkVersion`, `sharedProjectIds` and `sdkProblem`.
+
+### `agent_uploads_build` · `mcp:write`
+
+Start a build of an uploaded agent from its stored package. The owner or a system admin may trigger it.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ buildLogId, message }`.
+
+### `agent_uploads_build_status` · `mcp:read`
+
+The latest build of an uploaded agent, for whoever can see it in their library (its owner, a member of a project it is shared with, or a system admin).
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ build }`. `build` is `null` when the agent has never been built, otherwise its status, image name, error if any, and stored output.
+
+### `agent_uploads_build_history` · `mcp:read`
+
+Past builds of an uploaded agent, newest first. Same visibility as `agent_uploads_build_status`.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ items }`.
+
+### `agent_uploads_shares_get` · `mcp:read`
+
+The projects a custom agent is shared with, and the projects its owner could share it with. Only the owner may see this — not a system admin, and not on a built-in.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ projectIds, projects }`.
+
+### `agent_uploads_shares_update` · `mcp:write`
+
+Share a custom agent with exactly these projects, replacing the current set. Their members may then deploy it, but not change it. Only the owner may share it, and only with projects they are a member of.
+
+**Inputs:** `agentTypeId`, `projectIds` (replaces the whole list).
+
+**Returns:** `{ projectIds }`.
+
+### `agent_uploads_delete` · `mcp:write` · system admins only
+
+Delete any uploaded agent type. Stops its running agents first, and removes its env var templates and agent configurations with it. Refused while a public project uses it or another user's agent of it still runs. Unlike the other delete tools in this section, this reaches every user's uploads, not only the calling admin's own — the underlying service has always let an admin bypass the ownership check here. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `agentTypeId`.
+
+**Returns:** `{ success, stoppedAgents }`.
+
 ## Projects and sessions
 
 ### `projects_list` · `mcp:read`
@@ -181,6 +317,117 @@ The projects the user is a member of.
 **Inputs:** none.
 
 **Returns:** `{ items }`. Each item has `id`, `name`, `isOwner`, `isPublic`, `agentInactivityTimeoutMinutes`, `closeSessionWhenEmpty` (whether a session closes once everyone has left; `false` keeps it open), `activeSessions`, `activeAgents`, `totalSessions` and `createdAt`.
+
+### `projects_get` · `mcp:read`
+
+One project: its settings, public setup, and its 10 most recent sessions with agent and participant counts. `sessions_list` has every session.
+
+**Inputs:** `projectId`.
+
+**Returns:** the project row, including its public setup fields (`isPublic`, `publicToken`, `publicAgentTypeId`, `publicVisualizerType`, `publicVisualizerLocked`, `publicMaxSessionDurationSeconds`, `publicWelcomeMessage`, `publicExpiresAt`, `publicEnabled`) and `sessions` (up to 10, newest first, each with `agentCount`/`participantCount`).
+
+`publicAgentConfig`, when set, never carries raw plan content, pipeline config or env var values — the same rule `projects_public_update`'s input follows, applied to what this tool hands back. It comes back as `{ name, icon, agentConfigurationId, personaId, envVarTemplateId, connectorBindings, mode, availablePlanIds, hasPlan, hasPipelineConfig, envVarKeys }`: `hasPlan`/`hasPipelineConfig` say whether a plan or pipeline override is set, without its content, `envVarKeys` lists the env vars' names, never their values, and `mode`/`availablePlanIds` (absent = plan mode) say whether the public agent runs as a companion and which plans it may offer — by id, same as the input.
+
+### `projects_stats` · `mcp:read`
+
+Totals for a project.
+
+**Inputs:** `projectId`.
+
+**Returns:** `totalSessions`, `activeSessions`, `totalAgents`, `activeAgents`, `totalMessages`, `totalParticipants`.
+
+### `project_metrics_get` · `mcp:read`
+
+A fuller metrics snapshot than `projects_stats`: sessions and agents broken down by status, participants currently online, today's message count, and the project's agent type, plan template and public status.
+
+**Inputs:** `projectId`.
+
+**Returns:** `sessions` (`{ total, active, closed }`), `agents` (`{ total, running, starting, failed, stopped }`), `participants` (`{ total, online }`), `messages` (`{ total, todayCount }`), `project` (`{ name, agentType, agentTypeName, planTemplateName, isPublic, createdAt }`), `timestamp`.
+
+### `projects_create` · `mcp:write`
+
+Create a project, owned by the caller.
+
+**Inputs:** `name` (string, 1–255), `agentInactivityTimeoutMinutes` (integer 1–1440 or `null`, *optional*; auto-stops an idle agent, `null` disables it), `closeSessionWhenEmpty` (boolean, *optional*; default `false`).
+
+**Returns:** the new project, as `projects_get` shows it.
+
+### `projects_update` · `mcp:write`
+
+Change a project's name or its session settings.
+
+**Inputs:** `projectId`, and the same fields as `projects_create`, all *optional*.
+
+**Returns:** the project, as `projects_get` shows it.
+
+### `projects_public_update` · `mcp:write`
+
+Turn a project public or private, and configure the agent a visitor gets on the public link. Only the project owner may bind or move connectors on it; the deploy check runs against the owner when one is bound.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `projectId` | id | |
+| `isPublic` | boolean | |
+| `agentTypeId` | id, *optional* | Default: STELLA V2 |
+| `name` | string, ≤ 255, *optional* | The public agent's display name; required the first time any field below is set |
+| `icon` | string, ≤ 10, *optional* | One emoji |
+| `agentConfigurationId` | id, *optional* | |
+| `personaId` | id, *optional* | Default: the default persona |
+| `envVarTemplateId` | id, *optional* | |
+| `connectorBindings` | up to 20 of `{ connectorId, slot?, handle? }`, *optional* | As in `agents_deploy`, from the owner's own connectors or those shared with the project |
+| `mode` | `"plan"` or `"companion"`, *optional* | Absent = follow a single plan. `"companion"` talks freely and offers `availablePlanIds` as activities |
+| `availablePlanIds` | up to 20 ids, *optional* | Plans a companion may offer; refused unless `mode` is `"companion"` |
+| `visualizerType` | string, ≤ 50, *optional* | e.g. `sphere`, `face`, `galaxy`, `text` |
+| `visualizerLocked` | boolean, *optional* | |
+| `maxSessionDurationSeconds` | integer 60–7200 or `null`, *optional* | |
+| `welcomeMessage` | string, ≤ 500, or `null`, *optional* | Text every participant sees on screen before their session starts; the agent doesn't say it. `null` or empty removes it |
+| `enabled` | boolean, *optional* | Pauses or resumes the public link without reconfiguring it |
+
+It takes no raw plan content, pipeline config or env var values, the same as `agents_deploy`. The fields given are merged onto the project's existing public setup rather than replacing it, so a plan, pipeline overrides or env vars already set (from the web app, say) are kept across a call that only touches, for example, `name` or `enabled`.
+
+**Returns:** the updated project, as `projects_get` shows it.
+
+### `projects_public_link_get` · `mcp:read`
+
+The link anyone can open to join a public project.
+
+**Inputs:** `projectId`.
+
+**Returns:** `{ publicLink, isEnabled }`. `publicLink` is `null` when the project is not public.
+
+### `project_collaborators_list` · `mcp:read`
+
+The members of a project and anyone invited but not yet responded.
+
+**Inputs:** `projectId`.
+
+**Returns:** `{ collaborators, pendingInvitations }`. Each collaborator has `userId`, `email`, `name`, `role` (`OWNER` or `COLLABORATOR`) and `joinedAt`. Each pending invitation has `invitationId`, `email`, `name`, `status` (`PENDING`) and `invitedAt`.
+
+### `project_collaborators_invite` · `mcp:write`
+
+Invite a registered user to a project by email. Only the project owner can invite.
+
+**Inputs:** `projectId`, `email`.
+
+**Returns:** the invitation: `id`, `projectId`, `projectName`, `inviterId`, `inviterName`, `inviterEmail`, `inviteeId`, `inviteeName`, `inviteeEmail`, `status`, `createdAt`, `respondedAt`.
+
+### `project_collaborators_remove` · `mcp:write`
+
+Remove a collaborator from a project, and any invitation still pending for them. Only the project owner can remove, and the owner can't remove themself.
+
+**Inputs:** `projectId`, `userId` (from `project_collaborators_list`).
+
+**Returns:** the project's collaborators afterward, as `project_collaborators_list` shows it.
+
+### `projects_delete` · `mcp:write` · system admins only
+
+Delete any project — any member, not just the owner. Stops every running agent in it first, then removes it and everything under it: sessions, invitations, collaborators. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `projectId`.
+
+**Returns:** `{ message }`.
 
 ### `sessions_list` · `mcp:read`
 
@@ -262,6 +509,44 @@ Where a session stands in its plan.
 
 **Returns:** `{ state }`: the current state, progress, turn counters, task status per state and the collected deliverables. `state` is `null` when the session never ran a plan.
 
+### `session_timeline_get` · `mcp:read`
+
+Messages and room events (joins, leaves and similar) of a session, interleaved, newest first, one page at a time. `session_transcript_get` has only the messages, oldest first.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `sessionId` | id | |
+| `skip` | integer ≥ 0, *optional* | |
+| `take` | integer 1–100, *optional* | Default 50 |
+
+**Returns:** `{ items, total }`. Each item is `{ type: "message", id, timestamp, role, messageType, content }` or `{ type: "event", id, timestamp, eventType, data }`.
+
+### `session_participants_list` · `mcp:read`
+
+Every participant who joined a session, including ones who left, newest first. `sessions_get` has only who is in it right now.
+
+**Inputs:** `sessionId`.
+
+**Returns:** `{ items }`, each `{ id, name, identity, joinedAt, leftAt, lastSeenAt }`.
+
+### `session_analytics_get` · `mcp:read`
+
+Per-stage latency for one session's turns, with a summary across stages. Different from `session_state_get` (plan progress) and `session_transcript_get` (the messages themselves).
+
+**Inputs:** `sessionId`.
+
+**Returns:** `stages` (per-stage `count`, `mean_ms` and similar) and `summary`.
+
+### `sessions_delete` · `mcp:write` · system admins only
+
+Delete any session. Stops its agents first, then removes it and everything in it: the transcript, participants and plan state. Different from `sessions_close`, which ends a session but keeps its transcript readable. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `sessionId`.
+
+**Returns:** `{ message }`.
+
 ## Invitations
 
 The link a participant opens to join a session, without an account.
@@ -305,7 +590,7 @@ Make an open invitation link stop working. A participant who already joined stay
 
 **Returns:** the revoked invitation, as `session_invitations_list` shows each one.
 
-## Agents
+## Env var templates
 
 ### `env_var_templates_list` · `mcp:read`
 
@@ -316,6 +601,67 @@ The user's env var templates, which hold the API keys an agent needs.
 **Returns:** `{ items }`. Each item has `id`, `name`, `description`, `variableKeys`, `agentTypeId`, `invalid` and `needsCheck`. The variables are listed by name only, **never their values**. A template only fits agents of its `agentTypeId`.
 
 `invalid` maps each setting whose stored value does not fit its type or range to the reason, for example `{ "TTS_SPEED": "must be between 0.5 and 2" }`. `agents_deploy` refuses such a template until it is fixed in the app. `needsCheck` is `true` for a template that has not been saved since 1.6.0 made settings typed.
+
+### `env_var_templates_get` · `mcp:read`
+
+One env var template in full.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** the same fields as `env_var_templates_list`'s items, plus `settings`: the stored value of each declared setting whose type is readable (`string`, `boolean`, `integer`, `number`, `enum`). Secrets and custom variables still never show a value, only their name in `variableKeys`.
+
+### `env_var_templates_duplicate` · `mcp:write`
+
+Copy an env var template the user owns into a new one, named "`<name>` (Copy)", for the same `agentTypeId`. The variables themselves are carried over without being re-entered.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** the new template, as `env_var_templates_get` shows it.
+
+### `env_var_templates_create` · `mcp:write`
+
+Create a template holding the variables an agent type needs, scoped to exactly that `agentTypeId`.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `name` | string, 1–255 | |
+| `description` | string, ≤ 2000, *optional* | |
+| `variables` | object, variable name to value | The actual secret values. They pass through this chat and are stored encrypted; no tool ever returns them |
+| `agentTypeId` | id | A template is scoped to exactly one agent type; it can't be changed after creation |
+
+Refused, naming each one, when a value does not fit what the agent type declares for it.
+
+**Returns:** the new template, as `env_var_templates_get` shows it.
+
+### `env_var_templates_update` · `mcp:write`
+
+Change a template's name, description or variables.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `envVarTemplateId` | id | |
+| `name` | string, 1–255, *optional* | |
+| `description` | string, ≤ 2000, *optional* | |
+| `variables` | object, variable name to value, *optional* | Adds or overwrites by name |
+| `removeKeys` | array of strings, *optional* | Deletes by name |
+
+`variables` and `removeKeys` are merged onto the existing (decrypted) values, so untouched secrets keep their stored value and are never re-sent. `agentTypeId` isn't here: it can't change after creation — duplicate the template under the desired type instead.
+
+**Returns:** the template, as `env_var_templates_get` shows it.
+
+### `env_var_templates_delete` · `mcp:write` · system admins only
+
+Delete an env var template. The underlying ownership check has no admin override, so this only reaches the calling admin's own templates, not every user's. Anyone else gets "tool not found" calling it by name — it was never registered for their connection.
+
+**Inputs:** `envVarTemplateId`.
+
+**Returns:** `{ message }`.
+
+## Agents
 
 ### `agents_deploy` · `mcp:write`
 
@@ -363,6 +709,21 @@ The last 100 lines of the agent's log.
 
 **Returns:** `{ logs }`. It is empty once the agent's pod is gone.
 
+### `agent_metrics_get` · `mcp:read`
+
+Per-stage latency stats for every session of one agent type in a project over a date range, with outlier sessions (any stage over 2x the global p50) and a summary across stages.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `projectId` | id | |
+| `agentTypeId` | id | From `agent_types_list` |
+| `from` | ISO date, *optional* | Default 30 days ago |
+| `to` | ISO date, *optional* | Default now |
+
+**Returns:** `stages` (per-stage `count`, `mean_ms`, `p50_ms`, `p95_ms`, `min_ms`, `max_ms`), `outlierSessions`, `summary`.
+
 ### `agents_restart` · `mcp:write`
 
 Restart an agent with the configuration it was deployed with. Its current turn is cut off. Refused in a session that is closing or closed.
@@ -381,7 +742,7 @@ Stop an agent and remove its pod. The agent and its messages stay, and `agents_r
 
 ## Platform settings (system admins)
 
-The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets `403` calling them by name.
+The platform-wide switches in Settings → Platform Defaults. Only a system admin sees these two tools; anyone else gets "tool not found" calling them by name — they were never registered for that connection.
 
 ### `platform_settings_get` · `mcp:read`
 
@@ -403,7 +764,7 @@ Turn **Review uploaded agents** on or off. While it is on (the default), no uplo
 
 ## Agent review (system admins)
 
-Reviewing uploaded agents, as in Settings → Agent Review. Approving an agent lets its code run in the cluster, so only a system admin sees these four tools; anyone else gets `403` calling them by name. Built-in agents are never reviewed.
+Reviewing uploaded agents, as in Settings → Agent Review. Approving an agent lets its code run in the cluster, so only a system admin sees these four tools; anyone else gets "tool not found" calling them by name — they were never registered for that connection. Built-in agents are never reviewed.
 
 ### `agent_reviews_list` · `mcp:read`
 
@@ -454,6 +815,74 @@ Reject an uploaded agent, so it cannot deploy, also when it was approved before.
 | `reason` | string | Required, not blank. Shown to the uploader |
 
 **Returns:** the agent, as `agent_reviews_get` shows it.
+
+## Admin (system admins)
+
+Live platform metrics, user management and measured voice capacity, as in Settings → Admin. Only a system admin sees these six tools; anyone else gets "tool not found" calling one by name — it was never registered for their connection.
+
+### `admin_dashboard_get` · `mcp:read`
+
+A snapshot of the whole platform: participants, sessions, agents by state, and messages. The same numbers the admin dashboard streams live.
+
+**Inputs:** none.
+
+**Returns:** `timestamp`, `activeParticipants`, `totalParticipants`, `activeSessions`, `totalSessions`, `runningAgents`, `startingAgents`, `failedAgents`, `pausedAgents`, `stoppedAgents`, `totalAgents`, `totalMessages`, `messagesToday`, `sessionsWithTimeout`.
+
+### `admin_users_list` · `mcp:read`
+
+Every registered user, newest first.
+
+**Inputs:** `page` (*optional*, default 1), `limit` (*optional*, default 50, max 200).
+
+**Returns:** `{ users, total, page, totalPages }`. Each user has `id`, `email`, `name`, `verified`, `isSystemAdmin`, `createdAt`, `projectCount`.
+
+### `admin_users_verify` · `mcp:write`
+
+Mark a user's account verified.
+
+**Inputs:** `userId` (from `admin_users_list`).
+
+**Returns:** the user, as `admin_users_list` shows one.
+
+### `admin_users_set_admin` · `mcp:write`
+
+Grant or revoke system admin on a user. An admin can revoke their own.
+
+**Inputs:** `userId` (from `admin_users_list`), `isAdmin` (boolean).
+
+**Returns:** the user, as `admin_users_list` shows one.
+
+### `admin_capacity_get` · `mcp:read`
+
+The newest load-test result for each environment + GPU pair: the most simultaneous conversations that kept the voice fluent, from a real run, never computed.
+
+**Inputs:** none.
+
+**Returns:** `{ items }`. Each item has `id`, `measuredAt`, `gpuName`, `gpuMemoryMb`, `environment`, `sttProvider`, `ttsProvider`, `gitRevision`, `maxSessions`, `limitedBy`, `reachedTopLevel`, `durationSeconds`, `criteria`, `levels`.
+
+### `admin_capacity_record` · `mcp:write`
+
+Record one finished load-test run. Normally posted by `scripts/load-test/load_test.py` itself; this tool's fields match that script's JSON output exactly.
+
+**Inputs:**
+
+| Input | Type | Notes |
+|---|---|---|
+| `measuredAt` | ISO datetime | |
+| `gpuName` | string, ≤ 200 | |
+| `gpuMemoryMb` | integer ≥ 0, *optional*, nullable | |
+| `sttProvider` | string, ≤ 100, *optional* | |
+| `ttsProvider` | string, ≤ 100, *optional* | |
+| `environment` | string, ≤ 100 | e.g. "development" or "production" |
+| `gitRevision` | string, ≤ 64, *optional* | |
+| `maxSessions` | integer ≥ 0 | Highest simultaneous session count that kept the voice fluent |
+| `limitedBy` | array of strings | Why the next level failed; empty when the top level passed |
+| `reachedTopLevel` | boolean | True when even the highest level tried passed |
+| `durationSeconds` | integer ≥ 1 | |
+| `criteria` | object | |
+| `levels` | array of objects | |
+
+**Returns:** the recorded measurement, as `admin_capacity_get` shows one.
 
 ## Connectors
 
@@ -518,3 +947,29 @@ Members of those projects can bind the connector to their agents. The agents cal
 **Inputs:** `connectorId`, `projectIds` (up to 100, from `projects_list`).
 
 **Returns:** the connector, as `connectors_get` shows it.
+
+## Inbox
+
+### `user_messages_list` · `mcp:read`
+
+The caller's own inbox (project invitations and similar notifications), newest first.
+
+**Inputs:** `page` (integer ≥ 1, *optional*, default 1), `limit` (integer 1–100, *optional*, default 20).
+
+**Returns:** `{ messages, total, page, limit, totalPages }`. Each message has `id`, `type`, `title`, `body`, `read`, `createdAt`, `relatedEntityId`, `relatedEntityType` and a `metadata` object that depends on the type.
+
+### `user_messages_unread_count_get` · `mcp:read`
+
+The caller's number of unread inbox messages.
+
+**Inputs:** none.
+
+**Returns:** `{ count }`.
+
+### `user_messages_mark_read` · `mcp:write`
+
+Mark one of the caller's own inbox messages as read.
+
+**Inputs:** `messageId`, from `user_messages_list`.
+
+**Returns:** the message, as `user_messages_list` shows it, with `read: true`.

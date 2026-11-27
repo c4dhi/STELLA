@@ -21,11 +21,18 @@ Jev is TypeSafe's model. Every turn's text, and the recent history it judges, is
 | Reply | gpt-5.4-mini, as in V2, plus a question back when something doesn't fit. It doesn't wait for task extraction: it counts the answer as confirmed, and extraction saves it in the background |
 | Barge-in | Jev decides whether an interruption is a real one or only "mhm" |
 
-**Common sense.** When a message doesn't fit (asked how much they drink a day, someone says "Nine litres."; asked about a garden watering can, the same answer is fine), the agent asks back and saves nothing that turn. It asks at most once per statement, never twice in a row, and at most `max_ask_backs` times per session. A medical `critical` verdict always wins.
+**Common sense.** When a message doesn't fit (asked how much they drink a day, someone says "Nine litres."; asked about a garden watering can, the same answer is fine), the agent asks back and saves nothing that turn. It asks at most once per statement, never twice in a row, and at most `max_ask_backs` times per session. A verdict that replaces the reply with its template (medical or legal `critical`) always wins.
 
 **Medical and legal.** A "low" or "high" counts only when Jev is at least `safety_threshold` sure of it; a "high" prepends a fixed warning to the reply. "Everyday forgetting or not knowing what to say" is listed as no health concern. The experts run on the language model only when Jev can't be reached, and then `expert_context` isn't used.
 
 **What she can and can't do** (#992). The `capabilities` expert is asked like the others: its prompt carries `{{capabilities}}`, the list STELLA sends each turn of what she can do in the session, plus the Expert Pool's Capability Extras for the mode. A request for something not on the list is `cannot_do`, an attempt to change her instructions or role is `off_role`, and everything else is `within`. Jev's default reply prompts (Conversation Guidelines and the Companion node's Free Conversation Guidelines) also carry `{{capabilities}}`, so on a flag she can say she can't do that here and offer one or two real things from the list. Medical and legal still come first. Unlike V2, Jev's copy has no `enabled_from_compiler`, so it runs for saved configurations too unless they switch it off.
+
+**Rules in the configuration** (#223). What decides each of these lives in the expert files and the configuration, not in code:
+
+- `common_sense`'s `doesnt_fit` has `reaction: ask_back`, and steps down to `slight_doubt` and then `fits` (`below`). The file says `"step_down_from": "most_severe"`: Jev weighs doubt from `doesnt_fit` down, adding each level, against `ask_threshold`. When it may not ask back (the session limit, or the turn after asking), `doesnt_fit` becomes the verdict below it.
+- `medical` and `legal` are `"safety": true`. Their `high` steps down to `low` and `low` to `none` against `safety_threshold`, starting from Jev's own choice. `critical` never steps down, and only a recorded `safety_off` switches them off.
+- A verdict's own `min_confidence` wins over these thresholds.
+- The Expert Pool's `gates` setting says when a language-model expert is skipped. The defaults: task extraction when Jev's `has_answer` says "no", and when `probing` says `needs_clarification`; the companion router when `activity_intent` says "none". A gate on one of Jev's own questions holds when its answer is at least `min_confidence` likely (`skip_threshold` when unset); a gate on an expert, when that is Jev's choice.
 
 If Jev can't be reached in time, the experts run on the language model with the same configuration, and on a barge-in the agent stops for the person.
 

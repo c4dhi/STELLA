@@ -146,9 +146,12 @@ export class AgentsController {
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 86400000);
-    const toDate = to ? new Date(to) : new Date();
-    return this.agentsService.getAgentMetrics(projectId, agentSlug, fromDate, toDate);
+    return this.agentsService.getAgentMetrics(
+      projectId,
+      agentSlug,
+      from ? new Date(from) : undefined,
+      to ? new Date(to) : undefined,
+    );
   }
 
   /**

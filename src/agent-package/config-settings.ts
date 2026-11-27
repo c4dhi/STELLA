@@ -33,6 +33,7 @@ export const CONFIG_SETTING_TYPES = [
   'key_value',
   'expert_list',
   'verdict_directives',
+  'gate_list',
 ] as const
 export type ConfigSettingType = (typeof CONFIG_SETTING_TYPES)[number]
 
@@ -81,6 +82,7 @@ const SLOT_TYPE_TO_SETTING_TYPE: Record<string, ConfigSettingType> = {
   key_value: 'key_value',
   expert_list: 'expert_list',
   verdict_directives: 'verdict_directives',
+  gate_list: 'gate_list',
 }
 
 /** Slot `x` on node `n` as the setting `n.x`. */
@@ -184,9 +186,36 @@ export function checkConfigSettingValue(setting: ConfigSetting, value: unknown):
     case 'verdict_directives':
       // Their structure belongs to the expert registry, which checks it.
       return isPlainObject(value) ? null : 'must be an object'
+    case 'gate_list':
+      return checkGateList(value)
     default:
       return null
   }
+}
+
+const GATE_KEYS = new Set(['skip', 'when', 'verdicts', 'min_confidence'])
+
+/**
+ * A gate list (#223): `[{skip, when, verdicts, min_confidence?}]`. Skip expert
+ * `skip` when `when` (an expert, or a question of the agent's own) gives one of
+ * `verdicts`, at least `min_confidence` sure.
+ */
+function checkGateList(value: unknown): string | null {
+  if (!Array.isArray(value)) return 'must be a list of gates'
+  for (const [i, gate] of value.entries()) {
+    const where = `gate ${i + 1}`
+    if (!isPlainObject(gate)) return `${where} must be an object`
+    const unknown = Object.keys(gate).filter((k) => !GATE_KEYS.has(k))
+    if (unknown.length > 0) return `${where} has unknown keys: ${unknown.join(', ')}`
+    if (typeof gate.skip !== 'string' || !gate.skip) return `${where} needs "skip": the expert to skip`
+    if (typeof gate.when !== 'string' || !gate.when) return `${where} needs "when": what decides it`
+    if (!Array.isArray(gate.verdicts) || gate.verdicts.length === 0 || !gate.verdicts.every((v) => typeof v === 'string')) {
+      return `${where} needs "verdicts": a list of texts`
+    }
+    const c = gate.min_confidence
+    if (c !== undefined && (typeof c !== 'number' || !(c >= 0 && c <= 1))) return `${where}: min_confidence must be a number from 0 to 1`
+  }
+  return null
 }
 
 /** Split `n.x` into node `n` and name `x`. */

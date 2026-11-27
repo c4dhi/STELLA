@@ -76,6 +76,16 @@ export const STRUCTURAL_EXPERT_CAPABILITY: Readonly<Record<string, Capability>> 
 /** Verdict actions an expert may declare. Mirrors VERDICT_ACTIONS in the SDK's expert base. */
 export const VERDICT_ACTIONS = ['inform', 'prepend', 'override', 'short_circuit'] as const
 
+/**
+ * What a verdict can lead to (#221). The platform owns this list; an agent's
+ * pipeline node declares which of them it acts on (`verdict_rules.reactions`).
+ * Mirrors REACTIONS in the SDK's experts/verdict_rules.py, pinned by a spec.
+ */
+export const VERDICT_REACTIONS = ['none', 'ask_followup', 'redirect', 'ask_about_pending', 'ask_back', 'repeat_request'] as const
+
+/** The rule fields a verdict may carry beyond action/template/description. Mirrors RULE_FIELDS in the SDK. */
+export const VERDICT_RULE_FIELDS = ['flag', 'tone', 'must_avoid', 'reaction', 'reaction_field', 'min_confidence', 'below', 'overrides'] as const
+
 export function parseMemoryBytes(value: string): number | null {
   const match = value.match(/^(\d+)(Ki|Mi|Gi)?$/)
   if (!match) return null

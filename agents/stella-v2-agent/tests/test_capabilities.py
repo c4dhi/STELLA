@@ -255,10 +255,16 @@ def test_any_expert_using_a_placeholder_its_compiler_cannot_fill_is_off():
     # The rule is about the configured prompt, not the expert's name
     # (handbook sdk-experts-clean-interface).
     prompt = "Judge against what she can do:\n{{capabilities}}"
-    assert _fit_with_prompt("1.1.0", "medical", prompt) is False
-    assert _fit_with_prompt("1.2.0", "medical", prompt) is True
-    assert _fit_with_prompt("1.0.0", "medical", "You are {{persona.name}}.") is False
-    assert _fit_with_prompt("1.1.0", "medical", "You are {{persona.name}}.") is True
+    assert _fit_with_prompt("1.1.0", "probing", prompt) is False
+    assert _fit_with_prompt("1.2.0", "probing", prompt) is True
+    assert _fit_with_prompt("1.0.0", "probing", "You are {{persona.name}}.") is False
+    assert _fit_with_prompt("1.1.0", "probing", "You are {{persona.name}}.") is True
+
+
+def test_a_safety_expert_stays_on_with_a_placeholder_its_compiler_cannot_fill():
+    # #221/#222: medical is a safety expert; a prompt the session can't fully
+    # fill doesn't switch it off, it runs with the placeholder as written.
+    assert _fit_with_prompt("1.1.0", "medical", "Judge against what she can do:\n{{capabilities}}") is True
 
 
 def test_a_capabilities_prompt_without_the_placeholder_runs_on_an_older_compiler():
@@ -277,3 +283,17 @@ def test_the_switch_off_reads_no_expert_by_name():
 
     source = inspect.getsource(StellaV2Agent._fit_experts_to_configuration)
     assert '"capabilities"' not in source and "'capabilities'" not in source
+
+
+def test_medical_and_legal_stay_on_under_an_old_compiler_pin():
+    # #221/#222: the safety floor holds whatever compiler the session runs
+    # and whenever the configuration was authored, even with enabled: false.
+    for compiler in ("1.0.0", "1.1.0", "1.2.0"):
+        for authored in (None, "1.0.0", "1.1.0"):
+            agent = _agent_with(compiler)
+            pipeline = _saved(authored=authored)
+            pipeline["nodes"]["expert_pool"] = {"experts": {"medical": {"enabled": False}, "legal": {"enabled": False}}}
+            agent.expert_registry.apply_config(pipeline["nodes"]["expert_pool"])
+            agent._fit_experts_to_configuration(pipeline)
+            enabled = {e.name for e in agent.expert_registry.get_enabled()}
+            assert {"medical", "legal"} <= enabled, (compiler, authored)

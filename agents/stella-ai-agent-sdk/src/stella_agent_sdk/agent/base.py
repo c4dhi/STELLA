@@ -75,8 +75,10 @@ class BaseAgent(ABC):
     The session lifecycle:
         1. on_session_start() - Agent receives configuration, initializes state
         2. process() - Called for each user input, yields streaming responses
-        3. on_interrupt() - Called if user interrupts (barge-in)
-        4. on_session_end() - Called when session ends, cleanup
+        3. on_session_end() - Called when session ends, cleanup
+
+    on_interrupt() is abstract (every agent must define it), but the default
+    run_audio_loop() does not call it - see on_interrupt's own docstring.
     """
 
     #: Whether this agent supports user barge-in (interrupting mid-speech).
@@ -591,18 +593,23 @@ class BaseAgent(ABC):
                 # Show thinking status
                 yield AgentOutput.thinking(input.session_id)
 
-                # Stream the response
-                async for chunk in self.stream_from_llm(input.text):
+                # Stream the response. Each chunk carries the whole reply so
+                # far, not just the new token - the SDK finds the new text by
+                # comparing with the previous chunk (see
+                # docs-site/docs/agent-sdk/streaming.md).
+                reply = ""
+                async for token in self.stream_from_llm(input.text):
+                    reply += token
                     yield AgentOutput.text_chunk(
                         input.session_id,
-                        chunk,
+                        reply,
                         transcript_id=transcript_id,
                     )
 
-                # Mark stream as complete
+                # Mark stream as complete - repeats the full text, not empty.
                 yield AgentOutput.text_chunk(
                     input.session_id,
-                    "",
+                    reply,
                     transcript_id=transcript_id,
                     is_final=True,
                 )
@@ -623,10 +630,12 @@ class BaseAgent(ABC):
         """
         Handle interrupt signal (user barge-in).
 
-        Called when the user starts speaking while the agent is responding.
-        You should stop any ongoing generation immediately.
-
-        This is called BEFORE the INTERRUPT input type arrives in process().
+        Abstract, so every agent has a place to cancel work in progress. The
+        default ``run_audio_loop()`` does NOT call this: a committed voice
+        barge-in is handled by the SDK itself via ``on_barge_in()``, and a
+        committed text barge-in stops your generator at its next ``yield`` (see
+        docs-site/docs/agent-sdk/streaming.md#interruptions). An agent that
+        overrides ``run_audio_loop()`` with its own loop may call this itself.
 
         Args:
             session_id: The session being interrupted.
@@ -824,9 +833,9 @@ class BaseAgent(ABC):
 
     async def on_config_update(self, session_id: str, config: Dict[str, Any]) -> None:
         """
-        Called when configuration is updated during a session.
-
-        Override this to handle runtime configuration changes.
+        Defined for a future runtime configuration update, but nothing in the
+        current SDK calls it yet - there is no path that delivers a config
+        change to a running agent. Override it and it will simply never run.
 
         Args:
             session_id: The session being updated.
@@ -845,7 +854,10 @@ class BaseAgent(ABC):
 
         This is the right place to send the initial state of any progress
         tracking or todo lists that the frontend should display immediately
-        when the agent joins the room.
+        when the agent joins the room. A ``text_final``/``text_chunk`` output
+        (e.g. a welcome message) is shown and, once ``is_final``, spoken -
+        there is no turn running yet, so the audio loop's sentence-by-sentence
+        TTS does not apply here.
 
         Args:
             session_id: The session that just started.

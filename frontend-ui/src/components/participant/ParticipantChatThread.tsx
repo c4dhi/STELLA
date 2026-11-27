@@ -6,6 +6,7 @@ import { DeliveryStatusIndicator } from '../messaging'
 import type { ParticipantMessage } from './ParticipantSessionView'
 import { generateUUID } from '../../lib/uuid'
 import SpokenMessageText from '../face/SpokenMessageText'
+import { groupPositions } from './messageGroups'
 
 /**
  * The participant's conversation: the messages and the box to type in.
@@ -135,6 +136,17 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
 
     const textSize = isPage ? 'text-[15px]' : 'text-sm'
 
+    // Back-to-back messages from one sender: avatar once, time once.
+    const positions = groupPositions(messages)
+
+    // iOS Safari zooms the page on focus when a text input's font is under
+    // 16px; a hardware keyboard means there's a pointing device too, so this
+    // also decides whether the Enter/Shift+Enter hint makes sense to show.
+    const hasPhysicalKeyboard =
+      typeof window === 'undefined' || !window.matchMedia
+        ? true
+        : window.matchMedia('(pointer: fine)').matches
+
     return (
       <>
         {/* Messages */}
@@ -169,7 +181,7 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                 <p className="text-white/50 text-sm">No messages yet. Type a message below.</p>
               </div>
             ) : (
-              messages.map(message =>
+              messages.map((message, index) =>
                 message.messageType === 'participant_event' ? (
                   // Join/leave: a centered pill
                   <motion.div
@@ -192,15 +204,23 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                       </span>
                     </div>
                   </motion.div>
-                ) : (
+                ) : (() => {
+                  const { first, last } = positions[index]
+                  return (
                   <motion.div
                     key={message.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className={`flex gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''}`}
+                    data-group-first={first}
+                    data-group-last={last}
+                    // A follow-on message sits close under the one before it.
+                    className={`flex gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''} ${
+                      first ? '' : '!mt-1'
+                    }`}
                   >
                     <div
-                      className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      aria-hidden={!first}
+                      className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${first ? '' : 'invisible'} ${
                         message.role === 'user'
                           ? 'bg-violet-500/20 text-violet-400'
                           : message.role === 'other_user'
@@ -212,7 +232,7 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                     </div>
 
                     <div className={`flex-1 max-w-[80%] ${message.role === 'user' ? 'text-right' : ''}`}>
-                      {message.role === 'other_user' && (
+                      {message.role === 'other_user' && first && (
                         <p className="text-[10px] text-cyan-400/80 mb-1 px-1">
                           {message.speakerName || message.participantName || 'Organizer'}
                         </p>
@@ -220,10 +240,10 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                       <div
                         className={`inline-block px-4 py-2.5 rounded-2xl text-left ${
                           message.role === 'user'
-                            ? 'bg-violet-500/25 text-white rounded-br-sm'
+                            ? `bg-violet-500/25 text-white ${last ? 'rounded-br-sm' : ''}`
                             : message.role === 'other_user'
-                            ? 'bg-cyan-500/10 text-white/90 rounded-bl-sm border border-cyan-500/20'
-                            : 'bg-white/[0.06] text-white/90 rounded-bl-sm'
+                            ? `bg-cyan-500/10 text-white/90 border border-cyan-500/20 ${last ? 'rounded-bl-sm' : ''}`
+                            : `bg-white/[0.06] text-white/90 ${last ? 'rounded-bl-sm' : ''}`
                         }`}
                       >
                         <p className={`${textSize} leading-relaxed whitespace-pre-wrap`}>
@@ -245,14 +265,17 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                           </div>
                         )}
                       </div>
-                      <p className="text-[10px] text-white/50 mt-1 px-1">
-                        {message.isStreaming
-                          ? `${message.speakerName || 'The agent'} is writing…`
-                          : formatTime(message.timestamp)}
-                      </p>
+                      {last && (
+                        <p className="text-[10px] text-white/50 mt-1 px-1">
+                          {message.isStreaming
+                            ? `${message.speakerName || 'The agent'} is writing…`
+                            : formatTime(message.timestamp)}
+                        </p>
+                      )}
                     </div>
                   </motion.div>
-                ),
+                  )
+                })(),
               )
             )}
             <div ref={messagesEndRef} />
@@ -282,7 +305,7 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                   placeholder="Type your answer…"
                   aria-label="Your answer"
                   disabled={!room}
-                  className="flex-1 min-w-0 resize-none bg-transparent px-2 py-2 text-white text-[15px] leading-relaxed placeholder-white/40 focus:outline-none disabled:opacity-50"
+                  className="flex-1 min-w-0 resize-none bg-transparent px-2 py-2 text-white text-base leading-relaxed placeholder-white/40 focus:outline-none disabled:opacity-50"
                 />
               ) : (
                 <input
@@ -307,7 +330,9 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
                 {isPage ? 'Send' : <Send className="w-5 h-5" />}
               </button>
             </div>
-            {hint && <p className="text-[11px] text-white/50 mt-2 text-center">{hint}</p>}
+            {hint && hasPhysicalKeyboard && (
+              <p className="text-[11px] text-white/50 mt-2 text-center">{hint}</p>
+            )}
           </div>
         </form>
       </>

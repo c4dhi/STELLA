@@ -103,5 +103,7 @@ def test_stella_v2_pipeline_slot_overrides_merge_with_defaults(
 
     # Unspecified defaults remain intact (partial merge behavior).
     assert agent.response_generator.response_max_tokens == 200
-    assert agent.arbitration._tone_map["legal"] == "cautious"
-    assert agent.arbitration._tone_map["noise_detection"] == "neutral"
+    # Other experts keep the tone their verdicts carry (#222: no code table).
+    assert "legal" not in agent.arbitration._tone_map
+    assert agent.expert_registry.get("legal").verdict_directives["high"].tone == "cautious"
+    assert agent.expert_registry.get("noise_detection").verdict_directives["unclear"].tone == "neutral"

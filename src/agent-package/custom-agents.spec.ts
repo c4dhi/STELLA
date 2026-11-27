@@ -34,17 +34,19 @@ const packages = fs.existsSync(CUSTOM_AGENTS)
 // The agents in custom-agents/ are not seeded. Users download them and
 // upload them through the UI, so each one must pass exactly the validation an
 // upload goes through. A package that fails here would be turned away there.
+// custom-agents/ ships no package of its own anymore (#1050) — this only
+// exercises whatever a worktree happens to have checked out there.
 describe('custom-agents packages pass upload validation', () => {
   const service = new AgentPackageService(new ManifestValidator(), new DockerfileValidator(), null as any)
 
-  it('ships at least the ELIAS-Interviewer', () => {
-    expect(packages).toContain('elias-interviewer')
-  })
-
-  it.each(packages)('%s', async (name) => {
-    const result = await service.validatePackage(zipFolder(path.join(CUSTOM_AGENTS, name)))
-    expect(result.errors).toEqual([])
-    expect(result.valid).toBe(true)
-    expect(result.manifest?.metadata.slug).toBe(name)
-  })
+  if (packages.length === 0) {
+    it.skip('no packages in custom-agents/ to validate', () => {})
+  } else {
+    it.each(packages)('%s', async (name) => {
+      const result = await service.validatePackage(zipFolder(path.join(CUSTOM_AGENTS, name)))
+      expect(result.errors).toEqual([])
+      expect(result.valid).toBe(true)
+      expect(result.manifest?.metadata.slug).toBe(name)
+    })
+  }
 })

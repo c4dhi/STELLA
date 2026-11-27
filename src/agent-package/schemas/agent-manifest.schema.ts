@@ -12,6 +12,8 @@ import {
   PLAN_MODES,
   RESOURCE_DEFAULTS,
   SLUG_REGEX,
+  VERDICT_REACTIONS,
+  VERDICT_RULE_FIELDS,
   VERSION_REGEX,
   parseCpuMillicores,
   parseMemoryBytes,
@@ -41,7 +43,7 @@ import {
 
 const EXPERTS_CAPABILITY = 'experts'
 const EXPERT_CONFIG_PROPERTY_KEYS = ['experts', 'expert_overrides', 'experts_dir', 'custom_experts'] as const
-const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives'] as const
+const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives', 'gate_list'] as const
 
 /**
  * The regex engine for uploaded schemas: it refuses every pattern. Ajv asks it
@@ -342,6 +344,29 @@ const pipelineNodeSchema = z
     icon: z.string().optional(),
     position: z.object({ row: z.number(), col: z.number() }),
     slots: z.array(pipelineSlotSchema),
+    // Which verdict rules this step acts on (#221): the reactions it carries out
+    // and the rule fields it reads. A saved configuration or an expert file that
+    // uses one no node declares is refused.
+    verdict_rules: z
+      .object({
+        reactions: z.array(z.enum(VERDICT_REACTIONS)).default([]),
+        fields: z.array(z.enum(VERDICT_RULE_FIELDS)).default([]),
+      })
+      .strict()
+      .optional(),
+    // How the Configurator draws a step that is not in the turn's chain (#224):
+    // `side`, on its own row with its own input and output (barge-in: a typed
+    // interruption in, commit/resume out), or `parallel`, fed by the turn's
+    // input and feeding its output (a bridge phrase). The labels name the two
+    // ends. Without it the step is drawn where its edges put it.
+    path: z
+      .object({
+        kind: z.enum(['side', 'parallel']),
+        input: z.string().min(1),
+        output: z.string().min(1),
+      })
+      .strict()
+      .optional(),
   })
   .passthrough()
 

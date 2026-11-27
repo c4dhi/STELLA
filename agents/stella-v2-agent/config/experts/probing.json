@@ -20,17 +20,25 @@
     "no_probe": {
       "action": "inform",
       "template": "",
-      "description": "TAP OUT (default). The user's message is clear; no follow-up question is needed."
+      "description": "TAP OUT (default). The user's message is clear; no follow-up question is needed.",
+      "flag": false,
+      "tone": "curious"
     },
     "needs_clarification": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. A specific follow-up question would collect a pending deliverable."
+      "description": "ENGAGE. A specific follow-up question would collect a pending deliverable.",
+      "flag": true,
+      "tone": "curious",
+      "reaction": "ask_followup"
     },
     "gentle_redirect": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. The user went off-topic and should be gently steered back."
+      "description": "ENGAGE. The user went off-topic and should be gently steered back.",
+      "flag": true,
+      "tone": "curious",
+      "reaction": "redirect"
     }
   }
 }

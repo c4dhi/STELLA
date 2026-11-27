@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 VERDICT_ACTIONS = ("inform", "prepend", "override", "short_circuit")
 
 
+def _texts(value: Any) -> List[str]:
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def _number(value: Any) -> Optional[float]:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 @dataclass
 class VerdictDirective:
     """What the arbitration stage does with the final response when an expert
@@ -52,6 +60,18 @@ class VerdictDirective:
     template: str = ""
     description: str = ""
     template_i18n: Dict[str, str] = field(default_factory=dict)
+    # Verdict rules (#221/#222): what the verdict leads to, as configuration.
+    # See stella_agent_sdk.experts.verdict_rules. None/empty means "not set".
+    flag: Optional[bool] = None
+    tone: str = ""
+    must_avoid: List[str] = field(default_factory=list)
+    reaction: str = ""
+    reaction_field: str = ""
+    overrides: List[str] = field(default_factory=list)
+    # Stepping down (#223): how sure the agent must be of this verdict, and the
+    # verdict it becomes when it isn't. None/"" means not set.
+    min_confidence: Optional[float] = None
+    below: str = ""
 
     @staticmethod
     def coerce(value: Any) -> "VerdictDirective":
@@ -78,11 +98,20 @@ class VerdictDirective:
                 if isinstance(raw_i18n, dict)
                 else {}
             )
+            flag = value.get("flag")
             return VerdictDirective(
                 action=action,
                 template=str(value.get("template", "")),
                 template_i18n=template_i18n,
                 description=str(value.get("description", "")),
+                flag=flag if isinstance(flag, bool) else None,
+                tone=str(value.get("tone") or ""),
+                must_avoid=_texts(value.get("must_avoid")),
+                reaction=str(value.get("reaction") or ""),
+                reaction_field=str(value.get("reaction_field") or ""),
+                overrides=_texts(value.get("overrides")),
+                min_confidence=_number(value.get("min_confidence")),
+                below=str(value.get("below") or ""),
             )
         return VerdictDirective()
 
@@ -94,12 +123,23 @@ class VerdictDirective:
         return {str(k): VerdictDirective.coerce(v) for k, v in value.items()}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out: Dict[str, Any] = {
             "action": self.action,
             "template": self.template,
             "template_i18n": self.template_i18n,
             "description": self.description,
         }
+        if self.flag is not None:
+            out["flag"] = self.flag
+        if self.min_confidence is not None:
+            out["min_confidence"] = self.min_confidence
+        for key in ("tone", "reaction", "reaction_field", "below"):
+            if getattr(self, key):
+                out[key] = getattr(self, key)
+        for key in ("must_avoid", "overrides"):
+            if getattr(self, key):
+                out[key] = list(getattr(self, key))
+        return out
 
 
 @dataclass
@@ -150,6 +190,19 @@ class ExpertConfig:
     # Drives literature-informed override/prepend/short_circuit at arbitration time.
     verdict_directives: Dict[str, VerdictDirective] = field(default_factory=dict)
     enabled_from_compiler: str = ""
+    # Safety floor (#221/#222): a safety expert runs unless the configuration
+    # recorded safety_off ({confirmed, by, at}); see the SDK's verdict_rules.
+    safety: bool = False
+    safety_off: Optional[Dict[str, Any]] = None
+    # The verdicts a safety expert never steps down (None: the SDK's default,
+    # "critical"), and where stepping down starts: "choice" (the verdict given)
+    # or "most_severe" (the top of the expert's step-down chain, weighing every
+    # level on the way down).
+    never_step_down: Optional[List[str]] = None
+    step_down_from: str = "choice"
+    # False for an expert whose recommendation is internal bookkeeping (task
+    # extraction's "Set 2 deliverables") and must never steer the reply.
+    surfaces_recommendation: bool = True
 
     def __post_init__(self) -> None:
         # Coerce verdict_directives whether they arrive as dicts (JSON/config) or instances.
@@ -180,6 +233,10 @@ class ExpertConfig:
             tools=list(data.get("tools") or []),
             verdict_directives=data.get("verdict_directives", {}),
             enabled_from_compiler=str(data.get("enabled_from_compiler") or ""),
+            safety=data.get("safety") is True,
+            never_step_down=_texts(data["never_step_down"]) if isinstance(data.get("never_step_down"), list) else None,
+            step_down_from=str(data.get("step_down_from") or "choice"),
+            surfaces_recommendation=data.get("surfaces_recommendation", True) is not False,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -202,4 +259,8 @@ class ExpertConfig:
                 k: v.to_dict() for k, v in self.verdict_directives.items()
             },
             "enabled_from_compiler": self.enabled_from_compiler,
+            "safety": self.safety,
+            "never_step_down": self.never_step_down,
+            "step_down_from": self.step_down_from,
+            "surfaces_recommendation": self.surfaces_recommendation,
         }

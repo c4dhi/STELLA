@@ -91,6 +91,27 @@ describe('declaring configuration settings', () => {
   })
 })
 
+describe('how a step off the turn is drawn (#224)', () => {
+  const withPath = (p: unknown) => ({
+    ...base,
+    pipelineSchema: { ...base.pipelineSchema, nodes: [{ ...base.pipelineSchema.nodes[0], path: p }] },
+  })
+
+  it('accepts a side or parallel path and stores it with the node', () => {
+    const result = parseAgentManifest(withPath({ kind: 'side', input: 'Typed interruption', output: 'Commit / Resume' }))
+    expect(result.errors).toEqual([])
+    const column = manifestToAgentTypeData(result.manifest!, null).pipelineSchema as { nodes: Array<Record<string, unknown>> }
+    expect(column.nodes[0].path).toEqual({ kind: 'side', input: 'Typed interruption', output: 'Commit / Resume' })
+    expect(errorsOf(withPath({ kind: 'parallel', input: 'parallel', output: 'bridge phrase' }))).toBe('')
+  })
+
+  it('refuses a path that does not hold together', () => {
+    expect(errorsOf(withPath({ kind: 'beside', input: 'a', output: 'b' }))).toContain('path')
+    expect(errorsOf(withPath({ kind: 'side', input: 'a' }))).toContain('path')
+    expect(errorsOf(withPath({ kind: 'side', input: 'a', output: 'b', colour: 'red' }))).toContain('path')
+  })
+})
+
 describe('checkConfigSettingValue', () => {
   const s = (setting: Partial<ConfigSetting>): ConfigSetting => ({ key: 'n.x', type: 'text', ...setting })
 
@@ -113,5 +134,16 @@ describe('checkConfigSettingValue', () => {
     expect(checkConfigSettingValue(s({ type: 'string_list' }), ['a', 1])).toBe('must be a list of texts')
     expect(checkConfigSettingValue(s({ type: 'key_value' }), { a: 'b' })).toBeNull()
     expect(checkConfigSettingValue(s({ type: 'expert_list' }), [])).toBe('must be an object')
+  })
+
+  it('checks a gate list (#223)', () => {
+    const gate = s({ type: 'gate_list' })
+    expect(checkConfigSettingValue(gate, [{ skip: 'task_extraction', when: 'has_answer', verdicts: ['no'] }])).toBeNull()
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: ['c'], min_confidence: 0.8 }])).toBeNull()
+    expect(checkConfigSettingValue(gate, {})).toBe('must be a list of gates')
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', verdicts: ['c'] }])).toMatch(/needs "when"/)
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: [] }])).toMatch(/needs "verdicts"/)
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: ['c'], min_confidence: 2 }])).toMatch(/min_confidence/)
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: ['c'], also: 1 }])).toMatch(/unknown keys: also/)
   })
 })

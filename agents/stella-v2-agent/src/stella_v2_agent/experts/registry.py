@@ -18,18 +18,42 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
+from stella_agent_sdk.experts.verdict_rules import merge_verdict_directives, safety_switched_off
+
 from stella_v2_agent.experts.base import ExpertConfig, VerdictDirective
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def _coerce_override_value(key: str, value: Any) -> Any:
-    """Coerce a raw override value before setattr, so structured fields
-    (e.g. verdict_directives) become their typed form instead of plain dicts."""
-    if key == "verdict_directives":
-        return VerdictDirective.coerce_map(value)
-    return value
+_FILE_ONLY_KEYS = ("safety", "never_step_down", "surfaces_recommendation", "step_down_from")
+
+
+def _apply_overrides(expert: ExpertConfig, overrides: Dict[str, Any]) -> None:
+    """Lay a configuration's entry for one expert over it.
+
+    ``verdict_directives`` merge verdict by verdict, field by field (#222): a
+    configuration saved before a rule field existed keeps that field's
+    default. A safety expert stays on unless the entry records ``safety_off``;
+    ``enabled: false`` alone doesn't stop it.
+    """
+    for key, value in overrides.items():
+        if key in _FILE_ONLY_KEYS:
+            # Set in the expert's file only (STELLA refuses them in a saved
+            # configuration): a saved safety:false would bypass safety_off.
+            logger.warning(f"{expert.name}: ignoring {key!r} from the configuration; it belongs to the expert file")
+            continue
+        if key == "verdict_directives":
+            current = {k: v.to_dict() for k, v in expert.verdict_directives.items()}
+            saved = value if isinstance(value, dict) else {}
+            expert.verdict_directives = VerdictDirective.coerce_map(merge_verdict_directives(current, saved))
+        elif hasattr(expert, key):
+            setattr(expert, key, value)
+    if expert.safety:
+        on = not safety_switched_off({"safety_off": expert.safety_off})
+        if expert.enabled != on and on:
+            logger.info(f"{expert.name} is a safety expert: kept on (switching it off needs a recorded safety_off)")
+        expert.enabled = on
 
 
 class ExpertRegistry:
@@ -143,9 +167,7 @@ class ExpertRegistry:
             config = self._experts[name]
             if not isinstance(overrides, dict):
                 continue
-            for key, value in overrides.items():
-                if hasattr(config, key):
-                    setattr(config, key, _coerce_override_value(key, value))
+            _apply_overrides(config, overrides)
 
     def apply_config(self, config: dict) -> None:
         """Apply configuration overrides from Agent Configurator.
@@ -163,9 +185,7 @@ class ExpertRegistry:
                 expert = self._experts[name]
                 if not isinstance(overrides, dict):
                     continue
-                for key, value in overrides.items():
-                    if hasattr(expert, key):
-                        setattr(expert, key, _coerce_override_value(key, value))
+                _apply_overrides(expert, overrides)
 
         # Register custom experts
         custom_experts = config.get("custom_experts", {})

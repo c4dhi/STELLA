@@ -32,7 +32,9 @@ Example Usage:
         async def run_audio_loop(self):
             async for event in self.audio.audio_in():
                 # event.is_final is always True (partials sent to LiveKit)
-                await self.audio.audio_out(f"You said: {event.text}")
+                reply = f"You said: {event.text}"
+                await self.audio.publish_text(reply, is_final=True)
+                await self.audio.speak(reply)
 
         async def _handle_barge_in(self):
             await self.audio.stop_speaking()

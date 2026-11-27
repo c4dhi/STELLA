@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Check, Copy, ExternalLink, Globe, Users, XCircle, PlayCircle } from 'lucide-react'
+import { Check, Copy, Globe, Users, XCircle, PlayCircle } from 'lucide-react'
 import { useThemeStore } from '../../store/themeStore'
 import { apiClient } from '../../services/ApiClient'
+import PublicLinkDisplay from '../shared/PublicLinkDisplay'
+import { WELCOME_MESSAGE_MAX_LENGTH } from '../shared/WelcomeMessageStep'
 
 interface PublicLinkModalProps {
   isOpen: boolean
@@ -12,6 +14,9 @@ interface PublicLinkModalProps {
   publicToken: string
   isEnabled?: boolean
   onStatusChange?: (enabled: boolean) => void
+  /** The text participants see before their session; empty = no such screen. */
+  welcomeMessage?: string | null
+  onWelcomeMessageChange?: (message: string | null) => void
 }
 
 export default function PublicLinkModal({
@@ -22,12 +27,39 @@ export default function PublicLinkModal({
   publicToken,
   isEnabled = true,
   onStatusChange,
+  welcomeMessage = null,
+  onWelcomeMessageChange,
 }: PublicLinkModalProps) {
   const { resolvedTheme } = useThemeStore()
   const isDark = resolvedTheme === 'dark'
   const [copied, setCopied] = useState(false)
   const [isToggling, setIsToggling] = useState(false)
   const [currentEnabled, setCurrentEnabled] = useState(isEnabled)
+  const [savedMessage, setSavedMessage] = useState(welcomeMessage ?? '')
+  const [messageDraft, setMessageDraft] = useState(welcomeMessage ?? '')
+  const [isSavingMessage, setIsSavingMessage] = useState(false)
+  const [messageError, setMessageError] = useState<string | null>(null)
+  const messageChanged = messageDraft.trim() !== savedMessage.trim()
+
+  const handleSaveMessage = async () => {
+    setIsSavingMessage(true)
+    setMessageError(null)
+    try {
+      const next = messageDraft.trim() || null
+      await apiClient.updateProjectPublicConfig(projectId, {
+        isPublic: true,
+        welcomeMessage: next,
+      })
+      setSavedMessage(next ?? '')
+      setMessageDraft(next ?? '')
+      onWelcomeMessageChange?.(next)
+    } catch (err) {
+      console.error('Failed to save welcome message:', err)
+      setMessageError('Could not save the message. Please try again.')
+    } finally {
+      setIsSavingMessage(false)
+    }
+  }
 
   const publicLink = `${window.location.origin}/p/${publicToken}`
 
@@ -82,7 +114,8 @@ export default function PublicLinkModal({
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
             className={`
-              relative w-full max-w-md rounded-2xl overflow-hidden shadow-2xl
+              relative w-full max-w-md max-h-[calc(100dvh-2rem)] rounded-2xl overflow-hidden shadow-2xl
+              flex flex-col
               ${isDark
                 ? 'bg-zinc-800 border border-zinc-700'
                 : 'bg-white border border-neutral-200'
@@ -90,7 +123,7 @@ export default function PublicLinkModal({
             `}
           >
             {/* Header */}
-            <div className={`px-6 pt-6 pb-4`}>
+            <div className={`shrink-0 px-6 pt-6 pb-4`}>
               <div className="flex items-center gap-3 mb-2">
                 <div className={`
                   w-10 h-10 rounded-xl flex items-center justify-center
@@ -109,8 +142,8 @@ export default function PublicLinkModal({
               </div>
             </div>
 
-            {/* Content */}
-            <div className="px-6 pb-6">
+            {/* Content: the only part that scrolls, so the footer stays on screen */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
               {/* Status indicator - now interactive */}
               <div className={`
                 flex items-center justify-between p-3 rounded-xl mb-4
@@ -168,45 +201,53 @@ export default function PublicLinkModal({
                 }
               </p>
 
-              {/* Link display */}
-              <div className={`
-                flex items-center gap-2 coarse:gap-3 p-4 rounded-xl mb-4
-                ${isDark ? 'bg-zinc-700/50 border border-zinc-600' : 'bg-neutral-50 border border-neutral-200'}
-              `}>
-                <input
-                  type="text"
-                  value={publicLink}
-                  readOnly
-                  className={`flex-1 bg-transparent text-sm font-mono truncate ${isDark ? 'text-zinc-200' : 'text-neutral-700'}`}
+              {/* Link display, QR code above it, same as the participant connection screen */}
+              <PublicLinkDisplay value={publicLink} isDark={isDark} copied={copied} onCopy={handleCopyLink} />
+
+              {/* Welcome message */}
+              <div className="mb-4">
+                <label
+                  htmlFor="public-link-welcome-message"
+                  className={`block text-xs font-light tracking-wider uppercase mb-2 ${isDark ? 'text-zinc-400' : 'text-neutral-600'}`}
+                >
+                  Welcome Message <span className={isDark ? 'text-zinc-500' : 'text-neutral-400'}>(Optional)</span>
+                </label>
+                <textarea
+                  id="public-link-welcome-message"
+                  value={messageDraft}
+                  onChange={(e) => setMessageDraft(e.target.value)}
+                  placeholder="A message every participant sees on screen before their session starts..."
+                  rows={3}
+                  maxLength={WELCOME_MESSAGE_MAX_LENGTH}
+                  className={`
+                    w-full px-4 py-3 rounded-xl text-base sm:text-sm font-light resize-none
+                    focus:outline-none transition-all duration-200
+                    ${isDark
+                      ? 'bg-zinc-700/50 border border-zinc-600 text-zinc-100 placeholder:text-zinc-500 focus:border-zinc-500'
+                      : 'bg-neutral-50 border border-neutral-200 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-400/60 focus:bg-white'
+                    }
+                  `}
                 />
-                <button
-                  onClick={handleCopyLink}
-                  className={`
-                    p-2 rounded-lg transition-colors flex-shrink-0
-                    ${isDark
-                      ? 'hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200'
-                      : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-700'
-                    }
-                  `}
-                  title="Copy link"
-                >
-                  {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                </button>
-                <a
-                  href={publicLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={`
-                    p-2 rounded-lg transition-colors flex-shrink-0
-                    ${isDark
-                      ? 'hover:bg-zinc-600 text-zinc-400 hover:text-zinc-200'
-                      : 'hover:bg-neutral-200 text-neutral-500 hover:text-neutral-700'
-                    }
-                  `}
-                  title="Open in new tab"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                </a>
+                <div className={`mt-1 flex items-center justify-between text-xs font-light ${isDark ? 'text-zinc-500' : 'text-neutral-500'}`}>
+                  {messageError
+                    ? <span role="alert" className={isDark ? 'text-red-400' : 'text-red-600'}>{messageError}</span>
+                    : <span>Applies to participants who join from now on.</span>}
+                  <div className="flex items-center gap-3">
+                    <span>{messageDraft.length}/{WELCOME_MESSAGE_MAX_LENGTH}</span>
+                    {messageChanged && (
+                      <button
+                        onClick={handleSaveMessage}
+                        disabled={isSavingMessage}
+                        className={`
+                          px-3 py-1 rounded-lg text-xs font-medium transition-all disabled:opacity-50
+                          ${isDark ? 'bg-violet-600 text-white hover:bg-violet-500' : 'bg-neutral-900 text-white hover:bg-neutral-800'}
+                        `}
+                      >
+                        {isSavingMessage ? 'Saving...' : 'Save'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Info section */}
@@ -227,7 +268,7 @@ export default function PublicLinkModal({
             </div>
 
             {/* Footer */}
-            <div className={`px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+            <div className={`shrink-0 px-6 py-4 border-t ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
               <div className="flex gap-3">
                 <button
                   onClick={handleCopyLink}

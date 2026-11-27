@@ -39,7 +39,7 @@ export default function ModeSelectionStep({ mode, onSelectMode }: ModeSelectionS
   const isDark = resolvedTheme === 'dark'
 
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       {MODES.map((option) => {
         const selected = mode === option.id
         return (

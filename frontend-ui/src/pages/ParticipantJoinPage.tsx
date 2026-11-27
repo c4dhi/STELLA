@@ -164,9 +164,14 @@ export default function ParticipantJoinPage() {
             }
           }
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to check invitation status:', err);
-        // Don't change state on poll errors, just log and retry
+        if (err.statusCode === 404) {
+          // Invitation/project is gone (e.g. deleted mid-call) - stop polling.
+          setError('This conversation has ended.');
+          setPageState('ERROR');
+        }
+        // Other errors: don't change state, just log and retry
       }
     };
 
@@ -349,7 +354,7 @@ export default function ParticipantJoinPage() {
         <OrganizerMessageModal
           key="message"
           message={invitation.customMessage!}
-          participantName={invitation.participantName}
+          participantName={invitation.fromPublicLink ? undefined : invitation.participantName}
           onContinue={handleMessageAcknowledged}
         />
       )}

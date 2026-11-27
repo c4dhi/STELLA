@@ -19,6 +19,11 @@ What we test here:
 from stella_v2_agent.pipeline.arbitration import Arbitration
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.experts.base import ExpertConfig, VerdictDirective
+from stella_v2_agent.experts.registry import ExpertRegistry
+
+# What each verdict leads to lives in the built-in expert files (#222), so the
+# tests run arbitration with them, as the agent does.
+BUILTIN = ExpertRegistry().as_map()
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +59,7 @@ def _verdict(
 def test_empty_verdicts_returns_neutral_directive():
     # With no experts active, arbitration should produce a safe neutral default.
     arb = Arbitration()
-    result = arb.resolve([])
+    result = arb.resolve([], expert_configs=BUILTIN)
 
     assert result.directive.tone == "neutral"
     assert result.directive.short_circuit is False
@@ -77,7 +82,7 @@ def test_noise_detection_unclear_short_circuits_all_other_experts():
         _verdict("probing", "needs_clarification", priority=60, recommendation="Tell me more"),
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.directive.short_circuit is True
     # The redirect message should be set (either default or custom)
@@ -90,7 +95,7 @@ def test_noise_detection_clear_does_not_short_circuit():
     arb = Arbitration()
     verdicts = [_verdict("noise_detection", "clear", priority=100)]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.directive.short_circuit is False
 
@@ -108,7 +113,7 @@ def test_higher_priority_expert_tone_wins():
         _verdict("probing", "needs_clarification", priority=60, recommendation="Ask more"),
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     # medical has higher priority — it should be the favored expert
     assert result.favored_expert == "medical"
@@ -125,7 +130,7 @@ def test_lower_priority_expert_does_not_override_primary_action():
         _verdict("probing", "needs_clarification", priority=60, recommendation="Ask about symptoms"),
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     # Primary action must come from medical (highest priority)
     assert result.directive.primary_action == "See a specialist"
@@ -140,17 +145,19 @@ def test_medical_high_verdict_adds_must_avoid():
     arb = Arbitration()
     verdicts = [_verdict("medical", "high", priority=95)]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert any("medical" in item for item in result.directive.must_avoid)
 
 
 def test_legal_critical_verdict_adds_must_avoid():
     # Same rule for legal at "critical" severity.
+    # (The shipped file overrides the reply on "critical"; here it's generated.)
     arb = Arbitration()
     verdicts = [_verdict("legal", "critical", priority=90)]
+    configs = {"legal": _expert("legal", 90, {"critical": VerdictDirective("inform", "")})}
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=configs)
 
     assert any("legal" in item for item in result.directive.must_avoid)
 
@@ -160,14 +167,15 @@ def test_medical_high_verdict_also_avoids_personal_tips():
     # personal tips, not just diagnoses/treatment plans — that's the gap that
     # let a plan step's "give a small personal suggestion" through unchecked.
     arb = Arbitration()
-    result = arb.resolve([_verdict("medical", "high", priority=95)])
+    result = arb.resolve([_verdict("medical", "high", priority=95)], expert_configs=BUILTIN)
 
     assert any("tip" in item for item in result.directive.must_avoid)
 
 
 def test_legal_critical_verdict_also_avoids_personal_tips():
     arb = Arbitration()
-    result = arb.resolve([_verdict("legal", "critical", priority=90)])
+    configs = {"legal": _expert("legal", 90, {"critical": VerdictDirective("inform", "")})}
+    result = arb.resolve([_verdict("legal", "critical", priority=90)], expert_configs=configs)
 
     assert any("tip" in item for item in result.directive.must_avoid)
 
@@ -178,7 +186,7 @@ def test_medical_low_verdict_does_not_add_must_avoid():
     arb = Arbitration()
     verdicts = [_verdict("medical", "low", priority=95)]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.directive.must_avoid == []
 
@@ -200,7 +208,7 @@ def test_probing_needs_clarification_sets_followup():
         )
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.directive.ask_followup is True
     assert result.directive.followup_question == "Can you describe the pain level?"
@@ -218,7 +226,7 @@ def test_probing_gentle_redirect_sets_redirect():
         )
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.directive.force_redirect is True
     assert result.directive.redirect_message == "Let's stay on topic."
@@ -237,7 +245,7 @@ def test_probing_extracts_deliverable_signals_from_raw_output():
         )
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert "user_name" in result.directive.deliverable_signals
     assert "user_age" in result.directive.deliverable_signals
@@ -255,7 +263,7 @@ def test_probing_ignores_non_list_deliverable_signals():
         )
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     # Should fall back to empty — no crash, no partial data
     assert result.directive.deliverable_signals == []
@@ -278,7 +286,7 @@ def test_timekeeper_stuck_sets_followup_when_probing_did_not():
         )
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.directive.ask_followup is True
     assert result.directive.followup_question == "You seem stuck — want to move on?"
@@ -293,7 +301,7 @@ def test_timekeeper_does_not_override_probing_followup():
         _verdict("timekeeper", "stuck", priority=50, recommendation="Timekeeper question"),
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     # Probing's question must survive
     assert result.directive.followup_question == "Probing question"
@@ -312,7 +320,7 @@ def test_conflict_detected_between_medical_high_and_probing():
         _verdict("probing", "needs_clarification", priority=60),
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     # At least one conflict should be recorded
     assert len(result.conflicts) > 0
@@ -324,7 +332,7 @@ def test_no_conflict_when_only_one_expert_active():
     arb = Arbitration()
     verdicts = [_verdict("probing", "needs_clarification", priority=60)]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.conflicts == []
 
@@ -339,7 +347,7 @@ def test_apply_config_custom_tone_map():
     arb.apply_config({"tone_map": {"probing": "empathetic"}})
 
     verdicts = [_verdict("probing", "needs_clarification", priority=60)]
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     # Custom tone must be used instead of the default "curious"
     assert result.directive.tone == "empathetic"
@@ -351,7 +359,7 @@ def test_apply_config_custom_gate_failure_message():
     arb.apply_config({"gate_failure_message": "Please rephrase your question."})
 
     verdicts = [_verdict("noise_detection", "unclear", priority=100)]
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     assert result.directive.redirect_message == "Please rephrase your question."
 
@@ -373,7 +381,7 @@ def test_task_extraction_verdict_does_not_set_primary_action():
         )
     ]
 
-    result = arb.resolve(verdicts)
+    result = arb.resolve(verdicts, expert_configs=BUILTIN)
 
     # task_extraction must never set primary_action or change tone
     assert result.directive.primary_action == ""
@@ -385,8 +393,19 @@ def test_task_extraction_verdict_does_not_set_primary_action():
 # ---------------------------------------------------------------------------
 
 def _expert(name: str, priority: int, directives: dict | None = None) -> ExpertConfig:
-    """Build a minimal ExpertConfig with verdict_directives for arbitration tests."""
-    return ExpertConfig(name=name, priority=priority, verdict_directives=directives or {})
+    """The built-in expert with these verdicts' action and template replaced,
+    the way a saved configuration lays them over its file (#222)."""
+    import copy
+    base = copy.deepcopy(BUILTIN[name]) if name in BUILTIN else ExpertConfig(name=name)
+    base.priority = priority
+    for verdict, given in (directives or {}).items():
+        given = VerdictDirective.coerce(given)
+        rule = base.verdict_directives.get(verdict) or VerdictDirective()
+        rule.action, rule.template, rule.template_i18n = given.action, given.template, given.template_i18n
+        if given.reaction:
+            rule.reaction = given.reaction
+        base.verdict_directives[verdict] = rule
+    return base
 
 
 def test_override_directive_replaces_response():
@@ -581,7 +600,7 @@ def test_empty_directives_preserve_legacy_behavior():
     # With an expert config that carries no directives, arbitration behaves exactly
     # as before: tone + primary_action, action stays "inform".
     arb = Arbitration()
-    configs = {"medical": _expert("medical", 95, {})}
+    configs = {"medical": ExpertConfig(name="medical", priority=95, verdict_directives={"high": {"flag": True, "tone": "cautious"}})}
 
     result = arb.resolve(
         [_verdict("medical", "high", priority=95, recommendation="see a doctor")],
@@ -606,12 +625,12 @@ def test_seeded_noise_short_circuit_uses_gate_failure_message():
     assert result.directive.redirect_message == "Please repeat."
 
 
-def test_noise_fallback_without_configs_still_short_circuits():
-    # Back-compat: an un-migrated deployment (no expert_configs passed) keeps the
-    # hardcoded noise short-circuit behavior.
+def test_noise_unclear_short_circuits_from_its_file():
+    # The shipped noise_detection file asks the participant to repeat (#222:
+    # this used to be a fallback in code keyed on the expert's name).
     arb = Arbitration()
 
-    result = arb.resolve([_verdict("noise_detection", "unclear", priority=100)])
+    result = arb.resolve([_verdict("noise_detection", "unclear", priority=100)], expert_configs=BUILTIN)
 
     assert result.directive.action == "short_circuit"
     assert result.directive.short_circuit is True

@@ -6,6 +6,7 @@ import PipelineView from './PipelineView'
 import ExpertSidebar from './ExpertSidebar'
 import NodeDetailOverlay from './NodeDetailOverlay'
 import { useConfiguratorState } from './useConfiguratorState'
+import { VerdictRuleSupportContext, verdictRuleSupportOf } from './verdictRules'
 import type { StageSummary } from './PipelineNodeCard'
 import DiscardChangesDialog from '../shared/DiscardChangesDialog'
 import { useDiscardGuard } from '../../hooks/useDiscardGuard'
@@ -50,6 +51,8 @@ export default function AgentConfiguratorModal({
   const [overlayNodeId, setOverlayNodeId] = useState<string | null>(null)
 
   const state = useConfiguratorState(configuration, setConfiguration, pipelineSchema)
+  // The verdict rules this agent's stages act on: the expert panels offer only these (#224).
+  const ruleSupport = useMemo(() => verdictRuleSupportOf(pipelineSchema), [pipelineSchema])
 
   // Unsaved-changes guard (#177, #161): compare current name/description/config
   // to the values the modal opened with. Closing while dirty asks first.
@@ -77,51 +80,27 @@ export default function AgentConfiguratorModal({
     onSave(name.trim(), description.trim(), configuration)
   }
 
-  // Build stage summaries for pipeline nodes
+  // Stage summaries, from what each stage declares (#224): the model it runs
+  // (a `<stage>.model` setting), the experts it holds (an expert list), and the
+  // order verdicts are weighed in (a stage that acts on verdict rules).
   const stageSummaries = useMemo((): Record<string, StageSummary> => {
+    const settings = pipelineSchema.settings ?? []
     const nodeConfig = (id: string) => (configuration.nodes?.[id] ?? {}) as Record<string, unknown>
-    // A badge shows the configured model, else the one the agent declares as default.
-    const model = (id: string) =>
-      (nodeConfig(id).model as string) ||
-      ((pipelineSchema.settings ?? []).find((s) => s.key === `${id}.model`)?.default as string | undefined)
-
-    return {
-      input_gate: {
-        type: 'input_gate',
-        lines: [`${state.inputGateRules.length} trigger rules`],
-        receivesPlanData: true,
-        receivesProgressData: true,
-        modelBadge: model('input_gate'),
-      },
-      expert_pool: {
-        type: 'expert_pool',
-        lines: [
-          `${state.poolExperts.length} active${state.bgExperts.length > 0 ? ` (${state.bgExperts.length} bg)` : ''}`,
-        ],
-        receivesPlanData: true,
-        receivesProgressData: true,
-        chips: state.poolExperts.map((e) => e.name),
-      },
-      arbitration: {
-        type: 'arbitration',
-        lines: ['Priority-based resolution'],
-        receivesPlanData: false,
-        chips: state.arbitrationOrder,
-      },
-      response_generator: {
-        type: 'response_generator',
-        lines: ['Persona + guidelines'],
-        receivesPlanData: true,
-        modelBadge: model('response_generator'),
-      },
-      bridge_generator: {
-        type: 'bridge_generator',
-        lines: ['Ultra-short bridge phrase'],
-        receivesPlanData: false,
-        modelBadge: model('bridge_generator'),
-      },
+    const summaries: Record<string, StageSummary> = {}
+    for (const node of pipelineSchema.nodes) {
+      const summary: StageSummary = { lines: [] }
+      const modelSetting = settings.find((s) => s.key === `${node.id}.model`)
+      if (modelSetting) summary.modelBadge = (nodeConfig(node.id).model as string) || (modelSetting.default as string | undefined)
+      if (node.id === state.expertPoolNodeId) {
+        summary.lines.push(`${state.poolExperts.length} active${state.bgExperts.length > 0 ? ` (${state.bgExperts.length} bg)` : ''}`)
+        summary.chips = state.poolExperts.map((e) => e.name)
+      } else if (node.verdict_rules?.reactions?.length) {
+        summary.chips = state.arbitrationOrder
+      }
+      summaries[node.id] = summary
     }
-  }, [state.inputGateRules, state.poolExperts, state.bgExperts, state.arbitrationOrder, configuration, pipelineSchema.settings])
+    return summaries
+  }, [pipelineSchema, state.expertPoolNodeId, state.poolExperts, state.bgExperts, state.arbitrationOrder, configuration])
 
   const modifiedNodeCount = Object.keys(configuration.nodes || {}).filter(
     (k) => configuration.nodes?.[k] && Object.keys(configuration.nodes[k]).length > 0,
@@ -267,6 +246,7 @@ export default function AgentConfiguratorModal({
               nothing — so it gets a real height to fill instead, and scrolls
               internally rather than relying on the whole body's scroll. */}
           <div className={`w-full h-[42vh] shrink-0 lg:h-auto lg:w-[440px] lg:shrink-0 border-t lg:border-t-0 lg:border-l overflow-hidden ${isDark ? 'border-zinc-700' : 'border-neutral-200'}`}>
+            <VerdictRuleSupportContext.Provider value={ruleSupport}>
             <ExpertSidebar
               experts={state.experts}
               poolExperts={state.poolExperts}
@@ -281,6 +261,7 @@ export default function AgentConfiguratorModal({
               onToggleTaskExtraction={state.toggleTaskExtraction}
               isDark={isDark}
             />
+            </VerdictRuleSupportContext.Provider>
           </div>
         </div>
 

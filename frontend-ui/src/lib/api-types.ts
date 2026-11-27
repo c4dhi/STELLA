@@ -128,6 +128,7 @@ export interface ProjectWithSessions extends Project {
   isPublic?: boolean
   publicToken?: string
   publicEnabled?: boolean
+  publicWelcomeMessage?: string | null
   ownerId?: string
   isOwner?: boolean
 }
@@ -577,6 +578,8 @@ export interface CreateInvitationResponse {
 export interface InvitationDetails {
   participantName: string
   customMessage?: string | null
+  // True for a public-link participant, whose name is generated (#213).
+  fromPublicLink?: boolean
   visualizerType?: string | null
   visualizerLocked: boolean
   maxSessionDurationSeconds?: number | null
@@ -1161,6 +1164,9 @@ export interface PublicAgentConfig {
   envVars?: Record<string, string>
   /** Connectors every public session's agent may call; the owner's own. */
   connectorBindings?: { connectorId: string; slot?: string }[]
+  /** Absent = follow `plan`. 'companion' offers `availablePlanIds` as activities (#207). */
+  mode?: 'plan' | 'companion'
+  availablePlanIds?: string[]
 }
 
 /**
@@ -1176,6 +1182,8 @@ export interface UpdatePublicConfigDto {
   enabled?: boolean
   // Max session duration in seconds. null = no limit (default). Max 7200 (2h).
   maxSessionDurationSeconds?: number | null
+  // Shown on screen to every participant before their session. null clears it.
+  welcomeMessage?: string | null
 }
 
 /**
@@ -1247,6 +1255,7 @@ export interface ProjectWithPublicConfig extends Project {
   publicVisualizerType?: string
   publicVisualizerLocked: boolean
   publicMaxSessionDurationSeconds?: number | null
+  publicWelcomeMessage?: string | null
   publicExpiresAt?: string
   publicEnabled: boolean
 }
@@ -1699,6 +1708,23 @@ export interface VerdictDirective {
   description?: string
   /** Per-language overrides of `template`, keyed by language code (e.g. `de`). */
   template_i18n?: Record<string, string>
+  // Verdict rules (#221). The Configurator offers only those the agent declares.
+  /** Whether this verdict counts as a warning. */
+  flag?: boolean
+  /** The tone the reply takes. */
+  tone?: string
+  /** What the reply must not do. */
+  must_avoid?: string[]
+  /** What follows the verdict (one of the reactions the agent carries out). */
+  reaction?: string
+  /** The field a reaction reads from the expert's output. */
+  reaction_field?: string
+  /** How sure the agent must be of this verdict. */
+  min_confidence?: number
+  /** The verdict it becomes when the agent is not sure enough. */
+  below?: string
+  /** The experts whose advice this verdict overrides. */
+  overrides?: string[]
 }
 
 /** An agent-declared default expert, as published from config/experts/*.json
@@ -1720,6 +1746,8 @@ export interface ExpertDefault {
   min_confidence?: number
   /** On by default only for configurations authored against this prompt compiler or later. */
   enabled_from_compiler?: string
+  /** A safety expert (#221): only a confirmed safety_off record switches it off. */
+  safety?: boolean
   verdict_directives?: Record<
     string,
     { action?: string; template?: string; description?: string; template_i18n?: Record<string, string> }
@@ -1729,7 +1757,7 @@ export interface ExpertDefault {
 export interface ConfigurableSlot {
   id: string
   label: string
-  type: 'text' | 'number' | 'select' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives'
+  type: 'text' | 'number' | 'select' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives' | 'gate_list'
   description?: string
   default?: unknown
   options?: string[]  // for select type
@@ -1747,6 +1775,10 @@ export interface PipelineNode {
   icon?: string
   position: { row: number; col: number }
   slots: ConfigurableSlot[]
+  /** The verdict rules this step acts on (#221): reactions it carries out, rule fields it reads. */
+  verdict_rules?: { reactions?: string[]; fields?: string[] }
+  /** How a step off the turn's chain is drawn (#224): its own row (`side`) or alongside the turn (`parallel`). */
+  path?: { kind: 'side' | 'parallel'; input: string; output: string }
 }
 
 export interface PipelineEdge {
@@ -1775,7 +1807,7 @@ export interface PipelineThreshold {
  */
 export interface ConfigSetting {
   key: string
-  type: 'string' | 'text' | 'boolean' | 'integer' | 'number' | 'enum' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives'
+  type: 'string' | 'text' | 'boolean' | 'integer' | 'number' | 'enum' | 'string_list' | 'key_value' | 'expert_list' | 'verdict_directives' | 'gate_list'
   label?: string
   description?: string
   default?: unknown

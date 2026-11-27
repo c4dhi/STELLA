@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateProjectDto } from './dto/create-project.dto.js';
 import { UpdateProjectDto } from './dto/update-project.dto.js';
@@ -6,6 +6,8 @@ import { ProjectStatsDto } from './dto/project-stats.dto.js';
 import { UpdatePublicConfigDto } from './dto/update-public-config.dto.js';
 import { SessionStatus, AgentStatus } from '@prisma/client';
 import { AgentsService } from '../agents/agents.service.js';
+import { AGENT_TYPE_MANIFEST_SELECT, manifestOfAgentType, resolveAgentRequirements } from '../agents/agent-requirements.js';
+import { LiveKitService } from '../livekit/livekit.service.js';
 
 @Injectable()
 export class ProjectsService {
@@ -21,6 +23,7 @@ export class ProjectsService {
     private prisma: PrismaService,
     @Inject(forwardRef(() => AgentsService))
     agentsService: any,
+    private livekit: LiveKitService,
   ) {
     this.agentsService = agentsService;
   }
@@ -234,7 +237,7 @@ export class ProjectsService {
       where: { id },
       include: {
         sessions: {
-          select: { id: true },
+          select: { id: true, room: { select: { livekitRoomName: true } } },
         },
       },
     });
@@ -247,8 +250,9 @@ export class ProjectsService {
       `Deleting project ${id} (${project.name}) - stopping all agents and cleaning up ${project.sessions.length} sessions`,
     );
 
-    // Stop all agents for each session before deleting
-    // This ensures K8s pods, secrets, and configmaps are properly cleaned up
+    // Stop all agents and close each session's LiveKit room before deleting.
+    // Without the room close, a participant still on the call sits in a room
+    // LiveKit never tears down and whose session disappears from under it (#1047).
     for (const session of project.sessions) {
       this.logger.log(`Stopping agents for session ${session.id}`);
       try {
@@ -258,6 +262,17 @@ export class ProjectsService {
           `Failed to stop agents for session ${session.id}: ${error.message}`,
         );
         // Continue with deletion even if agent stop fails
+      }
+
+      const roomName = session.room?.livekitRoomName;
+      if (roomName) {
+        try {
+          await this.livekit.deleteRoom(roomName);
+        } catch (error) {
+          this.logger.warn(
+            `Failed to delete LiveKit room ${roomName} for session ${session.id}: ${error.message}`,
+          );
+        }
       }
     }
 
@@ -326,7 +341,11 @@ export class ProjectsService {
       if (dto.maxSessionDurationSeconds !== undefined) {
         updateData.publicMaxSessionDurationSeconds = dto.maxSessionDurationSeconds;
       }
+      if (dto.welcomeMessage !== undefined) {
+        updateData.publicWelcomeMessage = dto.welcomeMessage?.trim() || null;
+      }
       await this.checkPublicBindings(project, dto, callerId);
+      await this.checkPublicPlans(project, dto);
     } else {
       // When making private, optionally clear public config
       // Keep the publicToken so it can be re-enabled without losing the link
@@ -394,6 +413,57 @@ export class ProjectsService {
     const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
     if (ownerId && agentTypeId && (dto.agentConfig !== undefined || typeChanged)) {
       await this.agentsService.checkDeployable(agentTypeId, ownerId, project.id, bindings);
+    }
+  }
+
+  /**
+   * Companion mode and the plans it offers only make sense if the agent type
+   * actually declares companion support, and each plan id is one the owner
+   * can run — the agent always spawns as the project owner (see
+   * checkPublicBindings), never as whoever saves this config. Unchecked, a
+   * wrong save here only fails once a participant joins and the public link
+   * breaks, with nothing reported at save time. REST and MCP both go through
+   * this method, so they share the refusal.
+   */
+  private async checkPublicPlans(
+    project: { id: string; publicAgentTypeId: string | null },
+    dto: UpdatePublicConfigDto,
+  ): Promise<void> {
+    const agentConfig = dto.agentConfig;
+    if (!agentConfig) {
+      return;
+    }
+
+    if (agentConfig.mode === 'companion') {
+      const agentTypeId = dto.agentTypeId ?? project.publicAgentTypeId;
+      const agentType = agentTypeId
+        ? await this.prisma.agentType.findUnique({
+            where: { id: agentTypeId },
+            select: AGENT_TYPE_MANIFEST_SELECT,
+          })
+        : null;
+      const modes = agentType
+        ? resolveAgentRequirements(manifestOfAgentType(agentType)).plans?.modes
+        : undefined;
+      if (!modes?.includes('companion')) {
+        throw new BadRequestException('This agent type does not support companion mode');
+      }
+    }
+
+    if (agentConfig.availablePlanIds?.length) {
+      const owner = await this.prisma.projectMembership.findFirst({
+        where: { projectId: project.id, role: 'OWNER' },
+        select: { userId: true },
+      });
+      const ownerId = owner?.userId ?? null;
+      for (const planId of agentConfig.availablePlanIds) {
+        const template = ownerId
+          ? await this.prisma.planTemplate.findUnique({ where: { id: planId } })
+          : null;
+        if (!template || template.userId !== ownerId) {
+          throw new BadRequestException(`Plan ${planId} is not available to the project owner`);
+        }
+      }
     }
   }
 

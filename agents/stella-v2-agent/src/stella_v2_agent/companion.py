@@ -40,6 +40,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from stella_agent_sdk import AgentOutput
+from stella_agent_sdk.language import detect_language
 from stella_agent_sdk.llm import LLMConfig, LLMMessage, LLMProvider
 
 from stella_v2_agent.companion_settings import CompanionSettings, load_settings
@@ -515,6 +516,34 @@ _WOKEN_KIND = "woken_up"
 _RESTART_KINDS = {_DECISIONS[Change.DISMISSED][0], _WOKEN_KIND}
 
 
+def language_from_history(
+    history: List[Dict[str, Any]], *, supported: Tuple[str, ...] = ("de", "en"), bar: float = 0.85,
+) -> Optional[str]:
+    """The language the user was last speaking, read from the transcript (#159).
+
+    A pod that wakes a paused session has resolved no language yet: that only
+    happens on the first user turn it handles. When the first thing it does is
+    the wake opening, this is what keeps her from greeting a German speaker in
+    English. Only the user's own words count, the last three of them, and only
+    as clearly as a typed turn would have to be (the resolver's text bar).
+    """
+    said = [e.get("content", "") for e in history if e.get("role") == "user"][-3:]
+    language, confidence = detect_language(" ".join(said))
+    return language if language in supported and confidence >= bar else None
+
+
+def recorded_decision(envelope: Any) -> Dict[str, Any]:
+    """The companion decision a persisted envelope records, or ``{}``.
+
+    Other notes use a ``decision`` field too (a barge-in stores the string
+    ``"commit"``), and a transcript is never trusted to be well formed, so
+    every level is checked before it is read."""
+    def field(value: Any, key: str) -> Any:
+        return value.get(key) if isinstance(value, dict) else None
+    found = field(field(field(envelope, "data"), "metadata"), "decision")
+    return found if isinstance(found, dict) else {}
+
+
 def opening_from_history(messages: List[Any]) -> Tuple[bool, bool]:
     """``(greeted, offered)`` as the recorded transcript leaves them (#159).
 
@@ -528,8 +557,7 @@ def opening_from_history(messages: List[Any]) -> Tuple[bool, bool]:
     """
     greeted = offered = False
     for msg in messages:
-        data = (getattr(msg, "envelope", None) or {}).get("data") or {}
-        kind = ((data.get("metadata") or {}).get("decision") or {}).get("kind")
+        kind = recorded_decision(getattr(msg, "envelope", None)).get("kind")
         if kind in _RESTART_KINDS:
             greeted = offered = False
         elif kind in _OFFER_KINDS:

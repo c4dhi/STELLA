@@ -2243,7 +2243,9 @@ class AudioPipeline:
         except asyncio.CancelledError:
             pass  # Debounce was reset - new transcript came in
 
-    def _handle_data_message(self, participant_id: str, data: bytes) -> None:
+    def _handle_data_message(
+        self, participant_id: str, data: bytes, *, received_at_ms: Optional[int] = None
+    ) -> None:
         """
         Handle incoming data channel message from LiveKit.
 
@@ -2253,6 +2255,9 @@ class AudioPipeline:
         Args:
             participant_id: Identity of the participant who sent the message (LiveKit identity)
             data: Raw bytes of the message (JSON encoded)
+            received_at_ms: When the message actually arrived, if replayed later
+                (e.g. buffered while speech services were still loading, #193).
+                Defaults to now, as if it had just arrived.
         """
         try:
             message = json.loads(data.decode("utf-8"))
@@ -2327,7 +2332,7 @@ class AudioPipeline:
                         participant_id=envelope_participant_id,
                         transcript_id=envelope_transcript_id,
                         confidence=1.0,
-                        timestamp_ms=int(time.time() * 1000),
+                        timestamp_ms=received_at_ms if received_at_ms is not None else int(time.time() * 1000),
                         speech_started=False,
                         typed=True,
                     )

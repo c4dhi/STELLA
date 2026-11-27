@@ -611,7 +611,8 @@
                         "string_list",
                         "key_value",
                         "expert_list",
-                        "verdict_directives"
+                        "verdict_directives",
+                        "gate_list"
                       ]
                     },
                     "description": {
@@ -651,6 +652,70 @@
                   ],
                   "additionalProperties": {}
                 }
+              },
+              "verdict_rules": {
+                "type": "object",
+                "properties": {
+                  "reactions": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "none",
+                        "ask_followup",
+                        "redirect",
+                        "ask_about_pending",
+                        "ask_back",
+                        "repeat_request"
+                      ]
+                    }
+                  },
+                  "fields": {
+                    "default": [],
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "flag",
+                        "tone",
+                        "must_avoid",
+                        "reaction",
+                        "reaction_field",
+                        "min_confidence",
+                        "below",
+                        "overrides"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "path": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "side",
+                      "parallel"
+                    ]
+                  },
+                  "input": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "output": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "input",
+                  "output"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -763,7 +828,8 @@
               "string_list",
               "key_value",
               "expert_list",
-              "verdict_directives"
+              "verdict_directives",
+              "gate_list"
             ]
           },
           "label": {

@@ -16,6 +16,7 @@ import {
   StartJoinPublicProjectResponseDto,
   JoinProgressDto,
 } from './dto/public-project-info.dto.js';
+import { publicInvitationOptions } from './public-invitation-options.js';
 
 // In-memory progress state
 interface ProgressState {
@@ -43,6 +44,19 @@ interface PublicAgentConfig {
   envVarTemplateId?: string;
   envVars?: Record<string, string>;
   connectorBindings?: Array<{ connectorId: string; slot?: string; handle?: string }>;
+  // Absent = follow `plan`. 'companion' offers these plans as activities (#207);
+  // they are resolved and snapshotted on each spawn, as on a normal deploy.
+  mode?: 'plan' | 'companion';
+  availablePlanIds?: string[];
+}
+
+/** The mode a public project's agent is deployed in, as the create-agent request takes it. */
+export function publicDeployMode(
+  agentConfig: PublicAgentConfig | null,
+): { mode?: 'companion'; availablePlanIds?: string[] } {
+  return agentConfig?.mode === 'companion'
+    ? { mode: 'companion', availablePlanIds: agentConfig.availablePlanIds ?? [] }
+    : {};
 }
 
 @Injectable()
@@ -94,8 +108,10 @@ export class PublicProjectsService {
     agentConfig: PublicAgentConfig | null,
   ): Record<string, unknown> {
     // No agent settings: a deployment passes only platform keys (see withAgentDefaults).
+    // A companion takes no single plan: its activities come from publicDeployMode.
+    const companion = agentConfig?.mode === 'companion';
     return {
-      ...(agentConfig?.plan ? { plan: agentConfig.plan } : {}),
+      ...(agentConfig?.plan && !companion ? { plan: agentConfig.plan } : {}),
       ...(agentConfig?.pipelineConfig
         ? { pipeline_config: agentConfig.pipelineConfig }
         : {}),
@@ -232,6 +248,7 @@ export class PublicProjectsService {
         envVarTemplateId: agentConfig?.envVarTemplateId,
         envVars: agentConfig?.envVars,
         connectorBindings: agentConfig?.connectorBindings,
+        ...publicDeployMode(agentConfig),
       },
       ownerId,
     );
@@ -250,9 +267,7 @@ export class PublicProjectsService {
 
     // 5. Create invitation using existing service
     const { invitation } = await this.invitationsService.create(session.id, {
-      visualizerType: project.publicVisualizerType || undefined,
-      visualizerLocked: project.publicVisualizerLocked,
-      maxSessionDurationSeconds: project.publicMaxSessionDurationSeconds ?? undefined,
+      ...publicInvitationOptions(project),
       // Auto-generated name
     });
 
@@ -299,6 +314,8 @@ export class PublicProjectsService {
       envVarTemplateId: agentConfig?.envVarTemplateId || null,
       envVars: agentConfig?.envVars || {},
       connectorBindings: agentConfig?.connectorBindings ?? [],
+      // The first spawn resolves the activities; a later wake replays its snapshot.
+      ...publicDeployMode(agentConfig),
       // Wake recreates it as this member: public agents run as the owner.
       deployedByUserId: ownerId,
     };
@@ -395,10 +412,10 @@ export class PublicProjectsService {
 
         // Step 4: Create invitation
         this.updateProgress(sessionId, 4, 'in_progress', 'Creating session...');
-        const { invitation } = await this.invitationsService.create(sessionId, {
-          visualizerType: project.publicVisualizerType || undefined,
-          visualizerLocked: project.publicVisualizerLocked,
-        });
+        const { invitation } = await this.invitationsService.create(
+          sessionId,
+          publicInvitationOptions(project),
+        );
 
         // Step 5: Done - agent will spawn when user joins
         this.updateProgress(sessionId, 5, 'complete', 'Ready!', {
@@ -428,6 +445,7 @@ export class PublicProjectsService {
             envVarTemplateId: agentConfig?.envVarTemplateId,
             envVars: agentConfig?.envVars,
             connectorBindings: agentConfig?.connectorBindings,
+            ...publicDeployMode(agentConfig),
           },
           ownerId,
         );
@@ -452,10 +470,10 @@ export class PublicProjectsService {
           'Creating session...',
           { agentId: agent.id },
         );
-        const { invitation } = await this.invitationsService.create(sessionId, {
-          visualizerType: project.publicVisualizerType || undefined,
-          visualizerLocked: project.publicVisualizerLocked,
-        });
+        const { invitation } = await this.invitationsService.create(
+          sessionId,
+          publicInvitationOptions(project),
+        );
 
         // Step 5: Done
         this.updateProgress(sessionId, 5, 'complete', 'Ready!', {

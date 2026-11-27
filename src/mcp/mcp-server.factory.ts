@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import { McpAuditService } from './mcp-audit.service.js';
 import {
   MCP_TOOL_PROVIDERS,
@@ -102,7 +103,9 @@ export class McpServerFactory {
         {
           title: tool.title,
           description: tool.description,
-          inputSchema: tool.input,
+          // An unknown key is refused, not dropped: a misspelled or wrongly
+          // nested field errors instead of silently saving without it.
+          inputSchema: z.object(tool.input).strict(),
           annotations: tool.annotations,
         },
         (args: unknown) => this.run(tool, args, auth),

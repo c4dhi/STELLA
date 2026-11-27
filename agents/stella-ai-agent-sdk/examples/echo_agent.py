@@ -73,9 +73,11 @@ class EchoAgent(BaseAgent):
         logger.info(f"Processed message {self.message_count}: {input.text[:50]}")
 
     async def on_interrupt(self, session_id: str) -> None:
-        """Required. Called when the user barges in over the agent.
+        """Required (abstract), but the default run_audio_loop() never calls it -
+        a committed barge-in is handled by the SDK itself (see on_barge_in).
 
-        Cancel any in-flight generation here. The echo agent produces its reply
+        Override it if you write your own run_audio_loop() and want a place to
+        cancel in-flight generation. The echo agent produces its reply
         instantly, so there is nothing to stop.
         """
         logger.info(f"Interrupt received for session {session_id}")

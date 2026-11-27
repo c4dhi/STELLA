@@ -861,6 +861,10 @@ export default function SessionsDashboard() {
             // Update local project state to reflect the change
             setProject(prev => prev ? { ...prev, publicEnabled: enabled } : null)
           }}
+          welcomeMessage={project.publicWelcomeMessage}
+          onWelcomeMessageChange={(message) => {
+            setProject(prev => prev ? { ...prev, publicWelcomeMessage: message } : null)
+          }}
         />
       )}
 

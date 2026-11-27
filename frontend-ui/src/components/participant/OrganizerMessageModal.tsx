@@ -8,7 +8,8 @@ import {
 
 interface OrganizerMessageModalProps {
   message: string;
-  participantName: string;
+  /** Left out for public-link participants, whose names are generated. */
+  participantName?: string;
   onContinue: () => void;
 }
 
@@ -39,7 +40,9 @@ export default function OrganizerMessageModal({
               Message from the Organizer
             </h2>
             <p className="text-content-secondary dark:text-content-inverse-secondary text-sm">
-              Hi {participantName}, the session organizer has a message for you.
+              {participantName
+                ? `Hi ${participantName}, the session organizer has a message for you.`
+                : 'The session organizer has a message for you.'}
             </p>
           </div>
 

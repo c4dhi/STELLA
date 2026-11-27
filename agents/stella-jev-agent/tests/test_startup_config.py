@@ -66,13 +66,15 @@ def test_loads_its_own_experts(agent: StellaJevAgent) -> None:
 
 def test_expert_overrides_keep_the_jev_pool(agent: StellaJevAgent) -> None:
     asyncio.run(agent.on_session_start(
-        "session-jev", _config(expert_overrides={"legal": {"enabled": False}})
+        "session-jev", _config(expert_overrides={"probing": {"enabled": False}, "legal": {"enabled": False}})
     ))
 
     assert isinstance(agent.expert_pool, JevExpertPool)
     assert agent.expert_pool.ask_threshold == 0.6
     names = agent.expert_registry.get_enabled_names()
-    assert "common_sense" in names and "legal" not in names
+    assert "common_sense" in names and "probing" not in names
+    # Legal is a safety expert (#223): only a recorded safety_off switches it off.
+    assert "legal" in names
 
 
 def test_requires_a_pipeline_config(agent: StellaJevAgent) -> None:

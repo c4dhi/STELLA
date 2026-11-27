@@ -21,58 +21,20 @@ import { PromptComposer, type PromptBlock } from './PromptComposer'
 /** Types drawn as one field each in a settings grid. */
 const FIELD_TYPES = new Set(['number', 'integer', 'enum', 'boolean', 'string'])
 
-// Stage icon + accent color mapping
-const STAGE_META: Record<string, { icon: JSX.Element; accent: string; accentBg: string; accentBgLight: string }> = {
-  input_gate: {
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M16 3h5v5" /><path d="M4 20 21 3" /><path d="M21 16v5h-5" /><path d="M15 15l6 6" /><path d="M4 4l5 5" />
-      </svg>
-    ),
-    accent: 'text-sky-400',
-    accentBg: 'bg-sky-500/10 border-sky-500/20',
-    accentBgLight: 'bg-sky-50 border-sky-100',
-  },
-  expert_pool: {
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
-      </svg>
-    ),
-    accent: 'text-emerald-400',
-    accentBg: 'bg-emerald-500/10 border-emerald-500/20',
-    accentBgLight: 'bg-emerald-50 border-emerald-100',
-  },
-  arbitration: {
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 6h18" /><path d="M7 12h10" /><path d="M10 18h4" />
-      </svg>
-    ),
-    accent: 'text-violet-400',
-    accentBg: 'bg-violet-500/10 border-violet-500/20',
-    accentBgLight: 'bg-violet-50 border-violet-100',
-  },
-  response_generator: {
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-      </svg>
-    ),
-    accent: 'text-amber-400',
-    accentBg: 'bg-amber-500/10 border-amber-500/20',
-    accentBgLight: 'bg-amber-50 border-amber-100',
-  },
-  bridge_generator: {
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
-      </svg>
-    ),
-    accent: 'text-rose-400',
-    accentBg: 'bg-rose-500/10 border-rose-500/20',
-    accentBgLight: 'bg-rose-50 border-rose-100',
-  },
+// A stage's accent colour (#224): picked from its id, so every agent's stages
+// get one without the Configurator knowing them. Its icon is the one it declares.
+const STAGE_ACCENTS = [
+  { accent: 'text-sky-400', accentBg: 'bg-sky-500/10 border-sky-500/20', accentBgLight: 'bg-sky-50 border-sky-100' },
+  { accent: 'text-emerald-400', accentBg: 'bg-emerald-500/10 border-emerald-500/20', accentBgLight: 'bg-emerald-50 border-emerald-100' },
+  { accent: 'text-violet-400', accentBg: 'bg-violet-500/10 border-violet-500/20', accentBgLight: 'bg-violet-50 border-violet-100' },
+  { accent: 'text-amber-400', accentBg: 'bg-amber-500/10 border-amber-500/20', accentBgLight: 'bg-amber-50 border-amber-100' },
+  { accent: 'text-rose-400', accentBg: 'bg-rose-500/10 border-rose-500/20', accentBgLight: 'bg-rose-50 border-rose-100' },
+]
+
+export function stageAccent(nodeId: string) {
+  let h = 0
+  for (const c of nodeId) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return STAGE_ACCENTS[h % STAGE_ACCENTS.length]
 }
 
 interface NodeDetailOverlayProps {
@@ -153,7 +115,7 @@ export default function NodeDetailOverlay({
   experts = [],
 }: NodeDetailOverlayProps) {
   const nodeConfig = (configuration.nodes?.[node.id] ?? {}) as Record<string, unknown>
-  const meta = STAGE_META[node.id]
+  const meta = stageAccent(node.id)
 
   const inputClass = `w-full px-3.5 py-2.5 rounded-xl text-[13px] font-light focus:outline-none transition-all ${
     isDark
@@ -472,10 +434,60 @@ export default function NodeDetailOverlay({
     )
   }
 
+  /**
+   * A gate list (#223, #224): one row per gate, "skip this expert when that
+   * expert or question says one of these, at least this sure". The whole list
+   * is saved as one value; Reset brings back the agent's default gates.
+   */
+  const renderGates = (s: ConfigSetting) => {
+    type Gate = { skip: string; when: string; verdicts: string[]; min_confidence?: number }
+    const configured = getSlotValue(nameOf(s))
+    const isOverridden = configured !== undefined && configured !== null
+    const gates = ((isOverridden ? configured : s.default) ?? []) as Gate[]
+    const save = (next: Gate[]) => onUpdateNodeConfig(node.id, nameOf(s), next)
+    const patch = (i: number, change: Partial<Gate>) =>
+      save(gates.map((g, j) => {
+        if (j !== i) return g
+        const merged = { ...g, ...change }
+        if (merged.min_confidence === undefined) delete merged.min_confidence
+        return merged
+      }))
+    const cell = `${inputClass} !py-1 !text-[12px]`
+    return (
+      <div key={s.key} data-testid={`gates-${s.key}`}>
+        {renderHeader(s, isOverridden)}
+        <div className="space-y-2">
+          <div className={`grid grid-cols-[1fr_1fr_1fr_5rem_1.5rem] gap-2 text-[10px] font-medium ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>
+            <span>Skip</span><span>When</span><span>Says (comma-separated)</span><span>How sure</span><span />
+          </div>
+          {gates.map((g, i) => (
+            <div key={i} className="grid grid-cols-[1fr_1fr_1fr_5rem_1.5rem] gap-2 items-center">
+              <input aria-label={`Gate ${i + 1} skips`} className={cell} value={g.skip} onChange={(e) => patch(i, { skip: e.target.value })} />
+              <input aria-label={`Gate ${i + 1} when`} className={cell} value={g.when} onChange={(e) => patch(i, { when: e.target.value })} />
+              <input aria-label={`Gate ${i + 1} says`} className={cell} value={g.verdicts.join(', ')}
+                onChange={(e) => patch(i, { verdicts: e.target.value.split(',').map((v) => v.trim()).filter(Boolean) })} />
+              <input aria-label={`Gate ${i + 1} how sure`} type="number" min={0} max={1} step={0.05} className={cell}
+                value={g.min_confidence ?? ''} placeholder="default"
+                onChange={(e) => patch(i, { min_confidence: e.target.value === '' ? undefined : Number(e.target.value) })} />
+              <button type="button" aria-label={`Remove gate ${i + 1}`} onClick={() => save(gates.filter((_, j) => j !== i))}
+                className={isDark ? 'text-zinc-500 hover:text-red-400' : 'text-neutral-400 hover:text-red-500'}>×</button>
+            </div>
+          ))}
+          <button type="button" onClick={() => save([...gates, { skip: '', when: '', verdicts: [] }])}
+            className={`text-[11px] font-medium ${isDark ? 'text-zinc-400 hover:text-zinc-200' : 'text-neutral-500 hover:text-neutral-700'}`}>
+            + Add gate
+          </button>
+        </div>
+        {s.description && <p className={`mt-1.5 text-[11px] ${isDark ? 'text-zinc-500' : 'text-neutral-400'}`}>{s.description}</p>}
+      </div>
+    )
+  }
+
   const renderSettings = () => {
     const prompts = settings.filter((s) => s.type === 'text')
     const fields = settings.filter((s) => FIELD_TYPES.has(s.type))
     const lists = settings.filter((s) => s.type === 'key_value' || s.type === 'string_list')
+    const gateLists = settings.filter((s) => s.type === 'gate_list')
     const hasExperts = settings.some((s) => s.type === 'expert_list')
 
     // Fields by their declared group, in order of appearance; advanced ones last.
@@ -514,6 +526,7 @@ export default function NodeDetailOverlay({
           </SettingsGrid>
         ))}
         {lists.map((s) => (s.type === 'key_value' ? renderPairs(s) : renderList(s)))}
+        {gateLists.map(renderGates)}
       </div>
     )
   }
@@ -553,7 +566,7 @@ export default function NodeDetailOverlay({
                   : `${meta?.accentBgLight || 'bg-neutral-50 border-neutral-200'}`
               }`}>
                 <span className={meta?.accent || (isDark ? 'text-zinc-400' : 'text-neutral-500')}>
-                  {meta?.icon || <span className="text-lg">{node.icon || '\u2699\uFE0F'}</span>}
+                  <span className="text-lg">{node.icon || '\u2699\uFE0F'}</span>
                 </span>
               </div>
               <div>

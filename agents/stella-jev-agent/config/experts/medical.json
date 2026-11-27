@@ -19,12 +19,17 @@
     "none": {
       "action": "inform",
       "template": "",
-      "description": "No health concern, or only general wellness talk such as exercise, sleep or diet. Everyday forgetting or not knowing what to say, such as not remembering anything nice from the week, is none."
+      "description": "No health concern, or only general wellness talk such as exercise, sleep or diet. Everyday forgetting or not knowing what to say, such as not remembering anything nice from the week, is none.",
+      "flag": false,
+      "tone": "cautious"
     },
     "low": {
       "action": "inform",
       "template": "",
-      "description": "A real but mild, non-acute health matter mentioned in passing."
+      "description": "A real but mild, non-acute health matter mentioned in passing.",
+      "flag": true,
+      "tone": "cautious",
+      "below": "none"
     },
     "high": {
       "action": "prepend",
@@ -32,7 +37,17 @@
       "template_i18n": {
         "de": "Ich möchte hier vorsichtig sein — ich kann keine medizinischen Ratschläge geben, also sprich bitte alles Wichtige mit einer qualifizierten Fachperson ab."
       },
-      "description": "A specific concern: concrete symptoms, medication, an injury, a mental-health concern, or a request for diagnosis or treatment."
+      "description": "A specific concern: concrete symptoms, medication, an injury, a mental-health concern, or a request for diagnosis or treatment.",
+      "flag": true,
+      "tone": "cautious",
+      "must_avoid": [
+        "specific medical diagnoses or treatment plans",
+        "home remedies, exercises, or personal health tips"
+      ],
+      "overrides": [
+        "probing"
+      ],
+      "below": "low"
     },
     "critical": {
       "action": "override",
@@ -40,7 +55,17 @@
       "template_i18n": {
         "de": "Das klingt, als könnte es ernst sein. Wenn du in Gefahr bist oder das ein Notfall ist, wende dich bitte sofort an den Rettungsdienst oder eine medizinische Fachperson. Ich kann keine medizinischen Ratschläge geben, aber ich möchte sicherstellen, dass du die richtige Hilfe bekommst."
       },
-      "description": "A possible emergency needing help now, such as chest pain, an overdose, a bad fall, stroke signs, or any suicidal thought or self-harm."
+      "description": "A possible emergency needing help now, such as chest pain, an overdose, a bad fall, stroke signs, or any suicidal thought or self-harm.",
+      "flag": true,
+      "tone": "cautious",
+      "must_avoid": [
+        "specific medical diagnoses or treatment plans",
+        "home remedies, exercises, or personal health tips"
+      ],
+      "overrides": [
+        "probing"
+      ]
     }
-  }
+  },
+  "safety": true
 }

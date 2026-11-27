@@ -43,8 +43,9 @@ import logging
 import os
 import re
 import signal
+import time
 import uuid
-from typing import Optional, Dict, Any, Coroutine
+from typing import Optional, Dict, Any, Coroutine, List, Tuple
 
 
 from stella_agent_sdk.agent.base import BaseAgent
@@ -166,6 +167,74 @@ def _render_message_template(template: str, variables: Dict[str, str]) -> str:
     return re.sub(r"\{([a-zA-Z0-9_]+)\}", lambda m: variables.get(m.group(1), ""), template)
 
 
+async def _dispatch_on_ready_output(
+    output: Any,
+    audio_pipeline: AudioPipeline,
+    agent: BaseAgent,
+    agent_identity: Dict[str, Any],
+) -> None:
+    """Dispatch one ``on_ready()`` output (issue #903).
+
+    TEXT_CHUNK / TEXT_FINAL are the one case ``AgentOutput.to_data_payload``
+    hands back to its caller — there is no audio-loop turn running yet to
+    publish and speak them, so this does it directly: the same contract as a
+    turn's text (``content`` is the whole reply so far, spoken once
+    ``is_final``), with ``[emotion]`` tags stripped the same way
+    ``run_audio_loop`` strips them, before publishing or speaking. Previously
+    these were silently dropped, so a welcome message yielded from
+    ``on_ready`` never reached the participant.
+
+    Everything else goes through ``to_data_payload``, same as the audio
+    loop's side channel, so shaping never drifts between the two call sites.
+    """
+    if output.type in (OutputType.TEXT_CHUNK, OutputType.TEXT_FINAL):
+        # Strip [emotion] tags the same way run_audio_loop does, before
+        # anything sees the text — otherwise they'd show on screen and get
+        # spoken (#903 review).
+        content, _cues = agent._parse_emotion_tags(output.content, is_final=output.is_final)
+        await audio_pipeline.publish_text(
+            content, is_final=output.is_final, transcript_id=output.transcript_id
+        )
+        if output.is_final and content.strip():
+            await audio_pipeline.speak(content)
+        return
+
+    payload = output.to_data_payload(agent_identity)
+    if payload is None:
+        logger.debug(f"[ON_READY] Ignoring output type: {output.type}")
+        return
+    if output.type == OutputType.PROGRESS_UPDATE:
+        # Store on agent for re-sending to new participants.
+        agent._last_progress_payload = payload
+        logger.info(f"[INITIAL PROGRESS] Publishing: {payload}")
+    await audio_pipeline._room.publish_data(payload)
+
+
+def _buffer_early_data_message(buffer: List[Tuple[str, bytes, int]], participant_id: str, data: bytes) -> None:
+    """Hold a data-channel message that arrived before AudioPipeline exists.
+
+    Between joining the room and speech services being ready, nothing is
+    listening for data messages yet (AudioPipeline registers the real
+    handler only once it's built), so anything typed in that window used to
+    vanish with no trace (#193). This is a temporary stand-in for
+    ``room_manager``'s single data-received callback slot, the same pattern
+    already used for ``on_participant_joined`` above: it buffers with the
+    real arrival time, and is replaced by
+    ``AudioPipeline._handle_data_message`` the moment the pipeline is built.
+    """
+    buffer.append((participant_id, data, int(time.time() * 1000)))
+
+
+def _replay_early_data_messages(buffer: List[Tuple[str, bytes, int]], audio_pipeline: AudioPipeline) -> None:
+    """Hand buffered messages to the now-built pipeline, in order, keeping
+    each one's real arrival time (#193) — not the time it's replayed, which
+    agents distinguishing "before the first question" from an answer rely on
+    (e.g. ELIAS, #219)."""
+    for participant_id, data, received_at_ms in buffer:
+        audio_pipeline._handle_data_message(participant_id, data, received_at_ms=received_at_ms)
+    buffer.clear()
+
+
 def wire_turn_taking(agent: BaseAgent, audio_pipeline: AudioPipeline, session_id: str) -> None:
     """Barge-in and take-back, from what the agent declares.
 
@@ -234,7 +303,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
                 async for event in self.audio.audio_in():
                     # event.is_final is always True (partials sent to LiveKit)
-                    await self.audio.audio_out(f"You said: {event.text}")
+                    reply = f"You said: {event.text}"
+                    await self.audio.publish_text(reply, is_final=True)
+                    await self.audio.speak(reply)
 
             async def _handle_barge_in(self) -> None:
                 await self.audio.stop_speaking()
@@ -346,6 +417,16 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
         room_manager.on_participant_joined(_tell_joiner_while_waiting)
 
+        # Text typed while speech is still loading used to be lost outright:
+        # nothing is listening for data messages until AudioPipeline exists,
+        # below. Buffer it here instead, so it is still answered once the
+        # agent starts (#193). Replaced by AudioPipeline's own handler the
+        # moment it's built (step 5).
+        early_data_messages: List[Tuple[str, bytes, int]] = []
+        room_manager.on_data_received(
+            lambda pid, data: _buffer_early_data_message(early_data_messages, pid, data)
+        )
+
         # 3. Connect to the external STT and TTS services (gRPC). While they
         # are still loading their models this waits up to their startup
         # budget (STELLA_SPEECH_WAIT_SECONDS, 720 s) instead of giving up
@@ -398,11 +479,30 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             agent_id=agent_id,
         )
 
+        # 5a. A deployment already locked to the text interface (#205) says so
+        # here, so the pipeline starts in "text" from its very first instant
+        # instead of relying solely on the frontend's post-join announcement
+        # (stella.interaction_mode): that announcement can be sent before this
+        # pipeline exists to receive it, and is then lost, not just late. The
+        # announcement itself is untouched and still drives a mid-session
+        # voice<->text switch.
+        initial_interaction_mode = agent._session_config.config.get("interaction_mode")
+        if initial_interaction_mode in ("voice", "text"):
+            audio_pipeline.set_interaction_mode(initial_interaction_mode)
+
         # 6. Inject audio pipeline and agent identity into agent
         agent._audio_pipeline = audio_pipeline
         # Screen events reach the agent from the start, also for an agent that
         # runs its own run_audio_loop (the SDK handles stella.* events itself).
         audio_pipeline.on_client_event(agent._dispatch_client_event)
+
+        # AudioPipeline's own __init__ just took over room_manager's single
+        # data-received slot, so this is the only gap (#193): hand it
+        # whatever arrived while it didn't exist yet, oldest first. Done only
+        # now, after on_client_event is wired above - a buffered client_event
+        # replayed any earlier would reach no handler and be dropped.
+        _replay_early_data_messages(early_data_messages, audio_pipeline)
+
         agent._session_id = session_id
         agent._agent_name = agent_name
         agent._agent_id = agent_id
@@ -459,19 +559,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         logger.info(f"Agent session started with config keys: {list(agent_config.keys())}")
 
         # 10. Call on_ready hook to send initial outputs (e.g., progress state).
-        # Side-channel outputs share the same payload mapping the audio loop uses
-        # (AgentOutput.to_data_payload) so shaping never drifts between the two.
         agent_identity = {"agent_id": agent_id, "agent_name": agent_name, "agent_icon": agent_icon}
         async for output in agent.on_ready(session_id):
-            payload = output.to_data_payload(agent_identity)
-            if payload is None:
-                logger.debug(f"[ON_READY] Ignoring output type: {output.type}")
-                continue
-            if output.type == OutputType.PROGRESS_UPDATE:
-                # Store on agent for re-sending to new participants.
-                agent._last_progress_payload = payload
-                logger.info(f"[INITIAL PROGRESS] Publishing: {payload}")
-            await audio_pipeline._room.publish_data(payload)
+            await _dispatch_on_ready_output(output, audio_pipeline, agent, agent_identity)
 
         # 10a. Tell the screens whether this agent speaks (#180): with TTS off no
         # audio progress ever arrives, so they fire a reply's cues at its end.

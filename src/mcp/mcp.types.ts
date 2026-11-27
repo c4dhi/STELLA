@@ -52,7 +52,7 @@ export interface McpToolDefinition<
 export function defineTool<Shape extends z.ZodRawShape>(
   def: McpToolDefinition<Shape>,
 ): McpToolDefinition {
-  return def as unknown as McpToolDefinition;
+  return def;
 }
 
 /** A domain's tools. Each implementation depends only on that domain's services. */
@@ -98,6 +98,14 @@ export const UPDATES: ToolAnnotations = {
 };
 // Ends something running: a session, an agent, an invitation link.
 export const ENDS: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+};
+// Permanently removes a row, system-admin tools only (#202) — nothing else on
+// MCP deletes.
+export const DELETES: ToolAnnotations = {
   readOnlyHint: false,
   destructiveHint: true,
   idempotentHint: true,
