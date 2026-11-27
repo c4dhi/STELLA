@@ -77,14 +77,18 @@ def _audio_harness():
     audio.publish_text = AsyncMock(
         side_effect=lambda text, is_final=False, transcript_id=None: publishes.append((text, is_final))
     )
+    sentences = []
+    audio.enqueue_sentence = MagicMock(
+        side_effect=lambda sentence, **_kw: sentences.append(sentence)
+    )
     audio._room.publish_data = AsyncMock()
-    return audio, publishes
+    return audio, publishes, sentences
 
 
 @pytest.mark.asyncio
 async def test_accumulated_chunks_reach_the_screen_whole():
     agent = AccumulatingAgent()
-    agent._audio_pipeline, publishes = _audio_harness()
+    agent._audio_pipeline, publishes, sentences = _audio_harness()
     agent._session_id = "s1"
 
     await agent.run_audio_loop()
@@ -92,6 +96,9 @@ async def test_accumulated_chunks_reach_the_screen_whole():
     last_text, last_is_final = publishes[-1]
     assert last_text == FULL_REPLY
     assert last_is_final is True
+    # TTS speaks the whole reply too, sentence by sentence, in order - no
+    # word is lost between sentences (whitespace at the boundary may differ).
+    assert "".join(sentences).replace(" ", "") == FULL_REPLY.replace(" ", "")
 
 
 @pytest.mark.asyncio
@@ -102,7 +109,7 @@ async def test_per_token_deltas_with_an_empty_final_chunk_corrupt_the_screen():
     text (the frontend bubble resets to it), and the empty final chunk then
     replaces the bubble with nothing."""
     agent = DeltaAgent()
-    agent._audio_pipeline, publishes = _audio_harness()
+    agent._audio_pipeline, publishes, _sentences = _audio_harness()
     agent._session_id = "s1"
 
     await agent.run_audio_loop()
