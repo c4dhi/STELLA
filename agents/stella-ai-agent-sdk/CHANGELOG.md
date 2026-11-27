@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Text typed while speech services were still loading was lost with no trace** (#999). `run_agent_from_env` joins the room before waiting (up to `STELLA_SPEECH_WAIT_SECONDS`) for STT/TTS, but nothing was listening for data-channel messages until `AudioPipeline` existed afterwards. A message typed during that wait is now buffered with its real arrival time and handed to the agent as soon as it starts, answered in order — the timestamp is preserved, not reset to replay time, so an agent telling "before the first question" apart from an answer (e.g. the ELIAS interviewer, #219) still sees it correctly.
+
 ## [0.11.0] - 2026-11-23
 
 Ships with STELLA 2.1.0. New: capabilities from the session, `{{capabilities}}`, settings from `agent.yaml`, and the wait for speech services. Breaking: `BaseTool.guidance` is removed, and `STTClient.connect()`/`TTSClient.connect()` take `wait_seconds`.

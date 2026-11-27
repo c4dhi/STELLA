@@ -43,8 +43,9 @@ import logging
 import os
 import re
 import signal
+import time
 import uuid
-from typing import Optional, Dict, Any, Coroutine
+from typing import Optional, Dict, Any, Coroutine, List, Tuple
 
 
 from stella_agent_sdk.agent.base import BaseAgent
@@ -164,6 +165,31 @@ def _render_message_template(template: str, variables: Dict[str, str]) -> str:
     empty string, so rendering never raises due to missing keys.
     """
     return re.sub(r"\{([a-zA-Z0-9_]+)\}", lambda m: variables.get(m.group(1), ""), template)
+
+
+def _buffer_early_data_message(buffer: List[Tuple[str, bytes, int]], participant_id: str, data: bytes) -> None:
+    """Hold a data-channel message that arrived before AudioPipeline exists.
+
+    Between joining the room and speech services being ready, nothing is
+    listening for data messages yet (AudioPipeline registers the real
+    handler only once it's built), so anything typed in that window used to
+    vanish with no trace (#193). This is a temporary stand-in for
+    ``room_manager``'s single data-received callback slot, the same pattern
+    already used for ``on_participant_joined`` above: it buffers with the
+    real arrival time, and is replaced by
+    ``AudioPipeline._handle_data_message`` the moment the pipeline is built.
+    """
+    buffer.append((participant_id, data, int(time.time() * 1000)))
+
+
+def _replay_early_data_messages(buffer: List[Tuple[str, bytes, int]], audio_pipeline: AudioPipeline) -> None:
+    """Hand buffered messages to the now-built pipeline, in order, keeping
+    each one's real arrival time (#193) — not the time it's replayed, which
+    agents distinguishing "before the first question" from an answer rely on
+    (e.g. ELIAS, #219)."""
+    for participant_id, data, received_at_ms in buffer:
+        audio_pipeline._handle_data_message(participant_id, data, received_at_ms=received_at_ms)
+    buffer.clear()
 
 
 def wire_turn_taking(agent: BaseAgent, audio_pipeline: AudioPipeline, session_id: str) -> None:
@@ -346,6 +372,16 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
         room_manager.on_participant_joined(_tell_joiner_while_waiting)
 
+        # Text typed while speech is still loading used to be lost outright:
+        # nothing is listening for data messages until AudioPipeline exists,
+        # below. Buffer it here instead, so it is still answered once the
+        # agent starts (#193). Replaced by AudioPipeline's own handler the
+        # moment it's built (step 5).
+        early_data_messages: List[Tuple[str, bytes, int]] = []
+        room_manager.on_data_received(
+            lambda pid, data: _buffer_early_data_message(early_data_messages, pid, data)
+        )
+
         # 3. Connect to the external STT and TTS services (gRPC). While they
         # are still loading their models this waits up to their startup
         # budget (STELLA_SPEECH_WAIT_SECONDS, 720 s) instead of giving up
@@ -397,6 +433,11 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
             agent_name=agent_name,
             agent_id=agent_id,
         )
+
+        # AudioPipeline's own __init__ just took over room_manager's single
+        # data-received slot, so this is the only gap (#193): hand it
+        # whatever arrived while it didn't exist yet, oldest first.
+        _replay_early_data_messages(early_data_messages, audio_pipeline)
 
         # 6. Inject audio pipeline and agent identity into agent
         agent._audio_pipeline = audio_pipeline
