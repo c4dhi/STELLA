@@ -85,6 +85,7 @@ Ships Agent SDK 0.11.0.
 
 ### Fixed
 
+- **Deleting a project while someone is on the call now ends it cleanly for them.** Deleting a project used to leave a participant's room open: LiveKit never tore it down, and their screen kept retrying a session that no longer existed. The delete now closes every session's LiveKit room, and the participant sees "This conversation has ended." instead of a generic connection error (#1047)
 - **Settings works on a phone.** Below 768px wide, the section list and the selected section each took half a cramped screen; now one shows full-width at a time, with a way back to the list, and desktop is unchanged (#784)
 - **The plan panel stays in step with the chat.** In a voice session, the panel used to jump to the agent's new state the instant the backend reported it — which is before the reply announcing that state has finished being spoken, sometimes by several seconds. It now waits for the current turn's speech to actually finish playing before updating. Text-only sessions are unaffected, since there the two were already in order (#894)
 - A deploy no longer goes red while a slow but healthy speech model is still
