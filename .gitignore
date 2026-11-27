@@ -108,3 +108,7 @@ stella-backup-*.zip.enc
 
 # Compiled output of the prisma seed script (npm run db:seed)
 .seed-dist/
+
+# ELIAS interviewer moved to its own repo (#1050); the folder stays on disk
+# here but is no longer tracked.
+/custom-agents/elias-interviewer/

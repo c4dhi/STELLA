@@ -4,14 +4,13 @@ Agents in this folder are **not** built into STELLA. They are ready-made package
 
 | Agent | What it does |
 |---|---|
-| [`elias-interviewer`](elias-interviewer/) | Runs an ELIAS interview guide word for word and writes every turn back to ELIAS |
 
 ## Upload one
 
 1. Zip the **contents** of the agent's folder, so `agent.yaml` sits at the root of the zip:
 
    ```bash
-   cd custom-agents/elias-interviewer && zip -r ../elias-interviewer.zip . -x 'tests/*' '*/__pycache__/*'
+   cd custom-agents/<agent-folder> && zip -r ../<agent-folder>.zip . -x 'tests/*' '*/__pycache__/*'
    ```
 
 2. In STELLA, open **Deploy Agent**, go to **My Agents** and upload the zip. STELLA checks the package (manifest, Dockerfile, allowed base image) and tells you what to fix if it is turned away.
