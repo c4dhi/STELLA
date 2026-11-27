@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Groundwork for verdict rules in the configuration.** An agent's `agent.yaml` can now say which reactions and rule fields each pipeline step acts on, and STELLA refuses an expert file or saved configuration that uses one it doesn't. A saved configuration overrides an expert's verdicts field by field, so one saved earlier keeps any new field's default. An expert marked `safety: true` can only be turned off with a confirmed, recorded step. The built-in agents switch to these rules in follow-up changes, so nothing changes for them yet (#1060)
 
+### Changed
+
+- **The V2 agent reads what each expert verdict leads to from the configuration.** Which verdicts count as a flag, the tone, what the reply must avoid, the follow-up, redirect or "ask about what's still open" reaction, and which expert wins a conflict now come from the expert's file, and a saved configuration can change them verdict by verdict. They used to be tables in V2's code. Medical and legal are safety experts: switching one off needs a recorded, confirmed step, and a prompt the session can't fill no longer turns them off. The default configuration behaves exactly as before, and Jev, which uses the same step, keeps its behaviour too. The arbitration "Tone Map" setting is now empty by default and only overrides the tone set on an expert's verdicts (#1061)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
