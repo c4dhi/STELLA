@@ -17,7 +17,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from stella_agent_sdk.experts.verdict_rules import DEFAULT_NEVER_STEP_DOWN, Gate, settle_verdict
 from stella_agent_sdk.prompts import history_turns
@@ -71,10 +71,16 @@ def answered_by_jev(config: Any) -> bool:
 ASK_BACK = "ask_back"
 
 
-def read_gates(value: Any) -> List[Gate]:
-    """The expert_pool's ``gates`` setting: when a language-model expert is skipped."""
-    gates = [Gate.parse(g) for g in value] if isinstance(value, list) else []
-    return [g for g in gates if g is not None]
+def read_gates(value: Any) -> List[Tuple[Gate, Optional[float]]]:
+    """The expert_pool's ``gates`` setting: when a language-model expert is skipped.
+    Each gate with the ``min_confidence`` it states, or None when it states none
+    (a gate on one of Jev's own questions then uses skip_threshold; 0 is a real 0)."""
+    gates = []
+    for raw in value if isinstance(value, list) else []:
+        gate = Gate.parse(raw)
+        if gate is not None:
+            gates.append((gate, gate.min_confidence if "min_confidence" in raw else None))
+    return gates
 
 
 @dataclass
@@ -203,7 +209,7 @@ class JevExpertPool(ExpertPool):
         sm_context: Dict[str, Any],
     ) -> List[ExpertVerdict]:
         questions: Dict[str, Any] = self.expert_questions(expert_names, user_input, conversation_history, sm_context)
-        for gate in self.gates:
+        for gate, _ in self.gates:
             if gate.skip in expert_names and gate.when in OWN_QUESTIONS:
                 questions[gate.when] = OWN_QUESTIONS[gate.when]
 
@@ -466,13 +472,13 @@ class JevExpertPool(ExpertPool):
         """Whether a gate skips this expert. A gate on one of Jev's own questions holds
         when the gate's answers are at least min_confidence likely (skip_threshold when it
         names none); a gate on an expert Jev answered, when that is its choice."""
-        for gate in self.gates:
+        for gate, stated in self.gates:
             answer = result.answers.get(gate.when) if gate.skip == name else None
             if answer is None:
                 continue
             if gate.when in OWN_QUESTIONS:
                 p = sum(float(answer.probabilities.get(v, 0.0)) for v in gate.verdicts)
-                if p >= (gate.min_confidence or self.skip_threshold):
+                if p >= (self.skip_threshold if stated is None else stated):
                     return True
             elif answer.choice in gate.verdicts and float(answer.probabilities.get(answer.choice, 0.0)) >= gate.min_confidence:
                 return True

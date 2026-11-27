@@ -81,7 +81,7 @@ Slots define the individual parameters that can be configured for each node.
 |-------|------|----------|-------------|
 | `id` | string | Yes | Unique within the node. Used as key in `config.nodes[nodeId][slotId]`. |
 | `label` | string | Yes | Human-readable name |
-| `type` | string | Yes | One of: `text`, `number`, `select`, `string_list`, `key_value`, `expert_list`, `verdict_directives` |
+| `type` | string | Yes | One of: `text`, `number`, `select`, `string_list`, `key_value`, `expert_list`, `verdict_directives`, `gate_list` |
 | `description` | string | No | Help text explaining what this parameter controls |
 | `default` | any | No | Default value used when no override is specified |
 

@@ -122,7 +122,7 @@ export function checkSafetyOff(expert: string, value: unknown): string | null {
  * Every problem with the experts in an `expert_list` setting's value
  * (`{ name: { enabled, verdict_directives, safety_off, ... } }`).
  */
-const FILE_ONLY_EXPERT_KEYS = ['safety', 'never_step_down'] as const
+const FILE_ONLY_EXPERT_KEYS = ['safety', 'never_step_down', 'step_down_from'] as const
 
 export function checkExpertListValue(value: unknown, support: VerdictRuleSupport): string[] {
   if (!isPlainObject(value)) return []

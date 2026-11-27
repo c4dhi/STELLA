@@ -159,13 +159,14 @@ describe('saved configurations', () => {
     expect(() => validateConfigurationAgainstSchema(config, schema)).toThrow(/safety_off needs who/)
   })
 
-  it('refuses safety and never_step_down, which belong to the expert file', () => {
+  it('refuses safety, never_step_down and step_down_from, which belong to the expert file', () => {
     // A saved `safety: false` would otherwise switch the floor off without a safety_off record.
     const config = (entry: Record<string, unknown>) => ({ nodes: { expert_pool: { experts: { medical: entry } } } })
     expect(() => validateConfigurationAgainstSchema(config({ safety: false }), schema)).toThrow(
       /"safety" is set in the expert's file, not in a configuration/,
     )
     expect(() => validateConfigurationAgainstSchema(config({ never_step_down: [] }), schema)).toThrow(/"never_step_down"/)
+    expect(() => validateConfigurationAgainstSchema(config({ step_down_from: 'choice' }), schema)).toThrow(/"step_down_from"/)
   })
 
   it('checks a standalone verdict_directives setting too', () => {

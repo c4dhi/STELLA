@@ -15,13 +15,14 @@ from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
 from stella_jev_agent.agent import _OWN_EXPERTS_DIR, StellaJevAgent
-COMMON = "common_sense"
 from stella_jev_agent.ask_back import AFTER_ASK_BACK_INSTRUCTION, ASK_BACK_INSTRUCTION, AskBack
 from stella_jev_agent.jev import JevUnavailable
 from stella_jev_agent.jev import JevClient
 from stella_jev_agent.pool import JevExpertPool, current_task
 from stella_jev_agent.questions import DOESNT_FIT, SLIGHT_DOUBT
 from stella_jev_agent.stages import JevBargeInEvaluator, JevResponseGenerator, NoBridge
+
+COMMON = "common_sense"
 
 
 def _answer(**probabilities: float) -> SimpleNamespace:
@@ -553,3 +554,17 @@ def test_without_any_history_placeholder_jev_reads_only_the_last_message():
     history = [{"role": "user", "content": f"turn {i}"} for i in range(20)]
     asyncio.run(pool.run(NAMES, "said", history, {}))
     assert jev.asked[0][0]["conversation"] == ["user: turn 19"]
+
+
+def test_a_gate_on_a_question_of_jevs_own_uses_its_stated_confidence_even_zero():
+    from stella_jev_agent.pool import read_gates
+    pool = Pool(FakeJev(_answers(has_answer=0.5)), AskBack())
+    # Unset: skip_threshold (0.8) applies, and P(no)=0.5 doesn't reach it.
+    pool.gates = read_gates([{"skip": "task_extraction", "when": "has_answer", "verdicts": ["no"]}])
+    _run(pool)
+    assert "task_extraction" in sum(pool.language_model_calls, [])
+    # A stated 0 is 0: the gate always holds.
+    pool = Pool(FakeJev(_answers(has_answer=0.5)), AskBack())
+    pool.gates = read_gates([{"skip": "task_extraction", "when": "has_answer", "verdicts": ["no"], "min_confidence": 0}])
+    _run(pool)
+    assert "task_extraction" not in sum(pool.language_model_calls, [])
