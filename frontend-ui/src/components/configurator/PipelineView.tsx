@@ -227,12 +227,14 @@ export default function PipelineView({ schema, configuration, selectedNodeId, on
     // A `parallel` step (#224) is fed by the turn's input and feeds its output,
     // like a bridge phrase spoken while the turn is still worked on; a `side`
     // step runs between its own two ends. Both are the agent's declaration.
+    // Annotations (ids starting `__`) have no named handles: an edge names a
+    // handle only on a stage's side, or React Flow drops it.
     const plainEdge = (id: string, source: string, target: string): Edge => ({
       id,
       source,
       target,
-      sourceHandle: 'right',
-      targetHandle: 'left',
+      ...(source.startsWith('__') ? {} : { sourceHandle: 'right' }),
+      ...(target.startsWith('__') ? {} : { targetHandle: 'left' }),
       type: 'default',
       animated: false,
       markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: annotationEdgeColor },

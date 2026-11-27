@@ -128,7 +128,18 @@ describe('the expert panel', () => {
   it('offers the reactions the agent carries out', () => {
     card(expert({ safety: false }), vi.fn(), ['reaction'], ['ask_back'])
     const select = screen.getByTestId('verdict-rules-high').querySelector('select')!
-    expect([...select.options].map((o) => o.value)).toEqual(['', 'ask_back'])
+    expect([...select.options].map((o) => o.value)).toEqual(['none', 'ask_back'])
+  })
+
+  it('saves "Nothing" as none, so it turns off a reaction the expert file sets', () => {
+    const file = { doesnt_fit: { action: 'inform' as const, template: '', reaction: 'ask_back' } }
+    const onUpdate = card(expert({ safety: false, verdictDirectives: file, defaultVerdictDirectives: file }), vi.fn(), ['reaction'], ['ask_back'])
+    const select = screen.getByTestId('verdict-rules-doesnt_fit').querySelector('select')!
+    expect(select.value).toBe('ask_back')
+    fireEvent.change(select, { target: { value: 'none' } })
+    const saved = onUpdate.mock.calls[0][0].verdictDirectives
+    expect(saved.doesnt_fit.reaction).toBe('none')
+    expect(mergeVerdictDirectives(file, saved).doesnt_fit.reaction).toBe('none')
   })
 })
 

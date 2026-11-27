@@ -416,18 +416,21 @@ function VerdictRuleFields({
         <div>
           <div className={label}>What follows</div>
           <select
-            value={directive.reaction ?? ''}
-            onChange={(e) => onChange({ reaction: e.target.value || undefined })}
+            value={directive.reaction ?? 'none'}
+            // "Nothing" is saved as `none`, not left out: a saved rule merges
+            // onto the expert file field by field, so a missing reaction would
+            // fall back to the file's (e.g. Jev's ask_back) instead of turning it off.
+            onChange={(e) => onChange({ reaction: e.target.value })}
             className={input}
           >
-            <option value="">Nothing</option>
+            <option value="none">Nothing</option>
             {support.reactions.map((r) => (
               <option key={r} value={r}>{REACTION_LABELS[r] ?? r}</option>
             ))}
           </select>
         </div>
       )}
-      {has('reaction_field') && directive.reaction && (
+      {has('reaction_field') && directive.reaction && directive.reaction !== 'none' && (
         <div>
           <div className={label}>Reads from the expert's output</div>
           <input className={input} value={directive.reaction_field ?? ''} placeholder="e.g. recommendation"
