@@ -35,6 +35,8 @@ export function verdictRuleSupport(pipelineSchema: Record<string, unknown> | nul
     for (const r of (declared.reactions as unknown[]) ?? []) if (typeof r === 'string') reactions.add(r)
     for (const f of (declared.fields as unknown[]) ?? []) if (typeof f === 'string') fields.add(f)
   }
+  // Declaring reactions means acting on the field that names one.
+  if (reactions.size > 0) fields.add('reaction')
   return { reactions, fields }
 }
 
@@ -120,11 +122,18 @@ export function checkSafetyOff(expert: string, value: unknown): string | null {
  * Every problem with the experts in an `expert_list` setting's value
  * (`{ name: { enabled, verdict_directives, safety_off, ... } }`).
  */
+const FILE_ONLY_EXPERT_KEYS = ['safety', 'never_step_down'] as const
+
 export function checkExpertListValue(value: unknown, support: VerdictRuleSupport): string[] {
   if (!isPlainObject(value)) return []
   const problems: string[] = []
   for (const [name, entry] of Object.entries(value)) {
     if (!isPlainObject(entry)) continue
+    for (const key of FILE_ONLY_EXPERT_KEYS) {
+      // Set in the expert's file only: a saved `safety: false` would otherwise
+      // switch the floor off without a safety_off record.
+      if (key in entry) problems.push(`expert "${name}": "${key}" is set in the expert's file, not in a configuration`)
+    }
     problems.push(...checkVerdictRules(name, entry.verdict_directives, support))
     const off = checkSafetyOff(name, entry.safety_off)
     if (off) problems.push(off)

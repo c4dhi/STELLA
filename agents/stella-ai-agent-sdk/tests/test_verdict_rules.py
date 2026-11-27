@@ -2,6 +2,7 @@
 
 from stella_agent_sdk.experts.verdict_rules import (
     REACTIONS,
+    RULE_FIELDS,
     Gate,
     VerdictRuleSupport,
     check_verdict_rules,
@@ -144,3 +145,15 @@ def test_a_gate_skips_an_expert_when_another_says_so_sure_enough():
 def test_a_malformed_gate_is_not_parsed():
     assert Gate.parse({"skip": "x", "when": "y"}) is None
     assert Gate.parse({"skip": "x", "when": "y", "verdicts": ["a"], "min_confidence": True}) is None
+
+
+def test_check_refuses_wrong_types_without_raising():
+    support = VerdictRuleSupport(("ask_followup",), RULE_FIELDS)
+    rules = {"a": {"below": ["b"], "flag": "yes", "must_avoid": "one line", "tone": 3, "reaction": {"x": 1}}}
+    problems = check_verdict_rules("x", rules, support)
+    assert len(problems) == 5
+
+
+def test_declaring_reactions_implies_the_reaction_field():
+    support = VerdictRuleSupport.from_declaration({"reactions": ["ask_followup"], "fields": []})
+    assert check_verdict_rules("probing", {"unclear": {"reaction": "ask_followup"}}, support) == []

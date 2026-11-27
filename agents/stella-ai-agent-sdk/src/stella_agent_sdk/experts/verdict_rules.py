@@ -80,6 +80,8 @@ class VerdictRuleSupport:
             return VerdictRuleSupport()
         reactions = [str(r) for r in value.get("reactions") or [] if isinstance(r, str)]
         fields = [str(f) for f in value.get("fields") or [] if isinstance(f, str)]
+        if reactions and "reaction" not in fields:
+            fields.append("reaction")  # declaring reactions means acting on the field that names one
         return VerdictRuleSupport(tuple(reactions), tuple(fields))
 
 
@@ -90,7 +92,8 @@ def check_verdict_rules(
 
     Refused: a reaction that isn't one of ``REACTIONS``, or that the agent didn't
     declare; a rule field the agent didn't declare; a ``min_confidence`` outside
-    0..1; a ``below`` that isn't one of the expert's verdicts.
+    0..1; a ``below`` that isn't one of the expert's verdicts; a value of the
+    wrong type. The same checks as the platform's ``checkVerdictRules``.
     """
     problems: List[str] = []
     verdicts = set(directives)
@@ -103,7 +106,7 @@ def check_verdict_rules(
                 problems.append(f'{where}: this agent does not act on "{field}"')
         reaction = rule.get("reaction")
         if reaction is not None:
-            if reaction not in REACTIONS:
+            if not isinstance(reaction, str) or reaction not in REACTIONS:
                 problems.append(f'{where}: unknown reaction "{reaction}" (valid: {", ".join(REACTIONS)})')
             elif reaction not in support.reactions and reaction != "none":
                 problems.append(f'{where}: this agent does not support the reaction "{reaction}"')
@@ -113,8 +116,17 @@ def check_verdict_rules(
         ):
             problems.append(f"{where}: min_confidence must be a number from 0 to 1")
         below = rule.get("below")
-        if below is not None and below not in verdicts:
+        if below is not None and (not isinstance(below, str) or below not in verdicts):
             problems.append(f'{where}: below "{below}" is not one of this expert\'s verdicts')
+        if "flag" in rule and not isinstance(rule["flag"], bool):
+            problems.append(f"{where}: flag must be true or false")
+        for name in ("must_avoid", "overrides"):
+            value = rule.get(name)
+            if value is not None and not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+                problems.append(f"{where}: {name} must be a list of texts")
+        for name in ("tone", "reaction_field"):
+            if rule.get(name) is not None and not isinstance(rule[name], str):
+                problems.append(f"{where}: {name} must be text")
     return problems
 
 
