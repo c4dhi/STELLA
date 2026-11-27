@@ -10,6 +10,7 @@ of that loop.
 
 import pytest
 
+from stella_agent_sdk.emotion.tags import strip_emotion_tags
 from stella_agent_sdk.messages.output import AgentOutput
 from stella_agent_sdk.progress import ProgressState
 from stella_agent_sdk.run import _dispatch_on_ready_output
@@ -18,8 +19,21 @@ IDENTITY = {"agent_id": "a1", "agent_name": "Agent", "agent_icon": "🤖"}
 
 
 class _FakeAgent:
-    def __init__(self):
+    """Mirrors BaseAgent._parse_emotion_tags exactly (strip_emotion_tags on
+    the real accumulated text), so these tests exercise the real stripping
+    rules rather than a stub standing in for them."""
+
+    supports_emotion_tags = True
+
+    def __init__(self, emotion_tags_enabled: bool = True):
         self._last_progress_payload = None
+        self._audio_pipeline = type("_P", (), {"emotion_tags_enabled": emotion_tags_enabled})()
+
+    def _parse_emotion_tags(self, raw: str, *, is_final: bool):
+        if not self.supports_emotion_tags or not self._audio_pipeline.emotion_tags_enabled:
+            return raw, []
+        result = strip_emotion_tags(raw, allow_partial_hold=not is_final)
+        return result.text, result.cues
 
 
 class _FakeRoom:
@@ -76,6 +90,30 @@ class TestTextDispatch:
 
         assert pipeline.published_text == [("", True, output.transcript_id)]
         assert pipeline.spoken == []
+
+    @pytest.mark.asyncio
+    async def test_emotion_tags_are_stripped_before_publish_and_speak(self):
+        """[tags] must never reach the screen or be spoken (#903 review) -
+        the same rule run_audio_loop enforces on a turn's reply."""
+        pipeline = _FakeAudioPipeline()
+        output = AgentOutput.text_final("s1", "[playful] Welcome!")
+
+        await _dispatch_on_ready_output(output, pipeline, _FakeAgent(), IDENTITY)
+
+        assert pipeline.published_text == [("Welcome!", True, output.transcript_id)]
+        assert pipeline.spoken == ["Welcome!"]
+
+    @pytest.mark.asyncio
+    async def test_emotion_tags_left_alone_when_the_agent_opts_out(self):
+        pipeline = _FakeAudioPipeline()
+        agent = _FakeAgent()
+        agent.supports_emotion_tags = False
+        output = AgentOutput.text_final("s1", "[playful] Welcome!")
+
+        await _dispatch_on_ready_output(output, pipeline, agent, IDENTITY)
+
+        assert pipeline.published_text == [("[playful] Welcome!", True, output.transcript_id)]
+        assert pipeline.spoken == ["[playful] Welcome!"]
 
 
 class TestSideChannelDispatch:

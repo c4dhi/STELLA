@@ -193,11 +193,13 @@ class SupportAgent(BaseAgent):
         self.task_status = {task_id: ItemStatus.PENDING for task_id in TASKS}
 
     async def on_ready(self, session_id: str) -> AsyncIterator[AgentOutput]:
-        # Side-channel outputs only: text yielded here is not spoken.
+        # A side-channel output like this one just goes to the room. Text
+        # (text_chunk/text_final) is shown too, and spoken once is_final —
+        # there's no turn running yet, so it isn't chunked sentence by sentence.
         yield AgentOutput.progress_update(session_id, self._progress(), update_trigger="session_start")
 
     async def on_interrupt(self, session_id: str) -> None:
-        # Required, but the default loop of SDK 0.10.0 never calls it. A committed
+        # Required, but the default loop never calls it today. A committed
         # barge-in drops the unspoken reply; a typed one stops reading process()
         # at its next yield. Only an agent running its own loop calls this.
         pass

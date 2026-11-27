@@ -178,18 +178,24 @@ async def _dispatch_on_ready_output(
     hands back to its caller — there is no audio-loop turn running yet to
     publish and speak them, so this does it directly: the same contract as a
     turn's text (``content`` is the whole reply so far, spoken once
-    ``is_final``). Previously these were silently dropped, so a welcome
-    message yielded from ``on_ready`` never reached the participant.
+    ``is_final``), with ``[emotion]`` tags stripped the same way
+    ``run_audio_loop`` strips them, before publishing or speaking. Previously
+    these were silently dropped, so a welcome message yielded from
+    ``on_ready`` never reached the participant.
 
     Everything else goes through ``to_data_payload``, same as the audio
     loop's side channel, so shaping never drifts between the two call sites.
     """
     if output.type in (OutputType.TEXT_CHUNK, OutputType.TEXT_FINAL):
+        # Strip [emotion] tags the same way run_audio_loop does, before
+        # anything sees the text — otherwise they'd show on screen and get
+        # spoken (#903 review).
+        content, _cues = agent._parse_emotion_tags(output.content, is_final=output.is_final)
         await audio_pipeline.publish_text(
-            output.content, is_final=output.is_final, transcript_id=output.transcript_id
+            content, is_final=output.is_final, transcript_id=output.transcript_id
         )
-        if output.is_final and output.content.strip():
-            await audio_pipeline.speak(output.content)
+        if output.is_final and content.strip():
+            await audio_pipeline.speak(content)
         return
 
     payload = output.to_data_payload(agent_identity)

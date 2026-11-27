@@ -28,7 +28,7 @@ If you override `__init__`, call `super().__init__()` first.
 `run_agent_from_env()` calls the hooks in this order:
 
 1. `on_session_start(session_id, config)`: once, after the room and audio pipeline are up.
-2. `on_ready(session_id)`: yields outputs to send before the first turn, for example the initial task panel.
+2. `on_ready(session_id)`: yields outputs to send before the first turn — e.g. the initial task panel, or a welcome line of text, which is shown and, once `is_final`, spoken.
 3. The agent registers with the session-management server.
 4. `run_audio_loop()`: runs the conversation. The default loop calls `process()` once per user turn.
 5. `on_session_ending(session_id, reason, deadline_ms)`: only when `session_end_mode()` returns `"wrap_up"`, while the room is still live.
@@ -66,7 +66,7 @@ What it yields:
 async def on_interrupt(self, session_id: str) -> None: ...
 ```
 
-Abstract, so every agent has it: the place to cancel work in progress. In SDK 0.10.0 the default loop does not call it. A committed barge-in is handled by the SDK itself (see [Barge-in](#barge-in)); an agent with its own loop can call it.
+Abstract, so every agent has it: the place to cancel work in progress. The default loop does not call it today. A committed barge-in is handled by the SDK itself (see [Barge-in](#barge-in)); an agent with its own loop can call it.
 
 ## Lifecycle hooks
 
@@ -82,7 +82,9 @@ All optional. The defaults are shown in brackets.
 | `async on_barge_in(session_id, transcript) -> BargeInDecision` | The user spoke over the agent | Backchannel heuristic, see below |
 | `async on_idle(session_id, idle_seconds)` | Nothing has happened for `idle_timeout_seconds` | Nothing |
 | `async on_client_event(session_id, event, data)` | The screen sent a declared event | Returns `None` |
-| `async on_config_update(session_id, config)` | Defined, but not called by SDK 0.10.0 | Nothing |
+| `async on_config_update(session_id, config)` | Defined, but nothing in the SDK calls it today | Nothing |
+
+`on_ready`'s text (`text_chunk`/`text_final`) is shown on screen and, once `is_final`, spoken — the same as a turn's reply, since there's no turn running yet to chunk it sentence by sentence. Everything else it yields goes to the screen only, same as in `process()`.
 
 Call `super()` when you override `on_session_start`; without it `self.session`, `self.persona` and `self.plan` stay as `run_agent_from_env()` set them, and the agent state never becomes `READY`.
 
