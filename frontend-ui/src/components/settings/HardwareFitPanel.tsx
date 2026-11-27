@@ -87,26 +87,30 @@ export default function HardwareFitPanel({
         </div>
       </div>
 
-      {/* How many sessions at once each colour holds for */}
+      {/* How many sessions at once each colour holds for: one numbered box per count */}
       {fit.colour && (
         <div className="mt-4">
-          <div className="flex gap-0.5" role="img" aria-label={rangeText(fit).join('; ')}>
+          <p className={`text-caption mb-1.5 ${muted}`}>Sessions at once</p>
+          <div className="flex flex-wrap gap-1" role="img" aria-label={rangeText(fit).join('; ')}>
             {Array.from({ length: maxSessions }, (_, i) => i + 1).map(n => {
               const bucket = fit.buckets.find(b => b.sessions === n)
               const c = bucket?.colour
+              const reading = c ? colourInfo[c].label : 'Too few sentences yet'
+              const estimated = bucket?.source === 'load test'
               return (
                 <span
                   key={n}
-                  className={`flex-1 h-2 first:rounded-l-full last:rounded-r-full ${
-                    c ? colourInfo[c].dot : isDark ? 'bg-neutral-700' : 'bg-neutral-200'
-                  } ${bucket?.source === 'load test' ? 'opacity-60' : ''}`}
-                />
+                  title={`${n} at once: ${reading}${estimated ? ' (from the load test)' : ''}`}
+                  className={`w-8 h-8 flex items-center justify-center rounded-md text-caption font-semibold tabular-nums ${
+                    c
+                      ? `${colourInfo[c].dot} text-white`
+                      : isDark ? 'bg-neutral-700 text-neutral-400' : 'bg-neutral-200 text-neutral-500'
+                  } ${estimated ? 'opacity-60' : ''}`}
+                >
+                  {n}
+                </span>
               )
             })}
-          </div>
-          <div className={`flex justify-between text-[11px] mt-1 ${muted}`}>
-            <span>1 session</span>
-            <span>{maxSessions} at once</span>
           </div>
           <ul className={`mt-2 space-y-0.5 text-caption ${body}`}>
             {rangeText(fit).map(line => <li key={line}>{line}</li>)}

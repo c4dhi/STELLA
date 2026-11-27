@@ -67,6 +67,25 @@ describe('HardwareFitPanel', () => {
     expect(html).not.toContain('qwen3')
   })
 
+  it('shows one numbered box per session count, saying what each one reads', () => {
+    const html = render(dev)
+    expect(html).toContain('Sessions at once')
+    for (const n of [1, 2, 3, 4]) expect(html).toMatch(new RegExp(`>${n}</span>`))
+    expect(html).toContain('title="2 at once: Sentence by sentence only"')
+    expect(html).toContain('title="4 at once: Too slow even sentence by sentence (from the load test)"')
+    // The old strip's end labels are gone
+    expect(html).not.toContain('<span>1 session</span>')
+    expect(html).not.toContain('<span>4 at once</span>')
+  })
+
+  it('marks a count with too few sentences as such', () => {
+    const fit: HardwareFit = {
+      ...dev,
+      buckets: [dev.buckets[0], { ...dev.buckets[1], colour: null }],
+    }
+    expect(render(fit)).toContain('title="2 at once: Too few sentences yet"')
+  })
+
   it('always explains why yellow can linger after a busy spell', () => {
     expect(render(dev)).toContain('stays there until it ends')
   })
