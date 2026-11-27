@@ -131,6 +131,31 @@ describe('the expert panel', () => {
     expect([...select.options].map((o) => o.value)).toEqual(['none', 'ask_back'])
   })
 
+  it('offers "Stays as it is" only when the expert file sets no fallback', () => {
+    // The default expert's file sets high → low: leaving `below` out would merge
+    // the file's value back, so the option could not be chosen.
+    card(expert({ safety: false }), vi.fn(), ['below', 'min_confidence'])
+    const fromFile = screen.getByTestId('verdict-rules-high')
+    const select = fromFile.querySelector('select')!
+    expect([...select.options].map((o) => o.value)).not.toContain('')
+    expect(select.value).toBe('low')
+    expect(fromFile.textContent).toContain('expert file')
+    expect(fromFile.textContent).toContain('How sure 0')
+    cleanup()
+    const none = { high: { action: 'prepend' as const, template: 'Careful.' } }
+    card(expert({ safety: false, verdictDirectives: none, defaultVerdictDirectives: none }), vi.fn(), ['below'])
+    const options = [...screen.getByTestId('verdict-rules-high').querySelector('select')!.options]
+    expect(options[0]).toMatchObject({ value: '', text: 'Stays as it is' })
+  })
+
+  it("shows the expert file's value where a cleared field falls back to it", () => {
+    const file = { high: { action: 'prepend' as const, template: 'Careful.', tone: 'cautious' } }
+    card(expert({ safety: false, verdictDirectives: { high: { action: 'prepend', template: 'Careful.' } }, defaultVerdictDirectives: file }), vi.fn(), ['tone'])
+    const tone = screen.getByTestId('verdict-rules-high').querySelector('input')!
+    expect(tone.value).toBe('')
+    expect(tone.placeholder).toBe('cautious (expert file)')
+  })
+
   it('saves "Nothing" as none, so it turns off a reaction the expert file sets', () => {
     const file = { doesnt_fit: { action: 'inform' as const, template: '', reaction: 'ask_back' } }
     const onUpdate = card(expert({ safety: false, verdictDirectives: file, defaultVerdictDirectives: file }), vi.fn(), ['reaction'], ['ask_back'])

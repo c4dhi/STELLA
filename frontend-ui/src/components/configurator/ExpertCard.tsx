@@ -324,6 +324,7 @@ function VerdictResponsesEditor({
               <VerdictRuleFields
                 verdict={verdict}
                 directive={directive}
+                fileDirective={expert.defaultVerdictDirectives?.[verdict]}
                 verdicts={verdicts}
                 onChange={(patch) => setDirective(verdict, patch)}
                 isDark={isDark}
@@ -381,12 +382,15 @@ const list = (text: string) => text.split(',').map((t) => t.trim()).filter(Boole
 function VerdictRuleFields({
   verdict,
   directive,
+  fileDirective,
   verdicts,
   onChange,
   isDark,
 }: {
   verdict: string
   directive: VerdictDirective
+  /** The expert file's rule for this verdict: what a cleared field falls back to. */
+  fileDirective?: VerdictDirective
   verdicts: string[]
   onChange: (patch: Partial<VerdictDirective>) => void
   isDark: boolean
@@ -400,6 +404,11 @@ function VerdictRuleFields({
   }`
   // undefined drops the field from the saved entry, so the file's value applies.
   const text = (value: string) => (value.trim() ? value : undefined)
+  // A cleared field shows what it falls back to, so the merge is visible.
+  const fromFile = (value: string | string[] | undefined, otherwise: string) => {
+    const shown = Array.isArray(value) ? value.join(', ') : value
+    return shown ? `${shown} (expert file)` : otherwise
+  }
   return (
     <div className="grid grid-cols-2 gap-x-3 gap-y-2 mt-2" data-testid={`verdict-rules-${verdict}`}>
       {has('flag') && (
@@ -433,14 +442,14 @@ function VerdictRuleFields({
       {has('reaction_field') && directive.reaction && directive.reaction !== 'none' && (
         <div>
           <div className={label}>Reads from the expert's output</div>
-          <input className={input} value={directive.reaction_field ?? ''} placeholder="e.g. recommendation"
+          <input className={input} value={directive.reaction_field ?? ''} placeholder={fromFile(fileDirective?.reaction_field, 'e.g. recommendation')}
             onChange={(e) => onChange({ reaction_field: text(e.target.value) })} />
         </div>
       )}
       {has('tone') && (
         <div>
           <div className={label}>Tone of the reply</div>
-          <input className={input} value={directive.tone ?? ''} placeholder="e.g. cautious"
+          <input className={input} value={directive.tone ?? ''} placeholder={fromFile(fileDirective?.tone, 'e.g. cautious')}
             onChange={(e) => onChange({ tone: text(e.target.value) })} />
         </div>
       )}
@@ -456,17 +465,23 @@ function VerdictRuleFields({
         <div>
           <div className={label}>When not sure enough, becomes</div>
           <select value={directive.below ?? ''} onChange={(e) => onChange({ below: e.target.value || undefined })} className={input}>
-            <option value="">Stays as it is</option>
+            {/* Leaving `below` out falls back to the expert file's, so "Stays
+                as it is" is only offered when the file sets none (#224). */}
+            {!fileDirective?.below && <option value="">Stays as it is</option>}
             {verdicts.filter((v) => v !== verdict).map((v) => (
-              <option key={v} value={v}>{v}</option>
+              <option key={v} value={v}>{v === fileDirective?.below ? `${v} (expert file)` : v}</option>
             ))}
           </select>
+          {fileDirective?.below && has('min_confidence') && (
+            <div className={`${label} mt-1 font-light`}>To keep the verdict, set How sure 0.</div>
+          )}
         </div>
       )}
       {has('must_avoid') && (
         <div className="col-span-2">
           <div className={label}>The reply must not (comma-separated)</div>
           <input className={input} value={(directive.must_avoid ?? []).join(', ')}
+            placeholder={fromFile(fileDirective?.must_avoid, '')}
             onChange={(e) => onChange({ must_avoid: list(e.target.value).length ? list(e.target.value) : undefined })} />
         </div>
       )}
@@ -474,6 +489,7 @@ function VerdictRuleFields({
         <div className="col-span-2">
           <div className={label}>Takes priority over these experts (comma-separated)</div>
           <input className={input} value={(directive.overrides ?? []).join(', ')}
+            placeholder={fromFile(fileDirective?.overrides, '')}
             onChange={(e) => onChange({ overrides: list(e.target.value).length ? list(e.target.value) : undefined })} />
         </div>
       )}

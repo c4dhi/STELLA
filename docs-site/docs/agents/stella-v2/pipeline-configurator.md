@@ -145,12 +145,14 @@ Under each verdict, the editor shows the [verdict rules](../../agent-sdk/agent-m
 - **Counts as a warning** (`flag`).
 - **What follows** (`reaction`), with the reply's **tone**, what it **must not** do, and the experts it **takes priority over**.
 
-For Jev:
+For Jev, the panel shows what all its nodes declare together. Its arbitration node declares the same fields and reactions as V2's, so Jev shows all of V2's. Its expert pool adds:
 - **How sure** (`min_confidence`).
 - **When not sure enough, becomes** (`below`).
-- **What follows**, where **Ask back what they meant** is an option.
+- **Ask back what they meant** (`ask_back`) as one more option under **What follows**, besides V2's three.
 
-A field left empty keeps the expert file's value: a saved verdict is merged onto the file field by field.
+A field left empty keeps the expert file's value: a saved verdict is merged onto the file field by field. The panel shows that value greyed out in the empty field, marked *(expert file)*. Two choices are saved explicitly, because leaving them out would bring the file's value back:
+- **What follows: Nothing** is saved as `none`.
+- **When not sure enough, becomes** offers **Stays as it is** only when the expert file sets no fallback. When the file sets one, it is marked *(expert file)* in the list, and to keep the verdict at any confidence you set **How sure** to 0.
 
 ### Safety experts
 
