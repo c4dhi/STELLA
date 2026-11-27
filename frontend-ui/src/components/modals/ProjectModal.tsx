@@ -453,6 +453,9 @@ export default function ProjectModal({
         return true
       case 'duration':
         return true
+      case 'message':
+        // Optional; the textarea already caps it at the DTO's 500.
+        return true
       case 'expiration':
         return true
       default:
