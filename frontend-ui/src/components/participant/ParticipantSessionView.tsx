@@ -337,8 +337,13 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
     const sendHeartbeat = async () => {
       try {
         await apiClient.participantHeartbeat(sessionData.authToken)
-      } catch (error) {
+      } catch (error: any) {
         console.error('Heartbeat failed:', error)
+        if (error?.statusCode === 404) {
+          // Session/participant is gone (e.g. project deleted mid-call) - stop retrying.
+          setConnectionError('This conversation has ended.')
+          clearInterval(intervalId)
+        }
       }
     }
 
