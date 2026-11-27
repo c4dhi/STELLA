@@ -37,6 +37,7 @@ import { determineMessageRole, extractSpeakerInfo } from '../../lib/messageUtils
 import { useTeleprompter } from '../../hooks/useTeleprompter'
 import { usePersistedState } from '../../hooks/usePersistedState'
 import { applyAgentAudioSilencing } from '../../lib/agentAudio'
+import { applyAgentReply } from './agentMessages'
 import { announceInteractionMode, createClientChannel, type InteractionMode } from '../../lib/clientChannel'
 import type { DeliveryStatus } from '../../lib/types'
 
@@ -853,29 +854,7 @@ export default function ParticipantSessionView({ sessionData }: ParticipantSessi
             }
 
             const agentName = typeof msgData.agent_name === 'string' ? msgData.agent_name : undefined
-            setMessages(prev => {
-              const existingIdx = prev.findIndex(m => m.id === transcriptId)
-              if (existingIdx >= 0) {
-                // Update existing partial message
-                const updated = [...prev]
-                updated[existingIdx] = {
-                  ...updated[existingIdx],
-                  text,
-                  isStreaming: !isFinal,
-                }
-                return updated
-              } else {
-                // Add new message (partial or final)
-                return [...prev, {
-                  id: transcriptId,
-                  role: 'assistant',
-                  text,
-                  timestamp: new Date(),
-                  isStreaming: !isFinal,
-                  speakerName: agentName,
-                }]
-              }
-            })
+            setMessages(prev => applyAgentReply(prev, { transcriptId, text, isFinal, agentName }))
           }
         }
       } catch (error) {

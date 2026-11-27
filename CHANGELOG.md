@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A cut-off agent reply on the participant's text screen no longer keeps showing "… is writing…" forever.** When the agent's reply was interrupted (e.g. by a barge-in) it never got its own final chunk, so the message's "still coming in" flag was never cleared. It now clears as soon as the agent's next reply starts (#1065)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
