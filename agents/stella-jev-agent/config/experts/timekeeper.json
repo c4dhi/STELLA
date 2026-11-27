@@ -19,22 +19,32 @@
     "on_track": {
       "action": "inform",
       "template": "",
-      "description": "It is moving, or it is too early to tell. This is the default."
+      "description": "It is moving, or it is too early to tell. This is the default.",
+      "flag": false,
+      "tone": "encouraging"
     },
     "slowing": {
       "action": "inform",
       "template": "",
-      "description": "A couple of turns without progress, with answers getting shorter or vaguer."
+      "description": "A couple of turns without progress, with answers getting shorter or vaguer.",
+      "flag": true,
+      "tone": "encouraging"
     },
     "stuck": {
       "action": "inform",
       "template": "",
-      "description": "No progress over several turns, or the same question keeps coming back."
+      "description": "No progress over several turns, or the same question keeps coming back.",
+      "flag": true,
+      "tone": "encouraging",
+      "reaction": "ask_about_pending"
     },
     "force_advance": {
       "action": "inform",
       "template": "",
-      "description": "So stuck that the current step should be skipped."
+      "description": "So stuck that the current step should be skipped.",
+      "flag": true,
+      "tone": "encouraging",
+      "reaction": "ask_about_pending"
     }
   }
 }

@@ -262,19 +262,17 @@ pipelineSchema:
       description: "Deterministic priority-based conflict resolution — no LLM (~1ms)"
       icon: "⚖️"
       position: { row: 0, col: 2 }
+      # What each expert verdict leads to is set on the verdict in the expert's
+      # file (#222); this is what arbitration acts on.
+      verdict_rules:
+        reactions: [ask_followup, redirect, ask_about_pending]
+        fields: [flag, tone, must_avoid, reaction, reaction_field, overrides]
       slots:
         - id: tone_map
           label: "Tone Map"
           type: key_value
-          description: "Expert name → tone when that expert flags something"
-          default:
-            medical: "cautious"
-            legal: "cautious"
-            noise_detection: "neutral"
-            task_extraction: "friendly"
-            probing: "curious"
-            timekeeper: "encouraging"
-            capabilities: "friendly"
+          description: "Expert name → tone, overriding the tone set on that expert's verdicts"
+          default: {}
         - id: gate_failure_message
           label: "Gate Failure Message"
           type: text

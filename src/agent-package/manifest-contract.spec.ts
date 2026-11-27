@@ -91,7 +91,7 @@ describe('one mapping for built-in and uploaded agents', () => {
     const zip = new AdmZip()
     zip.addLocalFolder(dir, '', (file) => file === 'agent.yaml' || file.startsWith('config/experts/'))
     const service = new AgentPackageService({} as any, {} as any, {} as any)
-    const uploaded = service.readExpertDefaults(zip.toBuffer(), seeded.manifest.capabilities)
+    const uploaded = service.readExpertDefaults(zip.toBuffer(), seeded.manifest.capabilities, seeded.manifest.pipelineSchema)
 
     expect(uploaded).toEqual(seeded.expertDefaults)
     expect(manifestToAgentTypeData(seeded.manifest, uploaded)).toEqual(

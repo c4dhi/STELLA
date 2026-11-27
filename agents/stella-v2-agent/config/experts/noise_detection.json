@@ -19,17 +19,23 @@
     "clear": {
       "action": "inform",
       "template": "",
-      "description": "TAP OUT (default). The message has discernible meaning, even if brief, off-topic, or full of typos."
+      "description": "TAP OUT (default). The message has discernible meaning, even if brief, off-topic, or full of typos.",
+      "flag": false,
+      "tone": "neutral"
     },
     "unclear": {
       "action": "short_circuit",
       "template": "",
-      "description": "ENGAGE. No discernible meaning: gibberish, random characters, transcription artifacts, or an empty/nonsense transcription."
+      "description": "ENGAGE. No discernible meaning: gibberish, random characters, transcription artifacts, or an empty/nonsense transcription.",
+      "flag": true,
+      "tone": "neutral"
     },
     "partial": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. Only partially intelligible — the actionable part is genuinely ambiguous."
+      "description": "ENGAGE. Only partially intelligible — the actionable part is genuinely ambiguous.",
+      "flag": true,
+      "tone": "neutral"
     }
   }
 }

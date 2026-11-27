@@ -18,5 +18,18 @@
     "complete_task",
     "skip_task",
     "skip_state"
-  ]
+  ],
+  "verdict_directives": {
+    "tool_calls_executed": {
+      "action": "inform",
+      "flag": true,
+      "tone": "friendly"
+    },
+    "no_tool_calls": {
+      "action": "inform",
+      "flag": false,
+      "tone": "friendly"
+    }
+  },
+  "surfaces_recommendation": false
 }

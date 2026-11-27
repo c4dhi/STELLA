@@ -67,14 +67,24 @@ Any built-in expert can carry `enabled_from_compiler` the same way.
 
 This is the clinical-determinism knob: each expert maps each verdict to an action (`inform` / `prepend` / `override` / `short_circuit`) and a response template, edited in the [Expert Module](#expert-module--verdict-responses). The highest-priority non-`inform` directive wins.
 
+What else a verdict leads to is set on the verdict too (the [verdict rules](../../agent-sdk/agent-manifest.md#verdict-rules)), in the expert's file and changeable per verdict by a saved configuration:
+
+- `flag`: whether the verdict counts as the expert flagging something. Only flagging verdicts set the tone and the reply's main direction.
+- `tone`: the tone the reply takes when this verdict leads.
+- `must_avoid`: what the reply must not contain (medical and legal list diagnoses, treatment plans and personal tips on `high` and `critical`).
+- `reaction`: `ask_followup` (probing's `needs_clarification`), `redirect` (probing's `gentle_redirect`) or `ask_about_pending` (timekeeper's `stuck` and `force_advance`, which asks directly about the open deliverables). A follow-up or redirect from a higher-priority expert comes first; asking about open items only happens when nothing else steered. `reaction_field` names the verdict field the text comes from (default `recommendation`).
+- `overrides`: experts this verdict wins over, reported as a conflict (medical and legal over probing).
+
+An expert file can also say `"surfaces_recommendation": false` (task extraction: its recommendation is bookkeeping and never steers the reply) and `"safety": true` (medical and legal: they run unless the configuration records a confirmed `safety_off`, and a prompt placeholder the session can't fill doesn't switch them off).
+
 | Slot | Type | Default | Rationale |
 |------|------|---------|-----------|
-| `tone_map` | key_value | Expert → tone mapping | Maps each expert to a tone (e.g., `medical → cautious`, `probing → curious`) used for `inform` verdicts. The winning expert's tone is injected into the Response Generator's context. |
+| `tone_map` | key_value | empty | Expert → tone, overriding the `tone` set on that expert's verdicts. The leading expert's tone is injected into the Response Generator's context. |
 | `gate_failure_message` | text | "I'm sorry, I didn't quite catch that..." | Locale-aware fallback spoken when `noise_detection` returns `unclear` and its `short_circuit` directive carries no template. |
 
 **Why not LLM-based?** V1's Aggregator uses an LLM to synthesize multiple expert findings (~500ms, non-deterministic). Arbitration is pure Python (~1ms) — the expert list order defines priority, and the winning verdict directive is applied deterministically: given the same verdicts, the same response is produced. For `override`/`short_circuit` the response LLM is bypassed entirely; for `prepend` the template is spoken and the LLM continues from it.
 
-**When to customize**: Author per-verdict templates for safety-critical experts (medical/legal) in the Expert Module. Adjust `tone_map` for `inform` verdicts. `gate_failure_message` is the noise fallback for localization.
+**When to customize**: Author per-verdict templates for safety-critical experts (medical/legal) in the Expert Module. A verdict's `tone`, `must_avoid` or `reaction` is changed in the expert's file or a saved configuration (the Configurator doesn't show these fields yet); `tone_map` overrides the tone for a whole expert. `gate_failure_message` is the noise fallback for localization.
 
 ### Response Generator
 

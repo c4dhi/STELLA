@@ -20,17 +20,25 @@
     "no_probe": {
       "action": "inform",
       "template": "",
-      "description": "Simply respond. They answered, or shared a remark, a story or a feeling worth responding to, even if it has nothing to do with the task. This is the default."
+      "description": "Simply respond. They answered, or shared a remark, a story or a feeling worth responding to, even if it has nothing to do with the task. This is the default.",
+      "flag": false,
+      "tone": "curious"
     },
     "needs_clarification": {
       "action": "inform",
       "template": "",
-      "description": "They tried to answer what the task needs, but left it open or too vague to record."
+      "description": "They tried to answer what the task needs, but left it open or too vague to record.",
+      "flag": true,
+      "tone": "curious",
+      "reaction": "ask_followup"
     },
     "gentle_redirect": {
       "action": "inform",
       "template": "",
-      "description": "They have clearly been away from the task for several turns in a row. One remark is not enough."
+      "description": "They have clearly been away from the task for several turns in a row. One remark is not enough.",
+      "flag": true,
+      "tone": "curious",
+      "reaction": "redirect"
     }
   }
 }

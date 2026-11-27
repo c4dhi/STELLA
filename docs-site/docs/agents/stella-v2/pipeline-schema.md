@@ -161,10 +161,8 @@ Key-value map. Used for mappings like expert → tone.
 - id: tone_map
   label: "Tone Map"
   type: key_value
-  description: "Expert name → tone when that expert flags something"
+  description: "Expert name → tone, overriding the tone set on that expert's verdicts"
   default:
-    medical: "cautious"
-    legal: "cautious"
     probing: "curious"
 ```
 
