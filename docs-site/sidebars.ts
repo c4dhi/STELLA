@@ -22,6 +22,7 @@ const sidebars: SidebarsConfig = {
         'guides/add-custom-ui',
         'guides/authentication',
         'guides/text-sessions',
+        'guides/public-projects',
       ],
     },
     {
