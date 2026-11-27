@@ -6,6 +6,7 @@ import { ProjectStatsDto } from './dto/project-stats.dto.js';
 import { UpdatePublicConfigDto } from './dto/update-public-config.dto.js';
 import { SessionStatus, AgentStatus } from '@prisma/client';
 import { AgentsService } from '../agents/agents.service.js';
+import { LiveKitService } from '../livekit/livekit.service.js';
 
 @Injectable()
 export class ProjectsService {
@@ -21,6 +22,7 @@ export class ProjectsService {
     private prisma: PrismaService,
     @Inject(forwardRef(() => AgentsService))
     agentsService: any,
+    private livekit: LiveKitService,
   ) {
     this.agentsService = agentsService;
   }
@@ -234,7 +236,7 @@ export class ProjectsService {
       where: { id },
       include: {
         sessions: {
-          select: { id: true },
+          select: { id: true, room: { select: { livekitRoomName: true } } },
         },
       },
     });
@@ -247,8 +249,9 @@ export class ProjectsService {
       `Deleting project ${id} (${project.name}) - stopping all agents and cleaning up ${project.sessions.length} sessions`,
     );
 
-    // Stop all agents for each session before deleting
-    // This ensures K8s pods, secrets, and configmaps are properly cleaned up
+    // Stop all agents and close each session's LiveKit room before deleting.
+    // Without the room close, a participant still on the call sits in a room
+    // LiveKit never tears down and whose session disappears from under it (#1047).
     for (const session of project.sessions) {
       this.logger.log(`Stopping agents for session ${session.id}`);
       try {
@@ -258,6 +261,17 @@ export class ProjectsService {
           `Failed to stop agents for session ${session.id}: ${error.message}`,
         );
         // Continue with deletion even if agent stop fails
+      }
+
+      const roomName = session.room?.livekitRoomName;
+      if (roomName) {
+        try {
+          await this.livekit.deleteRoom(roomName);
+        } catch (error) {
+          this.logger.warn(
+            `Failed to delete LiveKit room ${roomName} for session ${session.id}: ${error.message}`,
+          );
+        }
       }
     }
 
