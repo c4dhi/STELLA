@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Verdict rules** (#221). `stella_agent_sdk.experts.verdict_rules` holds what a verdict leads to as configuration: the platform's list of reactions (`REACTIONS`) and rule fields (`RULE_FIELDS`), `merge_verdict_directives` (a saved configuration overrides a verdict field by field), `check_verdict_rules` against what the agent declares, `settle_verdict` (step a verdict down while the agent isn't sure enough), the safety floor (`expert_enabled`, `may_drop_for`, `never_step_down`: a `"safety": true` expert runs unless the configuration recorded `safety_off`) and `Gate`/`gated_experts`. Nothing in it knows an expert by name.
+
 ## [0.11.0] - 2026-11-23
 
 Ships with STELLA 2.1.0. New: capabilities from the session, `{{capabilities}}`, settings from `agent.yaml`, and the wait for speech services. Breaking: `BaseTool.guidance` is removed, and `STTClient.connect()`/`TTSClient.connect()` take `wait_seconds`.
