@@ -46,11 +46,11 @@ Choose **Export**. The wizard asks whether to include metrics and logs (not need
 
 ## The upgrade
 
-Fetch the release, check out its tag, for example `v2.1.0`, and install that release's Node packages:
+Fetch the release, check out its tag, for example `v2.2.0`, and install that release's Node packages:
 
 ```bash
 git fetch --tags
-git checkout v2.1.0
+git checkout v2.2.0
 npm ci
 ```
 
@@ -74,11 +74,24 @@ All pods should be `Running` and ready, and started just now (the `AGE` column):
 kubectl -n ai-agents get pods
 ```
 
-Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v2.1.0`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
+Then open the web interface and sign in. **Settings** shows the version at the bottom of its sidebar, for example `STELLA v2.2.0`. Start one short session with a voice. If the voice is silent, see [Troubleshooting](#troubleshooting).
 
 ## Manual steps per version
 
 Run the steps of every version you pass, oldest first. A version not listed here needs none.
+
+### 2.2.0
+
+The deploy applies one new database migration by itself, which adds a column for a public project's welcome message. Back up first, as described above.
+
+After the upgrade:
+
+- **Restart every running agent** from its session, so that it runs the new image. A running agent keeps the image it started with.
+- **Check for outdated Pipeline Configurations.** Saved configurations are now checked against the verdict rules the agent declares. A configuration that uses a reaction or rule field the agent doesn't declare is marked outdated, and it can't be deployed until you fix it in the Pipeline Configurator and save it again. On their default configurations, STELLA V2 and Jev decide every turn exactly as before.
+- **Medical and legal are safety experts now**, in STELLA V2 and in Jev. A saved configuration that sets `enabled: false` on one of them no longer turns it off. To turn one off, use the Pipeline Configurator: it asks for a confirmation and records who did it and when.
+- **The arbitration Tone Map setting is empty by default.** It now only overrides the tone set on an expert's verdicts. A configuration that set its own values keeps them.
+- **To pick up Agent SDK 0.12.0, rebuild uploaded agents.** 0.12.0 keeps text typed while speech services load, and it shows and speaks text sent from `on_ready()`. Agents keep working without a rebuild. Agent SDK 0.12.0 is on PyPI before this release reaches production.
+- **The ELIAS-Interviewer agent is no longer in this repository.** It now lives in a repository of its own. An installation that has already uploaded it keeps it.
 
 ### 2.1.0
 
