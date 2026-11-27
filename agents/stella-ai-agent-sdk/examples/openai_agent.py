@@ -140,28 +140,31 @@ class OpenAIAgent(BaseAgent):
             )
 
             async for chunk in stream:
-                # Stop as soon as the user barges in - see on_interrupt below.
+                # Stops as soon as something sets self._cancelled - see
+                # on_interrupt below (not called by the default audio loop).
                 if self._cancelled:
                     logger.info("Generation cancelled")
                     break
 
-                # Extract content from chunk
+                # Extract content from chunk. text_chunk carries the whole
+                # reply so far, not just this token - the SDK finds the new
+                # text by comparing with the previous chunk (see
+                # docs-site/docs/agent-sdk/streaming.md).
                 if chunk.choices and chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    full_response += token
+                    full_response += chunk.choices[0].delta.content
 
-                    # Stream the token
                     yield AgentOutput.text_chunk(
                         input.session_id,
-                        token,
+                        full_response,
                         transcript_id=transcript_id,
                     )
 
-            # An empty chunk with is_final=True closes the stream.
+            # The final chunk repeats the full text with is_final=True - an
+            # empty final chunk would replace the bubble on screen with nothing.
             if not self._cancelled and full_response:
                 yield AgentOutput.text_chunk(
                     input.session_id,
-                    "",
+                    full_response,
                     transcript_id=transcript_id,
                     is_final=True,
                 )
@@ -181,10 +184,14 @@ class OpenAIAgent(BaseAgent):
             )
 
     async def on_interrupt(self, session_id: str) -> None:
-        """Handle interrupt - cancel ongoing generation.
+        """Required (abstract), but the default run_audio_loop() never calls it -
+        a committed barge-in is handled by the SDK itself (this agent does not
+        set `supports_barge_in`, so none is enabled here).
 
-        `process()` checks this flag on every streamed token, so generation stops
-        within a token or two of the user starting to speak.
+        Left as a cancellation point for an agent that writes its own
+        run_audio_loop(): `process()` checks `self._cancelled` on every
+        streamed token, so setting it here would stop generation within a
+        token or two.
         """
         logger.info(f"Interrupt received for session {session_id}")
         self._cancelled = True

@@ -19,6 +19,9 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **A message that arrives before any data handler is registered no longer vanishes without a trace** (#1016). `RoomManager`'s data callback is a single-slot registration, so a message delivered before `AudioPipeline` constructs (which only happens once STT/TTS have connected) had nowhere to go and was silently dropped. It now logs a warning naming the sender and the message size.
+- **`examples/openai_agent.py` and `BaseAgent.process`'s own streaming example now follow the SDK's accumulated-text contract** (#903). Both used to yield a raw per-token delta and close the stream with an empty final chunk — the exact anti-pattern `docs-site/docs/agent-sdk/streaming.md` warns against — which broke the published text and the spoken reply for anyone who copied them. `AgentOutput.text_chunk`'s docstring now says so directly.
+- **A welcome message (or any text) yielded from `on_ready()` is shown and spoken, not dropped.** `to_data_payload()` has always returned `None` for `TEXT_CHUNK`/`TEXT_FINAL` — the audio loop handles those itself — but the `on_ready` caller treated that `None` as "nothing to send" instead of publishing and speaking the text itself.
+- **`on_interrupt()`'s docstring, and the `__init__.py`/`run_agent_from_env` docstring examples, no longer describe behaviour the SDK doesn't have.** `on_interrupt()` is abstract but the default `run_audio_loop()` never calls it (wiring it into barge-in is #140); the two entry-point docstrings called a nonexistent `self.audio.audio_out()` instead of `publish_text()`/`speak()`.
 
 ## [0.11.0] - 2026-11-23
 

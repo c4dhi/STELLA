@@ -166,6 +166,49 @@ def _render_message_template(template: str, variables: Dict[str, str]) -> str:
     return re.sub(r"\{([a-zA-Z0-9_]+)\}", lambda m: variables.get(m.group(1), ""), template)
 
 
+async def _dispatch_on_ready_output(
+    output: Any,
+    audio_pipeline: AudioPipeline,
+    agent: BaseAgent,
+    agent_identity: Dict[str, Any],
+) -> None:
+    """Dispatch one ``on_ready()`` output (issue #903).
+
+    TEXT_CHUNK / TEXT_FINAL are the one case ``AgentOutput.to_data_payload``
+    hands back to its caller — there is no audio-loop turn running yet to
+    publish and speak them, so this does it directly: the same contract as a
+    turn's text (``content`` is the whole reply so far, spoken once
+    ``is_final``), with ``[emotion]`` tags stripped the same way
+    ``run_audio_loop`` strips them, before publishing or speaking. Previously
+    these were silently dropped, so a welcome message yielded from
+    ``on_ready`` never reached the participant.
+
+    Everything else goes through ``to_data_payload``, same as the audio
+    loop's side channel, so shaping never drifts between the two call sites.
+    """
+    if output.type in (OutputType.TEXT_CHUNK, OutputType.TEXT_FINAL):
+        # Strip [emotion] tags the same way run_audio_loop does, before
+        # anything sees the text — otherwise they'd show on screen and get
+        # spoken (#903 review).
+        content, _cues = agent._parse_emotion_tags(output.content, is_final=output.is_final)
+        await audio_pipeline.publish_text(
+            content, is_final=output.is_final, transcript_id=output.transcript_id
+        )
+        if output.is_final and content.strip():
+            await audio_pipeline.speak(content)
+        return
+
+    payload = output.to_data_payload(agent_identity)
+    if payload is None:
+        logger.debug(f"[ON_READY] Ignoring output type: {output.type}")
+        return
+    if output.type == OutputType.PROGRESS_UPDATE:
+        # Store on agent for re-sending to new participants.
+        agent._last_progress_payload = payload
+        logger.info(f"[INITIAL PROGRESS] Publishing: {payload}")
+    await audio_pipeline._room.publish_data(payload)
+
+
 def wire_turn_taking(agent: BaseAgent, audio_pipeline: AudioPipeline, session_id: str) -> None:
     """Barge-in and take-back, from what the agent declares.
 
@@ -234,7 +277,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
 
                 async for event in self.audio.audio_in():
                     # event.is_final is always True (partials sent to LiveKit)
-                    await self.audio.audio_out(f"You said: {event.text}")
+                    reply = f"You said: {event.text}"
+                    await self.audio.publish_text(reply, is_final=True)
+                    await self.audio.speak(reply)
 
             async def _handle_barge_in(self) -> None:
                 await self.audio.stop_speaking()
@@ -470,19 +515,9 @@ async def run_agent_from_env(agent: BaseAgent) -> None:
         logger.info(f"Agent session started with config keys: {list(agent_config.keys())}")
 
         # 10. Call on_ready hook to send initial outputs (e.g., progress state).
-        # Side-channel outputs share the same payload mapping the audio loop uses
-        # (AgentOutput.to_data_payload) so shaping never drifts between the two.
         agent_identity = {"agent_id": agent_id, "agent_name": agent_name, "agent_icon": agent_icon}
         async for output in agent.on_ready(session_id):
-            payload = output.to_data_payload(agent_identity)
-            if payload is None:
-                logger.debug(f"[ON_READY] Ignoring output type: {output.type}")
-                continue
-            if output.type == OutputType.PROGRESS_UPDATE:
-                # Store on agent for re-sending to new participants.
-                agent._last_progress_payload = payload
-                logger.info(f"[INITIAL PROGRESS] Publishing: {payload}")
-            await audio_pipeline._room.publish_data(payload)
+            await _dispatch_on_ready_output(output, audio_pipeline, agent, agent_identity)
 
         # 10a. Tell the screens whether this agent speaks (#180): with TTS off no
         # audio progress ever arrives, so they fire a reply's cues at its end.
