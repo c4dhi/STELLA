@@ -55,12 +55,19 @@ class AgentOutput:
         """
         Create a streaming text chunk.
 
-        Use this to stream response text token-by-token or chunk-by-chunk.
-        Session-management will display immediately and buffer for TTS.
+        Use this to stream a response as it is generated. ``text`` must be the
+        WHOLE reply so far, not just the new tokens: the audio loop finds the
+        new text by comparing with the previous chunk sharing this
+        ``transcript_id`` (see docs-site/docs/agent-sdk/streaming.md). Session-
+        management displays it immediately and buffers it for TTS.
+
+        Don't close the stream with an empty final chunk - repeat the full
+        text with ``is_final=True`` instead; an empty one replaces the bubble
+        on screen with nothing.
 
         Args:
             session_id: The session ID.
-            text: The text chunk to send.
+            text: The whole reply accumulated so far (not a delta).
             transcript_id: ID to group chunks (auto-generated if not provided).
             is_final: Whether this is the last chunk in the stream.
         """
