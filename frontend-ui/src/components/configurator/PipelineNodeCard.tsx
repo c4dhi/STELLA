@@ -26,16 +26,11 @@ export interface PipelineNodeCardData {
 }
 
 export interface StageSummary {
-  type: 'input_gate' | 'expert_pool' | 'arbitration' | 'response_generator' | 'bridge_generator'
   /** Short lines to render inside the node */
   lines: string[]
-  /** Whether this stage receives plan data at runtime */
-  receivesPlanData: boolean
-  /** Whether this stage receives progress/stagnation context at runtime */
-  receivesProgressData?: boolean
-  /** Model badge text (e.g. "gpt-4o-mini") */
+  /** Model badge text (e.g. "gpt-5.4-mini") */
   modelBadge?: string
-  /** Expert name chips for expert_pool / arbitration */
+  /** Expert name chips: the experts a stage holds, or the order verdicts are weighed in */
   chips?: string[]
 }
 

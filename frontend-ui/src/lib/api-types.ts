@@ -1708,6 +1708,23 @@ export interface VerdictDirective {
   description?: string
   /** Per-language overrides of `template`, keyed by language code (e.g. `de`). */
   template_i18n?: Record<string, string>
+  // Verdict rules (#221). The Configurator offers only those the agent declares.
+  /** Whether this verdict counts as a warning. */
+  flag?: boolean
+  /** The tone the reply takes. */
+  tone?: string
+  /** What the reply must not do. */
+  must_avoid?: string[]
+  /** What follows the verdict (one of the reactions the agent carries out). */
+  reaction?: string
+  /** The field a reaction reads from the expert's output. */
+  reaction_field?: string
+  /** How sure the agent must be of this verdict. */
+  min_confidence?: number
+  /** The verdict it becomes when the agent is not sure enough. */
+  below?: string
+  /** The experts whose advice this verdict overrides. */
+  overrides?: string[]
 }
 
 /** An agent-declared default expert, as published from config/experts/*.json
@@ -1729,6 +1746,8 @@ export interface ExpertDefault {
   min_confidence?: number
   /** On by default only for configurations authored against this prompt compiler or later. */
   enabled_from_compiler?: string
+  /** A safety expert (#221): only a confirmed safety_off record switches it off. */
+  safety?: boolean
   verdict_directives?: Record<
     string,
     { action?: string; template?: string; description?: string; template_i18n?: Record<string, string> }
@@ -1756,6 +1775,10 @@ export interface PipelineNode {
   icon?: string
   position: { row: number; col: number }
   slots: ConfigurableSlot[]
+  /** The verdict rules this step acts on (#221): reactions it carries out, rule fields it reads. */
+  verdict_rules?: { reactions?: string[]; fields?: string[] }
+  /** How a step off the turn's chain is drawn (#224): its own row (`side`) or alongside the turn (`parallel`). */
+  path?: { kind: 'side' | 'parallel'; input: string; output: string }
 }
 
 export interface PipelineEdge {
