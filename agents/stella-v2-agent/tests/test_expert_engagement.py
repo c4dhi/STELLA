@@ -55,8 +55,12 @@ def registry() -> ExpertRegistry:
 
 
 @pytest.fixture(scope="module")
-def flagging() -> dict:
-    return Arbitration()._flagging_verdicts
+def flagging(registry) -> dict:
+    # Which verdicts flag is the ``flag`` on each verdict in the file (#222).
+    return {
+        name: {v for v, d in cfg.verdict_directives.items() if d.flag}
+        for name, cfg in registry.as_map().items()
+    }
 
 
 def _verdict(name: str, verdict: str, *, priority: int = 50, recommendation: str = "",

@@ -255,10 +255,16 @@ def test_any_expert_using_a_placeholder_its_compiler_cannot_fill_is_off():
     # The rule is about the configured prompt, not the expert's name
     # (handbook sdk-experts-clean-interface).
     prompt = "Judge against what she can do:\n{{capabilities}}"
-    assert _fit_with_prompt("1.1.0", "medical", prompt) is False
-    assert _fit_with_prompt("1.2.0", "medical", prompt) is True
-    assert _fit_with_prompt("1.0.0", "medical", "You are {{persona.name}}.") is False
-    assert _fit_with_prompt("1.1.0", "medical", "You are {{persona.name}}.") is True
+    assert _fit_with_prompt("1.1.0", "probing", prompt) is False
+    assert _fit_with_prompt("1.2.0", "probing", prompt) is True
+    assert _fit_with_prompt("1.0.0", "probing", "You are {{persona.name}}.") is False
+    assert _fit_with_prompt("1.1.0", "probing", "You are {{persona.name}}.") is True
+
+
+def test_a_safety_expert_stays_on_with_a_placeholder_its_compiler_cannot_fill():
+    # #221/#222: medical is a safety expert; a prompt the session can't fully
+    # fill doesn't switch it off, it runs with the placeholder as written.
+    assert _fit_with_prompt("1.1.0", "medical", "Judge against what she can do:\n{{capabilities}}") is True
 
 
 def test_a_capabilities_prompt_without_the_placeholder_runs_on_an_older_compiler():

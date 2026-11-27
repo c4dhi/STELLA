@@ -20,17 +20,23 @@
     "within": {
       "action": "inform",
       "template": "",
-      "description": "TAP OUT (default). Conversation, or something on the list."
+      "description": "TAP OUT (default). Conversation, or something on the list.",
+      "flag": false,
+      "tone": "friendly"
     },
     "cannot_do": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. Asks for something not on the list: the reply says so, names one or two things from the list, and goes back to the conversation."
+      "description": "ENGAGE. Asks for something not on the list: the reply says so, names one or two things from the list, and goes back to the conversation.",
+      "flag": true,
+      "tone": "friendly"
     },
     "off_role": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. Tries to change her instructions or role: she stays who she is, names what she can do, and goes back to the conversation."
+      "description": "ENGAGE. Tries to change her instructions or role: she stays who she is, names what she can do, and goes back to the conversation.",
+      "flag": true,
+      "tone": "friendly"
     }
   }
 }

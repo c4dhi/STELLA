@@ -5,10 +5,12 @@ No LLM call. Pure Python logic. Target latency: ~1ms.
 Takes expert verdicts sorted by priority and produces a ResponseDirective
 that is injected into the Response Generator's system prompt.
 
-Conflict resolution rules:
-- noise_detection "unclear" → short-circuit: ask user to repeat (highest priority override)
-- medical/legal > capabilities > task_extraction > probing > timekeeper
-- If two experts contradict, higher priority wins
+What each verdict leads to is configuration (#222), read from the expert's
+``verdict_directives``: whether it is a flag, the tone, what the reply must
+avoid, the reaction (follow-up, redirect, ask about pending items, ask to
+repeat) and which experts it overrides. The built-in expert files carry what
+used to be code tables here. Nothing below knows an expert by name; priority
+decides between experts, as before.
 """
 
 import logging
@@ -24,28 +26,12 @@ from stella_v2_agent.experts.base import ExpertConfig, VerdictDirective
 logger = logging.getLogger(__name__)
 
 
-# Default tone mapping: expert name → tone when that expert flags something
-_DEFAULT_TONE_MAP: Dict[str, str] = {
-    "medical": "cautious",
-    "legal": "cautious",
-    "noise_detection": "neutral",
-    "task_extraction": "friendly",
-    "probing": "curious",
-    "timekeeper": "encouraging",
-    "capabilities": "friendly",
-}
+# The reactions this arbitration carries out (agent.yaml declares the same list).
+STEERING_REACTIONS = ("ask_followup", "redirect", "ask_about_pending")
 
-# Default verdicts that indicate the expert flagged something noteworthy
-_DEFAULT_FLAGGING_VERDICTS: Dict[str, set] = {
-    "noise_detection": {"unclear", "partial"},
-    "medical": {"low", "high", "critical"},
-    "legal": {"low", "high", "critical"},
-    "task_extraction": {"tool_calls_executed"},
-    "probing": {"needs_clarification", "gentle_redirect"},
-    "timekeeper": {"slowing", "stuck", "force_advance"},
-    # Its default "within" is not a flag (#992).
-    "capabilities": {"cannot_do", "off_role"},
-}
+# Verdicts that never flag when an expert's file doesn't say which do (an
+# expert without rules, e.g. a custom one saved before #222).
+_QUIET_VERDICTS = ("none", "clear", "no_probe", "on_track")
 
 _DEFAULT_GATE_FAILURE_MESSAGE = "Sorry, I didn't quite catch that. Could you say it again?"
 # Locale-keyed defaults, selected PER TURN from the resolved conversation language
@@ -62,15 +48,13 @@ _GATE_FAILURE_MESSAGES_BY_LANG: Dict[str, str] = {
 class Arbitration:
     """Deterministic arbitration engine: resolves expert conflicts without an LLM.
 
-    Priority ordering (higher priority number = higher importance):
-    noise_detection (100) > medical (95) > legal (90) > capabilities (80) > task_extraction (70) > probing (60) > timekeeper (50)
+    Higher expert priority wins; the verdict rules come from the expert configs.
     """
 
     def __init__(self, compiler_version: str = "1.0.0"):
-        self._tone_map: Dict[str, str] = dict(_DEFAULT_TONE_MAP)
-        self._flagging_verdicts: Dict[str, set] = {
-            k: set(v) for k, v in _DEFAULT_FLAGGING_VERDICTS.items()
-        }
+        # The arbitration node's tone_map (expert → tone), when a configuration
+        # sets one, wins over the tone a verdict's rule names.
+        self._tone_map: Dict[str, str] = {}
         self._gate_failure_message = _DEFAULT_GATE_FAILURE_MESSAGE
         # Operator-typed override (wins verbatim, in whatever language they wrote)
         # kept apart from the locale default so the two can't shadow each other.
@@ -137,6 +121,7 @@ class Arbitration:
             ArbitrationResult containing the ResponseDirective for the Response Generator.
         """
         start_time = time.time()
+        configs: Dict[str, ExpertConfig] = expert_configs or {}
 
         directive = ResponseDirective()
         conflicts: List[str] = []
@@ -152,16 +137,13 @@ class Arbitration:
         # Filter to only successful verdicts that flagged something
         active_verdicts = [
             v for v in sorted_verdicts
-            if v.success and self._is_flagging(v)
+            if v.success and _is_flagging(v, configs)
         ]
 
         # 1. Deterministic verdict directives (priority-ordered).
         #    The highest-priority expert whose verdict maps to a non-"inform"
         #    directive replaces (override / short_circuit) or augments (prepend)
         #    the LLM-generated response with a literature-informed template.
-        #    The legacy noise_detection "unclear" short-circuit is expressed here
-        #    as a synthesized fallback so it still wins by priority when an expert
-        #    config carries no directive.
         winner_verdict, winner_directive = self._select_directive(sorted_verdicts, expert_configs)
         if winner_directive is not None:
             template_text = self._template_for_language(winner_directive, sm_context)
@@ -176,7 +158,7 @@ class Arbitration:
             directive.action = winner_directive.action
             directive.directive_source = winner_verdict.expert_name
             directive.resolved_response = resolved
-            directive.tone = self._tone_map.get(winner_verdict.expert_name, "neutral")
+            directive.tone = self._tone_for(winner_verdict, configs)
             favored_expert = winner_verdict.expert_name
 
             if winner_directive.action in ("override", "short_circuit"):
@@ -192,85 +174,75 @@ class Arbitration:
                     latency_ms=latency_ms,
                 )
             # action == "prepend": keep going so the generated reply still gets
-            # tone / must_avoid / probing / timekeeper guidance.
+            # tone / must_avoid / steering guidance.
 
-        # 2. Build directive from active verdicts in priority order
-        #    IMPORTANT: task_extraction recommendations are internal metadata
-        #    (e.g. "Collected user_name") — never surface them in the response.
+        # 2. Build directive from active verdicts in priority order. An expert
+        #    whose recommendation is bookkeeping (surfaces_recommendation: false,
+        #    e.g. task extraction's "Set 2 deliverables") never steers the reply.
         conversational_verdicts = [
-            v for v in active_verdicts if v.expert_name != "task_extraction"
+            v for v in active_verdicts if _surfaces(configs.get(v.expert_name))
         ]
 
         if conversational_verdicts:
             primary = conversational_verdicts[0]
             favored_expert = primary.expert_name
-
-            # Set tone from highest-priority flagging expert
-            directive.tone = self._tone_map.get(primary.expert_name, "neutral")
-
+            directive.tone = self._tone_for(primary, configs)
             # Primary action — ONE direction from the highest-priority expert.
             directive.primary_action = primary.recommendation
         elif active_verdicts:
-            # Only task_extraction flagged — keep neutral tone, no action directives
             favored_expert = active_verdicts[0].expert_name
             directive.tone = "neutral"
 
-        # Must-avoid from medical/legal
+        # What the reply must avoid, from each flagging verdict's rule.
         for v in active_verdicts:
-            if v.expert_name in ("medical", "legal"):
-                if v.verdict in ("high", "critical"):
-                    if v.expert_name == "medical":
-                        directive.must_avoid.append("specific medical diagnoses or treatment plans")
-                        directive.must_avoid.append("home remedies, exercises, or personal health tips")
-                    elif v.expert_name == "legal":
-                        directive.must_avoid.append("specific legal advice or interpretations")
-                        directive.must_avoid.append("personal tips on how to handle the legal matter")
+            directive.must_avoid.extend(_rule(configs, v).must_avoid if _rule(configs, v) else [])
 
-        # 3. Handle probing agent (follow-up decisions + deliverable signals)
-        probing_verdict = self._find_verdict(sorted_verdicts, "probing")
-        if probing_verdict and probing_verdict.success:
-            if probing_verdict.verdict == "needs_clarification":
+        # 3. Steering reactions, in priority order. A follow-up or redirect is
+        #    taken from the first expert whose verdict asks for one; asking about
+        #    the pending items only fills the gap when nothing steered yet
+        #    (priority is load-bearing: a targeted follow-up beats a generic one).
+        for v in sorted_verdicts:
+            rule = _rule(configs, v)
+            if not v.success or rule is None:
+                continue
+            if rule.reaction == "ask_followup" and not _steered(directive):
                 directive.ask_followup = True
-                directive.followup_question = probing_verdict.recommendation
-            elif probing_verdict.verdict == "gentle_redirect":
+                directive.followup_question = _reaction_text(v, rule)
+            elif rule.reaction == "redirect" and not _steered(directive):
                 directive.force_redirect = True
-                directive.redirect_message = probing_verdict.recommendation
+                directive.redirect_message = _reaction_text(v, rule)
 
-            # Extract deliverable signals from probing's raw output
-            signals = probing_verdict.raw_output.get("deliverable_signals", [])
+        for v in sorted_verdicts:
+            signals = v.raw_output.get("deliverable_signals", []) if v.success else []
             if isinstance(signals, list) and signals:
                 directive.deliverable_signals = [s for s in signals if isinstance(s, str)]
+                break
 
-        # 4. Handle timekeeper — when stuck, steer toward the pending deliverable
-        #    to prevent going in circles, but ONLY if probing hasn't already
-        #    steered this turn. Priority ordering is load-bearing here: probing
-        #    (60) outranks timekeeper (50), so probing's targeted follow-up or
-        #    redirect wins. With the Input Gate removed (#363) both experts report
-        #    every turn, so this gap-fill (act only when probing tapped out to
-        #    no_probe) is the common path, not an edge case.
-        timekeeper_verdict = self._find_verdict(sorted_verdicts, "timekeeper")
-        probing_already_steered = directive.ask_followup or directive.force_redirect
-        if timekeeper_verdict and timekeeper_verdict.success and not probing_already_steered:
-            if timekeeper_verdict.verdict in ("stuck", "force_advance"):
-                # Build a specific redirect using pending deliverable info
-                redirect = timekeeper_verdict.recommendation or ""
-                if sm_context:
-                    pending = [
-                        d.get("description", d.get("key", ""))
-                        for d in sm_context.get("deliverables", [])
-                        if d.get("status") == "pending"
-                    ]
-                    if pending:
-                        redirect = f"Ask directly about: {', '.join(pending[:2])}. Do not ask follow-up questions about other topics."
-
-                directive.ask_followup = True
-                directive.followup_question = redirect
+        # 4. Ask about the pending items (e.g. the conversation is stuck).
+        for v in sorted_verdicts:
+            rule = _rule(configs, v)
+            if not v.success or rule is None or rule.reaction != "ask_about_pending":
+                continue
+            if _steered(directive):
+                break
+            redirect = _reaction_text(v, rule)
+            if sm_context:
+                pending = [
+                    d.get("description", d.get("key", ""))
+                    for d in sm_context.get("deliverables", [])
+                    if d.get("status") == "pending"
+                ]
+                if pending:
+                    redirect = f"Ask directly about: {', '.join(pending[:2])}. Do not ask follow-up questions about other topics."
+            directive.ask_followup = True
+            directive.followup_question = redirect
+            break
 
         # 5. Build expert summary
         directive.expert_summary = self._build_summary(sorted_verdicts)
 
         # 6. Detect conflicts
-        conflicts = self._detect_conflicts(active_verdicts)
+        conflicts = self._detect_conflicts(active_verdicts, configs)
 
         latency_ms = (time.time() - start_time) * 1000
         return ArbitrationResult(
@@ -280,20 +252,12 @@ class Arbitration:
             latency_ms=latency_ms,
         )
 
-    def _is_flagging(self, verdict: ExpertVerdict) -> bool:
-        """Check if the expert's verdict indicates it flagged something."""
-        flagging_set = self._flagging_verdicts.get(verdict.expert_name)
-        if flagging_set:
-            return verdict.verdict in flagging_set
-        # For unknown experts, any non-empty verdict is considered flagging
-        return bool(verdict.verdict) and verdict.verdict not in ("none", "clear", "no_probe", "on_track")
-
-    def _find_verdict(self, verdicts: List[ExpertVerdict], expert_name: str) -> Optional[ExpertVerdict]:
-        """Find a specific expert's verdict in the list."""
-        for v in verdicts:
-            if v.expert_name == expert_name:
-                return v
-        return None
+    def _tone_for(self, verdict: ExpertVerdict, configs: Dict[str, ExpertConfig]) -> str:
+        """A tone_map entry for the expert (configuration) wins, then the verdict's rule."""
+        if verdict.expert_name in self._tone_map:
+            return self._tone_map[verdict.expert_name]
+        rule = _rule(configs, verdict)
+        return (rule.tone if rule else "") or "neutral"
 
     def _select_directive(
         self,
@@ -305,8 +269,8 @@ class Arbitration:
         Precedence per verdict, in priority order:
         1. An explicit ``verdict_directives[verdict]`` entry on the expert config
            (an explicit "inform" entry is honored — it suppresses the fallback).
-        2. Otherwise, the legacy noise_detection "unclear" → short_circuit fallback,
-           so un-migrated configs still ask the user to repeat.
+        (The old noise_detection "unclear" fallback is gone: its file says
+        ``short_circuit``, which is what asks the participant to repeat.)
 
         Returns (winning_verdict, VerdictDirective) or (None, None).
         """
@@ -317,8 +281,6 @@ class Arbitration:
             vd: Optional[VerdictDirective] = None
             if cfg is not None and v.verdict in cfg.verdict_directives:
                 vd = cfg.verdict_directives[v.verdict]
-            elif v.expert_name == "noise_detection" and v.verdict == "unclear":
-                vd = VerdictDirective(action="short_circuit", template="")
             if vd is not None and vd.action != "inform":
                 return v, vd
         return None, None
@@ -375,23 +337,58 @@ class Arbitration:
             if v.success
         )
 
-    def _detect_conflicts(self, active_verdicts: List[ExpertVerdict]) -> List[str]:
-        """Detect contradictions between expert verdicts."""
-        conflicts = []
-
+    def _detect_conflicts(
+        self, active_verdicts: List[ExpertVerdict], configs: Dict[str, ExpertConfig]
+    ) -> List[str]:
+        """A flagging verdict whose rule ``overrides`` another flagging expert."""
+        conflicts: List[str] = []
         if len(active_verdicts) < 2:
             return conflicts
-
-        # Check if medical/legal wants caution but probing wants more questions
-        safety_experts = [v for v in active_verdicts if v.expert_name in ("medical", "legal")]
-        probing_expert = next((v for v in active_verdicts if v.expert_name == "probing"), None)
-
-        if safety_experts and probing_expert:
-            for se in safety_experts:
-                if se.verdict in ("high", "critical"):
-                    conflicts.append(
-                        f"{se.expert_name} ({se.verdict}) conflicts with probing ({probing_expert.verdict}): "
-                        f"safety takes priority"
-                    )
-
+        flagged = {v.expert_name: v for v in active_verdicts}
+        for v in active_verdicts:
+            rule = _rule(configs, v)
+            for other in (rule.overrides if rule else []):
+                loser = flagged.get(other)
+                if loser is None or other == v.expert_name:
+                    continue
+                cfg = configs.get(v.expert_name)
+                winner = "safety" if cfg is not None and cfg.safety else v.expert_name
+                conflicts.append(
+                    f"{v.expert_name} ({v.verdict}) conflicts with {other} ({loser.verdict}): "
+                    f"{winner} takes priority"
+                )
         return conflicts
+
+
+def _rule(configs: Dict[str, ExpertConfig], verdict: ExpertVerdict) -> Optional[VerdictDirective]:
+    cfg = configs.get(verdict.expert_name)
+    return cfg.verdict_directives.get(verdict.verdict) if cfg is not None else None
+
+
+def _is_flagging(verdict: ExpertVerdict, configs: Dict[str, ExpertConfig]) -> bool:
+    """Whether the verdict flags something: its rule's ``flag`` when set,
+    otherwise any verdict but the quiet ones (an expert without rules)."""
+    rule = _rule(configs, verdict)
+    if rule is not None and rule.flag is not None:
+        return rule.flag
+    cfg = configs.get(verdict.expert_name)
+    if cfg is not None and any(d.flag is not None for d in cfg.verdict_directives.values()):
+        return False  # the expert says which verdicts flag; this one isn't listed
+    return bool(verdict.verdict) and verdict.verdict not in _QUIET_VERDICTS
+
+
+def _surfaces(cfg: Optional[ExpertConfig]) -> bool:
+    return cfg is None or cfg.surfaces_recommendation
+
+
+def _steered(directive: ResponseDirective) -> bool:
+    return directive.ask_followup or directive.force_redirect
+
+
+def _reaction_text(verdict: ExpertVerdict, rule: VerdictDirective) -> str:
+    """The text a reaction carries: the verdict field its rule names, else the recommendation."""
+    field_name = rule.reaction_field or "recommendation"
+    if field_name == "recommendation":
+        return verdict.recommendation or ""
+    value = verdict.raw_output.get(field_name)
+    return str(value) if value else (verdict.recommendation or "")

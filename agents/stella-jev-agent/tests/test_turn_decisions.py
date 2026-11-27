@@ -14,7 +14,8 @@ from stella_v2_agent.models.arbitration_result import ResponseDirective
 from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
-from stella_jev_agent.agent import _OWN_EXPERTS_DIR, COMMON, StellaJevAgent
+from stella_jev_agent.agent import _OWN_EXPERTS_DIR, StellaJevAgent
+from stella_jev_agent.pool import COMMON
 from stella_jev_agent.ask_back import AFTER_ASK_BACK_INSTRUCTION, ASK_BACK_INSTRUCTION, AskBack
 from stella_jev_agent.jev import JevUnavailable
 from stella_jev_agent.jev import JevClient

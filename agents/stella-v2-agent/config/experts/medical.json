@@ -19,12 +19,16 @@
     "none": {
       "action": "inform",
       "template": "",
-      "description": "TAP OUT (default). No health concern, or only general wellness/lifestyle talk (exercise, sleep, diet)."
+      "description": "TAP OUT (default). No health concern, or only general wellness/lifestyle talk (exercise, sleep, diet).",
+      "flag": false,
+      "tone": "cautious"
     },
     "low": {
       "action": "inform",
       "template": "",
-      "description": "ENGAGE. A real but mild, non-acute health matter raised in passing — soft caution only."
+      "description": "ENGAGE. A real but mild, non-acute health matter raised in passing — soft caution only.",
+      "flag": true,
+      "tone": "cautious"
     },
     "high": {
       "action": "prepend",
@@ -32,7 +36,16 @@
       "template_i18n": {
         "de": "Ich möchte hier vorsichtig sein — ich kann keine medizinischen Ratschläge geben, also sprich bitte alles Wichtige mit einer qualifizierten Fachperson ab."
       },
-      "description": "ENGAGE. A specific health concern: symptoms, medication, injury, mental health, or a request for diagnosis."
+      "description": "ENGAGE. A specific health concern: symptoms, medication, injury, mental health, or a request for diagnosis.",
+      "flag": true,
+      "tone": "cautious",
+      "must_avoid": [
+        "specific medical diagnoses or treatment plans",
+        "home remedies, exercises, or personal health tips"
+      ],
+      "overrides": [
+        "probing"
+      ]
     },
     "critical": {
       "action": "override",
@@ -40,7 +53,17 @@
       "template_i18n": {
         "de": "Das klingt, als könnte es ernst sein. Wenn du in Gefahr bist oder das ein Notfall ist, wende dich bitte sofort an den Rettungsdienst oder eine medizinische Fachperson. Ich kann keine medizinischen Ratschläge geben, aber ich möchte sicherstellen, dass du die richtige Hilfe bekommst."
       },
-      "description": "ENGAGE. A medical emergency or suicidal ideation."
+      "description": "ENGAGE. A medical emergency or suicidal ideation.",
+      "flag": true,
+      "tone": "cautious",
+      "must_avoid": [
+        "specific medical diagnoses or treatment plans",
+        "home remedies, exercises, or personal health tips"
+      ],
+      "overrides": [
+        "probing"
+      ]
     }
-  }
+  },
+  "safety": true
 }
