@@ -9,8 +9,8 @@ type: software
 license: MIT
 repository-code: "https://github.com/c4dhi/STELLA"
 url: "https://c4dhi.github.io/STELLA/"
-version: "2.1.0" # x-release-please-version
-date-released: "2026-11-23"
+version: "2.2.0" # x-release-please-version
+date-released: "2026-11-30"
 authors:
   - name: "Universität St. Gallen (HSG)"
   - name: "University of Zurich (UZH)"

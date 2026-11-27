@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-11-30
+
+What an expert's verdict leads to is now part of the configuration. STELLA V2
+and Jev read which verdicts count as warnings, what follows each one, and when
+one expert skips another from the expert files. The Configurator shows these
+rules for every verdict, and medical and legal can only be switched off in a
+separate, confirmed step. Public projects can run a companion, show a welcome
+message and a QR code, and keep their session-length cap. Text chat no longer
+loses or misplaces early messages, and a resumed companion no longer crashes
+after a barge-in. MCP clients can manage projects and much more. Ships Agent
+SDK 0.12.0.
+
+### Upgrade notes
+
+- **Back up the database before you upgrade.** The deploy applies one migration on its own: a new nullable column for a public project's welcome message
+- **Agent SDK 0.12.0 is on PyPI before this release reaches production.** Uploaded agents keep working without a rebuild. Rebuild them to pick up the fixes for text typed while speech is loading and for text sent from `on_ready()`
+- **Medical and legal are safety experts now, in STELLA V2 and Jev.** A saved configuration with `enabled: false` on one of them no longer switches it off; turn it off in the Configurator, which asks for a confirmation and records who did it and when. A prompt the session can't fill no longer switches them off either
+- **Saved Pipeline Configurations are checked against the verdict rules the agent declares.** A configuration that uses a reaction or rule field the agent doesn't declare is marked outdated and can't be deployed until it is fixed and saved again. On the default configurations, V2 and Jev decide every turn exactly as before
+- **The arbitration "Tone Map" setting is empty by default** and only overrides the tone an expert's verdicts set. A configuration that set it keeps its values
+- **Redeploy running agents** after the upgrade so they run the new images; a running agent keeps the image it started with
+
 ### Added
 
 - **MCP clients can now manage projects.** `projects_create`, `_get`, `_stats` and `_update`; set up and read a project's public link (`projects_public_update`, `_public_link_get`); and list its collaborators and metrics — the same JSON-RPC interface personas and plan templates already used. A project's raw plan, pipeline config and env vars are never sent over this interface, only their ids (#1025)
@@ -15,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MCP clients who are system admins can now delete things, and reach the admin dashboard.** `projects_delete`, `sessions_delete`, `agent_configurations_delete`, `personas_delete`, `plan_templates_delete`, `env_var_templates_delete` and `agent_uploads_delete`; `admin_dashboard_get`, `admin_users_list`, `admin_users_verify`, `admin_users_set_admin`, `admin_capacity_get` and `admin_capacity_record`. Nobody else sees these tools, and calling one by name answers "tool not found" (#202)
 - A public project's link now shows a QR code above it, in the "Public Project Created!" step and in the public link dialog (#204)
 - In the participant's chat, messages one person sends back to back (within two minutes, with no reply in between) are grouped as in other chat apps: the avatar shows once and the time only under the last one (#1058)
-- Public projects can show participants a welcome message. Set it in public setup or later in the public link dialog; every participant who joins through the link reads it on screen before the session (the agent doesn't say it) (#1046)
+- Public projects can show participants a welcome message. Set it in public setup or later in the public link dialog; every participant who joins through the link reads it on screen before the session (the agent doesn't say it). MCP clients set it with `projects_public_update` (`welcomeMessage`) (#1046)
 - **Groundwork for verdict rules in the configuration.** An agent's `agent.yaml` can now say which reactions and rule fields each pipeline step acts on, and STELLA refuses an expert file or saved configuration that uses one it doesn't. A saved configuration overrides an expert's verdicts field by field, so one saved earlier keeps any new field's default. An expert marked `safety: true` can only be turned off with a confirmed, recorded step. The built-in agents switch to these rules in follow-up changes, so nothing changes for them yet (#1060)
 
 ### Fixed
@@ -25,21 +46,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A companion woken after a pause greets in the conversation's language.** The restarted agent knew no language until the user spoke, so the greeting on waking came out in English. It now takes the persona's language, or else the language of the user's last messages (#159)
 - **A resumed companion no longer crashes if the user ever interrupted her.** Since 2.1.0, an agent resuming after an auto-pause read the transcript's notes and stopped with an error on a barge-in note, so she never came back to a conversation in which the user had cut in. Notes that are not her own decisions are now skipped (#159)
 - **A public project can run its agent as a companion.** The public setup offered only plan mode, even for agents that can be companions. It now asks "How should it run?" like the deploy dialog, and in companion mode you pick the activities she may offer. Every participant's agent starts that way. Plan-mode and existing public projects are unchanged (#1018)
-- **Agent upload: tightened Dockerfile validation.** The base-image allowlist check is more thorough and harder to bypass (#210)
+- **Agent upload: Dockerfile checks are stricter** (#210)
 - **Agent upload: Dockerfile validation now uses a real parser, and the built image's base is checked again after the build.** (#211)
 - **A text-only session no longer opens with a window where the agent can speak.** An agent joining, restarting, or waking from an auto-pause into a session locked to the Text face used to start in voice and only learn it was text-only from the screen's own announcement, sent a moment after it joins; under a slow STT/TTS connect that announcement could be sent before the agent was ready to receive it and never arrive at all, so a reply generated in that window could be spoken instead of only shown as text (#1016). The deployment now tells the agent at spawn whenever the invitation it is joining already exists and is text-locked, so it starts in text from the first instant; a participant's own screen also now tells every agent already in the room, or that joins afterward, the room's real mode (voice or text) as soon as it connects, which is what closes the gap for an invitation created after the agent was already deployed. The mode is one value for the whole agent, so only a participant's own screen sends it: opening a running text-only session to look at it, from the session page, never switches the agent to voice. For researchers: a text-only study session should no longer have any agent audio in its recording from before the first reply; see [Text sessions](https://c4dhi.github.io/STELLA/docs/guides/text-sessions#what-it-changes-for-the-agent)
 - **The task panel no longer flashes when you come back to a companion session.** Reloading or resuming a session opened the panel for any activity in its history, even a finished one, and the agent's first update closed it again. It now opens only for an activity that is still running, or when you pinned it open (#1011)
 - The GPU STT and TTS images no longer install Python from the deadsnakes PPA, which answered 503 on about half its downloads and failed the 2.1.0 production deploy three times. Python 3.11 is now built from python.org's own source tarball instead (#1010)
 - **The hardware-fit traffic light now shows one numbered box per session count, instead of an unlabelled strip.** Each box is coloured by its own reading, with a "Sessions at once" label and hover text naming the reading and whether it comes from the load test (#1053)
 - **Public-link sessions now keep the project's maximum length.** The non-blocking public join (the one the page actually uses) created its invitation without the project's session-duration cap, so a public-link participant's session ran with no time limit (#1054)
+- **Deleting a project while a participant is in the call ends the call cleanly.** The participant's page used to keep loading messages forever. Deleting a project now closes each of its live sessions first, and the participant sees a "Conversation ended" screen instead of a connection error, with no further retries (#1047)
 - **A text message typed while speech is still loading is no longer lost.** While the agent waits for STT/TTS at start (up to `STELLA_SPEECH_WAIT_SECONDS`), nothing was listening for a participant's typed chat message, so anything sent during "Getting ready to listen…" vanished with no trace. It is now kept and answered, in order, once the agent is ready (#999)
 - **A cut-off agent reply on the participant's text screen no longer keeps showing "… is writing…" forever.** When the agent's reply was interrupted (e.g. by a barge-in) it never got its own final chunk, so the message's "still coming in" flag was never cleared. It now clears as soon as the agent's next reply starts (#1065)
 
 ### Changed
 
 - **The session page shows emotion tags only with Debug on.** It used to put the agent's emotion tags, such as "[happy]", back into every live reply, which read like a leak, most visibly with speech off. They now appear only while the chat's Debug toggle is on. Participants never saw them, and nothing changes for them (#1026)
+- **Agent SDK 0.12.0**: verdict rules and the safety floor as configuration, text kept while speech services load, and text from `on_ready()` shown and spoken. See the [SDK changelog](https://github.com/c4dhi/STELLA/blob/main/agents/stella-ai-agent-sdk/CHANGELOG.md)
 - **Dependencies updated**, minor and patch updates for the backend, frontend and docs site, including LiveKit (`livekit-client` 2.24→2.25, `livekit-server-sdk` 2.19→2.20, `@livekit/rtc-node` 1.2.2→1.2.3) and NestJS (12.5→12.6)
-- **ELIAS-Interviewer moved to its own repo** (#216)
+- **The ELIAS-Interviewer agent moved to its own repository** and is no longer under `custom-agents/` (#216)
 - **The V2 agent reads what each expert verdict leads to from the configuration.** Which verdicts count as a flag, the tone, what the reply must avoid, the follow-up, redirect or "ask about what's still open" reaction, and which expert wins a conflict now come from the expert's file, and a saved configuration can change them verdict by verdict. They used to be tables in V2's code. Medical and legal are safety experts: switching one off needs a recorded, confirmed step, and a prompt the session can't fill no longer turns them off. The default configuration behaves exactly as before, and Jev, which uses the same step, keeps its behaviour too. The arbitration "Tone Map" setting is now empty by default and only overrides the tone set on an expert's verdicts (#1061)
 - **Jev reads its ask-back, safety step-down and skip rules from the configuration.** When Jev asks back (`common_sense`'s `doesnt_fit`), how sure it must be of a medical or legal "low" or "high" before it counts, and when task extraction or the companion router is skipped now come from the expert files and a new Expert Pool setting, **Gates**, instead of code. Medical and legal are safety experts in Jev too: `enabled: false` alone no longer switches them off. The thresholds keep working as before, and on the default configuration Jev decides every turn exactly as before (#1062)
 - **The Configurator shows each verdict's rules and asks before a safety check is turned off.** Under each verdict, an expert's panel now shows what the agent acts on: for V2, whether it counts as a warning and what follows; for Jev, how sure the agent must be and what the verdict becomes otherwise. Medical and legal carry a **safety** badge, and turning one off asks for a confirmation, which is saved with who did it and when. Jev's **Gates** setting can be edited, one row per gate. The Configurator now draws every agent's stages from what the agent declares, so a new agent's stages show up without changes to the Configurator (#1063)
