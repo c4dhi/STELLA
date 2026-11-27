@@ -15,13 +15,14 @@ from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
 from stella_jev_agent.agent import _OWN_EXPERTS_DIR, StellaJevAgent
-from stella_jev_agent.pool import COMMON
 from stella_jev_agent.ask_back import AFTER_ASK_BACK_INSTRUCTION, ASK_BACK_INSTRUCTION, AskBack
 from stella_jev_agent.jev import JevUnavailable
 from stella_jev_agent.jev import JevClient
 from stella_jev_agent.pool import JevExpertPool, current_task
 from stella_jev_agent.questions import DOESNT_FIT, SLIGHT_DOUBT
 from stella_jev_agent.stages import JevBargeInEvaluator, JevResponseGenerator, NoBridge
+
+COMMON = "common_sense"
 
 
 def _answer(**probabilities: float) -> SimpleNamespace:
@@ -481,11 +482,14 @@ def test_an_unsure_medical_high_steps_down_and_prepends_nothing():
 
 
 def test_safety_levels_need_the_floor_but_an_emergency_never_does():
-    from stella_jev_agent.questions import settle_safety
-    assert settle_safety({"none": 0.6, "low": 0.25, "high": 0.15}, "low", 0.6) == "none"
-    assert settle_safety({"none": 0.1, "low": 0.25, "high": 0.65}, "high", 0.6) == "high"
-    assert settle_safety({"none": 0.5, "critical": 0.3}, "critical", 0.6) == "critical"
-    assert settle_safety({"fits": 0.4}, "fits", 0.6) == "fits"
+    # The step-down rules live in the medical file now (#223); the floor is safety_threshold.
+    pool = Pool(FakeJev(_answers()), AskBack())
+    medical = pool._registry.get("medical")
+    assert pool.safety_threshold == 0.6
+    assert pool._settle(medical, "low", {"none": 0.6, "low": 0.25, "high": 0.15}) == "none"
+    assert pool._settle(medical, "high", {"none": 0.1, "low": 0.25, "high": 0.65}) == "high"
+    assert pool._settle(medical, "critical", {"none": 0.5, "critical": 0.3}) == "critical"
+    assert pool._settle(pool._registry.get("probing"), "no_probe", {"no_probe": 0.4}) == "no_probe"
 
 
 def test_jev_reads_the_configured_setting():
@@ -514,6 +518,7 @@ def test_the_pool_takes_its_defaults_from_agent_yaml_and_resets_between_configur
                                 ("jev_timeout_ms", 900)]
         )
         + "        - { id: expert_context, type: text }\n"
+        + "        - { id: gates, type: gate_list, default: [] }\n"
     )
     jev = FakeJev(_answers())
     jev.timeout_s = 1.5
@@ -549,3 +554,17 @@ def test_without_any_history_placeholder_jev_reads_only_the_last_message():
     history = [{"role": "user", "content": f"turn {i}"} for i in range(20)]
     asyncio.run(pool.run(NAMES, "said", history, {}))
     assert jev.asked[0][0]["conversation"] == ["user: turn 19"]
+
+
+def test_a_gate_on_a_question_of_jevs_own_uses_its_stated_confidence_even_zero():
+    from stella_jev_agent.pool import read_gates
+    pool = Pool(FakeJev(_answers(has_answer=0.5)), AskBack())
+    # Unset: skip_threshold (0.8) applies, and P(no)=0.5 doesn't reach it.
+    pool.gates = read_gates([{"skip": "task_extraction", "when": "has_answer", "verdicts": ["no"]}])
+    _run(pool)
+    assert "task_extraction" in sum(pool.language_model_calls, [])
+    # A stated 0 is 0: the gate always holds.
+    pool = Pool(FakeJev(_answers(has_answer=0.5)), AskBack())
+    pool.gates = read_gates([{"skip": "task_extraction", "when": "has_answer", "verdicts": ["no"], "min_confidence": 0}])
+    _run(pool)
+    assert "task_extraction" not in sum(pool.language_model_calls, [])

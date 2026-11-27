@@ -114,4 +114,15 @@ describe('checkConfigSettingValue', () => {
     expect(checkConfigSettingValue(s({ type: 'key_value' }), { a: 'b' })).toBeNull()
     expect(checkConfigSettingValue(s({ type: 'expert_list' }), [])).toBe('must be an object')
   })
+
+  it('checks a gate list (#223)', () => {
+    const gate = s({ type: 'gate_list' })
+    expect(checkConfigSettingValue(gate, [{ skip: 'task_extraction', when: 'has_answer', verdicts: ['no'] }])).toBeNull()
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: ['c'], min_confidence: 0.8 }])).toBeNull()
+    expect(checkConfigSettingValue(gate, {})).toBe('must be a list of gates')
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', verdicts: ['c'] }])).toMatch(/needs "when"/)
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: [] }])).toMatch(/needs "verdicts"/)
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: ['c'], min_confidence: 2 }])).toMatch(/min_confidence/)
+    expect(checkConfigSettingValue(gate, [{ skip: 'a', when: 'b', verdicts: ['c'], also: 1 }])).toMatch(/unknown keys: also/)
+  })
 })

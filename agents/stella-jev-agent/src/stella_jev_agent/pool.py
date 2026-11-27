@@ -17,8 +17,9 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from stella_agent_sdk.experts.verdict_rules import DEFAULT_NEVER_STEP_DOWN, Gate, settle_verdict
 from stella_agent_sdk.prompts import history_turns
 from stella_agent_sdk.settings import AgentSettings
 
@@ -35,22 +36,18 @@ from stella_jev_agent.scope import Scope, scoped
 from stella_v2_agent.companion import commands_from
 from typesafe_sdk import Choice
 
-from stella_jev_agent.questions import (
-    ACTIVITY_INTENT, DOESNT_FIT, FITS, HAS_ANSWER, SLIGHT_DOUBT, settle_safety, turn_state,
-)
+from stella_jev_agent.questions import OWN_QUESTIONS, turn_state
 
 logger = logging.getLogger(__name__)
 
-COMMON = "common_sense"
 # How much conversation Jev's own questions read when no expert prompt it answers asks for any.
 OWN_QUESTIONS_TURNS = 1
-# These verdicts speak a fixed template instead of the reply, so nothing could ask back.
-OVERRIDING_EXPERTS = {"medical", "legal"}
+# A verdict with one of these actions speaks a fixed template instead of the reply,
+# so nothing could ask back.
+REPLACING_ACTIONS = ("override", "short_circuit")
 # Extraction is where V2 skips a stalled optional task, so it must run on a stalled plan.
 STALLED_AFTER_TURNS = 3
 EXTRACTION = "task_extraction"
-ROUTER = "companion_router"
-NEEDS_CLARIFICATION = "needs_clarification"
 ANSWERED_TASK = "answered_task"
 NEXT_STEP = "next_step"
 # Carries Jev's pick to the extraction run, and is taken out before extraction reads the context.
@@ -71,8 +68,19 @@ def answered_by_jev(config: Any) -> bool:
     or calls tools, such as task_extraction, needs a language model."""
     return bool(config and config.enabled and config.verdict_directives and not config.can_call_functions)
 
-# A language-model expert is skipped when Jev says it has nothing to do.
-GATES = {EXTRACTION: ("has_answer", HAS_ANSWER, "no"), ROUTER: ("activity_intent", ACTIVITY_INTENT, "none")}
+ASK_BACK = "ask_back"
+
+
+def read_gates(value: Any) -> List[Tuple[Gate, Optional[float]]]:
+    """The expert_pool's ``gates`` setting: when a language-model expert is skipped.
+    Each gate with the ``min_confidence`` it states, or None when it states none
+    (a gate on one of Jev's own questions then uses skip_threshold; 0 is a real 0)."""
+    gates = []
+    for raw in value if isinstance(value, list) else []:
+        gate = Gate.parse(raw)
+        if gate is not None:
+            gates.append((gate, gate.min_confidence if "min_confidence" in raw else None))
+    return gates
 
 
 @dataclass
@@ -94,8 +102,19 @@ def is_stalled(sm_context: Dict[str, Any]) -> bool:
     return isinstance(progress, dict) and progress.get("turns_without_deliverable", 0) >= STALLED_AFTER_TURNS
 
 
-def overridden(verdicts: List[ExpertVerdict]) -> bool:
-    return any(v.expert_name in OVERRIDING_EXPERTS and v.verdict == "critical" for v in verdicts)
+def overridden(verdicts: List[ExpertVerdict], registry: Any) -> bool:
+    """Whether a verdict this turn replaces the reply with its template."""
+    return any(_rule(registry, v.expert_name, v.verdict).get("action") in REPLACING_ACTIONS for v in verdicts)
+
+
+def _rule(registry: Any, name: str, verdict: str) -> Dict[str, Any]:
+    config = registry.get(name) if registry is not None else None
+    directive = config.verdict_directives.get(verdict) if config is not None else None
+    return directive.to_dict() if directive is not None else {}
+
+
+def _asks_back(registry: Any, verdict: ExpertVerdict) -> bool:
+    return _rule(registry, verdict.expert_name, verdict.verdict).get("reaction") == ASK_BACK
 
 
 def current_task(sm_context: Dict[str, Any]) -> str:
@@ -168,8 +187,11 @@ class JevExpertPool(ExpertPool):
         self.forecast_threshold = get("forecast_threshold")
         # Stricter, since nobody asked: a wrong one saves what was not said, or overwrites an answer.
         self.also_threshold = get("also_threshold")
-        # How sure Jev must be of a medical or legal "low" or "high".
+        # How sure Jev must be of a safety expert's verdict that can step down
+        # (medical or legal "low" or "high"), when the verdict doesn't say.
         self.safety_threshold = get("safety_threshold")
+        # When a language-model expert is skipped because Jev says it has nothing to do.
+        self.gates = read_gates(get("gates"))
         # What kind of conversation this is, for every question Jev answers.
         self.expert_context = str(get("expert_context") or "")
         # These two belong to objects with their own defaults (JEV_TIMEOUT_MS sets the
@@ -187,9 +209,9 @@ class JevExpertPool(ExpertPool):
         sm_context: Dict[str, Any],
     ) -> List[ExpertVerdict]:
         questions: Dict[str, Any] = self.expert_questions(expert_names, user_input, conversation_history, sm_context)
-        for name, (key, question, _) in GATES.items():
-            if name in expert_names:
-                questions[key] = question
+        for gate, _ in self.gates:
+            if gate.skip in expert_names and gate.when in OWN_QUESTIONS:
+                questions[gate.when] = OWN_QUESTIONS[gate.when]
 
         self.forecast = TurnForecast()
         self._held = None
@@ -228,12 +250,14 @@ class JevExpertPool(ExpertPool):
         also = read_also(result.answers, tasks, fixes, self.also_threshold, self.last_pick)
         self.last_picks = ([self.last_pick] if self.last_pick else []) + also
         verdicts = self._verdicts(expert_names, result)
-        common = next((v for v in verdicts if v.expert_name == COMMON), None)
-        wanted = bool(common and common.verdict == DOESNT_FIT)
-        asking = self._ask_back.decide(wanted and not overridden(verdicts))
-        if common and wanted and not asking:
-            common.verdict = SLIGHT_DOUBT
-            common.recommendation = self._guidance(COMMON, SLIGHT_DOUBT)
+        asker = next((v for v in verdicts if _asks_back(self._registry, v)), None)
+        asking = self._ask_back.decide(asker is not None and not overridden(verdicts, self._registry))
+        if asker is not None and not asking:
+            # Not asking back after all: the verdict one level down.
+            below = _rule(self._registry, asker.expert_name, asker.verdict).get("below")
+            if below:
+                asker.verdict = below
+                asker.recommendation = self._guidance(asker.expert_name, below)
 
         remaining = [] if asking else self._language_model_experts(expert_names, result, sm_context)
         run_llm = lambda names: self._run_experts(
@@ -402,22 +426,15 @@ class JevExpertPool(ExpertPool):
             choice = answer.choice
             probabilities = dict(answer.probabilities)
             raw: Dict[str, Any] = {"provider": "jev", "probabilities": probabilities}
-            if name == COMMON and DOESNT_FIT in probabilities:
-                p_bad = probabilities[DOESNT_FIT]
-                if p_bad >= self.ask_threshold:
-                    choice = DOESNT_FIT
-                elif p_bad + probabilities.get(SLIGHT_DOUBT, 0.0) >= self.ask_threshold:
-                    choice = SLIGHT_DOUBT
-                else:
-                    choice = FITS
-            elif name in OVERRIDING_EXPERTS:
-                settled = settle_safety(probabilities, choice, self.safety_threshold)
-                if settled != choice:
-                    logger.info(f"Jev {name}: {choice} ({probabilities.get(choice, 0):.2f}) is below "
-                                f"{self.safety_threshold}, taken as {settled}")
-                    raw["jev_choice"] = choice
-                    choice = settled
             config = self._registry.get(name)
+            settled = self._settle(config, choice, probabilities)
+            if settled != choice and config.step_down_from == "choice":
+                # Stepped down from Jev's own choice: kept for the analytics. (An expert
+                # weighed from its most severe verdict has no single choice to step from.)
+                logger.info(f"Jev {name}: {choice} ({probabilities.get(choice, 0):.2f}) is not sure enough, "
+                            f"taken as {settled}")
+                raw["jev_choice"] = choice
+            choice = settled
             verdicts.append(ExpertVerdict(
                 expert_name=name,
                 verdict=choice,
@@ -429,6 +446,44 @@ class JevExpertPool(ExpertPool):
             ))
         return verdicts
 
+    def _settle(self, config: Any, choice: str, probabilities: Dict[str, float]) -> str:
+        """The verdict to act on, from the expert's step-down rules (``below``,
+        ``min_confidence``). A verdict without its own ``min_confidence`` uses the
+        node's safety_threshold on a safety expert and its ask_threshold otherwise."""
+        if config is None:
+            return choice
+        chain = {v: d for v, d in config.verdict_directives.items() if d.below}
+        if not chain:
+            return choice
+        default = self.safety_threshold if config.safety else self.ask_threshold
+        directives = {
+            v: {"below": d.below, "min_confidence": d.min_confidence if d.min_confidence is not None else default}
+            for v, d in chain.items()
+        }
+        keep = (config.never_step_down if config.never_step_down is not None else DEFAULT_NEVER_STEP_DOWN) if config.safety else ()
+        start = choice
+        if config.step_down_from == "most_severe":
+            # The top of the chain: a verdict nothing steps down to.
+            targets = {d.below for d in chain.values()}
+            start = next((v for v in chain if v not in targets), choice)
+        return settle_verdict(start, probabilities, directives, keep)
+
+    def _gated(self, name: str, result: Any) -> bool:
+        """Whether a gate skips this expert. A gate on one of Jev's own questions holds
+        when the gate's answers are at least min_confidence likely (skip_threshold when it
+        names none); a gate on an expert Jev answered, when that is its choice."""
+        for gate, stated in self.gates:
+            answer = result.answers.get(gate.when) if gate.skip == name else None
+            if answer is None:
+                continue
+            if gate.when in OWN_QUESTIONS:
+                p = sum(float(answer.probabilities.get(v, 0.0)) for v in gate.verdicts)
+                if p >= (self.skip_threshold if stated is None else stated):
+                    return True
+            elif answer.choice in gate.verdicts and float(answer.probabilities.get(answer.choice, 0.0)) >= gate.min_confidence:
+                return True
+        return False
+
     def _language_model_experts(
         self, expert_names: List[str], result: Any, sm_context: Dict[str, Any]
     ) -> List[str]:
@@ -437,9 +492,6 @@ class JevExpertPool(ExpertPool):
         # Where Jev said which task was answered, that decides: extraction saves only that task,
         # so it runs exactly when there is one. The other two questions can disagree with it.
         follows_pick = ANSWERED_TASK in result.answers
-        # Too vague to record, by the definition of the answer. The reply probes, and the
-        # value is still in the history when the person says it properly.
-        unclear = "probing" in result.answers and result.answers["probing"].choice == NEEDS_CLARIFICATION
         remaining = []
         answered = set(self._jev_experts(expert_names))
         for name in expert_names:
@@ -448,18 +500,15 @@ class JevExpertPool(ExpertPool):
             if name == EXTRACTION and follows_pick and not always_extract:
                 if not self.last_picks:
                     continue
-            elif name in GATES and not (name == EXTRACTION and always_extract):
-                key, _, nothing_to_do = GATES[name]
-                if result.answers[key].probabilities[nothing_to_do] >= self.skip_threshold:
-                    continue
-                if name == EXTRACTION and unclear:
-                    continue
+            elif not (name == EXTRACTION and always_extract) and self._gated(name, result):
+                # Jev says it has nothing to do (the configuration's gates).
+                continue
             remaining.append(name)
         return remaining
 
     def _settle_llm_ask_back(self, verdicts: List[ExpertVerdict]) -> List[ExpertVerdict]:
-        wanted = any(v.expert_name == COMMON and v.verdict == DOESNT_FIT for v in verdicts)
-        self._ask_back.decide(wanted and not overridden(verdicts))
+        wanted = any(_asks_back(self._registry, v) for v in verdicts)
+        self._ask_back.decide(wanted and not overridden(verdicts, self._registry))
         return verdicts
 
 

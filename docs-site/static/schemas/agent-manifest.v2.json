@@ -611,7 +611,8 @@
                         "string_list",
                         "key_value",
                         "expert_list",
-                        "verdict_directives"
+                        "verdict_directives",
+                        "gate_list"
                       ]
                     },
                     "description": {
@@ -801,7 +802,8 @@
               "string_list",
               "key_value",
               "expert_list",
-              "verdict_directives"
+              "verdict_directives",
+              "gate_list"
             ]
           },
           "label": {

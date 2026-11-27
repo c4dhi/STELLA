@@ -26,7 +26,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-_FILE_ONLY_KEYS = ("safety", "never_step_down", "surfaces_recommendation")
+_FILE_ONLY_KEYS = ("safety", "never_step_down", "surfaces_recommendation", "step_down_from")
 
 
 def _apply_overrides(expert: ExpertConfig, overrides: Dict[str, Any]) -> None:

@@ -43,7 +43,7 @@ import {
 
 const EXPERTS_CAPABILITY = 'experts'
 const EXPERT_CONFIG_PROPERTY_KEYS = ['experts', 'expert_overrides', 'experts_dir', 'custom_experts'] as const
-const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives'] as const
+const VALID_SLOT_TYPES = ['text', 'number', 'select', 'string_list', 'key_value', 'expert_list', 'verdict_directives', 'gate_list'] as const
 
 /**
  * The regex engine for uploaded schemas: it refuses every pattern. Ajv asks it
