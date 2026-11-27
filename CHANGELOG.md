@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The hardware-fit traffic light now shows one numbered box per session count, instead of an unlabelled strip.** Each box is coloured by its own reading, with a "Sessions at once" label and hover text naming the reading and whether it comes from the load test (#1053)
 - **Public-link sessions now keep the project's maximum length.** The non-blocking public join (the one the page actually uses) created its invitation without the project's session-duration cap, so a public-link participant's session ran with no time limit (#1054)
 - **A text message typed while speech is still loading is no longer lost.** While the agent waits for STT/TTS at start (up to `STELLA_SPEECH_WAIT_SECONDS`), nothing was listening for a participant's typed chat message, so anything sent during "Getting ready to listen…" vanished with no trace. It is now kept and answered, in order, once the agent is ready (#999)
+- **A cut-off agent reply on the participant's text screen no longer keeps showing "… is writing…" forever.** When the agent's reply was interrupted (e.g. by a barge-in) it never got its own final chunk, so the message's "still coming in" flag was never cleared. It now clears as soon as the agent's next reply starts (#1065)
 
 ### Changed
 
