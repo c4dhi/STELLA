@@ -26,6 +26,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+_FILE_ONLY_KEYS = ("safety", "never_step_down", "surfaces_recommendation")
+
+
 def _apply_overrides(expert: ExpertConfig, overrides: Dict[str, Any]) -> None:
     """Lay a configuration's entry for one expert over it.
 
@@ -35,6 +38,11 @@ def _apply_overrides(expert: ExpertConfig, overrides: Dict[str, Any]) -> None:
     ``enabled: false`` alone doesn't stop it.
     """
     for key, value in overrides.items():
+        if key in _FILE_ONLY_KEYS:
+            # Set in the expert's file only (STELLA refuses them in a saved
+            # configuration): a saved safety:false would bypass safety_off.
+            logger.warning(f"{expert.name}: ignoring {key!r} from the configuration; it belongs to the expert file")
+            continue
         if key == "verdict_directives":
             current = {k: v.to_dict() for k, v in expert.verdict_directives.items()}
             saved = value if isinstance(value, dict) else {}

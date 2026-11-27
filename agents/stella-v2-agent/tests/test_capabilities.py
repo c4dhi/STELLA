@@ -283,3 +283,17 @@ def test_the_switch_off_reads_no_expert_by_name():
 
     source = inspect.getsource(StellaV2Agent._fit_experts_to_configuration)
     assert '"capabilities"' not in source and "'capabilities'" not in source
+
+
+def test_medical_and_legal_stay_on_under_an_old_compiler_pin():
+    # #221/#222: the safety floor holds whatever compiler the session runs
+    # and whenever the configuration was authored, even with enabled: false.
+    for compiler in ("1.0.0", "1.1.0", "1.2.0"):
+        for authored in (None, "1.0.0", "1.1.0"):
+            agent = _agent_with(compiler)
+            pipeline = _saved(authored=authored)
+            pipeline["nodes"]["expert_pool"] = {"experts": {"medical": {"enabled": False}, "legal": {"enabled": False}}}
+            agent.expert_registry.apply_config(pipeline["nodes"]["expert_pool"])
+            agent._fit_experts_to_configuration(pipeline)
+            enabled = {e.name for e in agent.expert_registry.get_enabled()}
+            assert {"medical", "legal"} <= enabled, (compiler, authored)

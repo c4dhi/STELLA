@@ -40,3 +40,10 @@ def test_a_recorded_safety_off_does():
 def test_medical_and_legal_are_the_safety_experts():
     safety = {name for name, cfg in ExpertRegistry().as_map().items() if cfg.safety}
     assert safety == {"medical", "legal"}
+
+
+def test_a_saved_entry_cannot_change_what_belongs_to_the_file():
+    registry = _registry({"medical": {"safety": False, "enabled": False}, "task_extraction": {"surfaces_recommendation": True}})
+    assert registry.get("medical").safety is True
+    assert registry.get("medical").enabled is True
+    assert registry.get("task_extraction").surfaces_recommendation is False
