@@ -61,12 +61,10 @@ def test_every_combination_of_built_in_verdicts_resolves_as_before():
 def test_every_combination_of_jev_verdicts_resolves_as_before():
     old = LegacyArbitration()
     old._flagging_verdicts["common_sense"] = {"slight_doubt", "doesnt_fit"}  # what Jev patched in
-    # Jev's medical and legal become safety experts in #223; until then the
-    # analytics line names the expert where it used to say "safety".
-    _check_every_combination(ExpertRegistry(experts_dir=str(JEV_EXPERTS)).as_map(), old, jev_conflict_text=True)
+    _check_every_combination(ExpertRegistry(experts_dir=str(JEV_EXPERTS)).as_map(), old)
 
 
-def _check_every_combination(configs, old, jev_conflict_text=False):
+def _check_every_combination(configs, old):
     new = Arbitration()
     verdicts_by_expert = {
         name: [None, *cfg.verdict_directives] for name, cfg in configs.items() if name != "companion_router"
@@ -77,10 +75,7 @@ def _check_every_combination(configs, old, jev_conflict_text=False):
         verdicts = [_verdict(n, v, configs) for n, v in zip(names, combo) if v is not None]
         for context in (SM_CONTEXT, None):
             args = dict(sm_context=context, expert_configs=configs, user_input="hello")
-            got = _outcome(new.resolve(verdicts, **args))
-            if jev_conflict_text:
-                got = (got[0], [c.replace("medical takes", "safety takes").replace("legal takes", "safety takes") for c in got[1]], got[2])
-            assert got == _outcome(old.resolve(verdicts, **args)), combo
+            assert _outcome(new.resolve(verdicts, **args)) == _outcome(old.resolve(verdicts, **args)), combo
             checked += 1
     assert checked > 10_000
 

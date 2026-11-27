@@ -22,14 +22,18 @@
       "template": "",
       "description": "Probably what they meant, but one small detail is odd and could be a mishearing.",
       "flag": true,
-      "tone": "neutral"
+      "tone": "neutral",
+      "below": "fits"
     },
     "doesnt_fit": {
       "action": "inform",
       "template": "",
       "description": "Not believable as what they meant: an amount or fact that is impossible or absurd for this everyday activity, an answer with no sensible link to the question, a clear contradiction of what they said earlier, a closing phrase or caption with no place in the conversation, or words with no meaning, or text a speech recogniser invents during silence, such as subtitle credits, a broadcaster's name, thanks for watching or a request to subscribe.",
       "flag": true,
-      "tone": "neutral"
+      "tone": "neutral",
+      "reaction": "ask_back",
+      "below": "slight_doubt"
     }
-  }
+  },
+  "step_down_from": "most_severe"
 }

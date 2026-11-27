@@ -15,7 +15,7 @@ from stella_v2_agent.models.expert_verdict import ExpertVerdict
 from stella_v2_agent.pipeline.arbitration import Arbitration
 
 from stella_jev_agent.agent import _OWN_EXPERTS_DIR, StellaJevAgent
-from stella_jev_agent.pool import COMMON
+COMMON = "common_sense"
 from stella_jev_agent.ask_back import AFTER_ASK_BACK_INSTRUCTION, ASK_BACK_INSTRUCTION, AskBack
 from stella_jev_agent.jev import JevUnavailable
 from stella_jev_agent.jev import JevClient
@@ -481,11 +481,14 @@ def test_an_unsure_medical_high_steps_down_and_prepends_nothing():
 
 
 def test_safety_levels_need_the_floor_but_an_emergency_never_does():
-    from stella_jev_agent.questions import settle_safety
-    assert settle_safety({"none": 0.6, "low": 0.25, "high": 0.15}, "low", 0.6) == "none"
-    assert settle_safety({"none": 0.1, "low": 0.25, "high": 0.65}, "high", 0.6) == "high"
-    assert settle_safety({"none": 0.5, "critical": 0.3}, "critical", 0.6) == "critical"
-    assert settle_safety({"fits": 0.4}, "fits", 0.6) == "fits"
+    # The step-down rules live in the medical file now (#223); the floor is safety_threshold.
+    pool = Pool(FakeJev(_answers()), AskBack())
+    medical = pool._registry.get("medical")
+    assert pool.safety_threshold == 0.6
+    assert pool._settle(medical, "low", {"none": 0.6, "low": 0.25, "high": 0.15}) == "none"
+    assert pool._settle(medical, "high", {"none": 0.1, "low": 0.25, "high": 0.65}) == "high"
+    assert pool._settle(medical, "critical", {"none": 0.5, "critical": 0.3}) == "critical"
+    assert pool._settle(pool._registry.get("probing"), "no_probe", {"no_probe": 0.4}) == "no_probe"
 
 
 def test_jev_reads_the_configured_setting():
@@ -514,6 +517,7 @@ def test_the_pool_takes_its_defaults_from_agent_yaml_and_resets_between_configur
                                 ("jev_timeout_ms", 900)]
         )
         + "        - { id: expert_context, type: text }\n"
+        + "        - { id: gates, type: gate_list, default: [] }\n"
     )
     jev = FakeJev(_answers())
     jev.timeout_s = 1.5

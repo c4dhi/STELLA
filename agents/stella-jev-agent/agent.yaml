@@ -267,6 +267,11 @@ pipelineSchema:
       description: "One Jev call answers the experts that only decide. Language models run afterwards, only where text or values must be written."
       icon: "🧪"
       position: { row: 0, col: 1 }
+      # Jev settles each verdict from its probabilities (min_confidence, below) and
+      # asks back on an ask_back verdict (#223).
+      verdict_rules:
+        reactions: [ask_back]
+        fields: [min_confidence, below]
       slots:
         - id: ask_threshold
           label: "Ask-back Threshold"
@@ -316,6 +321,14 @@ pipelineSchema:
           step: 0.05
           default: 0.6
           description: "How sure Jev must be of a medical or legal \"low\" or \"high\" before it counts. Below it the verdict steps down a level, so a weak guess never puts the fixed warning in front of the reply. \"critical\" always counts."
+        - id: gates
+          label: "Gates"
+          type: gate_list
+          description: "When a language-model expert is skipped because Jev says it has nothing to do. Each gate names the expert to skip and when: one of Jev's own questions (has_answer, activity_intent), held when its answers are at least min_confidence likely (the Skip Threshold when unset), or an expert Jev answers, held when that is its choice."
+          default:
+            - { skip: task_extraction, when: has_answer, verdicts: ["no"] }
+            - { skip: companion_router, when: activity_intent, verdicts: ["none"] }
+            - { skip: task_extraction, when: probing, verdicts: ["needs_clarification"] }
         - id: expert_context
           label: "Expert Context"
           type: text

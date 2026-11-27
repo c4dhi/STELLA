@@ -19,6 +19,10 @@ def _texts(value: Any) -> List[str]:
     return [str(v) for v in value] if isinstance(value, list) else []
 
 
+def _number(value: Any) -> Optional[float]:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 @dataclass
 class VerdictDirective:
     """What the arbitration stage does with the final response when an expert
@@ -64,6 +68,10 @@ class VerdictDirective:
     reaction: str = ""
     reaction_field: str = ""
     overrides: List[str] = field(default_factory=list)
+    # Stepping down (#223): how sure the agent must be of this verdict, and the
+    # verdict it becomes when it isn't. None/"" means not set.
+    min_confidence: Optional[float] = None
+    below: str = ""
 
     @staticmethod
     def coerce(value: Any) -> "VerdictDirective":
@@ -102,6 +110,8 @@ class VerdictDirective:
                 reaction=str(value.get("reaction") or ""),
                 reaction_field=str(value.get("reaction_field") or ""),
                 overrides=_texts(value.get("overrides")),
+                min_confidence=_number(value.get("min_confidence")),
+                below=str(value.get("below") or ""),
             )
         return VerdictDirective()
 
@@ -121,7 +131,9 @@ class VerdictDirective:
         }
         if self.flag is not None:
             out["flag"] = self.flag
-        for key in ("tone", "reaction", "reaction_field"):
+        if self.min_confidence is not None:
+            out["min_confidence"] = self.min_confidence
+        for key in ("tone", "reaction", "reaction_field", "below"):
             if getattr(self, key):
                 out[key] = getattr(self, key)
         for key in ("must_avoid", "overrides"):
@@ -182,6 +194,12 @@ class ExpertConfig:
     # recorded safety_off ({confirmed, by, at}); see the SDK's verdict_rules.
     safety: bool = False
     safety_off: Optional[Dict[str, Any]] = None
+    # The verdicts a safety expert never steps down (None: the SDK's default,
+    # "critical"), and where stepping down starts: "choice" (the verdict given)
+    # or "most_severe" (the top of the expert's step-down chain, weighing every
+    # level on the way down).
+    never_step_down: Optional[List[str]] = None
+    step_down_from: str = "choice"
     # False for an expert whose recommendation is internal bookkeeping (task
     # extraction's "Set 2 deliverables") and must never steer the reply.
     surfaces_recommendation: bool = True
@@ -216,6 +234,8 @@ class ExpertConfig:
             verdict_directives=data.get("verdict_directives", {}),
             enabled_from_compiler=str(data.get("enabled_from_compiler") or ""),
             safety=data.get("safety") is True,
+            never_step_down=_texts(data["never_step_down"]) if isinstance(data.get("never_step_down"), list) else None,
+            step_down_from=str(data.get("step_down_from") or "choice"),
             surfaces_recommendation=data.get("surfaces_recommendation", True) is not False,
         )
 
@@ -240,5 +260,7 @@ class ExpertConfig:
             },
             "enabled_from_compiler": self.enabled_from_compiler,
             "safety": self.safety,
+            "never_step_down": self.never_step_down,
+            "step_down_from": self.step_down_from,
             "surfaces_recommendation": self.surfaces_recommendation,
         }

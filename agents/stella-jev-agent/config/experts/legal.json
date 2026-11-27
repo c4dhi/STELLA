@@ -28,7 +28,8 @@
       "template": "",
       "description": "A legal subject comes up, but it is mild and not urgent.",
       "flag": true,
-      "tone": "cautious"
+      "tone": "cautious",
+      "below": "none"
     },
     "high": {
       "action": "prepend",
@@ -45,7 +46,8 @@
       ],
       "overrides": [
         "probing"
-      ]
+      ],
+      "below": "low"
     },
     "critical": {
       "action": "override",
@@ -64,5 +66,6 @@
         "probing"
       ]
     }
-  }
+  },
+  "safety": true
 }
