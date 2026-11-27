@@ -136,12 +136,12 @@ const ParticipantChatThread = forwardRef<ParticipantChatThreadHandle, Participan
 
     const textSize = isPage ? 'text-[15px]' : 'text-sm'
 
-    // iOS Safari zooms the page on focus when a text input's font is under
-    // 16px; a hardware keyboard means there's a pointing device too, so this
-    // also decides whether the Enter/Shift+Enter hint makes sense to show.
     // Back-to-back messages from one sender: avatar once, time once.
     const positions = groupPositions(messages)
 
+    // iOS Safari zooms the page on focus when a text input's font is under
+    // 16px; a hardware keyboard means there's a pointing device too, so this
+    // also decides whether the Enter/Shift+Enter hint makes sense to show.
     const hasPhysicalKeyboard =
       typeof window === 'undefined' || !window.matchMedia
         ? true
