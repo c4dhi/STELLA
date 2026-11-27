@@ -11,6 +11,10 @@ package uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-30
+
+Ships with STELLA 2.2.0. New: verdict rules and the safety floor as configuration, and `interaction_mode` in `AGENT_CONFIG`. Fixed: text typed while speech services load is kept, and text from `on_ready()` is shown and spoken.
+
 ### Added
 
 - **`AGENT_CONFIG` carries `interaction_mode`** when the deployment is into a session locked to the Text face (#1016). `run_agent_from_env` applies it to the `AudioPipeline` right after constructing it, before anything else runs, so a reply can't reach the TTS speech worker during the window before the screen's own `stella.interaction_mode` announcement would otherwise arrive. It's a plain `AGENT_CONFIG` key, not a platform key (not in `PLATFORM_KEYS`): STELLA computes it from the session, not from what a deployer chooses.
