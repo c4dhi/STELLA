@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`projects_public_update` can now set a public project's agent to companion mode.** It takes `mode` and `availablePlanIds`, same as the setup wizard, and refuses companion mode on an agent type that doesn't declare it, `availablePlanIds` without `mode: "companion"`, or a plan id that isn't one of the owner's — REST and MCP share the same check. `projects_get` returns both fields too (#209)
 - **MCP clients who are system admins can now delete things, and reach the admin dashboard.** `projects_delete`, `sessions_delete`, `agent_configurations_delete`, `personas_delete`, `plan_templates_delete`, `env_var_templates_delete` and `agent_uploads_delete`; `admin_dashboard_get`, `admin_users_list`, `admin_users_verify`, `admin_users_set_admin`, `admin_capacity_get` and `admin_capacity_record`. Nobody else sees these tools, and calling one by name answers "tool not found" (#202)
 - A public project's link now shows a QR code above it, in the "Public Project Created!" step and in the public link dialog (#204)
+- In the participant's chat, messages one person sends back to back (within two minutes, with no reply in between) are grouped as in other chat apps: the avatar shows once and the time only under the last one (#1058)
 - Public projects can show participants a welcome message. Set it in public setup or later in the public link dialog; every participant who joins through the link reads it on screen before the session (the agent doesn't say it) (#1046)
 
 ### Fixed

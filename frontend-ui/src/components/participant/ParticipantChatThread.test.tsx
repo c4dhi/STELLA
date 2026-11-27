@@ -35,3 +35,21 @@ describe('ParticipantChatThread hint', () => {
     expect(screen.getByLabelText('Your answer').className).toContain('text-base')
   })
 })
+
+describe('ParticipantChatThread message groups', () => {
+  const at = (s: number) => new Date(Date.UTC(2026, 10, 27, 13, 7, s))
+  const m = (id: string, role: 'user' | 'assistant', s: number) => ({ id, role, text: `text ${id}`, timestamp: at(s) })
+
+  it('shows the time once under back-to-back messages from one sender, and again after a reply', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }))
+    const messages = [m('a', 'user', 0), m('b', 'user', 5), m('c', 'user', 9), m('d', 'assistant', 20)]
+    const { container } = render(<ParticipantChatThread {...baseProps} messages={messages as never} />)
+    const rows = container.querySelectorAll('[data-group-last]')
+    expect([...rows].map((r) => r.getAttribute('data-group-last'))).toEqual(['false', 'false', 'true', 'true'])
+    // One time line for the three user messages, one for the reply.
+    const time = at(0).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    expect(screen.getAllByText(time)).toHaveLength(2)
+    // The avatar is shown on the first of the group only.
+    expect([...rows].map((r) => r.getAttribute('data-group-first'))).toEqual(['true', 'false', 'false', 'true'])
+  })
+})
