@@ -398,6 +398,8 @@ export class PublicProjectsService {
         const { invitation } = await this.invitationsService.create(sessionId, {
           visualizerType: project.publicVisualizerType || undefined,
           visualizerLocked: project.publicVisualizerLocked,
+          maxSessionDurationSeconds:
+            project.publicMaxSessionDurationSeconds ?? undefined,
         });
 
         // Step 5: Done - agent will spawn when user joins
@@ -455,6 +457,8 @@ export class PublicProjectsService {
         const { invitation } = await this.invitationsService.create(sessionId, {
           visualizerType: project.publicVisualizerType || undefined,
           visualizerLocked: project.publicVisualizerLocked,
+          maxSessionDurationSeconds:
+            project.publicMaxSessionDurationSeconds ?? undefined,
         });
 
         // Step 5: Done

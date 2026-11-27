@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Public-link sessions now keep the project's maximum length.** The non-blocking public join (the one the page actually uses) created its invitation without the project's session-duration cap, so a public-link participant's session ran with no time limit (#1054)
+
 ## [2.1.0] - 2026-11-23
 
 Agents that know their limits, and STELLA on a phone. Grace now says plainly
