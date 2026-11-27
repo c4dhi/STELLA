@@ -268,7 +268,6 @@ export class PublicProjectsService {
     // 5. Create invitation using existing service
     const { invitation } = await this.invitationsService.create(session.id, {
       ...publicInvitationOptions(project),
-      maxSessionDurationSeconds: project.publicMaxSessionDurationSeconds ?? undefined,
       // Auto-generated name
     });
 

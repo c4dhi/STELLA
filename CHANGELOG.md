@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The task panel no longer flashes when you come back to a companion session.** Reloading or resuming a session opened the panel for any activity in its history, even a finished one, and the agent's first update closed it again. It now opens only for an activity that is still running, or when you pinned it open (#1011)
 - The GPU STT and TTS images no longer install Python from the deadsnakes PPA, which answered 503 on about half its downloads and failed the 2.1.0 production deploy three times. Python 3.11 is now built from python.org's own source tarball instead (#1010)
 - **The hardware-fit traffic light now shows one numbered box per session count, instead of an unlabelled strip.** Each box is coloured by its own reading, with a "Sessions at once" label and hover text naming the reading and whether it comes from the load test (#1053)
+- **Public-link sessions now keep the project's maximum length.** The non-blocking public join (the one the page actually uses) created its invitation without the project's session-duration cap, so a public-link participant's session ran with no time limit (#1054)
 
 ### Changed
 

@@ -8,10 +8,12 @@ export function publicInvitationOptions(project: {
   publicVisualizerType: string | null;
   publicVisualizerLocked: boolean;
   publicWelcomeMessage: string | null;
+  publicMaxSessionDurationSeconds: number | null;
 }) {
   return {
     visualizerType: project.publicVisualizerType || undefined,
     visualizerLocked: project.publicVisualizerLocked,
     customMessage: project.publicWelcomeMessage || undefined,
+    maxSessionDurationSeconds: project.publicMaxSessionDurationSeconds ?? undefined,
   };
 }

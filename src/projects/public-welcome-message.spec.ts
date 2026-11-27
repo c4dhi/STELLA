@@ -44,14 +44,19 @@ describe('public welcome message', () => {
   });
 
   it('puts the message on every public participant invitation, and nothing when there is none', () => {
-    const base = { publicVisualizerType: 'text', publicVisualizerLocked: true };
+    const base = { publicVisualizerType: 'text', publicVisualizerLocked: true, publicMaxSessionDurationSeconds: 1800 };
     expect(publicInvitationOptions({ ...base, publicWelcomeMessage: 'Hello' })).toEqual({
       visualizerType: 'text',
       visualizerLocked: true,
       customMessage: 'Hello',
+      maxSessionDurationSeconds: 1800,
     });
     expect(publicInvitationOptions({ ...base, publicWelcomeMessage: null }).customMessage).toBeUndefined();
-    expect(publicInvitationOptions({ publicVisualizerType: null, publicVisualizerLocked: false, publicWelcomeMessage: null }))
-      .toEqual({ visualizerType: undefined, visualizerLocked: false, customMessage: undefined });
+    expect(publicInvitationOptions({
+      publicVisualizerType: null,
+      publicVisualizerLocked: false,
+      publicWelcomeMessage: null,
+      publicMaxSessionDurationSeconds: null,
+    })).toEqual({ visualizerType: undefined, visualizerLocked: false, customMessage: undefined, maxSessionDurationSeconds: undefined });
   });
 });
