@@ -70,6 +70,7 @@ nodes:
 | `position` | object | Yes | `{ row: number, col: number }` — layout position in the pipeline visualization |
 | `slots` | array | Yes | List of configurable parameters (see [Slots](#slots)) |
 | `verdict_rules` | object | No | `{ reactions: [...], fields: [...] }`: the verdict reactions and rule fields this step acts on. An expert file or saved configuration that uses one no node declares is refused. See [Verdict rules](../../agent-sdk/agent-manifest.md#verdict-rules). |
+| `path` | object | No | `{ kind: side \| parallel, input, output }`: how the Configurator draws a step that is not in the turn's chain. `side` puts it on its own row between its own two ends (barge-in: `input: "Typed interruption"`, `output: "Commit / Resume"`); `parallel` feeds it from the turn's input and into its output, with the two labels on those edges (a bridge phrase). Without it, the step is drawn where its edges put it. |
 
 ## Slots
 

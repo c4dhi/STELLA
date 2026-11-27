@@ -91,6 +91,27 @@ describe('declaring configuration settings', () => {
   })
 })
 
+describe('how a step off the turn is drawn (#224)', () => {
+  const withPath = (p: unknown) => ({
+    ...base,
+    pipelineSchema: { ...base.pipelineSchema, nodes: [{ ...base.pipelineSchema.nodes[0], path: p }] },
+  })
+
+  it('accepts a side or parallel path and stores it with the node', () => {
+    const result = parseAgentManifest(withPath({ kind: 'side', input: 'Typed interruption', output: 'Commit / Resume' }))
+    expect(result.errors).toEqual([])
+    const column = manifestToAgentTypeData(result.manifest!, null).pipelineSchema as { nodes: Array<Record<string, unknown>> }
+    expect(column.nodes[0].path).toEqual({ kind: 'side', input: 'Typed interruption', output: 'Commit / Resume' })
+    expect(errorsOf(withPath({ kind: 'parallel', input: 'parallel', output: 'bridge phrase' }))).toBe('')
+  })
+
+  it('refuses a path that does not hold together', () => {
+    expect(errorsOf(withPath({ kind: 'beside', input: 'a', output: 'b' }))).toContain('path')
+    expect(errorsOf(withPath({ kind: 'side', input: 'a' }))).toContain('path')
+    expect(errorsOf(withPath({ kind: 'side', input: 'a', output: 'b', colour: 'red' }))).toContain('path')
+  })
+})
+
 describe('checkConfigSettingValue', () => {
   const s = (setting: Partial<ConfigSetting>): ConfigSetting => ({ key: 'n.x', type: 'text', ...setting })
 

@@ -7,6 +7,7 @@
  */
 
 import { useMemo, useCallback } from 'react'
+import { readSafetyOff, type SafetyOff } from './verdictRules'
 import type { AgentConfigurationPayload, PipelineSchema, VerdictDirective, VerdictAction, ExpertDefault } from '../../lib/api-types'
 import { useConfiguratorStore } from '../../store/configuratorStore'
 
@@ -43,6 +44,10 @@ export interface ExpertDefinition {
   verdictDirectives: Record<string, VerdictDirective>
   /** Built-in default directives (read-only), used to show defaults and reset per verdict. */
   defaultVerdictDirectives: Record<string, VerdictDirective>
+  /** A safety expert (its file says so): it runs unless a confirmed record switches it off. */
+  safety: boolean
+  /** The record that switched this safety expert off, if one did. */
+  safetyOff?: SafetyOff
 }
 
 export interface InputGateRule {
@@ -78,6 +83,7 @@ interface BuiltInExpertDefault {
   defaultVerdictDirectives: Record<string, VerdictDirective>
   /** On by default only for configurations authored against this compiler or later. */
   enabledFromCompiler?: string
+  safety: boolean
 }
 
 /**
@@ -130,6 +136,7 @@ function builtInsFromPublished(published: ExpertDefault[]): BuiltInExpertDefault
       verdictVocabulary: vocab,
       defaultVerdictDirectives: directives,
       enabledFromCompiler: raw.enabled_from_compiler || undefined,
+      safety: raw.safety === true,
     }
   })
 }
@@ -145,11 +152,37 @@ export function verdictDirectivesEqual(
       a[k]?.action !== b[k]?.action ||
       a[k]?.template !== b[k]?.template ||
       (a[k]?.description ?? '') !== (b[k]?.description ?? '') ||
-      !templateI18nEqual(a[k]?.template_i18n, b[k]?.template_i18n)
+      !templateI18nEqual(a[k]?.template_i18n, b[k]?.template_i18n) ||
+      !verdictRulesEqual(a[k], b[k])
     )
       return false
   }
   return true
+}
+
+/** The verdict rule fields (#221) a directive carries, in a fixed order. */
+export const VERDICT_RULE_KEYS = [
+  'flag', 'tone', 'must_avoid', 'reaction', 'reaction_field', 'min_confidence', 'below', 'overrides',
+] as const
+
+export function verdictRulesEqual(a?: VerdictDirective, b?: VerdictDirective): boolean {
+  return VERDICT_RULE_KEYS.every((key) => JSON.stringify(a?.[key] ?? null) === JSON.stringify(b?.[key] ?? null))
+}
+
+/** Copy the verdict rule fields of a stored directive, keeping only well-typed values. */
+function readVerdictRules(d: Record<string, unknown>): Partial<VerdictDirective> {
+  const out: Partial<VerdictDirective> = {}
+  const texts = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined)
+  if (typeof d.flag === 'boolean') out.flag = d.flag
+  for (const key of ['tone', 'reaction', 'reaction_field', 'below'] as const) {
+    if (typeof d[key] === 'string' && d[key]) out[key] = d[key] as string
+  }
+  if (typeof d.min_confidence === 'number' && Number.isFinite(d.min_confidence)) out.min_confidence = d.min_confidence
+  for (const key of ['must_avoid', 'overrides'] as const) {
+    const list = texts(d[key])
+    if (list) out[key] = list
+  }
+  return out
 }
 
 function templateI18nEqual(a?: Record<string, string>, b?: Record<string, string>): boolean {
@@ -163,6 +196,25 @@ function parseVerdictVocabulary(outputSchema?: Record<string, unknown>): string[
   const verdict = outputSchema?.verdict
   if (typeof verdict !== 'string') return []
   return verdict.split('|').map((v) => v.trim()).filter(Boolean)
+}
+
+/**
+ * A saved map over the expert file's, field by field (#221, as the agent's
+ * `merge_verdict_directives`): a saved verdict keeps every field it doesn't set
+ * from the file, so one saved before a rule field existed still shows its default.
+ */
+export function mergeVerdictDirectives(
+  defaults: Record<string, VerdictDirective>,
+  saved: unknown,
+): Record<string, VerdictDirective> {
+  const merged: Record<string, VerdictDirective> = { ...defaults }
+  const raw = (saved && typeof saved === 'object' ? saved : {}) as Record<string, unknown>
+  for (const [verdict, entry] of Object.entries(readVerdictDirectives(saved))) {
+    const given = (raw[verdict] ?? {}) as Record<string, unknown>
+    const kept = Object.fromEntries(Object.entries(entry).filter(([key]) => key in given))
+    merged[verdict] = { ...(defaults[verdict] ?? { action: 'inform', template: '' }), ...kept } as VerdictDirective
+  }
+  return merged
 }
 
 /** Read a stored verdict_directives override blob into the typed map. */
@@ -189,6 +241,7 @@ export function readVerdictDirectives(raw: unknown): Record<string, VerdictDirec
       }
       const i18n = readTemplateI18n(d.template_i18n)
       if (i18n) result[verdict].template_i18n = i18n
+      Object.assign(result[verdict], readVerdictRules(d))
     }
   }
   return result
@@ -207,30 +260,48 @@ function readTemplateI18n(raw: unknown): Record<string, string> | undefined {
 // Helpers to read / write the nested configuration payload
 // ---------------------------------------------------------------------------
 
-function getExpertPoolConfig(cfg: AgentConfigurationPayload) {
-  return (cfg.nodes?.expert_pool ?? {}) as Record<string, unknown>
+/**
+ * Where a configuration keeps its experts (#224): the stage that declares an
+ * expert list, and that list's setting (plus the list of the configuration's
+ * own experts, if it declares one). Nothing here is a stage name.
+ */
+export interface ExpertPoolSlots {
+  nodeId: string
+  expertsKey: string
+  customKey?: string
 }
 
-function getExpertOverrides(cfg: AgentConfigurationPayload): Record<string, Record<string, unknown>> {
-  const pool = getExpertPoolConfig(cfg)
-  return (pool.experts ?? {}) as Record<string, Record<string, unknown>>
+export function findExpertPool(schema: Pick<PipelineSchema, 'nodes'> | null | undefined): ExpertPoolSlots | undefined {
+  for (const node of schema?.nodes ?? []) {
+    const lists = node.slots.filter((slot) => slot.type === 'expert_list')
+    const builtIn = lists.find((slot) => !slot.isCustom)
+    if (builtIn) return { nodeId: node.id, expertsKey: builtIn.id, customKey: lists.find((slot) => slot.isCustom)?.id }
+  }
+  return undefined
 }
 
-function getCustomExperts(cfg: AgentConfigurationPayload): Record<string, Record<string, unknown>> {
-  const pool = getExpertPoolConfig(cfg)
-  return (pool.custom_experts ?? {}) as Record<string, Record<string, unknown>>
+function getExpertPoolConfig(cfg: AgentConfigurationPayload, pool: ExpertPoolSlots | undefined) {
+  return (pool ? cfg.nodes?.[pool.nodeId] ?? {} : {}) as Record<string, unknown>
+}
+
+function getExpertOverrides(cfg: AgentConfigurationPayload, pool: ExpertPoolSlots | undefined): Record<string, Record<string, unknown>> {
+  return (pool ? getExpertPoolConfig(cfg, pool)[pool.expertsKey] ?? {} : {}) as Record<string, Record<string, unknown>>
+}
+
+function getCustomExperts(cfg: AgentConfigurationPayload, pool: ExpertPoolSlots | undefined): Record<string, Record<string, unknown>> {
+  return (pool?.customKey ? getExpertPoolConfig(cfg, pool)[pool.customKey] ?? {} : {}) as Record<string, Record<string, unknown>>
 }
 
 // No agent reads always_run or background_experts and no agent declares them,
 // so the backend refuses them (#996) and drops them from saved configurations.
 // Nothing here writes them; a configuration saved before still shows its lists.
-function getAlwaysRun(cfg: AgentConfigurationPayload): string[] {
-  const pool = getExpertPoolConfig(cfg)
+function getAlwaysRun(cfg: AgentConfigurationPayload, poolSlots: ExpertPoolSlots | undefined): string[] {
+  const pool = getExpertPoolConfig(cfg, poolSlots)
   return (pool.always_run ?? [...DEFAULT_ALWAYS_RUN]) as string[]
 }
 
-function getBackgroundExperts(cfg: AgentConfigurationPayload): string[] {
-  const pool = getExpertPoolConfig(cfg)
+function getBackgroundExperts(cfg: AgentConfigurationPayload, poolSlots: ExpertPoolSlots | undefined): string[] {
+  const pool = getExpertPoolConfig(cfg, poolSlots)
   return (pool.background_experts ?? [...DEFAULT_BACKGROUND]) as string[]
 }
 
@@ -241,8 +312,9 @@ function getBackgroundExperts(cfg: AgentConfigurationPayload): string[] {
 export function useConfiguratorState(
   configuration: AgentConfigurationPayload,
   setConfiguration: (cfg: AgentConfigurationPayload) => void,
-  _pipelineSchema: PipelineSchema,
+  pipelineSchema: PipelineSchema,
 ) {
+  const poolSlots = useMemo(() => findExpertPool(pipelineSchema), [pipelineSchema])
   // ----- Built-in expert defaults sourced from the agent's published declaration -----
   // The agent declares its default experts in config/experts/*.json; the backend
   // publishes them on AgentType.expertDefaults. Fall back to the hardcoded constants
@@ -274,10 +346,10 @@ export function useConfiguratorState(
   const builtInNames = useMemo(() => new Set(builtInDefaults.map((e) => e.name)), [builtInDefaults])
 
   // ----- Raw reads from configuration -----
-  const overrides = useMemo(() => getExpertOverrides(configuration), [configuration])
-  const customs = useMemo(() => getCustomExperts(configuration), [configuration])
-  const alwaysRun = useMemo(() => getAlwaysRun(configuration), [configuration])
-  const backgroundExperts = useMemo(() => getBackgroundExperts(configuration), [configuration])
+  const overrides = useMemo(() => getExpertOverrides(configuration, poolSlots), [configuration, poolSlots])
+  const customs = useMemo(() => getCustomExperts(configuration, poolSlots), [configuration, poolSlots])
+  const alwaysRun = useMemo(() => getAlwaysRun(configuration, poolSlots), [configuration, poolSlots])
+  const backgroundExperts = useMemo(() => getBackgroundExperts(configuration, poolSlots), [configuration, poolSlots])
 
   const alwaysRunSet = useMemo(() => new Set(alwaysRun), [alwaysRun])
   const backgroundSet = useMemo(() => new Set(backgroundExperts), [backgroundExperts])
@@ -292,8 +364,11 @@ export function useConfiguratorState(
       result.push({
         name: builtin.name,
         description: (ov.description as string) ?? builtin.description,
-        enabled:
-          ov.enabled !== undefined
+        // A safety expert runs unless a confirmed record turned it off; a saved
+        // `enabled: false` alone doesn't, as in the agent (#221).
+        enabled: builtin.safety
+          ? !readSafetyOff(ov.safety_off)
+          : ov.enabled !== undefined
             ? Boolean(ov.enabled)
             : enabledByDefault(builtin.enabledFromCompiler, editingConfig),
         alwaysTriggered: ov.always_triggered !== undefined ? Boolean(ov.always_triggered) : builtin.alwaysTriggered,
@@ -314,9 +389,11 @@ export function useConfiguratorState(
         verdictVocabulary: builtin.verdictVocabulary,
         verdictDirectives:
           ov.verdict_directives !== undefined
-            ? readVerdictDirectives(ov.verdict_directives)
+            ? mergeVerdictDirectives(builtin.defaultVerdictDirectives, ov.verdict_directives)
             : builtin.defaultVerdictDirectives,
         defaultVerdictDirectives: builtin.defaultVerdictDirectives,
+        safety: builtin.safety,
+        safetyOff: readSafetyOff(ov.safety_off),
       })
     }
 
@@ -342,6 +419,7 @@ export function useConfiguratorState(
         verdictVocabulary: parseVerdictVocabulary(def.output_schema as Record<string, unknown> | undefined),
         verdictDirectives: readVerdictDirectives(def.verdict_directives),
         defaultVerdictDirectives: {},
+        safety: false,
       })
     }
 
@@ -407,26 +485,43 @@ export function useConfiguratorState(
 
   const patchExpertPool = useCallback(
     (patch: Record<string, unknown>) => {
-      const pool = { ...getExpertPoolConfig(configuration), ...patch }
+      if (!poolSlots) return
+      // The patch names the lists by role; they are saved under the keys the stage declares.
+      const { experts, custom_experts, ...rest } = patch
+      const keyed: Record<string, unknown> = { ...rest }
+      if ('experts' in patch) keyed[poolSlots.expertsKey] = experts
+      if ('custom_experts' in patch && poolSlots.customKey) keyed[poolSlots.customKey] = custom_experts
+      const pool = { ...getExpertPoolConfig(configuration, poolSlots), ...keyed }
       setConfiguration({
         ...configuration,
         nodes: {
           ...(configuration.nodes ?? {}),
-          expert_pool: pool,
+          [poolSlots.nodeId]: pool,
         },
       })
     },
-    [configuration, setConfiguration],
+    [configuration, setConfiguration, poolSlots],
   )
 
   /** Update a single built-in expert's overrides */
   const updateExpert = useCallback(
     (name: string, updates: Partial<ExpertDefinition>) => {
       if (builtInNames.has(name)) {
-        const current = { ...getExpertOverrides(configuration) }
+        const current = { ...getExpertOverrides(configuration, poolSlots) }
         const existing = { ...(current[name] ?? {}) }
 
         if (updates.enabled !== undefined) existing.enabled = updates.enabled
+        // A safety expert goes off only with its confirmed record (#221), and
+        // switching it back on drops the record.
+        if (updates.enabled === true) delete existing.safety_off
+        if ('safetyOff' in updates) {
+          if (updates.safetyOff) {
+            existing.safety_off = updates.safetyOff
+            existing.enabled = false
+          } else {
+            delete existing.safety_off
+          }
+        }
         if (updates.alwaysTriggered !== undefined) {
           existing.always_triggered = updates.alwaysTriggered
           // Always-triggered bypasses the input gate, so trigger criteria is moot.
@@ -458,7 +553,7 @@ export function useConfiguratorState(
         patchExpertPool({ experts: current })
       } else {
         // Custom expert
-        const current = { ...getCustomExperts(configuration) }
+        const current = { ...getCustomExperts(configuration, poolSlots) }
         const existing = { ...(current[name] ?? {}) }
 
         if (updates.enabled !== undefined) existing.enabled = updates.enabled
@@ -498,8 +593,8 @@ export function useConfiguratorState(
    *  Two-way: used by both sidebar drag and arbitration node drag. */
   const reorderExperts = useCallback(
     (orderedNames: string[]) => {
-      const builtinOverrides = { ...getExpertOverrides(configuration) }
-      const customDefs = { ...getCustomExperts(configuration) }
+      const builtinOverrides = { ...getExpertOverrides(configuration, poolSlots) }
+      const customDefs = { ...getCustomExperts(configuration, poolSlots) }
 
       orderedNames.forEach((name, index) => {
         const priority = 100 - index * 5
@@ -518,7 +613,7 @@ export function useConfiguratorState(
   /** Add a new custom expert */
   const addCustomExpert = useCallback(
     (expert: { name: string; description: string; model: string; temperature: number; maxTokens: number; systemPrompt: string; triggerCriteria?: string; alwaysTriggered?: boolean }) => {
-      const current = { ...getCustomExperts(configuration) }
+      const current = { ...getCustomExperts(configuration, poolSlots) }
       const alwaysTriggered = Boolean(expert.alwaysTriggered)
       current[expert.name] = {
         name: expert.name,
@@ -544,7 +639,7 @@ export function useConfiguratorState(
     (name: string) => {
       if (builtInNames.has(name)) return // Cannot remove built-in experts
 
-      const current = { ...getCustomExperts(configuration) }
+      const current = { ...getCustomExperts(configuration, poolSlots) }
       delete current[name]
 
       patchExpertPool({ custom_experts: current })
@@ -611,6 +706,7 @@ export function useConfiguratorState(
     disabledExperts,
     inputGateRules,
     arbitrationOrder,
+    expertPoolNodeId: poolSlots?.nodeId,
     taskExtractionEnabled,
     companionRouter,
     alwaysRunSet,

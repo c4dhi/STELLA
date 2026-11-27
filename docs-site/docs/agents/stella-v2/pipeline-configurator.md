@@ -139,6 +139,30 @@ The output **interface** stays fixed (`{verdict, confidence, recommendation}`); 
 
 Every verdict ships with a sensible default action and explanation. The editor shows defaults dimmed and offers **per-verdict reset** and **reset all to default**, mirroring the prompt editor.
 
+### Verdict rules
+
+Under each verdict, the editor shows the [verdict rules](../../agent-sdk/agent-manifest.md#verdict-rules) the agent acts on, and only those (#224). An agent that declares none shows none. For V2:
+- **Counts as a warning** (`flag`).
+- **What follows** (`reaction`), with the reply's **tone**, what it **must not** do, and the experts it **takes priority over**.
+
+For Jev, the panel shows what all its nodes declare together. Its arbitration node declares the same fields and reactions as V2's, so Jev shows all of V2's. Its expert pool adds:
+- **How sure** (`min_confidence`).
+- **When not sure enough, becomes** (`below`).
+- **Ask back what they meant** (`ask_back`) as one more option under **What follows**, besides V2's three.
+
+A field left empty keeps the expert file's value: a saved verdict is merged onto the file field by field. The panel shows that value greyed out in the empty field, marked *(expert file)*. Two choices are saved explicitly, because leaving them out would bring the file's value back:
+- **What follows: Nothing** is saved as `none`.
+- **When not sure enough, becomes** offers **Stays as it is** only when the expert file sets no fallback. When the file sets one, it is marked *(expert file)* in the list, and to keep the verdict at any confidence you set **How sure** to 0.
+
+### Safety experts
+
+An expert whose file says `"safety": true` carries a red **safety** badge. In V2 and Jev these are `medical` and `legal`. Turning one off is a separate step:
+1. A warning explains that the agent will no longer notice emergencies.
+2. **Turn it off** saves a `safety_off` record with who turned it off and when.
+3. Without that record the agent keeps the expert on, whatever else the configuration says.
+
+Switching it back on removes the record.
+
 ### Custom experts
 
 The **New Custom Expert** form uses the same prompt editor as the edit view (variable insertion, `{{variable}}` highlighting, fullscreen expand) and includes an **Always Triggered** toggle — when enabled, the expert runs on every turn and the Trigger Criteria field is hidden.
@@ -149,7 +173,10 @@ Closing the Configurator (backdrop click or the close button) while there are un
 
 ## Agent-Declared Defaults & Capability Gating
 
-The settings each stage shows are the ones the agent declares in its `agent.yaml` (as pipeline slots or in `settings:`), drawn by their type; the Configurator has no per-agent forms. A value the agent does not declare, or one out of its range, is refused on save. See [Configuration settings](../../agent-sdk/agent-manifest.md#configuration-settings).
+The stages, and the settings each one shows, are the ones the agent declares in its `agent.yaml` (as pipeline slots or in `settings:`), drawn by their type; the Configurator has no per-agent forms and knows no stage by name (#224):
+- The expert panel belongs to the stage that declares an `expert_list` setting.
+- A step off the turn's chain is drawn from its `path` (see [pipeline schema](./pipeline-schema.md)).
+- A `gate_list` setting is drawn as one row per gate. A value the agent does not declare, or one out of its range, is refused on save. See [Configuration settings](../../agent-sdk/agent-manifest.md#configuration-settings).
 
 Experts and their default verdicts/actions are **declared by the agent**, not hardcoded in the UI. On seed/upload the platform reads each agent's `config/experts/*.json` and publishes them on `AgentType.expertDefaults`; the Configurator renders the agent's declared experts/verdicts/actions (with a transitional fallback to built-ins until re-seeded).
 

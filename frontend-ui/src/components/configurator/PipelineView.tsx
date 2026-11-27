@@ -107,79 +107,24 @@ export default function PipelineView({ schema, configuration, selectedNodeId, on
       focusable: false,
     })
 
-    // This evaluator's own endpoints — it lives on a separate runtime path, not
-    // in the turn pipeline. Its input is a message TYPED mid-turn; spoken
-    // interruptions bypass it entirely and are decided from VAD speech duration
-    // in the SDK. Styled like the Input/Output Message annotations and aligned
-    // on the node's row above the pipeline.
-    const bargeInNode = schema.nodes.find((n) => n.id === 'barge_in')
-    if (bargeInNode) {
-      const bargeInY = Y_OFFSET + bargeInNode.position.row * ROW_SPACING
-      pipelineNodes.push({
-        id: '__bargein_input__',
+    // A step off the turn's chain (#224) gets its own input and output on its
+    // row, styled like the Input/Output Message annotations: barge-in (a typed
+    // interruption in, commit/resume out), session end (farewell out). What the
+    // ends are called is the agent's declaration (`path`), not a node id.
+    for (const n of schema.nodes) {
+      if (n.path?.kind !== 'side') continue
+      const y = Y_OFFSET + n.position.row * ROW_SPACING
+      const annotation = (end: 'input' | 'output', x: number): Node => ({
+        id: `__${n.id}_${end}__`,
         type: 'pipeline',
-        position: { x: INPUT_ANNOTATION_X, y: bargeInY },
-        data: {
-          label: 'Typed interruption',
-          isAnnotation: true,
-          annotationType: 'input',
-          isDark,
-        },
+        position: { x, y },
+        data: { label: n.path![end], isAnnotation: true, annotationType: end, isDark },
         draggable: false,
         selectable: false,
         focusable: false,
       })
-      pipelineNodes.push({
-        id: '__bargein_output__',
-        type: 'pipeline',
-        position: { x: X_OFFSET + maxCol * COL_SPACING + 210 + OUTPUT_ANNOTATION_X_PAD, y: bargeInY },
-        data: {
-          label: 'Commit / Resume',
-          isAnnotation: true,
-          annotationType: 'output',
-          isDark,
-        },
-        draggable: false,
-        selectable: false,
-        focusable: false,
-      })
-    }
-
-    // Session-end interrupt — the terminal counterpart to barge-in. Like barge-in it
-    // runs on a separate path (the backend session_end signal), not the turn pipeline,
-    // so give it its own input endpoint (the session-end trigger) and output endpoint
-    // (the spoken farewell + self-disconnect), aligned on its own row.
-    const interruptNode = schema.nodes.find((n) => n.id === 'interrupt_handler')
-    if (interruptNode) {
-      const interruptY = Y_OFFSET + interruptNode.position.row * ROW_SPACING
-      pipelineNodes.push({
-        id: '__interrupt_input__',
-        type: 'pipeline',
-        position: { x: INPUT_ANNOTATION_X, y: interruptY },
-        data: {
-          label: 'Session End',
-          isAnnotation: true,
-          annotationType: 'input',
-          isDark,
-        },
-        draggable: false,
-        selectable: false,
-        focusable: false,
-      })
-      pipelineNodes.push({
-        id: '__interrupt_output__',
-        type: 'pipeline',
-        position: { x: X_OFFSET + maxCol * COL_SPACING + 210 + OUTPUT_ANNOTATION_X_PAD, y: interruptY },
-        data: {
-          label: 'Farewell / Close',
-          isAnnotation: true,
-          annotationType: 'output',
-          isDark,
-        },
-        draggable: false,
-        selectable: false,
-        focusable: false,
-      })
+      pipelineNodes.push(annotation('input', INPUT_ANNOTATION_X))
+      pipelineNodes.push(annotation('output', X_OFFSET + maxCol * COL_SPACING + 210 + OUTPUT_ANNOTATION_X_PAD))
     }
 
     return pipelineNodes
@@ -258,43 +203,6 @@ export default function PipelineView({ schema, configuration, selectedNodeId, on
       },
     })
 
-    // Input annotation → bridge_generator (parallel fork)
-    const bridgeNode = schema.nodes.find((n) => n.id === 'bridge_generator')
-    if (bridgeNode) {
-      pipelineEdges.push({
-        id: 'edge-input-bridge',
-        source: '__input__',
-        target: 'bridge_generator',
-        targetHandle: 'left',
-        type: 'default',
-        animated: false,
-        label: 'parallel',
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color: annotationEdgeColor,
-        },
-        style: {
-          stroke: annotationEdgeColor,
-          strokeWidth: 1.5,
-          strokeDasharray: '6 4',
-        },
-        labelStyle: {
-          fontSize: 7,
-          fill: isDark ? '#52525b' : '#a1a1aa',
-          fontWeight: 400,
-          fontStyle: 'italic',
-        },
-        labelBgStyle: {
-          fill: isDark ? '#18181b' : '#ffffff',
-          fillOpacity: 0.9,
-        },
-        labelBgPadding: [4, 2] as [number, number],
-        labelBgBorderRadius: 3,
-      })
-    }
-
     // Last pipeline node → output annotation
     pipelineEdges.push({
       id: 'edge-output',
@@ -316,130 +224,40 @@ export default function PipelineView({ schema, configuration, selectedNodeId, on
       },
     })
 
-    // Bridge generator → output annotation (early TTS)
-    if (bridgeNode) {
-      pipelineEdges.push({
-        id: 'edge-bridge-output',
-        source: 'bridge_generator',
-        sourceHandle: 'right',
-        target: '__output__',
-        type: 'default',
-        animated: false,
-        label: 'bridge phrase',
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color: dashedEdgeColor,
-        },
-        style: {
-          stroke: dashedEdgeColor,
-          strokeWidth: 1.5,
-          strokeDasharray: '6 4',
-        },
-        labelStyle: {
-          fontSize: 7,
-          fill: edgeLabelColor,
-          fontWeight: 400,
-          fontStyle: 'italic',
-        },
-        labelBgStyle: {
-          fill: isDark ? '#18181b' : '#ffffff',
-          fillOpacity: 0.9,
-        },
-        labelBgPadding: [4, 2] as [number, number],
-        labelBgBorderRadius: 3,
-      })
-    }
-
-    // Barge-in evaluator: sits above the pipeline and spans the whole turn.
-    // Visualize its input (the user's interruption) and output (the
-    // commit/resume decision that controls playback), mirroring the bridge.
-    const bargeInNode = schema.nodes.find((n) => n.id === 'barge_in')
-    if (bargeInNode) {
-      // Dedicated input endpoint (SDK interruption) → evaluator.
-      pipelineEdges.push({
-        id: 'edge-bargein-input',
-        source: '__bargein_input__',
-        target: 'barge_in',
-        targetHandle: 'left',
-        type: 'default',
-        animated: false,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color: annotationEdgeColor,
-        },
-        style: {
-          stroke: annotationEdgeColor,
-          strokeWidth: 1.5,
-          strokeDasharray: '6 4',
-        },
-      })
-      // Evaluator → dedicated output endpoint (commit/resume decision).
-      pipelineEdges.push({
-        id: 'edge-bargein-output',
-        source: 'barge_in',
-        sourceHandle: 'right',
-        target: '__bargein_output__',
-        type: 'default',
-        animated: false,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color: annotationEdgeColor,
-        },
-        style: {
-          stroke: annotationEdgeColor,
-          strokeWidth: 1.5,
-          strokeDasharray: '6 4',
-        },
-      })
-    }
-
-    // Session-end interrupt: trigger endpoint → handler → farewell/close endpoint.
-    const interruptNode = schema.nodes.find((n) => n.id === 'interrupt_handler')
-    if (interruptNode) {
-      pipelineEdges.push({
-        id: 'edge-interrupt-input',
-        source: '__interrupt_input__',
-        target: 'interrupt_handler',
-        targetHandle: 'left',
-        type: 'default',
-        animated: false,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color: annotationEdgeColor,
-        },
-        style: {
-          stroke: annotationEdgeColor,
-          strokeWidth: 1.5,
-          strokeDasharray: '6 4',
-        },
-      })
-      pipelineEdges.push({
-        id: 'edge-interrupt-output',
-        source: 'interrupt_handler',
-        sourceHandle: 'right',
-        target: '__interrupt_output__',
-        type: 'default',
-        animated: false,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          width: 14,
-          height: 14,
-          color: annotationEdgeColor,
-        },
-        style: {
-          stroke: annotationEdgeColor,
-          strokeWidth: 1.5,
-          strokeDasharray: '6 4',
-        },
-      })
+    // A `parallel` step (#224) is fed by the turn's input and feeds its output,
+    // like a bridge phrase spoken while the turn is still worked on; a `side`
+    // step runs between its own two ends. Both are the agent's declaration.
+    // Annotations (ids starting `__`) have no named handles: an edge names a
+    // handle only on a stage's side, or React Flow drops it.
+    const plainEdge = (id: string, source: string, target: string): Edge => ({
+      id,
+      source,
+      target,
+      ...(source.startsWith('__') ? {} : { sourceHandle: 'right' }),
+      ...(target.startsWith('__') ? {} : { targetHandle: 'left' }),
+      type: 'default',
+      animated: false,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: annotationEdgeColor },
+      style: { stroke: annotationEdgeColor, strokeWidth: 1.5, strokeDasharray: '6 4' },
+    })
+    const labelled = (edge: Edge, label: string, color: string): Edge => ({
+      ...edge,
+      label,
+      markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color },
+      style: { stroke: color, strokeWidth: 1.5, strokeDasharray: '6 4' },
+      labelStyle: { fontSize: 7, fill: isDark ? '#52525b' : '#a1a1aa', fontWeight: 400, fontStyle: 'italic' },
+      labelBgStyle: { fill: isDark ? '#18181b' : '#ffffff', fillOpacity: 0.9 },
+      labelBgPadding: [4, 2] as [number, number],
+      labelBgBorderRadius: 3,
+    })
+    for (const n of schema.nodes) {
+      if (n.path?.kind === 'parallel') {
+        pipelineEdges.push(labelled(plainEdge(`edge-${n.id}-input`, '__input__', n.id), n.path.input, annotationEdgeColor))
+        pipelineEdges.push(labelled(plainEdge(`edge-${n.id}-output`, n.id, '__output__'), n.path.output, dashedEdgeColor))
+      } else if (n.path?.kind === 'side') {
+        pipelineEdges.push(plainEdge(`edge-${n.id}-input`, `__${n.id}_input__`, n.id))
+        pipelineEdges.push(plainEdge(`edge-${n.id}-output`, n.id, `__${n.id}_output__`))
+      }
     }
 
     return pipelineEdges
