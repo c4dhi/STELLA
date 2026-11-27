@@ -514,6 +514,7 @@ pipelineSchema:
       # Sits above the main pipeline, horizontally centered (cols 0-3 → 1.5).
       # Barge-in spans the whole turn rather than being a stage in the flow.
       position: { row: -1, col: 1.5 }
+      path: { kind: side, input: "Typed interruption", output: "Commit / Resume" }
       slots:
         - id: resume_threshold
           label: "Carry-on Threshold"

@@ -354,6 +354,19 @@ const pipelineNodeSchema = z
       })
       .strict()
       .optional(),
+    // How the Configurator draws a step that is not in the turn's chain (#224):
+    // `side`, on its own row with its own input and output (barge-in: a typed
+    // interruption in, commit/resume out), or `parallel`, fed by the turn's
+    // input and feeding its output (a bridge phrase). The labels name the two
+    // ends. Without it the step is drawn where its edges put it.
+    path: z
+      .object({
+        kind: z.enum(['side', 'parallel']),
+        input: z.string().min(1),
+        output: z.string().min(1),
+      })
+      .strict()
+      .optional(),
   })
   .passthrough()
 
